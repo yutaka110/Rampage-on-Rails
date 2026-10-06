@@ -1,4 +1,5 @@
 #include "CourseRailElevationProfileEditor.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -105,41 +106,53 @@ void CourseRailElevationProfileEditor::SetViewport(CourseOverviewMapRect rect) {
     InvalidateFrameCache();
 }
 
-void CourseRailElevationProfileEditor::SetSettings(
-    CourseRailElevationProfileSettings settings) {
-    settings.paddingPixels = (std::clamp)(settings.paddingPixels, 4.0f, 96.0f);
-    settings.zoomDistance = (std::clamp)(settings.zoomDistance, 0.05f, 64.0f);
-    settings.zoomHeight = (std::clamp)(settings.zoomHeight, 0.05f, 64.0f);
-    settings.heightSnapStep = (std::clamp)(settings.heightSnapStep, 0.01f, 1000.0f);
-    settings.samplesPerSegment = (std::clamp)(settings.samplesPerSegment, 4u, 128u);
-    if (SameSettings(settings_, settings)) return;
+bool CourseRailElevationProfileSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(paddingPixels, 4.0f, 96.0f) &&
+        settings::InRange(zoomDistance, .05f, 64.0f) &&
+        settings::InRange(zoomHeight, .05f, 64.0f) &&
+        settings::InRange(heightSnapStep, .01f, 1000.0f) &&
+        settings::InRange(samplesPerSegment, 4u, 128u) &&
+        settings::Finite(panPixels.x) && settings::Finite(panPixels.y);
+    return settings::Result(valid, errorMessage,
+        "CourseRailElevationProfileSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseRailElevationProfileEditor::SetSettings(
+    CourseRailElevationProfileSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++viewportRevision_;
     InvalidateFrameCache();
+    return true;
 }
 
 void CourseRailElevationProfileEditor::Pan(Vector2 deltaPixels) {
     if (deltaPixels.x == 0.0f && deltaPixels.y == 0.0f) return;
-    settings_.panPixels.x += deltaPixels.x;
-    settings_.panPixels.y += deltaPixels.y;
-    ++viewportRevision_;
-    InvalidateFrameCache();
+    CourseRailElevationProfileSettings candidate = settings_;
+    candidate.panPixels.x += deltaPixels.x;
+    candidate.panPixels.y += deltaPixels.y;
+    (void)SetSettings(candidate);
 }
 
 void CourseRailElevationProfileEditor::ZoomAt(
     Vector2 mapPosition,
     float distanceFactor,
     float heightFactor) {
-    if (!frame_.valid || distanceFactor <= 0.0f || heightFactor <= 0.0f) return;
-    const float distance = UnprojectDistance(mapPosition.x);
-    const float height = UnprojectHeight(mapPosition.y);
-    settings_.zoomDistance = (std::clamp)(settings_.zoomDistance * distanceFactor, 0.05f, 64.0f);
-    settings_.zoomHeight = (std::clamp)(settings_.zoomHeight * heightFactor, 0.05f, 64.0f);
-    const Vector2 after = Project(distance, height);
-    settings_.panPixels.x += mapPosition.x - after.x;
-    settings_.panPixels.y += mapPosition.y - after.y;
-    ++viewportRevision_;
-    InvalidateFrameCache();
+    if (!frame_.valid || !std::isfinite(mapPosition.x) || !std::isfinite(mapPosition.y) ||
+        !std::isfinite(distanceFactor) || !std::isfinite(heightFactor) ||
+        distanceFactor <= 0.0f || heightFactor <= 0.0f) return;
+    CourseRailElevationProfileSettings candidate = settings_;
+    candidate.zoomDistance = (std::clamp)(settings_.zoomDistance * distanceFactor, 0.05f, 64.0f);
+    candidate.zoomHeight = (std::clamp)(settings_.zoomHeight * heightFactor, 0.05f, 64.0f);
+    // Preserve the point under the cursor without changing live settings first.
+    const float centerX = viewport_.x + viewport_.width * 0.5f + settings_.panPixels.x;
+    const float centerY = viewport_.y + viewport_.height * 0.5f + settings_.panPixels.y;
+    candidate.panPixels.x += (mapPosition.x - centerX) *
+        (1.0f - candidate.zoomDistance / settings_.zoomDistance);
+    candidate.panPixels.y += (mapPosition.y - centerY) *
+        (1.0f - candidate.zoomHeight / settings_.zoomHeight);
+    (void)SetSettings(candidate);
 }
 
 void CourseRailElevationProfileEditor::FrameAll() {
@@ -288,7 +301,7 @@ void CourseRailElevationProfileEditor::Cancel(std::string message) {
 
 void CourseRailElevationProfileEditor::SetFocusDistance(float railDistance) {
     const CourseRailAuthoringModel* rail = DisplayRail();
-    if (rail == nullptr) return;
+    if (rail == nullptr || !std::isfinite(railDistance)) return;
     state_.focusDistance = (std::clamp)(railDistance, 0.0f, rail->Length());
     if (multiView_ != nullptr) multiView_->SetFocusDistance(state_.focusDistance);
 }

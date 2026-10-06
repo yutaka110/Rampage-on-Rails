@@ -95,25 +95,6 @@ const EffectAsset* FindEffectAsset(
     return &it->second;
 }
 
-EffectAsset* FindEffectAsset(
-    EffectRuntime* runtime,
-    const EditorObjectHandle& object) {
-    if (runtime == nullptr || object.domain != EditorDomainId::VfxEffectAsset) {
-        return nullptr;
-    }
-    const std::string name = StableIdSuffix(object, "vfx-asset");
-    if (!name.empty()) {
-        auto it = runtime->MutableAssets().find(name);
-        return it != runtime->MutableAssets().end() ? &it->second : nullptr;
-    }
-    const std::size_t index = static_cast<std::size_t>(object.localIndex);
-    if (index >= runtime->MutableAssets().size()) {
-        return nullptr;
-    }
-    auto it = runtime->MutableAssets().begin();
-    std::advance(it, static_cast<std::ptrdiff_t>(index));
-    return &it->second;
-}
 
 std::string EffectTechniqueLabel(const EffectAsset& asset) {
     bool hasParticle = false;
@@ -147,13 +128,13 @@ std::string EffectTechniqueLabel(const EffectAsset& asset) {
     return "particle";
 }
 
-PostProcessPass* FindPostProcessPass(
-    PostProcessStack* stack,
+const PostProcessPass* FindPostProcessPass(
+    const PostProcessStack* stack,
     const EditorObjectHandle& object) {
     if (stack == nullptr || object.domain != EditorDomainId::PostProcessPass) {
         return nullptr;
     }
-    std::vector<PostProcessPass>& passes = stack->MutablePasses();
+    const std::vector<PostProcessPass>& passes = stack->Passes();
     if (!object.stableId.empty()) {
         const std::string name = StableIdSuffix(object, "post-process");
         auto it = std::find_if(
@@ -170,11 +151,6 @@ PostProcessPass* FindPostProcessPass(
     return index < passes.size() ? &passes[index] : nullptr;
 }
 
-const PostProcessPass* FindPostProcessPass(
-    const PostProcessStack* stack,
-    const EditorObjectHandle& object) {
-    return FindPostProcessPass(const_cast<PostProcessStack*>(stack), object);
-}
 
 std::string PostProcessStage(const PostProcessPass& pass) {
     if (pass.pipeline == "ToneMapping") {
@@ -390,7 +366,15 @@ bool EditorProductionPropertyAdapter::Set(
     const std::string& name = descriptor.name;
     bool changed = false;
 
-    if (EffectAsset* asset = FindEffectAsset(effectRuntime_, object)) {
+    if ((object.domain == EditorDomainId::VfxEffectAsset || object.domain == EditorDomainId::PostProcessPass) &&
+        (!std::isfinite(value.floatValue) || !std::isfinite(value.vec3Value.x) ||
+         !std::isfinite(value.vec3Value.y) || !std::isfinite(value.vec3Value.z))) {
+        SetError(errorMessage, "Effect and post-process properties must be finite.");
+        return false;
+    }
+    if (const EffectAsset* current = FindEffectAsset(effectRuntime_, object)) {
+        EffectAsset candidate = *current;
+        EffectAsset* asset = &candidate;
         if (name == "VfxEffectAsset.name") {
             SetError(errorMessage, "Renaming VFX assets must go through Asset Mutation.");
             return false;
@@ -413,11 +397,14 @@ bool EditorProductionPropertyAdapter::Set(
             SetError(errorMessage, "Unsupported VFX asset property.");
             return false;
         }
+        if (changed && !effectRuntime_->RegisterAsset(std::move(candidate), errorMessage)) return false;
         MarkProductionEdited(runtimeState_, object.domain, markEdits_ && changed);
         return true;
     }
 
-    if (PostProcessPass* pass = FindPostProcessPass(postProcessStack_, object)) {
+    if (const PostProcessPass* current = FindPostProcessPass(postProcessStack_, object)) {
+        PostProcessPass candidate = *current;
+        PostProcessPass* pass = &candidate;
         if (name == "PostProcessPass.enabled") {
             changed = AssignBool(pass->enabled, value.boolValue);
         } else if (name == "PostProcessPass.stage") {
@@ -432,6 +419,13 @@ bool EditorProductionPropertyAdapter::Set(
         } else {
             SetError(errorMessage, "Unsupported post-process property.");
             return false;
+        }
+        if (changed) {
+            if (name == "PostProcessPass.enabled") {
+                postProcessStack_->SetEnabled(candidate.name, candidate.enabled);
+            } else if (!postProcessStack_->ConfigurePass(candidate, errorMessage)) {
+                return false;
+            }
         }
         MarkProductionEdited(runtimeState_, object.domain, markEdits_ && changed);
         return true;

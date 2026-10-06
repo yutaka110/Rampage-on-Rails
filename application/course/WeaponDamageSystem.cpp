@@ -82,10 +82,16 @@ bool CourseActorDamageReceiver::RememberShot(uint64_t shotId) {
     return true;
 }
 
-DamageResult CourseActorDamageReceiver::Apply(
-    CourseSpawnRuntime& runtime,
+DamageResult CourseActorDamageReceiver::Apply(CourseSpawnRuntime& runtime,
     const CourseAsset* course,
     const WeaponHitRequest& request) {
+    return runtime.ApplyWeaponHit(*this, course, request);
+}
+
+DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> actors, std::span<CourseObstacleActor> obstacles,
+        CourseSpawnRuntime& runtime,
+        const CourseAsset* course,
+        const WeaponHitRequest& request) {
     DamageResult result{};
     result.shotId = request.shotId;
     result.targetActorId = request.targetActorId;
@@ -108,7 +114,7 @@ DamageResult CourseActorDamageReceiver::Apply(
     result.requestAccepted = true;
     switch (request.hitKind) {
     case RailAimHitKind::Enemy:
-        for (CourseEnemyActor& enemy : runtime.MutableEnemies()) {
+        for (CourseEnemyActor& enemy : actors) {
             if (enemy.actorId != request.targetActorId) {
                 continue;
             }
@@ -147,7 +153,7 @@ DamageResult CourseActorDamageReceiver::Apply(
         return result;
 
     case RailAimHitKind::Obstacle:
-        for (CourseObstacleActor& obstacle : runtime.MutableObstacles()) {
+        for (CourseObstacleActor& obstacle : obstacles) {
             if (obstacle.actorId != request.targetActorId) {
                 continue;
             }

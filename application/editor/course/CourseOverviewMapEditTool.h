@@ -20,6 +20,8 @@ struct CourseOverviewMapEditSettings final {
     std::string defaultActorAssetId = "drone";
     std::string defaultWaveName = "Wave";
     float defaultWavePrewarmDistance = 80.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseOverviewMapEditInput final {
@@ -57,7 +59,7 @@ public:
         const CourseOverviewMapSnapService* snapping);
     void SetActive(bool active);
     void SetMode(CourseOverviewMapEditMode mode);
-    void SetSettings(CourseOverviewMapEditSettings settings);
+    bool SetSettings(CourseOverviewMapEditSettings settings, std::string* errorMessage = nullptr);
     void Tick(const CourseOverviewMapEditInput& input);
     void Cancel(std::string message = {});
 

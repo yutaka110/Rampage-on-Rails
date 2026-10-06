@@ -37,6 +37,8 @@ struct PlayerNearMissRuntimeState final {
 struct PlayerNearMissSettings final {
     uint32_t projectileHistoryCapacity = 256;
     size_t maximumResultsPerFrame = 16;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 class PlayerNearMissSystem final {
@@ -52,7 +54,7 @@ public:
     const std::vector<PlayerNearMissResult>& ResultsThisFrame() const noexcept {
         return resultsThisFrame_;
     }
-    PlayerNearMissSettings& MutableSettings() noexcept { return settings_; }
+    bool Configure(const PlayerNearMissSettings& settings, std::string* errorMessage = nullptr);
     const PlayerNearMissSettings& Settings() const noexcept { return settings_; }
 
 private:

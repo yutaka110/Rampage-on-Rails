@@ -1,13 +1,16 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <deque>
 #include <unordered_set>
 
 #include "RailAimState.h"
 
 class CourseSpawnRuntime;
+struct CourseEnemyActor;
 struct CourseAsset;
+struct CourseObstacleActor;
 
 enum class WeaponDamageType : uint8_t {
     Kinetic,
@@ -79,6 +82,13 @@ public:
     uint64_t DuplicateRequestCount() const { return duplicateRequestCount_; }
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    DamageResult ApplyActors(std::span<CourseEnemyActor> actors, std::span<CourseObstacleActor> obstacles,
+        CourseSpawnRuntime& runtime,
+        const CourseAsset* course,
+        const WeaponHitRequest& request);
+
     bool RememberShot(uint64_t shotId);
 
     static constexpr size_t kShotHistoryCapacity = 4096;

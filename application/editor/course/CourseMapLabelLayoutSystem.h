@@ -52,6 +52,8 @@ struct CourseMapLabelLayoutSettings final {
     float displacementStepPixels = 14.0f;
     uint32_t displacementRings = 4;
     float leaderLineThresholdPixels = 12.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMapLabelLayoutStats final {
@@ -80,7 +82,7 @@ public:
     const CourseMapLabelLayoutFrame& Build(
         const std::vector<CourseMapLabelCandidate>& candidates,
         CourseOverviewMapRect rect);
-    void SetSettings(CourseMapLabelLayoutSettings settings);
+    bool SetSettings(CourseMapLabelLayoutSettings settings, std::string* errorMessage = nullptr);
     const CourseMapLabelLayoutSettings& Settings() const noexcept { return settings_; }
     void Invalidate() noexcept;
 

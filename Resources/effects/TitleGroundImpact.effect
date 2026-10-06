@@ -1,0 +1,43 @@
+# Brief flash and fine grit; the expanding alpha billow is drawn by VFX.TitleGroundDust.
+name = title_ground_impact
+lifetime = 1.65
+blend = alpha
+layer = additive
+renderQueue = 3370
+color = 1,1,1,1
+size = 1,1,1
+
+component = particle
+name = title_sand_grit
+technique = ParticleAdditive
+blend = alpha
+texture = circle2
+duration = 0.85
+color = 0.38,0.24,0.12,0.8
+size = 0.8,1.2,1
+particle.lifetime = 0.75
+particle.emissive = 0.8
+particle.spawnCount = 4
+particle.spawnFrequency = 0.12
+particle.spawnRadius = 1.05
+particle.randomRotation = 1
+particle.pulseSpeed = 0
+particle.depthFadeSoftness = 0.0002
+particle.edgeSoftness = 0.5
+
+component = particle
+name = title_impact_flash
+technique = ParticleAdditive
+blend = additive
+texture = circle2
+duration = 0.10
+color = 1,0.48,0.08,0.8
+size = 5.5,3,1
+particle.lifetime = 0.09
+particle.emissive = 4
+particle.spawnCount = 2
+particle.spawnFrequency = 0
+particle.spawnRadius = 0.12
+particle.pulseSpeed = 0
+particle.depthFadeSoftness = 0
+particle.edgeSoftness = 0.4

@@ -31,7 +31,6 @@ public:
     void RestartInstance(uint32_t id);
     void SetInstanceAge(uint32_t id, float age);
     void SetEffectPreviewLoop(uint32_t id, bool enabled);
-    EffectInstance* FindInstance(uint32_t id);
     const EffectInstance* FindInstance(uint32_t id) const;
     void ClearInstances();
 
@@ -45,9 +44,12 @@ public:
     float SpeedMultiplier() const;
 
     const std::unordered_map<std::string, EffectAsset>& Assets() const;
-    std::unordered_map<std::string, EffectAsset>& MutableAssets();
+    bool RegisterAsset(EffectAsset asset, std::string* errorMessage = nullptr);
+    bool ValidateAssetReplacement(const std::unordered_map<std::string, EffectAsset>& assets, std::string* errorMessage = nullptr) const;
+    bool ReplaceAssets(std::unordered_map<std::string, EffectAsset> assets, std::string* errorMessage = nullptr);
+    bool SetInstanceAppearance(uint32_t id, const Transform& transform, const Vector4& color, bool attached = false);
+    bool MoveInstance(uint32_t id, const Vector3& position, bool resetVelocity = false);
     const std::vector<EffectInstance>& Instances() const;
-    std::vector<EffectInstance>& MutableInstances();
     uint64_t ParticlePoolResetSerial() const;
 
 private:

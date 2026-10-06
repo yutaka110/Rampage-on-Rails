@@ -50,6 +50,8 @@ struct CourseMapHybridCartographySettings final {
     float rockCoverageThreshold = 0.025f;
     float structureCoverageThreshold = 0.015f;
     float largestRegionThreshold = 0.006f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 // Decides how retained exact cartography and cheap semantic proxies are
@@ -60,7 +62,7 @@ public:
     const CourseMapHybridCartographyFrame& Compose(
         const CourseMapCartographyFrame* cartography);
 
-    void SetSettings(CourseMapHybridCartographySettings settings);
+    bool SetSettings(CourseMapHybridCartographySettings settings, std::string* errorMessage = nullptr);
     const CourseMapHybridCartographySettings& Settings() const noexcept {
         return settings_;
     }

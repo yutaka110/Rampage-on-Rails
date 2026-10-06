@@ -1,4 +1,5 @@
 #include "PostProcessPresetStore.h"
+#include <cmath>
 
 #include "PostProcessStack.h"
 
@@ -47,8 +48,8 @@ void SetError(std::string* error, const std::string& message) {
     }
 }
 
-PostProcessPass* FindPass(PostProcessStack& stack, const std::string& name) {
-    for (PostProcessPass& pass : stack.MutablePasses()) {
+PostProcessPass* FindPass(std::vector<PostProcessPass>& passes, const std::string& name) {
+    for (PostProcessPass& pass : passes) {
         if (pass.name == name) {
             return &pass;
         }
@@ -274,6 +275,7 @@ bool PostProcessPresetStore::Load(PostProcessStack& stack, std::string* error) {
         return false;
     }
 
+    auto candidates = stack.Passes();
     std::string line;
     while (std::getline(input, line)) {
         const size_t comment = line.find('#');
@@ -300,24 +302,24 @@ bool PostProcessPresetStore::Load(PostProcessStack& stack, std::string* error) {
 
         const std::string passName = key.substr(passNameBegin, fieldSeparator - passNameBegin);
         const std::string field = key.substr(fieldSeparator + 1);
-        PostProcessPass* pass = FindPass(stack, passName);
+        PostProcessPass* pass = FindPass(candidates, passName);
         if (pass == nullptr) {
             continue;
         }
 
         if (field == "enabled") {
             bool enabled = false;
-            if (ParseBool(value, enabled)) {
-                pass->enabled = enabled;
-            }
+            if (!ParseBool(value, enabled)) { SetError(error, "Invalid enabled flag in post-process preset."); return false; }
+            pass->enabled = enabled;
             continue;
         }
 
         float numericValue = 0.0f;
-        if (ParseFloat(value, numericValue)) {
-            ApplyFloatField(*pass, field, numericValue);
-        }
+        if (!ParseFloat(value, numericValue) || !std::isfinite(numericValue)) { SetError(error, "Invalid numeric value in post-process preset."); return false; }
+        ApplyFloatField(*pass, field, numericValue);
     }
+
+    if (!stack.ReplacePasses(std::move(candidates), error)) return false;
 
     // Presets store pass enable flags; translate them back into the atomic
     // transition controller instead of leaving its state out of sync.

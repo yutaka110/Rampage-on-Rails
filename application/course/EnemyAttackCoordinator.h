@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 
 #include "EnemyBehaviorSystem.h"
@@ -59,6 +60,8 @@ struct EnemyAttackCoordinatorSettings final {
     float maximumReservationSeconds = 3.0f;
     float tokenRecoverySeconds = 0.18f;
     float waitingPriorityPerSecond = 0.12f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct EnemyAttackCoordinatorFrame final {
@@ -101,12 +104,24 @@ public:
     const EnemyAttackCoordinatorSettings& Settings() const noexcept {
         return settings_;
     }
-    EnemyAttackCoordinatorSettings& MutableSettings() noexcept {
-        return settings_;
-    }
+    bool Configure(const EnemyAttackCoordinatorSettings& settings,
+        std::string* errorMessage = nullptr);
     const EnemyAttackCoordinatorFrame& Frame() const noexcept { return frame_; }
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    void RebuildFromRuntimeActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime);
+    void UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const EnemyBehaviorFrame& behaviorFrame,
+        float deltaTime);
+    bool MarkTelegraphPresentedActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        uint32_t actorId,
+        uint64_t intentSequence);
+
     void QueueIntent(CourseEnemyActor& actor, const EnemyAttackIntent& intent);
     void GrantToken(CourseEnemyActor& actor);
     void ReleaseToken(CourseEnemyActor& actor);

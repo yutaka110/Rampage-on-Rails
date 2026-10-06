@@ -70,6 +70,8 @@ struct PlayerDamageSystemSettings final {
     uint32_t projectileHistoryCapacity = 128;
     float maximumDamagePerHit = 10000.0f;
     float maximumInvulnerabilitySeconds = 5.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 // Authoritative acceptance boundary for every hostile hit against the player.
@@ -96,7 +98,11 @@ public:
         return resultsThisFrame_;
     }
     const PlayerDamageResult& LastResult() const noexcept { return lastResult_; }
-    PlayerDamageSystemSettings& MutableSettings() noexcept { return settings_; }
+    // 設定はコピーを編集し、検証に成功した場合だけ反映する。
+    // 履歴容量・無敵時間の変更に伴う既存状態の調整も、このクラスが担当する。
+    // Invalid settings leave both configuration and gameplay state unchanged.
+    bool Configure(const PlayerDamageSystemSettings& settings,
+        std::string* errorMessage = nullptr);
     const PlayerDamageSystemSettings& Settings() const noexcept { return settings_; }
 
 private:

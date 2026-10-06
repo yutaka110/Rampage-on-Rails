@@ -30,6 +30,8 @@ struct CourseMapVisualBakeSettings final {
     float minimumPrimitiveExtent = 0.75f;
     uint32_t maximumPrimitives = 16384;
     uint32_t maximumContours = 32768;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMapVisualBakeInput final {
@@ -80,7 +82,7 @@ public:
 
     void RequestRebuild() noexcept;
     void InvalidateAsset() noexcept;
-    void SetSettings(CourseMapVisualBakeSettings settings);
+    bool SetSettings(CourseMapVisualBakeSettings settings, std::string* errorMessage = nullptr);
     const CourseMapVisualBakeSettings& Settings() const noexcept { return settings_; }
     void SetCacheRoot(std::filesystem::path path);
     const CourseMapVisualAsset* CurrentAsset() const noexcept;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "EditorViewportCameraInput.h"
 #include "utils/math/MathUtils.h"
@@ -14,6 +15,8 @@ struct EditorViewportCameraSettings {
     float slowMoveMultiplier = 0.25f;
     float maximumDeltaTime = 0.1f;
     float maximumPitch = 1.55334306f; // 89 degrees.
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 class EditorViewportCameraController {
@@ -26,7 +29,8 @@ public:
         float farZ);
     void SetTransform(const Transform& transform);
     void SetLens(float fovY, float aspectRatio, float nearZ, float farZ);
-    void SetSettings(const EditorViewportCameraSettings& settings);
+    bool SetSettings(const EditorViewportCameraSettings& settings,
+        std::string* errorMessage = nullptr);
     void Update(const EditorViewportCameraInput& input);
 
     bool Initialized() const { return initialized_; }

@@ -33,16 +33,22 @@ EditorUndoResult EditorRuntimeApplyExecutionService::ApplyRuntimeChange(
         ? (undo ? change.beforePostProcess : change.afterPostProcess)
         : decltype(change.beforePostProcess){};
 
+    std::string validationError;
+    if ((change.includesVfxAuthoring && !targets_.effectRuntime->ValidateAssetReplacement(desiredVfx, &validationError)) ||
+        (change.includesPostProcess && !PostProcessStack::ValidatePasses(desiredPost, &validationError))) {
+        return EditorUndoResult::Failure(EditorErrorCode::NotAvailable, validationError);
+    }
+
     if (change.includesCourse) {
         using std::swap;
         swap(*targets_.course, desiredCourse);
     }
     if (change.includesTerrain) targets_.runtimeState->terrain = desiredTerrain;
     if (change.includesVfxAuthoring) {
+        (void)targets_.effectRuntime->ReplaceAssets(std::move(desiredVfx));
         targets_.effectRuntime->ClearInstances();
-        targets_.effectRuntime->MutableAssets().swap(desiredVfx);
     }
-    if (change.includesPostProcess) targets_.postProcessStack->MutablePasses().swap(desiredPost);
+    if (change.includesPostProcess) (void)targets_.postProcessStack->ReplacePasses(std::move(desiredPost));
 
     if (targets_.dirtyState != nullptr) {
         targets_.dirtyState->MarkDirty(

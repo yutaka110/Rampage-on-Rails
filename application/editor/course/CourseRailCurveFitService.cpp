@@ -1,4 +1,5 @@
 #include "CourseRailCurveFitService.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -80,12 +81,27 @@ float TriangleRadius(Vector3 a, Vector3 b, Vector3 c) {
 
 } // namespace
 
+bool CourseRailCurveFitSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(minimumInputSpacing, .001f, 1000.0f) &&
+        settings::InRange(simplificationTolerance, 0.0f, 1000.0f) &&
+        settings::InRange(maximumControlPointSpacing, .01f, 10000.0f) &&
+        settings::InRange(minimumSegmentLength, .001f, 1000.0f) &&
+        settings::InRange(minimumTurnRadius, 0.0f, 100000.0f) &&
+        settings::InRange(smoothingStrength, 0.0f, .49f) &&
+        settings::InRange(smoothingIterations, 0u, 16u) &&
+        settings::InRange(maximumInputSamples, 2u, 65536u) &&
+        settings::InRange(maximumControlPoints, 2u, 4096u);
+    return settings::Result(valid, errorMessage,
+        "CourseRailCurveFitSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
 CourseRailCurveFitResult CourseRailCurveFitService::Fit(
     const std::vector<Vector3>& samples,
     CourseRailCurveFitSettings settings,
     float corridorRadius,
     float speed) const {
     CourseRailCurveFitResult result{};
+    if (!settings.Validate(&result.message)) return result;
     result.inputPoints = static_cast<uint32_t>(samples.size());
     settings.minimumInputSpacing =
         (std::clamp)(settings.minimumInputSpacing, 0.001f, 1000.0f);

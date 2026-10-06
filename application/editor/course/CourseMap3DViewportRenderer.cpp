@@ -1,4 +1,5 @@
 #include "CourseMap3DViewportRenderer.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -348,16 +349,21 @@ CourseMap3DFrame CourseMap3DViewportRenderer::Build(
     return frame;
 }
 
-void CourseMap3DViewportRenderer::SetSettings(
-    CourseMap3DRenderSettings settings) {
-    settings.samplesPerRailSegment = (std::clamp)(
-        settings.samplesPerRailSegment, 4u, 128u);
-    settings.terrainTriangleBudget = (std::clamp)(
-        settings.terrainTriangleBudget, 100u, 100000u);
-    settings.gridExtent = (std::clamp)(settings.gridExtent, 10.0f, 100000.0f);
-    settings.gridStep = (std::clamp)(settings.gridStep, 1.0f, settings.gridExtent);
+bool CourseMap3DRenderSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(samplesPerRailSegment, 4u, 128u) &&
+        settings::InRange(terrainTriangleBudget, 100u, 100000u) &&
+        settings::InRange(gridExtent, 10.0f, 100000.0f) &&
+        settings::InRange(gridStep, 1.0f, gridExtent);
+    return settings::Result(valid, errorMessage,
+        "CourseMap3DRenderSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMap3DViewportRenderer::SetSettings(
+    CourseMap3DRenderSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
     ++settingsRevision_;
+    return true;
 }
 
 } // namespace editor

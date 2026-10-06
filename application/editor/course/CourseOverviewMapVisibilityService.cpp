@@ -1,4 +1,5 @@
 #include "CourseOverviewMapVisibilityService.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -277,20 +278,27 @@ const CourseOverviewMapVisibleFrame& CourseOverviewMapVisibilityService::Build(
     return frame_;
 }
 
-void CourseOverviewMapVisibilityService::SetSettings(
-    CourseOverviewMapVisibilitySettings settings) {
-    settings.overscanPixels = (std::max)(0.0f, settings.overscanPixels);
-    settings.railLodPixelError = (std::clamp)(settings.railLodPixelError, 0.0f, 16.0f);
-    settings.maximumLabels = (std::min)(settings.maximumLabels, 4096u);
-    settings.labelCellPixels = (std::clamp)(settings.labelCellPixels, 4.0f, 256.0f);
-    settings.estimatedGlyphWidth = (std::clamp)(settings.estimatedGlyphWidth, 1.0f, 64.0f);
-    settings.estimatedLabelHeight = (std::clamp)(settings.estimatedLabelHeight, 1.0f, 128.0f);
-    settings.labelPaddingPixels = (std::clamp)(settings.labelPaddingPixels, 0.0f, 64.0f);
-    settings.pixelsPerLabel = (std::max)(1.0f, settings.pixelsPerLabel);
-    if (SameSettings(settings_, settings)) return;
+bool CourseOverviewMapVisibilitySettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(overscanPixels, 0.0f, 100000.0f) &&
+        settings::InRange(railLodPixelError, 0.0f, 16.0f) &&
+        settings::InRange(maximumLabels, 0u, 4096u) &&
+        settings::InRange(labelCellPixels, 4.0f, 256.0f) &&
+        settings::InRange(estimatedGlyphWidth, 1.0f, 64.0f) &&
+        settings::InRange(estimatedLabelHeight, 1.0f, 128.0f) &&
+        settings::InRange(labelPaddingPixels, 0.0f, 64.0f) &&
+        settings::InRange(pixelsPerLabel, 1.0f, 1000000.0f);
+    return settings::Result(valid, errorMessage,
+        "CourseOverviewMapVisibilitySettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseOverviewMapVisibilityService::SetSettings(
+    CourseOverviewMapVisibilitySettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++state_.settingsRevision;
     Invalidate();
+    return true;
 }
 
 void CourseOverviewMapVisibilityService::Invalidate() noexcept {

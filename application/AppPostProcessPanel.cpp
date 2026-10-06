@@ -126,7 +126,7 @@ void DrawBloomGlareControls(PostProcessStack& postProcessStack, std::vector<Post
     PostProcessPresetStore presetStore{};
     if (ImGui::Button("Save Look Preset")) {
         std::string error;
-        if (presetStore.Save(postProcessStack, &error)) {
+        if (postProcessStack.ConfigurePasses(passes, &error) && presetStore.Save(postProcessStack, &error)) {
             lookPresetStatus = "Saved: " + presetStore.Path().string();
         } else {
             lookPresetStatus = error;
@@ -136,6 +136,7 @@ void DrawBloomGlareControls(PostProcessStack& postProcessStack, std::vector<Post
     if (ImGui::Button("Load Look Preset")) {
         std::string error;
         if (presetStore.Load(postProcessStack, &error)) {
+            passes = postProcessStack.Passes();
             lookPresetStatus = "Loaded: " + presetStore.Path().string();
         } else {
             lookPresetStatus = error;
@@ -149,7 +150,7 @@ void DrawBloomGlareControls(PostProcessStack& postProcessStack, std::vector<Post
 
 void DrawPostProcessPanel(
     PostProcessStack& postProcessStack) {
-    std::vector<PostProcessPass>& passes = postProcessStack.MutablePasses();
+    std::vector<PostProcessPass> passes = postProcessStack.Passes();
     ImGui::SeparatorText("Assignment Shortcuts");
     ImGui::TextUnformatted("0: Reset  1: WarpTunnel  2: Grayscale  3: Vignette");
     ImGui::TextUnformatted("4: BoxBlur  5: GaussianBlur  6: Outline  7: Dissolve  8: Random");
@@ -447,4 +448,7 @@ void DrawPostProcessPanel(
             pass.resolutionScale);
         ImGui::PopID();
     }
+    std::string error;
+    if (!postProcessStack.ConfigurePasses(passes, &error)) ImGui::TextWrapped("Edit rejected: %s", error.c_str());
+
 }

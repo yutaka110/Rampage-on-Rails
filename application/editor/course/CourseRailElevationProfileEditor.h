@@ -19,6 +19,8 @@ struct CourseRailElevationProfileSettings final {
     bool heightSnapEnabled = true;
     float heightSnapStep = 0.5f;
     uint32_t samplesPerSegment = 24;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseRailElevationProfileLine final {
@@ -97,7 +99,7 @@ public:
     void Unbind();
     void SetActive(bool active);
     void SetViewport(CourseOverviewMapRect rect);
-    void SetSettings(CourseRailElevationProfileSettings settings);
+    bool SetSettings(CourseRailElevationProfileSettings settings, std::string* errorMessage = nullptr);
     void Pan(Vector2 deltaPixels);
     void ZoomAt(Vector2 mapPosition, float distanceFactor, float heightFactor);
     void FrameAll();

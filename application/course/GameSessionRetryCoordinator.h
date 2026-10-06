@@ -79,6 +79,7 @@ enum class GameSessionRetryStatus : uint8_t {
     VehicleDamageRuntimeMismatch,
     EncounterPacingRuntimeMismatch,
     EncounterScoreRuntimeMismatch,
+    SpawnRuntimeMismatch,
 };
 
 struct GameSessionRetryResult final {

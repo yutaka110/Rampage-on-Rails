@@ -1,8 +1,23 @@
 #include "CourseGameplayWaveRuntimeBridge.h"
+#include "GameplaySettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
 #include <unordered_set>
+
+bool CourseGameplayWaveRuntimeSettings::Validate(std::string* errorMessage) const {
+    return gameplay::settings::Result(
+        maximumStateTransitionsPerFrame > 0 && maximumStateTransitionsPerFrame <= 65536,
+        errorMessage, "Wave transition budget must be between 1 and 65536.");
+}
+
+bool CourseGameplayWaveRuntimeBridge::Configure(
+    const CourseGameplayWaveRuntimeSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    // 設定の変更で進行中のウェーブをリセットしない。
+    settings_ = settings;
+    return true;
+}
 
 bool CourseGameplayWaveRuntimeBridge::Bind(
     const CourseRuntimeProgramAsset* program,
@@ -96,7 +111,7 @@ bool CourseGameplayWaveRuntimeBridge::NotifyEnemyDefeated(
         return false;
     }
     actorPhases_[actorIndex] = CourseGameplayActorPhase::Defeated;
-    for (CourseEnemyActor& actor : runtime_->MutableEnemies()) {
+    for (const CourseEnemyActor& actor : runtime_->Enemies()) {
         if (actor.desc.sourcePlacementGuid == placementGuid) {
             runtime_->EnemyCombat().ForceDefeat(*runtime_, actor.actorId);
         }
@@ -370,37 +385,12 @@ void CourseGameplayWaveRuntimeBridge::SpawnActor(uint32_t actorIndex) {
 }
 
 void CourseGameplayWaveRuntimeBridge::RemoveActorsForWave(std::size_t waveIndex) {
-    std::unordered_set<uint32_t> removedActorIds;
-    auto& enemies = runtime_->MutableEnemies();
-    enemies.erase(std::remove_if(enemies.begin(), enemies.end(), [&](auto& actor) {
-        const CourseRuntimeActorRecord* record =
-            program_->FindActor(actor.desc.sourcePlacementGuid);
-        if (record == nullptr || record->waveIndex != waveIndex) return false;
-        removedActorIds.insert(actor.actorId);
-        const std::string formationId =
-            !actor.desc.formationDefinition.definitionId.empty()
-                ? actor.desc.formationDefinition.definitionId
-                : actor.desc.waveId;
-        const bool hasAuthoredExit =
-            !actor.desc.formationDefinition.definitionId.empty() ||
-            runtime_->EnemyFormations().FindDefinition(formationId) != nullptr;
-        if (!hasAuthoredExit) return true;
-        actor.entranceExitState.exitRequested = true;
-        actor.entranceExitState.attackSuppressed = true;
-        actor.entranceExitState.targetable = false;
-        if (formationId.empty()) {
-            runtime_->EnemyEntranceExit().RequestActorExit(actor.actorId);
-        } else {
-            runtime_->EnemyEntranceExit().RequestFormationExit(formationId);
-        }
-        return false;
-    }), enemies.end());
-    // Projectiles cease being gameplay threats as soon as the Wave resolves;
-    // only the enemy actors remain long enough to perform their authored exit.
-    auto& bullets = runtime_->MutableBullets();
-    bullets.erase(std::remove_if(bullets.begin(), bullets.end(), [&](const auto& bullet) {
-        return removedActorIds.contains(bullet.ownerActorId);
-    }), bullets.end());
+    std::vector<uint32_t> retiredActorIds;
+    for (const CourseEnemyActor& actor : runtime_->Enemies()) {
+        const CourseRuntimeActorRecord* record = program_->FindActor(actor.desc.sourcePlacementGuid);
+        if (record != nullptr && record->waveIndex == waveIndex) retiredActorIds.push_back(actor.actorId);
+    }
+    runtime_->RetireEnemies(retiredActorIds);
     for (const uint32_t actorIndex : program_->waves[waveIndex].actorIndices) {
         if (actorPhases_[actorIndex] != CourseGameplayActorPhase::Defeated) {
             actorPhases_[actorIndex] = CourseGameplayActorPhase::Retired;
@@ -410,17 +400,11 @@ void CourseGameplayWaveRuntimeBridge::RemoveActorsForWave(std::size_t waveIndex)
 
 void CourseGameplayWaveRuntimeBridge::RemoveOwnedActors() {
     if (program_ == nullptr || runtime_ == nullptr) return;
-    std::unordered_set<uint32_t> removedActorIds;
-    auto& enemies = runtime_->MutableEnemies();
-    enemies.erase(std::remove_if(enemies.begin(), enemies.end(), [&](const auto& actor) {
-        if (program_->FindActor(actor.desc.sourcePlacementGuid) == nullptr) return false;
-        removedActorIds.insert(actor.actorId);
-        return true;
-    }), enemies.end());
-    auto& bullets = runtime_->MutableBullets();
-    bullets.erase(std::remove_if(bullets.begin(), bullets.end(), [&](const auto& bullet) {
-        return removedActorIds.contains(bullet.ownerActorId);
-    }), bullets.end());
+    std::vector<uint32_t> retiredActorIds;
+    for (const CourseEnemyActor& actor : runtime_->Enemies()) {
+        if (program_->FindActor(actor.desc.sourcePlacementGuid) != nullptr) retiredActorIds.push_back(actor.actorId);
+    }
+    runtime_->RetireEnemies(retiredActorIds, false);
 }
 
 bool CourseGameplayWaveRuntimeBridge::RuntimeContains(

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace {
 struct RailVector final {
@@ -73,6 +74,24 @@ void EnemyProjectileSystem::RebuildFromProjectiles(
             nextProjectileId_, projectile.projectileId + 1);
     }
     frame_.revision = ++revision_;
+}
+
+bool EnemyProjectileSystem::SpawnProjectile(EnemyProjectileRuntimeState projectile,
+    std::vector<EnemyProjectileRuntimeState>& projectiles) {
+    if (projectile.projectileId != 0 && std::any_of(projectiles.begin(), projectiles.end(),
+        [&](const auto& existing) { return existing.projectileId == projectile.projectileId; })) return false;
+    // Observe imported IDs before allocating, including IDs on legacy inputs.
+    if (projectile.projectileId != 0) nextProjectileId_ = (std::max)(nextProjectileId_, projectile.projectileId + 1);
+    if (!projectile.initialized) {
+        const uint64_t requestedId = projectile.projectileId;
+        InitializeLegacy(projectile);
+        if (requestedId != 0) projectile.projectileId = requestedId;
+    } else if (projectile.projectileId == 0) {
+        projectile.projectileId = nextProjectileId_++;
+    }
+    projectiles.push_back(std::move(projectile));
+    ++pendingSpawned_;
+    return true;
 }
 
 uint32_t EnemyProjectileSystem::SpawnVolley(

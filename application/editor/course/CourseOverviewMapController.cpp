@@ -144,8 +144,20 @@ void CourseOverviewMapController::SetSceneFitPoints(
     InvalidateFrameCache();
 }
 
+bool CourseOverviewMapController::ConfigureProjection(const CourseOverviewMapProjectionSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameProjection(settings, projectionSettings_)) return true;
+    EndInteractivePan();
+    projectionSettings_ = settings;
+    state_.mode = settings.mode;
+    ++viewportRevision_;
+    InvalidateFrameCache();
+    InvalidatePlayheadOverlay();
+    return true;
+}
+
 void CourseOverviewMapController::SetMode(CourseOverviewMapProjectionMode mode) {
-    if (projectionSettings_.mode == mode) return;
+    if (mode > CourseOverviewMapProjectionMode::Free || projectionSettings_.mode == mode) return;
     projectionSettings_.mode = mode;
     projectionSettings_.panPixels = {};
     projectionSettings_.zoom = 1.0f;
@@ -220,7 +232,10 @@ bool CourseOverviewMapController::FrameMapPoints(
 }
 
 void CourseOverviewMapController::PanPixels(Vector2 delta) {
-    if (delta.x == 0.0f && delta.y == 0.0f) return;
+    if (!std::isfinite(delta.x) || !std::isfinite(delta.y) ||
+        !std::isfinite(projectionSettings_.panPixels.x + delta.x) ||
+        !std::isfinite(projectionSettings_.panPixels.y + delta.y) ||
+        (delta.x == 0.0f && delta.y == 0.0f)) return;
     projectionSettings_.panPixels.x += delta.x;
     projectionSettings_.panPixels.y += delta.y;
     if (interactivePanActive_) {
@@ -247,7 +262,8 @@ bool CourseOverviewMapController::EndInteractivePan() noexcept {
 }
 
 void CourseOverviewMapController::ZoomAt(Vector2 mapPosition, float factor) {
-    if (!projection_.State().valid || !std::isfinite(factor) || factor <= 0.0f) return;
+    if (!projection_.State().valid || !std::isfinite(factor) || factor <= 0.0f ||
+        !std::isfinite(mapPosition.x) || !std::isfinite(mapPosition.y)) return;
     const Vector2 rawBefore = projection_.MapToRaw(mapPosition);
     projectionSettings_.zoom = (std::clamp)(projectionSettings_.zoom * factor, 0.05f, 64.0f);
     std::string ignored;

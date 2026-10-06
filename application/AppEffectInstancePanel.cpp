@@ -156,7 +156,7 @@ void CountComponentAuthoringSummary(
     }
 }
 
-EffectInstance* FindLatestInstance(const std::vector<EffectInstance*>& instances) {
+const EffectInstance* FindLatestInstance(const std::vector<const EffectInstance*>& instances) {
     if (instances.empty()) {
         return nullptr;
     }
@@ -168,8 +168,8 @@ EffectInstance* FindLatestInstance(const std::vector<EffectInstance*>& instances
         });
 }
 
-EffectInstance* FindInstanceById(
-    const std::vector<EffectInstance*>& instances,
+const EffectInstance* FindInstanceById(
+    const std::vector<const EffectInstance*>& instances,
     uint32_t instanceId) {
     const auto it = std::find_if(
         instances.begin(),
@@ -313,8 +313,8 @@ void DrawEffectInstancePanel(
     EffectRuntime& effectRuntime = *input.effectRuntime;
     const EffectAuthoringRegistry& authoringRegistry = input.authoringRegistry;
     uint32_t& selectedInstanceId = *input.selectedInstanceId;
-    std::vector<EffectInstance*> instances;
-    for (EffectInstance& instance : effectRuntime.MutableInstances()) {
+    std::vector<const EffectInstance*> instances;
+    for (const EffectInstance& instance : effectRuntime.Instances()) {
         if (instance.asset != nullptr) {
             instances.push_back(&instance);
         }
@@ -364,7 +364,7 @@ void DrawEffectInstancePanel(
 
         ImGui::TableSetColumnIndex(0);
         ImGui::BeginChild("EffectInstanceList", ImVec2(0.0f, 240.0f), true);
-        for (EffectInstance* instance : instances) {
+        for (const EffectInstance* instance : instances) {
             const bool isSelected = (selectedInstanceId == instance->id);
             std::string label = isSelected ?
                 "[Pinned] id=" + std::to_string(instance->id) + " " + instance->asset->name :
@@ -383,7 +383,7 @@ void DrawEffectInstancePanel(
 
         ImGui::TableSetColumnIndex(1);
         ImGui::BeginChild("EffectInstanceDetails", ImVec2(0.0f, 240.0f), true);
-        EffectInstance* selectedInstance = FindInstanceById(instances, selectedInstanceId);
+        const EffectInstance* selectedInstance = FindInstanceById(instances, selectedInstanceId);
 
         if (selectedInstance != nullptr) {
             ImGui::PushID(static_cast<int>(selectedInstance->id));
@@ -398,17 +398,19 @@ void DrawEffectInstancePanel(
             if (ImGui::DragFloat("Timeline Age", &timelineAge, 0.02f, 0.0f, 60.0f, "%.2f")) {
                 effectRuntime.SetInstanceAge(selectedInstance->id, timelineAge);
             }
-            ImGui::DragFloat3("Position", &selectedInstance->transform.translate.x, 0.05f, -100.0f, 100.0f);
-            ImGui::DragFloat3("Scale", &selectedInstance->transform.scale.x, 0.02f, 0.01f, 20.0f);
-            ImGui::ColorEdit4("Color", &selectedInstance->color.x);
+            Transform appearance = selectedInstance->transform;
+            Vector4 color = selectedInstance->color;
+            bool changed = ImGui::DragFloat3("Position", &appearance.translate.x, 0.05f, -100.0f, 100.0f);
+            changed |= ImGui::DragFloat3("Scale", &appearance.scale.x, 0.02f, 0.01f, 20.0f);
+            changed |= ImGui::ColorEdit4("Color", &color.x);
+            if (changed && !effectRuntime.SetInstanceAppearance(selectedInstance->id, appearance, color, selectedInstance->attached)) {
+                ImGui::TextUnformatted("Effect appearance was rejected.");
+            }
             if (ImGui::Button("Restart")) {
                 effectRuntime.RestartInstance(selectedInstance->id);
             }
             ImGui::SameLine();
-            if (ImGui::Button("Stop")) {
-                effectRuntime.StopEffect(selectedInstance->id);
-                selectedInstanceId = 0;
-            }
+            const bool stopRequested = ImGui::Button("Stop");
             if (ImGui::TreeNode("Component Authoring Detail")) {
                 for (const EffectComponentInstance& componentInstance : selectedInstance->components) {
                     const EffectComponentCommon* common =
@@ -430,7 +432,9 @@ void DrawEffectInstancePanel(
                 }
                 ImGui::TreePop();
             }
+            const uint32_t instanceId = selectedInstance->id;
             ImGui::PopID();
+            if (stopRequested) { effectRuntime.StopEffect(instanceId); selectedInstanceId = 0; }
         } else {
             ImGui::TextDisabled("No effect instance selected.");
         }

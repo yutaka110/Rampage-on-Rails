@@ -8,6 +8,15 @@
 namespace editor {
 namespace {
 
+template <typename Owner, typename Settings>
+void ApplyValidatedSettings(Owner& owner, const Settings& candidate) {
+    std::string error;
+    if (!owner.SetSettings(candidate, &error)) {
+        ImGui::TextWrapped("Settings rejected: %s", error.c_str());
+    }
+}
+
+
 constexpr std::string_view kPlacementPrefix = "course-enemy-placement:";
 
 bool IsPlacementHandle(const EditorObjectHandle* handle) {
@@ -617,7 +626,7 @@ void CourseEnemyDetailsPanel::DrawGizmoSettings(
                 tool.duplicateOffset = {
                     duplicateOffset[0], duplicateOffset[1], duplicateOffset[2]};
             }
-            context.viewportTool->SetSettings(std::move(tool));
+            ApplyValidatedSettings(*context.viewportTool, std::move(tool));
         }
     }
     if (context.transformGizmo == nullptr) return;
@@ -651,12 +660,12 @@ void CourseEnemyDetailsPanel::DrawGizmoSettings(
     }
     ImGui::SliderFloat("Handle Scale", &settings.handleLengthScale,
         0.1f, 4.0f, "%.2f");
-    context.transformGizmo->SetSettings(settings);
+    ApplyValidatedSettings(*context.transformGizmo, settings);
     if (context.viewportTool != nullptr) {
         CourseEnemyViewportEditSettings tool = context.viewportTool->Settings();
         tool.offsetSnap = settings.snapEnabled;
         tool.offsetSnapSize = settings.translationSnap;
-        context.viewportTool->SetSettings(std::move(tool));
+        ApplyValidatedSettings(*context.viewportTool, std::move(tool));
     }
     ImGui::Text("Selected placements: %u",
         context.transformGizmo->State().selectedPlacementCount);

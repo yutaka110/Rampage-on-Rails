@@ -27,6 +27,8 @@ struct CourseTerrainMapBakeSettings final {
     float tileLength = 240.0f;
     std::array<uint32_t, 3> longitudinalSegments{96u, 192u, 384u};
     std::array<uint32_t, 3> radialSegments{16u, 24u, 32u};
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseTerrainMapBakeInput final {
@@ -80,7 +82,7 @@ public:
 
     void RequestRebuild() noexcept;
     void InvalidateAsset() noexcept;
-    void SetSettings(CourseTerrainMapBakeSettings settings);
+    bool SetSettings(CourseTerrainMapBakeSettings settings, std::string* errorMessage = nullptr);
     const CourseTerrainMapBakeSettings& Settings() const noexcept {
         return settings_;
     }

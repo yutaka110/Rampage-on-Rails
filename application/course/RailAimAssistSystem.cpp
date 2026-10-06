@@ -1,8 +1,39 @@
 #include "RailAimAssistSystem.h"
+#include "GameplaySettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+
+bool RailAimAssistSettings::Validate(std::string* errorMessage) const {
+    if (!gameplay::settings::InRange(minimumDistance, 0.0f, 100000.0f) ||
+        !gameplay::settings::InRange(maximumDistance, 0.01f, 100000.0f) ||
+        minimumDistance >= maximumDistance ||
+        !gameplay::settings::InRange(mouseAcquireAngleDegrees, 0.01f, 45.0f) ||
+        !gameplay::settings::InRange(gamepadAcquireAngleDegrees, 0.01f, 45.0f) ||
+        !gameplay::settings::InRange(retentionAngleMultiplier, 1.0f, 4.0f) ||
+        !gameplay::settings::InRange(mouseMagnetismStrength, 0.0f, 1.0f) ||
+        !gameplay::settings::InRange(gamepadMagnetismStrength, 0.0f, 1.0f) ||
+        !gameplay::settings::InRange(mouseMaximumCorrectionDegrees, 0.0f, 45.0f) ||
+        !gameplay::settings::InRange(gamepadMaximumCorrectionDegrees, 0.0f, 45.0f) ||
+        !gameplay::settings::InRange(maximumCorrectionSpeedDegrees, 0.0f, 2000.0f) ||
+        !gameplay::settings::InRange(highIntentReticleSpeed, 1.0f, 100000.0f) ||
+        !gameplay::settings::InRange(minimumHighIntentStrength, 0.0f, 1.0f) ||
+        !gameplay::settings::InRange(targetSwitchAdvantage, 0.0f, 2.0f) ||
+        !gameplay::settings::InRange(targetRetentionSeconds, 0.0f, 5.0f) ||
+        !gameplay::settings::InRange(angleWeight, 0.0f, 2.0f) ||
+        !gameplay::settings::InRange(forwardWeight, 0.0f, 2.0f) ||
+        !gameplay::settings::InRange(anchorPriorityWeight, 0.0f, 2.0f) ||
+        !gameplay::settings::InRange(enemyPriorityBonus, 0.0f, 2.0f) ||
+        !gameplay::settings::InRange(retainedTargetBonus, 0.0f, 2.0f) ||
+        maximumVisibilityQueries > 256) {
+        return gameplay::settings::Result(false, errorMessage, "Aim-assist settings exceed valid distance, angle, strength or visibility limits.");
+    }
+    if (errorMessage != nullptr) {
+        errorMessage->clear();
+    }
+    return true;
+}
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;

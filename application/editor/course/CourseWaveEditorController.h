@@ -72,7 +72,6 @@ public:
     }
     const CourseWaveEditorControllerState& State() const noexcept { return state_; }
     const CourseAsset* Course() const noexcept { return binding_.course; }
-    CourseAsset* MutableCourse() noexcept { return binding_.course; }
     const CourseWaveMutationService* MutationService() const noexcept {
         return mutations_.get();
     }

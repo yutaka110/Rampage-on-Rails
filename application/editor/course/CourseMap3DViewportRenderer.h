@@ -22,6 +22,8 @@ struct CourseMap3DCamera final {
     float verticalFovRadians = 0.785398163f;
     float nearPlane = 0.5f;
     float farPlane = 200000.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMap3DCameraBasis final {
@@ -137,6 +139,8 @@ struct CourseMap3DRenderSettings final {
     bool showTerrain = true;
     bool showGrid = true;
     bool showLabels = true;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMap3DRenderInput final {
@@ -169,7 +173,7 @@ struct CourseMap3DDynamicOverlay final {
 class CourseMap3DViewportRenderer final {
 public:
     CourseMap3DFrame Build(const CourseMap3DRenderInput& input) const;
-    void SetSettings(CourseMap3DRenderSettings settings);
+    bool SetSettings(CourseMap3DRenderSettings settings, std::string* errorMessage = nullptr);
     const CourseMap3DRenderSettings& Settings() const noexcept { return settings_; }
     uint64_t SettingsRevision() const noexcept { return settingsRevision_; }
 

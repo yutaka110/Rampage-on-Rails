@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include <cstdint>
 #include <string_view>
 
@@ -31,6 +33,8 @@ struct CourseOverviewMapSnapSettings final {
     float lateralOffsetStep = 0.5f;
     bool controlPointMagnetEnabled = true;
     float controlPointMagnetPixels = 10.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseOverviewMapSnapResult final {
@@ -48,7 +52,7 @@ struct CourseOverviewMapSnapResult final {
 // drags, Wave triggers and ActorAsset drops in every overview projection.
 class CourseOverviewMapSnapService final {
 public:
-    void SetSettings(CourseOverviewMapSnapSettings settings);
+    bool SetSettings(CourseOverviewMapSnapSettings settings, std::string* errorMessage = nullptr);
     const CourseOverviewMapSnapSettings& Settings() const noexcept { return settings_; }
 
     CourseOverviewMapSnapResult SnapControlPoint(

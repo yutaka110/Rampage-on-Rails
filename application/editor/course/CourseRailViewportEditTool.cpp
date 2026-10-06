@@ -1,4 +1,5 @@
 #include "CourseRailViewportEditTool.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -72,9 +73,17 @@ void CourseRailViewportEditTool::SetSelectedPoint(std::string guid) {
     state_.selectedPointGuid = std::move(guid);
 }
 
-void CourseRailViewportEditTool::SetSettings(CourseRailViewportEditSettings settings) {
-    settings.gridSize = (std::clamp)(settings.gridSize, 0.01f, 1000.0f);
+bool CourseRailViewportEditSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(gridSize, .01f, 1000.0f);
+    return settings::Result(valid, errorMessage,
+        "CourseRailViewportEditSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseRailViewportEditTool::SetSettings(
+    CourseRailViewportEditSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
+    return true;
 }
 
 void CourseRailViewportEditTool::Tick(const CourseRailViewportEditInput& input) {

@@ -1,0 +1,23 @@
+name = title_drone_muzzle
+lifetime = 0.14
+blend = additive
+layer = additive
+renderQueue = 3350
+color = 1,1,1,1
+size = 1,1,1
+
+component = particle
+name = title_drone_muzzle_flash
+technique = ParticleAdditive
+texture = circle2
+duration = 0.14
+color = 1.0,0.55,0.12,1
+size = 1.1,1.1,1
+particle.lifetime = 0.12
+particle.emissive = 2.0
+particle.spawnCount = 3
+particle.spawnFrequency = 0
+particle.spawnRadius = 0.06
+particle.pulseSpeed = 0
+particle.depthFadeSoftness = 0
+particle.edgeSoftness = 0.4

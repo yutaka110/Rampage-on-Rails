@@ -126,6 +126,8 @@ struct CourseMapSceneVisualizationSettings final {
     uint32_t maxSceneStructures = 1024;
     uint32_t maxActorProxies = 2048;
     uint32_t labelBudget = 160;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMapSceneVisualizationInput final {
@@ -151,7 +153,7 @@ public:
     const CourseMapSceneVisualizationFrame* CurrentFrame(
         CourseOverviewMapProjectionMode mode) const noexcept;
 
-    void SetSettings(CourseMapSceneVisualizationSettings settings);
+    bool SetSettings(CourseMapSceneVisualizationSettings settings, std::string* errorMessage = nullptr);
     const CourseMapSceneVisualizationSettings& Settings() const noexcept {
         return settings_;
     }

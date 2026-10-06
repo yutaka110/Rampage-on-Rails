@@ -699,8 +699,8 @@ bool EditorVfxGraphService::ApplyPreview(std::string& errorMessage) {
         }
     }
     runtimeAsset.lifetime = longestLifetime;
+    if (!runtime_->RegisterAsset(std::move(runtimeAsset), &errorMessage)) return false;
     runtime_->ClearInstances();
-    runtime_->MutableAssets()[runtimeAsset.name] = std::move(runtimeAsset);
     runtime_->PlayEffect(graphAsset->name, {0.0f, 0.0f, 0.0f});
     return true;
 }

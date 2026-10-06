@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 
 #include "RailLockOnTypes.h"
@@ -19,6 +20,7 @@ public:
     void Reset();
     void Update(const RailLockResolverFrameInput& input);
     std::vector<RailLockToken> ConsumeTokens();
+    void LimitTokenCapacity(size_t capacity);
 
     const std::vector<RailLockToken>& Tokens() const { return tokens_; }
     const std::vector<RailLockCandidate>& Candidates() const { return candidates_; }

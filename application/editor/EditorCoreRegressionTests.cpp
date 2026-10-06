@@ -1,6 +1,7 @@
-﻿#include <cstdlib>
+#include <cstdlib>
 #include "../course/RailTitleScene.h"
 #include "EditorCoreRegressionTests.h"
+#include "../PostProcessPresetStore.h"
 
 #include "EditorAssetMutationExecutor.h"
 #include "EditorAssetMutationSafety.h"
@@ -285,6 +286,8 @@
 #include "../course/RailRideTuningTelemetry.h"
 #include "../course/RailWorldScale.h"
 #include "../course/RailSpeedDirector.h"
+#include "../course/RailLockOnSystem.h"
+#include "../course/RailLockResolver.h"
 #include "../course/RailVehicleActor.h"
 #include "../course/RailVehicleRenderer.h"
 #include "../course/RailVehicleAudioBridge.h"
@@ -363,6 +366,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -2014,6 +2018,282 @@ void TestPropertyEditService(RegressionRunner& runner) {
     runner.Expect(!lockedDelta.applied, "locked property delta should be rejected");
 }
 
+
+
+void TestRemainingEditorSettingsBoundaries(RegressionRunner& runner) {
+    runner.Expect(CourseEnemyTransformGizmoSettings{}.Validate() &&
+        CourseEnemyViewportEditSettings{}.Validate() &&
+        CourseMap3DRenderSettings{}.Validate() &&
+        CourseMapCartographyBakeSettings{}.Validate() &&
+        CourseMapCartographyRenderSettings{}.Validate() &&
+        CourseMapGeometryExtractionSettings{}.Validate() &&
+        CourseMapHologramSettings{}.Validate() &&
+        CourseMapHybridCartographySettings{}.Validate() &&
+        CourseMapLabelLayoutSettings{}.Validate() &&
+        CourseMapSceneBoundsSettings{}.Validate() &&
+        CourseMapSceneVisualizationSettings{}.Validate() &&
+        CourseMapSemanticLODSettings{}.Validate() &&
+        CourseMapVisualBakeSettings{}.Validate() &&
+        CourseOverviewMapEditSettings{}.Validate() &&
+        CourseOverviewMapSnapSettings{}.Validate() &&
+        CourseOverviewMapVisibilitySettings{}.Validate() &&
+        CourseRailElevationProfileSettings{}.Validate() &&
+        CourseRailSketchSettings{}.Validate() &&
+        CourseRailTransformGizmoSettings{}.Validate() &&
+        CourseRailViewportEditSettings{}.Validate() &&
+        CourseTerrainMapBakeSettings{}.Validate() &&
+        CourseTerrainMapRenderSettings{}.Validate(),
+        "all shipped editor setting defaults must satisfy the public contracts");
+    std::string error;
+    const float nan = (std::numeric_limits<float>::quiet_NaN)();
+    CourseMap3DViewportRenderer renderer;
+    const auto renderRevision = renderer.SettingsRevision();
+    auto render = renderer.Settings();
+    render.showTerrain = false;
+    render.gridStep = nan;
+    runner.Expect(!renderer.SetSettings(render, &error) && !error.empty() &&
+        renderer.Settings().showTerrain && renderer.SettingsRevision() == renderRevision,
+        "invalid mixed renderer edits must preserve settings and retained-frame revision");
+    render = renderer.Settings(); render.gridExtent = 50; render.gridStep = 100;
+    runner.Expect(!renderer.SetSettings(render, &error), "grid step must not exceed grid extent");
+    render.gridStep = 10;
+    runner.Expect(renderer.SetSettings(render, &error) && error.empty() && renderer.SettingsRevision() > renderRevision,
+        "accepted renderer edits must invalidate the frame and clear failure diagnostics");
+    CourseMapSemanticLODSystem lod;
+    const auto lodRevision = lod.SettingsRevision();
+    auto detail = lod.Settings(); detail.regionZoom = 6;
+    runner.Expect(!lod.SetSettings(detail, &error) && lod.SettingsRevision() == lodRevision &&
+        lod.Settings().regionZoom == 1.8f,
+        "LOD thresholds must remain ordered rather than partially clamping a bad edit");
+    detail = lod.Settings(); detail.inspectZoom = nan;
+    runner.Expect(!lod.SetSettings(detail, &error) && lod.SettingsRevision() == lodRevision,
+        "NaN must not poison LOD selection or its cache key");
+    CourseMapCartographyBakePipeline bake;
+    const auto bakeRevision = bake.SettingsRevision();
+    auto bakeSettings = bake.Settings(); bakeSettings.autoBake = true; bakeSettings.maximumRegions = 0;
+    runner.Expect(!bake.SetSettings(bakeSettings, &error) && !bake.Settings().autoBake &&
+        bake.SettingsRevision() == bakeRevision && bake.CurrentAsset() == nullptr,
+        "invalid bake work budget must not switch on automatic jobs or invalidate cached data");
+    CourseEnemyViewportEditTool enemyTool;
+    auto enemySettings = enemyTool.Settings(); enemySettings.defaultActorAssetId = "new_actor";
+    enemySettings.duplicateOffset.y = nan;
+    runner.Expect(!enemyTool.SetSettings(enemySettings, &error) && enemyTool.Settings().defaultActorAssetId == "drone",
+        "invalid edit-tool offsets must not partially change future authored placements");
+    CourseRailSketchTool sketch;
+    auto sketchSettings = sketch.Settings(); sketchSettings.minimumSamplePixels = 4;
+    sketchSettings.curveFit.maximumControlPoints = 1;
+    runner.Expect(!sketch.SetSettings(sketchSettings, &error) && sketch.Settings().minimumSamplePixels == 3,
+        "nested sketch curve budgets must validate before any tool setting is committed");
+    CourseRailCurveFitService fitter;
+    auto curve = CourseRailCurveFitSettings{}; curve.maximumInputSamples = 1;
+    runner.Expect(!fitter.Fit({{0,0,0}, {0,0,10}}, curve, 18, 4).succeeded,
+        "direct curve fitting requests must not bypass the nested work-budget contract");
+    CourseTerrainMapBakePipeline terrainBake;
+    auto terrainSettings = terrainBake.Settings(); terrainSettings.radialSegments[1] = 0;
+    runner.Expect(!terrainBake.SetSettings(terrainSettings, &error) && terrainBake.Settings().radialSegments[1] == 24,
+        "all terrain tessellation entries must be validated before committing an array setting");
+    CourseRailElevationProfileEditor elevation;
+    elevation.Pan({nan, 4});
+    runner.Expect(elevation.Settings().panPixels.x == 0 && elevation.Settings().panPixels.y == 0,
+        "profile navigation must use the same atomic validation as direct settings edits");
+    elevation.Pan({12, 4});
+    runner.Expect(elevation.Settings().panPixels.x == 12 && elevation.Settings().panPixels.y == 4,
+        "valid profile navigation should still update presentation settings");
+}
+
+void TestEffectMutationEncapsulation(RegressionRunner& runner) {
+    static_assert(std::is_same_v<decltype(std::declval<EffectSystem&>().FindInstance(1)), const EffectInstance*>);
+    static_assert(std::is_same_v<decltype(std::declval<EffectRuntime&>().Instances()), const std::vector<EffectInstance>&>);
+    const float nan = (std::numeric_limits<float>::quiet_NaN)();
+    std::string error;
+    EffectSystem system;
+    EffectRuntime runtime(&system);
+    EffectRuntime detached;
+    EffectAsset asset{};
+    asset.name = "encapsulation-spark";
+    runner.Expect(!detached.RegisterAsset(asset, &error) && detached.Assets().empty(),
+        "unattached effect facade must reject mutations instead of sharing a mutable fallback");
+    runner.Expect(runtime.RegisterAsset(asset, &error), "valid effect candidate should publish");
+    const uint32_t id = runtime.PlayEffect(asset.name, {1, 2, 3});
+    runner.Expect(id != 0 && runtime.FindInstance(id) != nullptr, "owner should allocate effect IDs");
+    runtime.SetInstanceAge(id, 0.25f);
+    auto invalidAssets = runtime.Assets();
+    invalidAssets.at(asset.name).defaultRing.divide = 2;
+    runner.Expect(!runtime.ReplaceAssets(invalidAssets, &error) && runtime.FindInstance(id)->age == 0.25f &&
+        runtime.FindInstance(id)->asset == system.FindAsset(asset.name),
+        "invalid replacement must preserve live assets, playback and references");
+    invalidAssets = runtime.Assets();
+    invalidAssets.at(asset.name).name = "different-key";
+    runner.Expect(!runtime.ReplaceAssets(invalidAssets, &error), "asset dictionary identity must match its name");
+    EffectAsset edited = *system.FindAsset(asset.name);
+    edited.lifetime = 3.0f;
+    runner.Expect(runtime.RegisterAsset(edited, &error) && runtime.FindInstance(id)->age == 0.25f &&
+        runtime.FindInstance(id)->asset == system.FindAsset(asset.name),
+        "asset editing should keep the instance and bind it to the current asset");
+    auto replacement = runtime.Assets();
+    replacement.at(asset.name).lifetime = 4.0f;
+    runner.Expect(runtime.ReplaceAssets(replacement, &error) && runtime.FindInstance(id)->asset == system.FindAsset(asset.name) &&
+        runtime.FindInstance(id)->asset->lifetime == 4.0f &&
+        runtime.FindInstance(id)->components.size() == system.FindAsset(asset.name)->Components().ComponentCount(),
+        "whole-map replacement must reconcile raw references and component state");
+    Transform appearance = runtime.FindInstance(id)->transform;
+    appearance.scale.x = -1;
+    runner.Expect(!runtime.SetInstanceAppearance(id, appearance, {1, 1, 1, 1}) &&
+        runtime.FindInstance(id)->transform.scale.x == 1,
+        "negative appearance scale must not reach live instances");
+    appearance = runtime.FindInstance(id)->transform;
+    appearance.translate.x = nan;
+    runner.Expect(!runtime.SetInstanceAppearance(id, appearance, {1, 1, 1, 1}) &&
+        !runtime.MoveInstance(id, {nan, 0, 0}, true),
+        "effect operations must reject nonfinite input atomically");
+    runner.Expect(runtime.MoveInstance(id, {4, 5, 6}, true) &&
+        runtime.FindInstance(id)->previousPosition.x == 4 && runtime.FindInstance(id)->velocity.x == 0,
+        "teleport operation should reset owner-managed velocity history");
+    runtime.SetInstanceAge(id, nan);
+    system.Update(nan);
+    runner.Expect(runtime.FindInstance(id)->age == 0.25f, "nonfinite delta must not poison effect age");
+    runner.Expect(runtime.PlayEffect(asset.name, {nan, 0, 0}) == 0 && runtime.Instances().size() == 1,
+        "invalid effect playback must not create an instance");
+    runner.Expect(runtime.ReplaceAssets({}, &error) && runtime.FindInstance(id) == nullptr,
+        "removing an asset must retire its instances rather than leave dangling pointers");
+}
+
+void TestPostProcessMutationEncapsulation(RegressionRunner& runner) {
+    PostProcessStack stack;
+    stack.ResetToVfxDefaults();
+    std::string error;
+    const float nan = (std::numeric_limits<float>::quiet_NaN)();
+    const auto original = stack.Passes();
+    runner.Expect(PostProcessStack::ValidatePasses(original, &error), "all shipped default passes must satisfy the public contract");
+    auto invalid = original.front();
+    invalid.intensity = nan;
+    runner.Expect(!stack.ConfigurePass(invalid, &error) && stack.Passes() == original,
+        "invalid pass edit must leave the full stack unchanged");
+    invalid = original.front(); invalid.pipeline = "other-route";
+    runner.Expect(!stack.ConfigurePass(invalid, &error) && stack.Passes() == original,
+        "live pass edits must preserve rendering routes");
+    auto candidates = original;
+    candidates.push_back(original.front());
+    runner.Expect(!stack.ReplacePasses(candidates, &error) && stack.Passes() == original,
+        "duplicate pass identity must be rejected before replacing the stack");
+    candidates = original; candidates.back().parameters.fogNearPlane = 0;
+    runner.Expect(!stack.ReplacePasses(candidates, &error) && stack.Passes() == original,
+        "invalid projection plane must reject the entire pass list");
+    stack.SetIntensity(original.front().name, nan);
+    runner.Expect(stack.Passes() == original, "scalar intensity API must reject nonfinite input");
+    stack.StartWarpTunnel(); stack.UpdateWarpTunnel(0.15f);
+    stack.StartDissolveTransition(); stack.UpdateDissolve(0.2f);
+    const float warp = stack.WarpTunnelTransition(), dissolve = stack.DissolveThreshold();
+    candidates = stack.Passes();
+    for (auto& pass : candidates) {
+        pass.intensity = 0.75f;
+        pass.parameters.warpTransition = 0.9f;
+        pass.parameters.dissolveThreshold = 0.9f;
+    }
+    runner.Expect(stack.ConfigurePasses(candidates, &error) && stack.GetWarpTunnelPhase() == WarpTunnelPhase::Enter &&
+        stack.GetDissolvePhase() == DissolvePhase::DissolveOut && stack.WarpTunnelTransition() == warp &&
+        stack.DissolveThreshold() == dissolve,
+        "live tuning must preserve controller-owned transition phases and progress");
+    for (const auto& pass : stack.Passes()) {
+        if (pass.pipeline == "WarpTunnelGenerate" || pass.pipeline == "WarpTunnelComposite")
+            runner.Expect(pass.parameters.warpTransition == warp, "warp passes must be synchronized by the controller");
+        if (pass.pipeline == "DissolveMask" || pass.pipeline == "Dissolve")
+            runner.Expect(pass.parameters.dissolveThreshold == dissolve, "dissolve passes must be synchronized by the controller");
+    }
+    stack.SetWarpTunnelDurations(1, nan);
+    stack.SetDissolveDurations(1, nan, 1);
+    stack.UpdateWarpTunnel(nan); stack.UpdateDissolve(nan);
+    runner.Expect(stack.WarpTunnelEnterDuration() == 0.65f && stack.DissolveOutDuration() == 0.8f &&
+        stack.WarpTunnelTransition() == warp && stack.DissolveThreshold() == dissolve,
+        "invalid timing must preserve all durations and progress");
+    const auto beforeLoad = stack.Passes();
+    const auto presetPath = std::filesystem::temp_directory_path() / "ge3-encapsulation-postprocess-regression.ini";
+    {
+        std::ofstream file(presetPath);
+        file << "pass." << original.front().name << ".intensity=0.5\n"
+             << "pass." << original.back().name << ".intensity=nan\n";
+    }
+    PostProcessPresetStore store(presetPath);
+    runner.Expect(!store.Load(stack, &error) && stack.Passes() == beforeLoad && stack.WarpTunnelTransition() == warp,
+        "malformed preset must not partially apply earlier valid entries or reset transitions");
+    std::error_code ignored; std::filesystem::remove(presetPath, ignored);
+    runner.Expect(stack.ReplacePasses(original, &error) && stack.GetWarpTunnelPhase() == WarpTunnelPhase::Idle &&
+        stack.GetDissolvePhase() == DissolvePhase::Idle && !stack.HasDissolveSwitchRequest(),
+        "complete authoring restoration must reconcile transition controllers to restored flags");
+}
+
+void TestPreviewSettingsEncapsulation(RegressionRunner& runner) {
+    const float nan = (std::numeric_limits<float>::quiet_NaN)();
+    std::string error;
+    CourseAsset course{};
+    course.name = "Settings authority fixture";
+    course.railPoints = {{{0, 0, 0}, 18, 4}, {{0, 0, 100}, 18, 4}, {{0, 0, 200}, 18, 4}};
+    CourseRailAuthoringModel::EnsureStableIdentity(course, "settings-authority");
+    CoursePreviewSimulationSystem simulation;
+    runner.Expect(simulation.BeginPreview(course, 0, &error), "settings fixture should begin preview");
+    simulation.Tick(0.1f);
+    const float distance = simulation.Frame().distance, elapsed = simulation.Frame().elapsedSeconds;
+    auto settings = simulation.Settings(); settings.fixedStepSeconds = nan;
+    runner.Expect(!simulation.Configure(settings, &error) && simulation.Settings().fixedStepSeconds == 1.0f / 60.0f,
+        "invalid fixed step must not replace preview settings");
+    settings = simulation.Settings(); settings.maximumSubsteps = 65;
+    runner.Expect(!simulation.Configure(settings, &error), "preview work budget must remain within 1..64 substeps");
+    settings = simulation.Settings(); settings.playbackRate = 2;
+    runner.Expect(simulation.Configure(settings, &error) && simulation.IsPlaying() &&
+        simulation.Frame().distance == distance && simulation.Frame().elapsedSeconds == elapsed,
+        "live preview settings must preserve snapshot and playback progress");
+    simulation.Tick(nan);
+    runner.Expect(!simulation.Seek(nan, &error) && !simulation.BeginPreview(course, nan, &error) &&
+        simulation.Frame().distance == distance && simulation.IsPlaying(),
+        "invalid timeline inputs must leave existing preview intact");
+    CoursePreviewActorRuntimeBridge actors;
+    runner.Expect(actors.Synchronize(simulation, 0, distance, &error), "isolated preview runtime should synchronize");
+    const auto fingerprint = actors.Stats().programFingerprint;
+    auto actorSettings = actors.Settings(); actorSettings.prewarmOpacity = nan;
+    runner.Expect(!actors.Configure(actorSettings, &error) && actors.Settings().prewarmOpacity == 0.42f,
+        "preview actor opacity must reject NaN without resetting its runtime");
+    actorSettings = actors.Settings(); actorSettings.simulateMovement = true;
+    runner.Expect(actors.Configure(actorSettings, &error) && actors.Stats().programFingerprint == fingerprint && actors.Active(),
+        "actor presentation settings must preserve the compiled preview program");
+    CourseOverviewMapController map;
+    auto projectionSettings = map.ProjectionSettings(); projectionSettings.zoom = nan;
+    runner.Expect(!map.ConfigureProjection(projectionSettings, &error) && map.ProjectionSettings().zoom == 1,
+        "map zoom must be finite before changing controller settings");
+    projectionSettings = map.ProjectionSettings(); projectionSettings.fitSamplesPerSegment = 257;
+    runner.Expect(!map.ConfigureProjection(projectionSettings, &error), "map fitting samples must respect its work budget");
+    projectionSettings = map.ProjectionSettings(); projectionSettings.zoom = 2;
+    runner.Expect(map.ConfigureProjection(projectionSettings, &error) && map.ProjectionSettings().zoom == 2,
+        "valid map projection settings should apply");
+    CourseOverviewMapProjection projection;
+    CourseRailAuthoringModel rail(course);
+    runner.Expect(projection.Configure(&rail, {0, 0, 500, 500}, {}, &error), "map projection fixture should configure");
+    projectionSettings.zoom = nan;
+    runner.Expect(!projection.Configure(&rail, {0, 0, 500, 500}, projectionSettings, &error) && projection.State().valid &&
+        projection.Settings().zoom == 1, "invalid projection settings must preserve the previous usable transform");
+    CourseMap3DViewportController viewport;
+    auto camera = viewport.Camera(); camera.nearPlane = camera.farPlane;
+    const auto revision = viewport.State().cameraRevision;
+    runner.Expect(!viewport.ConfigureCamera(camera, &error) && viewport.State().cameraRevision == revision,
+        "invalid clip planes must preserve camera and retained frame revision");
+    camera = viewport.Camera(); camera.distance = 900;
+    runner.Expect(viewport.ConfigureCamera(camera, &error) && viewport.State().cameraRevision > revision,
+        "accepted camera edits must invalidate the retained frame");
+    viewport.Orbit({nan, 0}); viewport.Pan({nan, 0}); viewport.Dolly(nan);
+    runner.Expect(viewport.Camera().distance == 900 && std::isfinite(viewport.Camera().yawRadians),
+        "camera navigation operations must not bypass finite-input rules");
+    EditorViewportCameraController editorCamera;
+    Transform initial{}; initial.scale = {1, 1, 1}; initial.translate = {1, 2, 3};
+    editorCamera.Initialize(initial, 0.785398163f, 1, 0.1f, 1000);
+    auto navigation = editorCamera.Settings(); navigation.maximumPitch = nan;
+    const auto cameraRevision = editorCamera.Revision();
+    runner.Expect(!editorCamera.SetSettings(navigation, &error) &&
+        editorCamera.Revision() == cameraRevision && editorCamera.WorldPosition().x == 1,
+        "invalid editor camera settings must preserve both settings and camera matrices");
+    navigation = editorCamera.Settings(); navigation.moveSpeed = 20;
+    runner.Expect(editorCamera.SetSettings(navigation, &error) && editorCamera.WorldPosition().x == 1,
+        "valid editor navigation settings must preserve the current viewpoint");
+}
+
 void TestProductionPropertyAdapters(RegressionRunner& runner) {
     EditorPropertyRegistry registry;
     RegisterBuiltInEditorProperties(registry);
@@ -2959,7 +3239,7 @@ void TestSelectiveRuntimeKeepChanges(RegressionRunner& runner) {
     EffectAsset effectAsset{};
     effectAsset.name = "selective_effect";
     effectAsset.lifetime = 1.0f;
-    effectRuntime.MutableAssets()[effectAsset.name] = effectAsset;
+    runner.Expect(effectRuntime.RegisterAsset(effectAsset), "Fixture effect must register through validation");
     PostProcessStack postProcess;
     postProcess.ResetToVfxDefaults();
     const float originalPostIntensity = postProcess.Passes().empty()
@@ -2974,8 +3254,10 @@ void TestSelectiveRuntimeKeepChanges(RegressionRunner& runner) {
 
     course.events.front().payload = "keep-course";
     runtimeState.terrain.previewSpeed = 90.0f;
-    effectRuntime.MutableAssets().at("selective_effect").lifetime = 2.0f;
-    if (!postProcess.MutablePasses().empty()) postProcess.MutablePasses().front().intensity = 3.0f;
+    { auto asset = effectRuntime.Assets().at("selective_effect"); asset.lifetime = 2.0f;
+      runner.Expect(effectRuntime.RegisterAsset(asset), "Fixture asset edit must be valid"); }
+    if (!postProcess.Passes().empty()) { auto pass = postProcess.Passes().front(); pass.intensity = 3.0f;
+      runner.Expect(postProcess.ConfigurePass(pass), "Fixture pass edit must be valid"); }
     std::string changeError;
     runner.Expect(
         snapshot.RefreshRuntimeChangeSet(
@@ -3005,8 +3287,10 @@ void TestSelectiveRuntimeKeepChanges(RegressionRunner& runner) {
 
     course.events.front().payload = "discard-later-course";
     runtimeState.terrain.previewSpeed = 140.0f;
-    effectRuntime.MutableAssets().at("selective_effect").lifetime = 4.0f;
-    if (!postProcess.MutablePasses().empty()) postProcess.MutablePasses().front().intensity = 5.0f;
+    { auto asset = effectRuntime.Assets().at("selective_effect"); asset.lifetime = 4.0f;
+      runner.Expect(effectRuntime.RegisterAsset(asset), "Fixture asset edit must be valid"); }
+    if (!postProcess.Passes().empty()) { auto pass = postProcess.Passes().front(); pass.intensity = 5.0f;
+      runner.Expect(postProcess.ConfigurePass(pass), "Fixture pass edit must be valid"); }
     runner.Expect(lifecycle.Stop(lifecycleRequest).succeeded, "selective Keep Changes session should stop");
     runner.Expect(
         course.events.front().payload == "keep-course" &&
@@ -8166,11 +8450,11 @@ void TestEditorWorldModel(RegressionRunner& runner) {
     EffectRuntime effectRuntime(&effectSystem);
     EffectAsset effectAsset{};
     effectAsset.name = "spark";
-    effectRuntime.MutableAssets()[effectAsset.name] = effectAsset;
+    runner.Expect(effectRuntime.RegisterAsset(effectAsset), "Fixture effect must register through validation");
     EffectInstance effectInstance{};
-    effectInstance.id = 42;
+    effectInstance.id = effectRuntime.PlayEffect(effectAsset.name, {});
     effectInstance.assetName = effectAsset.name;
-    effectRuntime.MutableInstances().push_back(effectInstance);
+    runner.Expect(effectInstance.id != 0, "Fixture effect instance must use the owned ID allocator");
     VfxWorldObjectProvider vfxProvider;
     const EditorDocumentId vfxDocument{
         "vfx-runtime-document", std::string(EditorDocumentTypes::Effect)};
@@ -17448,8 +17732,10 @@ void TestHandParticleAttachment(RegressionRunner& runner) {
             loadedEffect.asset.name == "hand_socket_particle" &&
             loadedEffect.asset.lifetime == 0.0f &&
             loadedEffect.asset.Components().ComponentCount() == 1 &&
-            loadedEffect.asset.defaultParticle.spawnCount == 12.0f &&
-            loadedEffect.asset.defaultParticle.lifetime > 1.0f &&
+            loadedEffect.asset.defaultParticle.spawnCount > 0.0f &&
+            loadedEffect.asset.defaultParticle.spawnCount <= 12.0f &&
+            loadedEffect.asset.defaultParticle.lifetime > 0.0f &&
+            loadedEffect.asset.defaultParticle.lifetime <= 1.0f &&
             loadedEffect.asset.defaultParticle.spawnFrequency > 0.0f &&
             loadedEffect.asset.defaultParticle.spawnFrequency <= 0.04f &&
             loadedEffect.asset.defaultParticle.emissive >= 6.0f,
@@ -17473,9 +17759,10 @@ void TestHandParticleAttachment(RegressionRunner& runner) {
             loadedLeftEffect.asset.defaultParticle.lifetime <= 0.5f &&
             loadedLeftEffect.asset.defaultParticle.spawnRadius <= 0.03f &&
             loadedLeftEffect.asset.defaultParticle.spawnCount <= 8.0f &&
-            loadedLeftEffect.asset.defaultParticle.emissive >= 8.0f,
+            loadedLeftEffect.asset.defaultParticle.emissive >= 6.0f,
         "Left Hand Particle Effect should remain compact, short-lived, and visibly red-tintable");
 
+    const EffectParticleSettings authoredRightEmitter = loadedEffect.asset.defaultParticle;
     EffectSystem effectSystem;
     effectSystem.RegisterAsset(std::move(loadedEffect.asset));
     EffectRuntime effectRuntime(&effectSystem);
@@ -17514,10 +17801,12 @@ void TestHandParticleAttachment(RegressionRunner& runner) {
     runner.Expect(
         attachmentFrame.particleQueue.size() == 1 &&
             attachmentFrame.particleQueue.front().settings != nullptr &&
-            attachmentFrame.particleQueue.front().settings->spawnCount == 12.0f &&
+            attachmentFrame.particleQueue.front().settings->spawnCount == authoredRightEmitter.spawnCount &&
+            attachmentFrame.particleQueue.front().settings->lifetime == authoredRightEmitter.lifetime &&
             attachmentFrame.particleQueue.front().settings->spawnFrequency > 0.0f &&
             attachmentFrame.particleQueue.front().common.componentCommon != nullptr &&
-            attachmentFrame.particleQueue.front().common.componentCommon->size.x >= 0.20f &&
+            attachmentFrame.particleQueue.front().common.componentCommon->size.x > 0.0f &&
+            attachmentFrame.particleQueue.front().common.componentCommon->size.x <= 0.20f &&
             attachmentFrame.particleQueue.front().common.componentCommon->duration == 0.0f,
         "Hand Particle Attachment should submit a continuous Effect through the GPU Particle render queue");
 
@@ -18427,7 +18716,12 @@ void TestMultiMaterialShowcasePresentationDefaults(RegressionRunner& runner) {
             runtimeState.handParticleAttachment.jointName == "mixamorig:RightHand" &&
             runtimeState.handParticleAttachment.effectName == "hand_socket_particle" &&
             runtimeState.handParticleAttachment.socketOffset.translate.y > 0.05f &&
-            runtimeState.handParticleAttachment.effectScale.x > 1.0f &&
+            runtimeState.handParticleAttachment.effectScale.x > 0.0f &&
+            runtimeState.handParticleAttachment.effectScale.x <= 1.0f &&
+            runtimeState.handParticleAttachment.effectScale.x == runtimeState.handParticleAttachment.effectScale.y &&
+            runtimeState.handParticleAttachment.effectScale.y == runtimeState.handParticleAttachment.effectScale.z &&
+            runtimeState.handParticleAttachment.color.z > 0.9f &&
+            runtimeState.handParticleAttachment.color.x < runtimeState.handParticleAttachment.color.z &&
             runtimeState.leftHandParticleAttachment.enabled &&
             runtimeState.leftHandParticleAttachment.jointName == "mixamorig:LeftHand" &&
             runtimeState.leftHandParticleAttachment.effectName == "left_hand_socket_particle" &&
@@ -19041,6 +19335,373 @@ void TestRailAimAssistPresetAndInputRouting(RegressionRunner& runner) {
     std::filesystem::remove_all(root, filesystemError);
 }
 
+void TestGameplaySettingsEncapsulation(RegressionRunner& runner) {
+    static_assert(std::is_same_v<decltype(std::declval<RailLockOnSystem&>().Settings()), const RailLockSettings&>);
+    static_assert(std::is_same_v<decltype(std::declval<WeaponFireSystem&>().FindRuntimeState(std::string{})),
+        const WeaponRuntimeState*>);
+    std::string error;
+    RailCameraDirector camera;
+    // Every camera configuration boundary must reject invalid values atomically.
+    const auto checkCamera = [&]<class T>(const T& initial, float T::* member, auto configure, auto read) {
+        T valid = initial;
+        valid.enabled = false;
+        runner.Expect(configure(valid, &error) && error.empty(), "Valid camera settings must commit");
+        for (const float value : {-1.0f, (std::numeric_limits<float>::infinity)(),
+                                 (std::numeric_limits<float>::quiet_NaN)()}) {
+            T invalid = valid;
+            invalid.enabled = true;
+            invalid.*member = value;
+            runner.Expect(!configure(invalid, &error) && !error.empty() &&
+                !read().enabled && read().*member == valid.*member,
+                "Rejected camera settings must preserve the entire previous configuration");
+        }
+    };
+    checkCamera(camera.ComfortSettings(), &RailCameraComfortSettings::stableAngularVelocityDeg,
+        [&](const auto& s, auto* e) { return camera.ConfigureComfort(s, e); }, [&]() -> const auto& { return camera.ComfortSettings(); });
+    checkCamera(camera.AimFocusSettings(), &RailCameraAimFocusSettings::blendInRate,
+        [&](const auto& s, auto* e) { return camera.ConfigureAimFocus(s, e); }, [&]() -> const auto& { return camera.AimFocusSettings(); });
+    checkCamera(camera.LookAtSettings(), &RailCameraLookAtSettings::blendRate,
+        [&](const auto& s, auto* e) { return camera.ConfigureLookAt(s, e); }, [&]() -> const auto& { return camera.LookAtSettings(); });
+    checkCamera(camera.CompositionSafetySettings(), &RailCameraCompositionSafetySettings::maxTargetCorrection,
+        [&](const auto& s, auto* e) { return camera.ConfigureCompositionSafety(s, e); }, [&]() -> const auto& { return camera.CompositionSafetySettings(); });
+    checkCamera(camera.LineOfSightSettings(), &RailCameraLineOfSightSettings::obstaclePadding,
+        [&](const auto& s, auto* e) { return camera.ConfigureLineOfSight(s, e); }, [&]() -> const auto& { return camera.LineOfSightSettings(); });
+    checkCamera(camera.CollisionProtectionSettings(), &RailCameraCollisionProtectionSettings::minClearance,
+        [&](const auto& s, auto* e) { return camera.ConfigureCollisionProtection(s, e); }, [&]() -> const auto& { return camera.CollisionProtectionSettings(); });
+    checkCamera(camera.SegmentTransitionSettings(), &RailCameraSegmentTransitionSettings::duration,
+        [&](const auto& s, auto* e) { return camera.ConfigureSegmentTransition(s, e); }, [&]() -> const auto& { return camera.SegmentTransitionSettings(); });
+    checkCamera(camera.EncounterFramingSettings(), &RailCameraEncounterFramingSettings::waveHoldDuration,
+        [&](const auto& s, auto* e) { return camera.ConfigureEncounterFraming(s, e); }, [&]() -> const auto& { return camera.EncounterFramingSettings(); });
+    auto composition = camera.CompositionSafetySettings();
+    composition.readabilityZoneWidth = composition.aimableZoneWidth * 0.5f;
+    runner.Expect(!camera.ConfigureCompositionSafety(composition), "Readability zone must contain the aimable zone");
+    auto focus = camera.AimFocusSettings();
+    focus.shakeSuppression = 1.01f;
+    runner.Expect(!camera.ConfigureAimFocus(focus), "Suppression must not exceed one");
+    auto transition = camera.SegmentTransitionSettings();
+    transition.minDuration = transition.duration + 1.0f;
+    runner.Expect(!camera.ConfigureSegmentTransition(transition), "Transition duration must respect its minimum");
+    auto look = camera.LookAtSettings();
+    look.minForwardDistance = look.maxForwardDistance + 1.0f;
+    runner.Expect(!camera.ConfigureLookAt(look), "Camera distance interval must not be inverted");
+    RailPath rail;
+    rail.SetControlPoints({{{0.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 100.0f}}});
+    RailCameraDirector liveCamera;
+    RailCameraDirectorFrameInput cameraInput;
+    cameraInput.railPath = &rail;
+    for (int i = 0; i < 20; ++i) { cameraInput.distance = static_cast<float>(i); liveCamera.Evaluate(cameraInput); }
+    RailCameraDirector referenceCamera = liveCamera;
+    runner.Expect(liveCamera.ConfigureComfort(liveCamera.ComfortSettings()), "Live camera configuration must succeed");
+    cameraInput.distance = 30.0f;
+    const auto liveFrame = liveCamera.Evaluate(cameraInput);
+    const auto referenceFrame = referenceCamera.Evaluate(cameraInput);
+    runner.Expect(liveFrame.position.x == referenceFrame.position.x && liveFrame.position.y == referenceFrame.position.y &&
+        liveFrame.position.z == referenceFrame.position.z && liveFrame.fovY == referenceFrame.fovY,
+        "Settings commit must retain camera smoothing history");
+
+    RailLockOnSystem lock;
+    auto locks = lock.Settings();
+    locks.maxLocks = 0;
+    runner.Expect(!lock.Configure(locks, &error) && !error.empty() && lock.Settings().maxLocks == 8,
+        "Invalid lock capacity must not change the configuration");
+    locks = lock.Settings();
+    locks.lockVfxTravelDistanceDivisor = 0.0f;
+    runner.Expect(!lock.Configure(locks), "Lock VFX divisor must remain positive");
+    auto assist = lock.AimAssistSettings();
+    assist.minimumDistance = assist.maximumDistance;
+    runner.Expect(!lock.ConfigureAimAssist(assist), "Assist acquisition distance must have a nonempty range");
+    assist = lock.AimAssistSettings();
+    assist.gamepadMagnetismStrength = (std::numeric_limits<float>::quiet_NaN)();
+    runner.Expect(!lock.ConfigureAimAssist(assist), "Assist strength must reject NaN");
+    RailAimAssistPreset preset;
+    preset.presetId = "encapsulation";
+    preset.displayName = "Encapsulation";
+    preset.settings = assist;
+    runner.Expect(!preset.Validate(), "Preset loading must use the same assist validation as runtime configuration");
+
+    // Acquire real lock tokens, then reduce their capacity.
+    Matrix4x4 viewProjection = MakeIdentity4x4();
+    viewProjection.m[2][2] = 0.01f;
+    // Resolver independently exercises the capacity operation without input-device dependencies.
+    RailLockResolver resolver;
+    std::vector<RailLockAnchor> anchors(2);
+    anchors[0].target.actorId = 1;
+    anchors[1].target.actorId = 2;
+    for (auto& anchor : anchors) { anchor.forwardDistance = 10.0f; anchor.worldPosition = {0.0f, 0.0f, 0.5f}; }
+    RailReticleState reticle;
+    reticle.lockHeld = true;
+    reticle.currentScreenPosition = reticle.previousScreenPosition = {400.0f, 300.0f};
+    RailLockResolverFrameInput resolverInput;
+    resolverInput.anchors = &anchors;
+    resolverInput.reticle = &reticle;
+    resolverInput.viewProjection = &viewProjection;
+    resolverInput.viewportWidth = 800;
+    resolverInput.viewportHeight = 600;
+    resolver.Update(resolverInput);
+    resolver.Update(resolverInput);
+    runner.Expect(resolver.Tokens().size() == 2, "Fixture must acquire two independent locks");
+    resolver.LimitTokenCapacity(1);
+    runner.Expect(resolver.Tokens().size() == 1 && resolver.Tokens().front().target.actorId == 1,
+        "Reducing lock capacity must retain earliest locks within the new limit");
+
+    RailSpeedDirector speed;
+    CourseEventMarker event;
+    event.type = "boss";
+    speed.NotifyCourseEvents({event});
+    RailSpeedDirectorFrameInput speedInput;
+    speedInput.railPath = &rail;
+    speedInput.deltaTime = 0.0f;
+    speed.Evaluate(speedInput);
+    auto speedSettings = speed.Settings();
+    speedSettings.eventBlendDuration = 0.5f;
+    runner.Expect(speed.Configure(speedSettings, true, &error) &&
+        speed.Evaluate(speedInput).eventMultiplier < 1.0f,
+        "Live speed tuning must preserve the active event instead of resetting progression");
+    speedSettings.minSpeed = speedSettings.maxSpeed + 1.0f;
+    runner.Expect(!speed.Configure(speedSettings, true) && speed.Settings().eventBlendDuration == 0.5f,
+        "Invalid speed interval must leave the policy unchanged");
+
+    PlayerNearMissSystem nearMiss;
+    for (uint64_t id : {11ULL, 12ULL, 13ULL}) {
+        PlayerNearMissRequest request;
+        request.projectileId = id; request.closeness = 0.5f; request.surfaceSeparation = 1.0f;
+        runner.Expect(nearMiss.Submit(request).accepted, "Fixture near miss must be accepted");
+    }
+    auto nearSettings = nearMiss.Settings();
+    nearSettings.projectileHistoryCapacity = 2;
+    nearSettings.maximumResultsPerFrame = 1;
+    runner.Expect(nearMiss.Configure(nearSettings) &&
+        nearMiss.State().processedProjectileIds == std::vector<uint64_t>({12,13}) &&
+        nearMiss.ResultsThisFrame().size() == 3,
+        "History reduction must retain newest IDs without dropping already accepted events");
+    nearSettings.projectileHistoryCapacity = 0;
+    runner.Expect(!nearMiss.Configure(nearSettings) && nearMiss.Settings().projectileHistoryCapacity == 2,
+        "Configuration must not disable duplicate near-miss protection");
+    auto nearState = nearMiss.State();
+    nearState.processedProjectileIds = {12,12};
+    runner.Expect(!nearMiss.RestoreState(nearState), "Restoration must not bypass near-miss history rules");
+    PlayerNearMissRequest duplicate;
+    duplicate.projectileId = 13; duplicate.closeness = 0.5f; duplicate.surfaceSeparation = 1.0f;
+    nearMiss.Update(0.0f);
+    runner.Expect(!nearMiss.Submit(duplicate).accepted, "Recent near miss must still be rejected as duplicate");
+
+    PlayerDamagePresentationBridge presentation;
+    PlayerDamageResult hit;
+    hit.accepted = true; hit.appliedDamage = 10.0f; hit.sequence = 1;
+    const std::array<PlayerDamageResult, 1> hits{hit};
+    presentation.Update({hits, 0.0f});
+    auto feedback = presentation.Settings();
+    feedback.hapticDurationSeconds = 0.0f;
+    runner.Expect(presentation.Configure(feedback) && presentation.Frame().hapticRemainingSeconds == 0.0f &&
+        presentation.Frame().hapticLow == 0.0f, "Disabling haptic duration must stop the pending vibration");
+    feedback.flashDecayPerSecond = -1.0f;
+    runner.Expect(!presentation.Configure(feedback), "Invalid flash decay must not enter presentation state");
+    CourseGameplayWaveRuntimeBridge waves;
+    auto waveSettings = waves.Settings();
+    waveSettings.maximumStateTransitionsPerFrame = 0;
+    runner.Expect(!waves.Configure(waveSettings) && waves.Settings().maximumStateTransitionsPerFrame == 256,
+        "Wave settings must not freeze progress with a zero transition budget");
+}
+
+void TestWeaponStateEncapsulation(RegressionRunner& runner) {
+    WeaponFireSystem weapons;
+    WeaponDefinition definition;
+    definition.weaponId = "encapsulated";
+    definition.magazineCapacity = 2;
+    definition.initialReserveAmmo = 4;
+    definition.reloadDuration = 1.0f;
+    runner.Expect(weapons.RegisterDefinition(definition), "Fixture weapon must register");
+    WeaponFireInput input;
+    input.weaponId = definition.weaponId;
+    input.triggerPressed = input.triggerHeld = true;
+    runner.Expect(weapons.Update(input).fired, "Firing must consume ammunition through the weapon owner");
+    const auto before = *weapons.FindRuntimeState(definition.weaponId);
+    input.deltaTime = (std::numeric_limits<float>::quiet_NaN)();
+    const auto invalid = weapons.Update(input);
+    const auto* state = weapons.FindRuntimeState(definition.weaponId);
+    runner.Expect(invalid.rejectReason == WeaponFireRejectReason::InvalidInput && !invalid.fired &&
+        state->ammoInMagazine == before.ammoInMagazine && state->cooldownRemaining == before.cooldownRemaining &&
+        state->totalProjectilesFired == before.totalProjectilesFired,
+        "Nonfinite input must not advance timers, spend ammunition or authorize a shot");
+    runner.Expect(weapons.BeginReload(definition.weaponId) && !weapons.BeginReload(definition.weaponId),
+        "Reload operation must enter once and reject a duplicate request");
+    definition.reloadDuration = 0.2f;
+    runner.Expect(weapons.RegisterDefinition(definition) &&
+        weapons.FindRuntimeState(definition.weaponId)->reloadRemaining <= 0.2f,
+        "Hot reload must reconcile the active reload timer with its new upper bound");
+    input = {}; input.weaponId = definition.weaponId; input.deltaTime = 0.2f;
+    weapons.Update(input);
+    state = weapons.FindRuntimeState(definition.weaponId);
+    runner.Expect(!state->reloading && state->ammoInMagazine == 2 && state->reserveAmmo == 3,
+        "Only completed reload may transfer reserve ammo into the magazine");
+    definition.magazineCapacity = 1;
+    runner.Expect(weapons.RegisterDefinition(definition) && weapons.FindRuntimeState(definition.weaponId)->ammoInMagazine == 1,
+        "Shrinking a magazine must clamp its owned ammo state");
+    auto invalidDefinition = definition;
+    invalidDefinition.shotInterval = 0.0f;
+    runner.Expect(!weapons.RegisterDefinition(invalidDefinition) &&
+        weapons.FindDefinition(definition.weaponId)->shotInterval == definition.shotInterval,
+        "Invalid weapon definitions must preserve live definition and runtime state");
+    definition.fireMode = WeaponFireMode::ChargeRelease;
+    definition.minimumChargeSeconds = 0.1f; definition.maximumChargeSeconds = 2.0f;
+    runner.Expect(weapons.RegisterDefinition(definition), "Charge mode must register");
+    input.triggerHeld = true; input.deltaTime = 1.0f;
+    weapons.Update(input);
+    definition.maximumChargeSeconds = 0.5f;
+    runner.Expect(weapons.RegisterDefinition(definition) && weapons.FindRuntimeState(definition.weaponId)->chargeSeconds == 0.5f,
+        "Changing charge limits must clamp accumulated charge");
+    definition.fireMode = WeaponFireMode::SemiAutomatic;
+    runner.Expect(weapons.RegisterDefinition(definition) && weapons.FindRuntimeState(definition.weaponId)->chargeSeconds == 0.0f,
+        "Changing firing mode must not retain charge from a previous mode");
+    definition.magazineCapacity = 0; definition.heatCapacity = 0; definition.heatPerProjectile = 1.0f;
+    runner.Expect(weapons.RegisterDefinition(definition), "Unlimited unheated mode must register");
+    input.triggerPressed = true;
+    weapons.Update(input);
+    state = weapons.FindRuntimeState(definition.weaponId);
+    runner.Expect(state->ammoInMagazine == 0 && state->reserveAmmo == 0 && state->heat == 0.0f && !state->overheated,
+        "Disabled ammo/heat mechanics must not retain obsolete mutable state");
+    invalidDefinition = definition;
+    invalidDefinition.fireMode = static_cast<WeaponFireMode>(255);
+    runner.Expect(!weapons.RegisterDefinition(invalidDefinition), "Undefined fire modes must not enter owned state");
+    definition.fireMode = WeaponFireMode::Automatic;
+    definition.maxProjectilesPerTrigger = 4;
+    runner.Expect(weapons.RegisterDefinition(definition), "Automatic catch-up fixture must register");
+    input.deltaTime = (std::numeric_limits<float>::max)();
+    input.triggerPressed = false;
+    for (int i = 0; i < 3; ++i) {
+        const auto caughtUp = weapons.Update(input);
+        runner.Expect(caughtUp.shots.size() <= 4 && std::isfinite(weapons.FindRuntimeState(definition.weaponId)->cooldownRemaining),
+            "Extreme finite elapsed time must retain bounded catch-up and a finite owned timer");
+    }
+}
+
+void TestRuntimeEncapsulation(RegressionRunner& runner) {
+    static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().Enemies()),
+        const std::vector<CourseEnemyActor>&>);
+    static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().Bullets()),
+        const std::vector<CourseBulletActor>&>);
+    static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().Obstacles()),
+        const std::vector<CourseObstacleActor>&>);
+    std::string error;
+    PlayerDamageSystem damage;
+    damage.Reset();
+    for (uint64_t id : {11ULL, 12ULL, 13ULL}) {
+        damage.Update(1.0f);
+        PlayerHitRequest hit{};
+        hit.sourceProjectileId = id;
+        hit.rawDamage = 1.0f;
+        runner.Expect(damage.Submit(hit).accepted, "Distinct projectile hits must be accepted");
+    }
+    auto settings = damage.Settings();
+    settings.projectileHistoryCapacity = 1;
+    settings.maximumInvulnerabilitySeconds = 0.10f;
+    runner.Expect(damage.Configure(settings, &error) && error.empty() &&
+        damage.State().consumedProjectileIds == std::vector<uint64_t>{13} &&
+        damage.State().invulnerabilityRemainingSeconds <= 0.10f,
+        "Reducing settings must retain newest duplicate ID and clamp existing invulnerability");
+    const auto revision = damage.State().revision;
+    for (const float invalid : {-1.0f, (std::numeric_limits<float>::infinity)(),
+             (std::numeric_limits<float>::quiet_NaN)()}) {
+        settings.maximumDamagePerHit = invalid;
+        runner.Expect(!damage.Configure(settings, &error) && !error.empty() &&
+            damage.Settings().maximumDamagePerHit == 10000.0f && damage.State().revision == revision,
+            "Invalid damage settings must leave configuration and live state unchanged");
+    }
+    settings = damage.Settings();
+    settings.projectileHistoryCapacity = 0;
+    runner.Expect(!damage.Configure(settings), "Duplicate history cannot be disabled by an invalid zero capacity");
+
+    CourseSpawnRuntime runtime;
+    auto safety = runtime.FireSafetySettings();
+    safety.minForwardDistance = safety.maxForwardDistance + 1.0f;
+    runner.Expect(!runtime.ConfigureFireSafety(safety, &error) && !error.empty() &&
+        runtime.FireSafetySettings().minForwardDistance == 6.0f,
+        "Inverted fire range must be rejected before publishing settings");
+    auto attack = runtime.EnemyAttacks().Settings();
+    attack.maximumThreatBudget = (std::numeric_limits<float>::quiet_NaN)();
+    runner.Expect(!runtime.EnemyAttacks().Configure(attack), "Nonfinite attack budget must be rejected");
+    attack = runtime.EnemyAttacks().Settings();
+    attack.maximumConcurrentAttackers = 0;
+    runner.Expect(runtime.EnemyAttacks().Configure(attack), "Zero capacity must remain a valid attack-admission hold");
+
+    runtime.SpawnEnemyActor({});
+    const uint32_t enemyId = runtime.Enemies().front().actorId;
+    const float lateral = runtime.Enemies().front().desc.lateralOffset;
+    runner.Expect(!runtime.SetEnemyRailPose(enemyId, 0.0f,
+        (std::numeric_limits<float>::quiet_NaN)(), 0.0f, 0.0f) &&
+        runtime.Enemies().front().desc.lateralOffset == lateral,
+        "Invalid rail pose must not partially update a live enemy");
+    runner.Expect(!runtime.SynchronizePreviewEnemy(enemyId, {}),
+        "Preview updates must not overwrite a gameplay enemy");
+    CourseBulletActor projectile{};
+    projectile.projectileId = 100;
+    projectile.ownerActorId = enemyId;
+    runner.Expect(runtime.SpawnProjectile(projectile) && !runtime.SpawnProjectile(projectile),
+        "Projectile creation must preserve unique IDs");
+    runner.Expect(runtime.ConsumeProjectile(100) && !runtime.ConsumeProjectile(100) &&
+        !runtime.ConsumeProjectile(999) && runtime.Bullets().front().hitConsumed &&
+        !runtime.Bullets().front().active,
+        "Projectile consumption must be idempotent and update all lifetime flags");
+    runtime.ClearProjectiles();
+    projectile.projectileId = 0;
+    runner.Expect(runtime.SpawnProjectile(projectile) && runtime.Bullets().front().projectileId > 100,
+        "Clearing projectiles must not recycle IDs that damage history may still contain");
+    auto invalidCheckpoint = runtime.CaptureCheckpoint();
+    invalidCheckpoint.enemies.front().desc.hitPoints = -1.0f;
+    runner.Expect(!runtime.RestoreCheckpoint(invalidCheckpoint, true, &error) && !error.empty() &&
+        runtime.Enemies().front().desc.hitPoints > 0.0f && runtime.ActiveBulletCount() == 1,
+        "Invalid checkpoint must not replace any part of the live runtime");
+    invalidCheckpoint = runtime.CaptureCheckpoint();
+    invalidCheckpoint.enemies.push_back(invalidCheckpoint.enemies.front());
+    runner.Expect(!runtime.RestoreCheckpoint(invalidCheckpoint) && runtime.ActiveEnemyCount() == 1,
+        "Checkpoint restoration must reject duplicate actor identities");
+
+    CourseActorDamageReceiver receiver;
+    WeaponHitRequest hit{};
+    hit.shotId = 1;
+    hit.targetActorId = enemyId;
+    hit.hitKind = RailAimHitKind::Enemy;
+    hit.hitNormal = {0.0f, 1.0f, 0.0f};
+    hit.baseDamage = 1000.0f;
+    const auto killed = receiver.Apply(runtime, nullptr, hit);
+    runner.Expect(killed.destroyed && killed.remainingHitPoints == 0.0f &&
+        runtime.Enemies().front().desc.hitPoints == runtime.Enemies().front().combatState.currentHitPoints &&
+        receiver.Apply(runtime, nullptr, hit).duplicate,
+        "Weapon damage must clamp HP, synchronize both health views and reject duplicate shots");
+    CourseObstacleActorDesc obstacle{};
+    obstacle.breakable = false;
+    runtime.SpawnObstacle(obstacle);
+    hit.shotId = 2;
+    hit.targetActorId = runtime.Obstacles().front().actorId;
+    hit.hitKind = RailAimHitKind::Obstacle;
+    runner.Expect(receiver.Apply(runtime, nullptr, hit).blocked &&
+        runtime.Obstacles().front().desc.hitPoints == obstacle.hitPoints,
+        "Indestructible obstacle health must survive a weapon hit");
+
+    CourseEnemyActorDesc exiting{};
+    exiting.formationDefinition = EnemyFormationDefinition::CommercialDefault("encapsulation-exit");
+    runtime.SpawnEnemyActor(exiting);
+    const uint32_t exitingId = runtime.Enemies().back().actorId;
+    projectile.projectileId = 200;
+    projectile.ownerActorId = exitingId;
+    runtime.SpawnProjectile(projectile);
+    runtime.RetireEnemies(std::array<uint32_t, 1>{exitingId});
+    runner.Expect(runtime.Enemies().back().entranceExitState.exitRequested &&
+        !runtime.Enemies().back().entranceExitState.targetable &&
+        std::none_of(runtime.Bullets().begin(), runtime.Bullets().end(),
+            [&](const auto& bullet) { return bullet.ownerActorId == exitingId; }),
+        "Animated retirement must retain the actor while stopping its owned projectiles and targeting");
+}
+
+// Test fixtures use the same checked restoration boundary as retry/load.
+// No test gets a mutable reference to an actor owned by CourseSpawnRuntime.
+void RestoreEnemyFixture(RegressionRunner& runner, CourseSpawnRuntime& runtime, const CourseEnemyActor& actor) {
+    auto checkpoint = runtime.CaptureCheckpoint();
+    for (auto& candidate : checkpoint.enemies) if (candidate.actorId == actor.actorId) candidate = actor;
+    std::string error;
+    runner.Expect(runtime.RestoreCheckpoint(checkpoint, true, &error), "Enemy fixture checkpoint must be valid: " + error);
+}
+
 void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
     constexpr uint32_t kWidth = 1000;
     constexpr uint32_t kHeight = 600;
@@ -19080,7 +19741,7 @@ void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
         "attack warning phases should be distinguishable by text, shape scale, tier, phase color and a real seconds countdown");
 
     CourseSpawnRuntime runtime;
-    runtime.MutableFireSafetySettings().enabled = false;
+    { auto candidate = runtime.FireSafetySettings(); candidate.enabled = false; runner.Expect(runtime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
     CourseEnemyActorDesc attack{};
     attack.spawnDistance = 50.0f;
     attack.radius = 2.0f;
@@ -19148,9 +19809,13 @@ void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
             hasEvent(telegraph.Frame(), EnemyAttackTelegraphEventKind::Fired),
         "actual bullet emission should drive the fired flash and its sequenced feedback event");
 
-    runtime.MutableEnemies().front().bulletsEmittedThisFrame = 0;
-    runtime.MutableEnemies().front().fireTimer = 0.50f;
-    runtime.MutableEnemies().front().desc.lateralOffset = 80.0f;
+    {
+        CourseEnemyActor fixture = runtime.Enemies().front();
+        fixture.bulletsEmittedThisFrame = 0;
+        fixture.fireTimer = 0.50f;
+        fixture.desc.lateralOffset = 80.0f;
+        RestoreEnemyFixture(runner, runtime, fixture);
+    }
     telegraph.Reset();
     telegraph.Update(input);
     const EnemyAttackTelegraphFrame& offscreenFrame = telegraph.Frame();
@@ -19159,7 +19824,9 @@ void TestEnemyAttackTelegraphSystem(RegressionRunner& runner) {
             !hasEvent(offscreenFrame, EnemyAttackTelegraphEventKind::Fired),
         "offscreen enemies must not leave a countdown or replay an old fired flash after reset");
 
-    runtime.MutableEnemies().front().desc.lateralOffset = 0.0f;
+    runtime.SetEnemyRailPose(runtime.Enemies().front().actorId,
+        runtime.Enemies().front().desc.distanceOffset, 0.0f,
+        runtime.Enemies().front().desc.verticalOffset, runtime.Enemies().front().desc.forwardSpeed);
     CourseObstacleActorDesc occluder{};
     occluder.spawnDistance = 25.0f;
     occluder.halfExtents = {4.0f, 4.0f, 4.0f};
@@ -19554,7 +20221,7 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
     spawn.SpawnObstacle(legacyObstacle);
     CourseBulletActor hostileProjectile{};
     hostileProjectile.damage = 99.0f;
-    spawn.MutableBullets().push_back(hostileProjectile);
+    spawn.SpawnProjectile(hostileProjectile);
 
     CourseCollisionSystem collision;
     SectionCheckpointSystem sections;
@@ -19591,7 +20258,7 @@ void TestGameSessionPresentationAndRetry(RegressionRunner& runner) {
     railVehicle.Reset(70.0f, 30.0f, &retryRail);
     waveRuntime.NotifyEnemyDefeated("retry-actor");
     waveRuntime.Update({0.0f, 90.0f, {}});
-    spawn.MutableObstacles().clear();
+    spawn.ClearObstacles();
     session.ApplyPlayerDamage(1000.0f, "retry_lethal");
     session.Update({0.016f, 90.0f, 1, 1, 0, 0, false, false});
     runner.Expect(
@@ -19878,8 +20545,10 @@ void TestSubmissionObstacleReadability(RegressionRunner& runner) {
         runner.Expect(result.destroyed && !hud.Frame().obstacleApproaching &&
             !collision.Update(collisionInput).contact,
             "destroying an obstacle must clear the warning and body collision before deferred cleanup");
-        runtime.MutableObstacles().front().desc.hitPoints = d.hitPoints;
-        runtime.MutableObstacles().front().age = d.lifetime;
+        auto expiredCheckpoint = runtime.CaptureCheckpoint();
+        expiredCheckpoint.obstacles.front().desc.hitPoints = d.hitPoints;
+        expiredCheckpoint.obstacles.front().age = d.lifetime;
+        runner.Expect(runtime.RestoreCheckpoint(expiredCheckpoint), "Expired obstacle fixture must restore");
         vehicle.distance = event.distance;
         hud.Update(hudInput);
         runner.Expect(!hud.Frame().obstacleApproaching && !collision.Update(collisionInput).contact,
@@ -20029,7 +20698,7 @@ void TestRailPlayerMovementAndDodge(RegressionRunner& runner) {
     bullet.radius = 2.0f;
     bullet.damage = 50.0f;
     bullet.lifetime = 2.0f;
-    collisionRuntime.MutableBullets().push_back(bullet);
+    collisionRuntime.SpawnProjectile(bullet);
     CourseCollisionSystem collision;
     CourseCollisionFrameInput collisionInput{};
     collisionInput.deltaTime = 0.016f;
@@ -20235,6 +20904,48 @@ void TestRailVehicleMovementAndPresentation(RegressionRunner& runner) {
             ValidateModelDataMaterialLayout(cartModel) &&
             ValidateModelGeometryOrientation(cartModel),
         "packaged rail vehicle fallback should be validated multi-material production geometry");
+    const auto cartAudit=AuditModelClosedSurface(cartModel);
+    bool beveledNormals=false;
+    for(const auto& vertex : cartModel.vertices) {
+        const int axes=(std::abs(vertex.normal.x)>0.1f ? 1:0)+
+            (std::abs(vertex.normal.y)>0.1f ? 1:0)+(std::abs(vertex.normal.z)>0.1f ? 1:0);
+        beveledNormals=beveledNormals || (axes>=2 && vertex.texcoord.x>=2.0f);
+    }
+    runner.Expect(cartAudit.IsValid() && beveledNormals && cartAudit.triangleCount<600,
+        "Cart chamfers must retain closed consistently wound solids and encoded edge normals within a small geometry budget");
+
+    Material gameplayMaterial{};
+    gameplayMaterial.color={0.4f,0.3f,0.2f,1};
+    gameplayMaterial.shininess=6.0f;
+    gameplayMaterial.specularMode=1;
+    const DirectionalLight openingLight{{1,0.68f,0.5f,1},{-0.5f,-0.42f,0.76f},2.15f};
+    for (const auto& source : cartModel.materials) {
+        const Material titlePaint=BuildRailVehicleTitleMaterial(source,gameplayMaterial,
+            openingLight,{0,0,-1},{0,0.32f,-0.95f},1.0f/1.55f);
+        const Material reference=BuildRailVehicleTitleMaterial(source,gameplayMaterial,
+            openingLight,{0,0,-1},{0,0.32f,-0.95f});
+        runner.Expect(titlePaint.color.x==reference.color.x && titlePaint.color.y==reference.color.y &&
+            titlePaint.color.z==reference.color.z && titlePaint.color.x>titlePaint.color.y &&
+            titlePaint.color.y>titlePaint.color.z && titlePaint.color.w==source.baseColorFactor.w,
+            "Title preview must inherit the warm opening gameplay appearance rather than replace gameplay with the blue title palette");
+        runner.Expect(std::abs(titlePaint.padding2[0]*1.55f-reference.padding2[0])<0.0001f &&
+            gameplayMaterial.specularMode==1 && gameplayMaterial.color.x==0.4f,
+            "Title exposure compensation must preserve the gameplay reference and leave the source gameplay material unchanged");
+    }
+    const auto titleBody=BuildRailVehicleTitleMaterial(cartModel.materials[0],gameplayMaterial,
+        openingLight,{0,0,-1},{0,0.32f,-0.95f});
+    const auto titleIron=BuildRailVehicleTitleMaterial(cartModel.materials[1],gameplayMaterial,
+        openingLight,{0,0,-1},{0,0.32f,-0.95f});
+    runner.Expect(titleBody.specularMode==8 && titleIron.specularMode==8 &&
+        titleBody.shininess>titleIron.shininess && titleBody.environmentCoefficient==0 &&
+        titleIron.environmentCoefficient>0.5f && titleIron.color.x<titleBody.color.x*0.5f,
+        "Title paint and iron must retain different roughness, reflectance and value under the shared gameplay palette");
+    for (float exposure : {0.0f,-1.0f,std::numeric_limits<float>::quiet_NaN()}) {
+        const auto material=BuildRailVehicleTitleMaterial(cartModel.materials[0],gameplayMaterial,
+            openingLight,{0,0,-1},{0,0.32f,-0.95f},exposure);
+        runner.Expect(std::isfinite(material.padding2[0]) && material.padding2[0]==1.0f,
+            "Invalid title exposure ratio must fall back to a finite preview");
+    }
 
     input.emergencyBrake = true;
     const RailVehicleMovementFrame emergencyFrame = vehicle.Update(input);
@@ -21584,7 +22295,7 @@ void TestRailWorldShotRouting(RegressionRunner& runner) {
         query.railPath = &rail;
         query.spawnRuntime = &runtime;
         ApplyRailAimHit(aim, RailWorldRaycast::Query(query));
-        runtime.MutableEnemies().clear();
+        runtime.ClearEnemies();
 
         CourseCollisionSystem collision;
         const CourseCollisionFrameStats stats = collision.Update(
@@ -21678,7 +22389,7 @@ void TestWeaponDamageReception(RegressionRunner& runner) {
 
 void TestEnemyCombatStateMachine(RegressionRunner& runner) {
     CourseSpawnRuntime runtime;
-    runtime.MutableFireSafetySettings().enabled = false;
+    { auto candidate = runtime.FireSafetySettings(); candidate.enabled = false; runner.Expect(runtime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
 
     CourseEnemyActorDesc enemy{};
     enemy.actorAssetId = "regression_commercial_drone";
@@ -21790,7 +22501,7 @@ void TestEnemyWarningFireEligibility(RegressionRunner& runner) {
         {{0.0f, 0.0f, 200.0f}, 18.0f, 32.0f}});
     const Matrix4x4 vp = MakePerspectiveFovMatrix(1.04719755f, 1.6666667f, 0.1f, 1000.0f);
     CourseSpawnRuntime runtime;
-    runtime.MutableFireSafetySettings().minVisibleBeforeFire = 0.0f;
+    { auto candidate = runtime.FireSafetySettings(); candidate.minVisibleBeforeFire = 0.0f; runner.Expect(runtime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
     CourseEnemyActorDesc desc{};
     desc.actorAssetId = "warning_eligibility_fixture";
     desc.spawnDistance = 75.0f;
@@ -21848,7 +22559,7 @@ void TestEnemyWarningFireEligibility(RegressionRunner& runner) {
             runtime.Enemies().front().behaviorState.attackTimeRemaining < 0.15f &&
             !warning.Frame().cues.empty(),
             "a presented eligible warning must count down before the chosen gate is lost");
-        auto& actor = runtime.MutableEnemies().front();
+        CourseEnemyActor actor = runtime.Enemies().front();
         const float lateral = actor.desc.lateralOffset;
         const float authoredLateral = actor.behaviorState.authoredLateralOffset;
         if (gate == 0) actor.desc.suppressFire = true;
@@ -21888,7 +22599,9 @@ void TestEnemyWarningFireEligibility(RegressionRunner& runner) {
         if (gate == 4) { actor.screenPresenceEvaluated = true; actor.screenPresenceAttackAllowed = false; }
         if (gate == 5) { actor.encounterPacingEvaluated = true; actor.encounterPacingAttackAllowed = false; }
         if (gate == 6) safety.playerDistance = 1000.0f;
+        RestoreEnemyFixture(runner, runtime, actor);
         runtime.Update(0.13f, safety);
+        actor = runtime.Enemies().front();
         present();
         runner.Expect(runtime.Enemies().front().fireSequence == 0 &&
             runtime.Bullets().empty() && warning.Frame().cues.empty() &&
@@ -21906,6 +22619,7 @@ void TestEnemyWarningFireEligibility(RegressionRunner& runner) {
         course.terrainPlacements.clear();
         actor.screenPresenceEvaluated = false;
         actor.encounterPacingEvaluated = false;
+        RestoreEnemyFixture(runner, runtime, actor);
         safety.playerDistance = 0.0f;
         runtime.Update(0.02f, safety);
         present();
@@ -21928,7 +22642,7 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
         {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
         {{0.0f, 0.0f, 180.0f}, 18.0f, 32.0f}});
     CourseSpawnRuntime runtime;
-    runtime.MutableFireSafetySettings().enabled = false;
+    { auto candidate = runtime.FireSafetySettings(); candidate.enabled = false; runner.Expect(runtime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
     CourseEnemyActorDesc enemy{};
     enemy.actorAssetId = "regression_interceptor";
     enemy.sourcePlacementGuid = "behavior-placement";
@@ -22051,7 +22765,7 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
         "Behavior movement should drive authoritative rail-local position and presentation-only bank without changing combat ownership");
 
     CourseSpawnRuntime bandRuntime;
-    bandRuntime.MutableFireSafetySettings().enabled = false;
+    { auto candidate = bandRuntime.FireSafetySettings(); candidate.enabled = false; runner.Expect(bandRuntime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
     CourseEnemyActorDesc bandEnemy{};
     bandEnemy.actorAssetId = "regression_band_interceptor";
     bandEnemy.sourcePlacementGuid = "band-placement";
@@ -22129,7 +22843,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
     runner.Expect(
         openingScout.LoadFromFile(
             "Resources/courses/actors/drone_scout.actor", &openingScoutError) &&
-            openingScout.meshId == "combat_assault_hull" &&
+            openingScout.meshId == "twin_shield_hull" &&
             openingScout.radius == 1.05f,
         "opening scout uses a distinct production hull without enlarging its hitbox");
     const char* waveIds[]{"intro_scout_pair", "intro_lockon_line",
@@ -22141,7 +22855,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
     constexpr float dt = 1.0f / 60.0f;
     for (const char* waveId : waveIds) {
         CourseSpawnRuntime runtime;
-        runtime.MutableFireSafetySettings().enabled = false;
+        { auto candidate = runtime.FireSafetySettings(); candidate.enabled = false; runner.Expect(runtime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
         CourseEventDispatcher dispatcher;
         CourseEventMarker event{};
         event.type = "enemy_wave";
@@ -22242,7 +22956,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
     safety.playerDistance = event.distance;
     safety.railPath = &rail;
     runtime.Update(dt, safety);
-    auto& actor = runtime.MutableEnemies().front();
+    CourseEnemyActor actor = runtime.Enemies().front();
     const auto worldPosition = [&](const CourseEnemyActor& enemy) {
         const auto sample = rail.Evaluate(enemy.desc.spawnDistance + enemy.desc.distanceOffset);
         return Vector3{sample.position.x + sample.right.x * enemy.desc.lateralOffset + sample.up.x * enemy.desc.verticalOffset,
@@ -22256,7 +22970,9 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
     actor.attackState.tokenReserved = true;
     actor.targetingState.solutionLocked = true;
     actor.bulletsEmittedThisFrame = 1;
+    RestoreEnemyFixture(runner, runtime, actor);
     runtime.EnforceEnemyEngagementClearance(safety);
+    actor = runtime.Enemies().front();
     const Vector3 safePosition = worldPosition(actor);
     const float cameraDistance = std::sqrt(
         std::pow(safePosition.x - safety.cameraPosition.x, 2.0f) +
@@ -22374,13 +23090,12 @@ void TestSpireGuardAttackPassChoreography(RegressionRunner& runner) {
             // A speed-up must not turn the stationary attack pose into a flyby.
             safety.playerDistance += (elapsed < 4.0f ? 18.0f : 21.0f) * dt;
             if (mode == 2 && frame == 60) {
-                for (auto& actor : runtime.MutableEnemies()) {
-                    if (actor.actorId == 1) actor.desc.hitPoints = 0.0f;
-                }
+                runtime.EnemyCombat().ForceDefeat(runtime, 1);
             }
             safety.cameraAllowsEnemyFire = mode != 3 || elapsed >= 5.40f;
-            runtime.EnemyAttacks().MutableSettings().maximumConcurrentAttackers =
-                mode == 1 && elapsed < 3.0f ? 0 : 3;
+            auto attackSettings = runtime.EnemyAttacks().Settings();
+            attackSettings.maximumConcurrentAttackers = mode == 1 && elapsed < 3.0f ? 0 : 3;
+            runner.Expect(runtime.EnemyAttacks().Configure(attackSettings), "Zero attack capacity is an intentional admission hold");
             runtime.Update(dt, safety);
             EnemyCombatPresentationInput presentationInput{};
             presentationInput.runtime = &runtime;
@@ -22496,7 +23211,7 @@ void TestSpireGuardAttackPassChoreography(RegressionRunner& runner) {
 
 void TestEnemyFormationAndEntranceExit(RegressionRunner& runner) {
     CourseSpawnRuntime runtime;
-    runtime.MutableFireSafetySettings().enabled = false;
+    { auto candidate = runtime.FireSafetySettings(); candidate.enabled = false; runner.Expect(runtime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
 
     EnemyFormationDefinition definition =
         EnemyFormationDefinition::CommercialDefault("formation-regression");
@@ -22670,13 +23385,13 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
     input.runtime = &runtime;
     input.playerDistance = -1.0f;
 
-    runtime.MutableEnemies().clear();
+    runtime.ClearEnemies();
     EnemyProjectileRuntimeState projectile{};
     projectile.projectileId = 9001;
     projectile.damage = 12.0f;
     projectile.initialized = true;
     projectile.active = true;
-    runtime.MutableBullets().push_back(projectile);
+    runtime.SpawnProjectile(projectile);
     director.Update(input);
     runner.Expect(
         director.Frame().truth.activeHostileProjectiles == 1 &&
@@ -22684,7 +23399,7 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
             !director.Frame().truth.safeToResolveSession,
         "Combat Truth should keep HUD and session unresolved while a hostile projectile remains in flight after its actor is gone");
 
-    runtime.MutableBullets().clear();
+    runtime.ClearProjectiles();
     PlayerDamageResult damage{};
     damage.accepted = true;
     damage.appliedDamage = 12.0f;
@@ -22926,7 +23641,7 @@ void TestEnemyEncounterBeatPacingCameraAndAuthoring(
                 "single threat hero framing",
         "one priority enemy should receive a comfortable hero composition with tighter FOV and camera pull-in instead of multi-enemy wide framing");
 
-    runtime.MutableEnemies().clear();
+    runtime.ClearEnemies();
     pacing.Update(pacingInput); // Attack -> Recovery.
     pacing.Update(pacingInput); // Recovery -> ExitResolve.
     const EnemyEncounterPacingFrame& resolving = pacing.Update(pacingInput);
@@ -22980,13 +23695,14 @@ void TestEnemyAttackCoordinationAndExecution(RegressionRunner& runner) {
         {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
         {{0.0f, 0.0f, 180.0f}, 18.0f, 32.0f}});
     CourseSpawnRuntime runtime;
-    runtime.MutableFireSafetySettings().enabled = false;
-    auto& settings = runtime.EnemyAttacks().MutableSettings();
+    { auto candidate = runtime.FireSafetySettings(); candidate.enabled = false; runner.Expect(runtime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
+    auto settings = runtime.EnemyAttacks().Settings();
     settings.maximumConcurrentAttackers = 1;
     settings.maximumAttackersPerWave = 1;
     settings.maximumAttackersPerSector = 1;
     settings.maximumThreatBudget = 4.0f;
     settings.tokenRecoverySeconds = 0.12f;
+    runner.Expect(runtime.EnemyAttacks().Configure(settings), "Attack settings fixture must be valid");
 
     auto spawnCommercial = [&](const char* id,
                                EnemyBehaviorArchetype archetype,
@@ -23034,8 +23750,8 @@ void TestEnemyAttackCoordinationAndExecution(RegressionRunner& runner) {
 
     const CourseSpawnRuntimeCheckpoint checkpoint = runtime.CaptureCheckpoint();
     CourseSpawnRuntime restored;
-    restored.MutableFireSafetySettings().enabled = false;
-    restored.EnemyAttacks().MutableSettings() = settings;
+    { auto candidate = restored.FireSafetySettings(); candidate.enabled = false; runner.Expect(restored.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
+    runner.Expect(restored.EnemyAttacks().Configure(settings), "Restored attack settings must be valid");
     restored.RestoreCheckpoint(checkpoint, false);
     runner.Expect(
         reservedCount(restored) == 1 && restored.ActiveBulletCount() == 0,
@@ -23193,13 +23909,15 @@ void TestEnemyTargetingAndProjectileRuntime(RegressionRunner& runner) {
     targetInput.playerVerticalOffset = 4.0f;
     targeting.Update(targetingRuntime, targetInput);
 
-    CourseEnemyActor& targetingActor = targetingRuntime.MutableEnemies().front();
+    CourseEnemyActor targetingActor = targetingRuntime.Enemies().front();
     targetingActor.attackState.tokenReserved = true;
     targetingActor.attackState.intentSequence = 17;
     targetingActor.attackState.tokenId = 41;
     targetingActor.attackState.deterministicSeed = 0x12345678ULL;
     targetInput.playerLateralOffset = 2.0f;
+    RestoreEnemyFixture(runner, targetingRuntime, targetingActor);
     targeting.Update(targetingRuntime, targetInput);
+    targetingActor = targetingRuntime.Enemies().front();
     const EnemyTargetingRuntimeState locked = targetingActor.targetingState;
     runner.Expect(
         locked.solutionLocked && locked.attackIntentSequence == 17 &&
@@ -23210,6 +23928,7 @@ void TestEnemyTargetingAndProjectileRuntime(RegressionRunner& runner) {
 
     targetInput.playerLateralOffset = -18.0f;
     targeting.Update(targetingRuntime, targetInput);
+    targetingActor = targetingRuntime.Enemies().front();
     runner.Expect(
         targetingActor.targetingState.revision == locked.revision &&
             std::abs(targetingActor.targetingState.targetLateralOffset -
@@ -23271,7 +23990,7 @@ void TestEnemyTargetingAndProjectileRuntime(RegressionRunner& runner) {
     fastProjectile.lifetime = 2.0f;
     fastProjectile.initialized = true;
     fastProjectile.active = true;
-    collisionRuntime.MutableBullets().push_back(fastProjectile);
+    collisionRuntime.SpawnProjectile(fastProjectile);
     CourseCollisionSystem collision;
     CourseCollisionFrameInput collisionInput{};
     collisionInput.deltaTime = 1.0f / 60.0f;
@@ -23362,7 +24081,7 @@ void TestPlayerHitboxAndNearMissAuthority(RegressionRunner& runner) {
     graze.damage = 15.0f;
     graze.lifetime = 3.0f;
     graze.active = true;
-    runtime.MutableBullets().push_back(graze);
+    runtime.SpawnProjectile(graze);
     CourseCollisionSystem collision;
     CourseCollisionFrameInput collisionInput{};
     collisionInput.deltaTime = 1.0f / 60.0f;
@@ -23387,8 +24106,10 @@ void TestPlayerHitboxAndNearMissAuthority(RegressionRunner& runner) {
             collision.PlayerNearMiss().State().acceptedNearMisses == 1,
         "the same Projectile ID should never score near-miss more than once");
 
-    runtime.MutableBullets().front().previousLateralOffset = 2.0f;
-    runtime.MutableBullets().front().lateralOffset = 0.0f;
+    auto hitCheckpoint = runtime.CaptureCheckpoint();
+    hitCheckpoint.bullets.front().previousLateralOffset = 2.0f;
+    hitCheckpoint.bullets.front().lateralOffset = 0.0f;
+    runner.Expect(runtime.RestoreCheckpoint(hitCheckpoint, true), "Swept projectile fixture must restore");
     const CourseCollisionFrameStats hitAfterGraze =
         collision.Update(runtime, collisionInput);
     runner.Expect(
@@ -23519,7 +24240,7 @@ void TestEnemyProjectilePresentationPipeline(RegressionRunner& runner) {
     projectile.impactEffectId = "regression_enemy_impact";
     projectile.initialized = true;
     projectile.active = true;
-    runtime.MutableBullets().push_back(projectile);
+    runtime.SpawnProjectile(projectile);
 
     EnemyProjectilePresentationBridge presentation;
     EnemyProjectilePresentationInput presentationInput{};
@@ -23596,7 +24317,7 @@ void TestEnemyProjectilePresentationPipeline(RegressionRunner& runner) {
         presentation.Frame().events.empty() && audio.Frame().cues.empty(),
         "stable projectiles should not replay spawn or fly-by one-shots every frame");
 
-    runtime.MutableBullets().clear();
+    runtime.ClearProjectiles();
     PlayerDamageResult hit{};
     hit.accepted = true;
     hit.lethal = false;
@@ -23627,11 +24348,11 @@ void TestEnemyProjectilePresentationPipeline(RegressionRunner& runner) {
 
     presentation.Reset();
     audio.Reset();
-    runtime.MutableBullets().push_back(projectile);
+    runtime.SpawnProjectile(projectile);
     presentationInput.playerDamageResults = {};
     presentationInput.shootDownResults = {};
     presentation.Update(presentationInput);
-    runtime.MutableBullets().clear();
+    runtime.ClearProjectiles();
     EnemyProjectileShootDownResult intercepted{};
     intercepted.projectileId = 7701;
     intercepted.ownerActorId = 42;
@@ -23928,7 +24649,7 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
         EnemyAttackDefenseResponse::LeanLeft |
         EnemyAttackDefenseResponse::LeanRight;
     runtime.SpawnEnemyActor(enemy);
-    CourseEnemyActor& actor = runtime.MutableEnemies().front();
+    CourseEnemyActor actor = runtime.Enemies().front();
     actor.attackState.phase = EnemyAttackRuntimePhase::Telegraphing;
     actor.attackState.tokenReserved = true;
     actor.attackState.tokenId = 77;
@@ -23948,8 +24669,9 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
     damage.appliedDamage = 5.0f;
     EnemyAttackInterruptSystem interrupt;
     interrupt.BeginFrame();
-    const EnemyAttackInterruptResult interrupted =
-        interrupt.Submit(runtime, damage);
+    RestoreEnemyFixture(runner, runtime, actor);
+    const EnemyAttackInterruptResult interrupted = interrupt.Submit(runtime, damage);
+    actor = runtime.Enemies().front();
     runner.Expect(
         interrupted.eligible && interrupted.interrupted &&
             actor.attackState.phase == EnemyAttackRuntimePhase::Cancelled &&
@@ -23989,6 +24711,7 @@ void TestMountedDefenseResponseContract(RegressionRunner& runner) {
     actor.attackState.intentSequence = 22;
     actor.behaviorState.attackIntentActive = true;
     actor.behaviorState.attackIntentSequence = 22;
+    RestoreEnemyFixture(runner, runtime, actor);
     EnemyAttackDefensePresentationBridge defensePresentation;
     EnemyAttackDefensePresentationInput defenseInput{};
     defenseInput.telegraph = &telegraph;
@@ -24353,7 +25076,7 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
         {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
         {{0.0f, 0.0f, 160.0f}, 18.0f, 32.0f}});
     CourseSpawnRuntime runtime;
-    runtime.MutableFireSafetySettings().enabled = false;
+    { auto candidate = runtime.FireSafetySettings(); candidate.enabled = false; runner.Expect(runtime.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
     CourseEnemyActorDesc enemy{};
     enemy.actorAssetId = "presentation_commercial_drone";
     enemy.spawnDistance = 70.0f;
@@ -24417,7 +25140,9 @@ void TestEnemyCombatPresentationBridge(RegressionRunner& runner) {
             bridge.Frame().vfxCommands.empty(),
         "combat telegraph phase alone must not charge a gun, pulse or shake before an eligible readable attack intent");
 
-    runtime.MutableEnemies().front().fireSequence += 1;
+    CourseEnemyActor firedFixture = runtime.Enemies().front();
+    ++firedFixture.fireSequence;
+    RestoreEnemyFixture(runner, runtime, firedFixture);
     runtime.Update(0.01f);
     events = runtime.EnemyCombat().ConsumeEvents();
     input.events = events;
@@ -26229,10 +26954,12 @@ void TestCoursePreviewSimulationSystem(RegressionRunner& runner) {
     course.SaveToString(&sourceBefore, &error);
 
     CoursePreviewSimulationSystem simulation;
-    simulation.MutableSettings().fixedStepSeconds = 0.01f;
-    simulation.MutableSettings().travelSpeed = 4.0f;
-    simulation.MutableSettings().maximumSubsteps = 64;
-    simulation.MutableSettings().automaticEnemyDefeatSeconds = 0.03f;
+    auto previewSettings = simulation.Settings();
+    previewSettings.fixedStepSeconds = 0.01f;
+    previewSettings.travelSpeed = 4.0f;
+    previewSettings.maximumSubsteps = 64;
+    previewSettings.automaticEnemyDefeatSeconds = 0.03f;
+    runner.Expect(simulation.Configure(previewSettings), "preview fixture settings should validate");
     runner.Expect(
         simulation.BeginPreview(course, 0.0f, &error) && simulation.IsPlaying() &&
             simulation.HasSnapshot() && simulation.Waves().size() == 2 &&
@@ -26359,6 +27086,9 @@ void TestCourseWaveRuntimeCompilerAndPreviewActorBridge(
         asset.radius = 1.75f;
         asset.hitPoints = 55.0f;
         asset.forwardSpeed = 2.0f;
+        // This fixture tests linear integration. Commercial enemies instead
+        // maintain an engagement distance and need not advance at constant speed.
+        asset.behaviorDefinition = EnemyBehaviorDefinition::LegacyDirect();
         return true;
     };
     options.bulletPatternResolver = [](
@@ -26413,10 +27143,12 @@ void TestCourseWaveRuntimeCompilerAndPreviewActorBridge(
         "strict runtime compilation should reject unresolved ActorAssets with diagnostics");
 
     CoursePreviewSimulationSystem simulation;
-    simulation.MutableSettings().fixedStepSeconds = 0.01f;
-    simulation.MutableSettings().travelSpeed = 4.0f;
-    simulation.MutableSettings().maximumSubsteps = 64;
-    simulation.MutableSettings().automaticallyDefeatEnemies = false;
+    auto previewSettings = simulation.Settings();
+    previewSettings.fixedStepSeconds = 0.01f;
+    previewSettings.travelSpeed = 4.0f;
+    previewSettings.maximumSubsteps = 64;
+    previewSettings.automaticallyDefeatEnemies = false;
+    runner.Expect(simulation.Configure(previewSettings), "preview fixture settings should validate");
     std::string error;
     runner.Expect(
         simulation.BeginPreview(course, 0.0f, &error),
@@ -26440,13 +27172,17 @@ void TestCourseWaveRuntimeCompilerAndPreviewActorBridge(
             runtimeActor->desc.localScale.z == placement.localScale.z,
         "preview runtime actors should preserve placement identity and authored presentation data");
 
-    bridge.MutableSettings().simulateMovement = true;
-    bridge.MutableSettings().preserveActorsAtAuthoredTransform = false;
+    auto actorSettings = bridge.Settings();
+    actorSettings.simulateMovement = true;
+    actorSettings.preserveActorsAtAuthoredTransform = false;
+    runner.Expect(bridge.Configure(actorSettings), "preview actor fixture settings should validate");
+    const uint32_t movingActorId = bridge.Runtime().Enemies().front().actorId;
     bridge.Synchronize(simulation, 0.10f, simulation.Frame().distance, &error);
     const float firstMovedOffset = bridge.Runtime().Enemies().front().desc.distanceOffset;
     bridge.Synchronize(simulation, 0.10f, simulation.Frame().distance, &error);
     runner.Expect(
-        bridge.Runtime().Enemies().front().desc.distanceOffset > firstMovedOffset + 0.1f,
+        bridge.Runtime().Enemies().front().actorId == movingActorId &&
+            std::abs(bridge.Runtime().Enemies().front().desc.distanceOffset - firstMovedOffset - 0.2f) < 0.0001f,
         "preview Actor movement should accumulate when authored-transform preservation is disabled");
 
     simulation.MarkEnemyDefeated(placement.editorGuid);
@@ -26626,7 +27362,7 @@ void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
         "gameplay bridge should materialize the authored Actor at the cooked Wave trigger");
 
     const CourseGameplayWaveCheckpoint checkpoint = gameplay.CaptureCheckpoint();
-    runtime.MutableEnemies().front().desc.hitPoints = 0.0f;
+    runtime.EnemyCombat().ForceDefeat(runtime, runtime.Enemies().front().actorId);
     gameplay.Update({0.0f, first.triggerRailDistance + 0.01f, {}});
     runner.Expect(
         gameplay.Stats().completedWaves == 1 && gameplay.Stats().activeWaves == 1 &&
@@ -28143,7 +28879,13 @@ void TestCourseMapPresentationSystems(RegressionRunner& runner) {
             {0.0f, 0.0f, 800.0f, 500.0f}, projectionSettings, &error) &&
         sceneProjection.Configure(&rail, {0.0f, 0.0f, 800.0f, 500.0f},
             projectionSettings, &error, nullptr, &boundsFrame.fitPoints) &&
-        sceneProjection.State().baseScale < railOnlyProjection.State().baseScale,
+        sceneProjection.State().rawMinimum.x < railOnlyProjection.State().rawMinimum.x &&
+        sceneProjection.State().rawMaximum.x > railOnlyProjection.State().rawMaximum.x &&
+        std::all_of(boundsFrame.fitPoints.begin(), boundsFrame.fitPoints.end(),
+            [&](Vector3 point) {
+                const auto projected = sceneProjection.ProjectWorldScreenOnly(point);
+                return projected.valid && sceneProjection.State().rect.Contains(projected.mapPosition);
+            }),
         "overview projection should fit the complete scene bounds instead of only the rail");
 
     CourseMapSemanticLODSystem semanticLod;
@@ -28535,7 +29277,7 @@ void TestCourseMapCartographyPersistenceUnit(RegressionRunner& runner) {
     EditorAssetRecord productionMesh{};
     productionMesh.kind = EditorAssetKind::Mesh;
     productionMesh.id = "ball_production";
-    productionMesh.guid = "341b4a9d19b537b30668ed32e1090d63";
+    productionMesh.guid = "a7853409f86661149beaecb724ea5104"; // Durable GUID stored by ball_production.mesh.
     productionMesh.logicalPath = "Generated/Imported/ball_production.mesh";
     productionMesh.sourcePath = "Resources/Generated/Imported/ball_production.mesh";
     productionMesh.displayName = "Ball Production";
@@ -28544,6 +29286,10 @@ void TestCourseMapCartographyPersistenceUnit(RegressionRunner& runner) {
     runner.Expect(assets.Register(std::move(productionMesh)),
         "cartography regression should register its Production Mesh source");
 
+    CourseTerrainProductionMeshResolver resolver;
+    const auto& meshSource = resolver.Resolve(assets, "ball_production");
+    runner.Expect(meshSource.Resolved() && meshSource.source == CourseTerrainMeshResolutionSource::ProductionAsset,
+        "cartography fixture must resolve the real durable Production Mesh identity");
     CourseMapGeometryExtractionService extraction;
     const CourseMapGeometryExtractionResult extracted = extraction.Extract(
         {&visual, &assets});
@@ -29821,7 +30567,7 @@ void TestVehicleDirectionalDamageResponse(RegressionRunner& runner) {
         CourseBulletActor bullet{};bullet.projectileId=1;bullet.active=true;bullet.initialized=true;
         bullet.distanceOffset=bullet.previousDistanceOffset=50;bullet.verticalOffset=bullet.previousVerticalOffset=3;
         bullet.previousLateralOffset=side*10;bullet.lateralOffset=-side*10;
-        bullet.radius=0.3f;bullet.damage=6;bullet.lifetime=5;runtime.MutableBullets().push_back(bullet);
+        bullet.radius=0.3f;bullet.damage=6;bullet.lifetime=5;runtime.SpawnProjectile(bullet);
         CourseCollisionFrameInput ci{};ci.railPath=&rail;ci.player.distance=50;ci.player.verticalOffset=3;
         ci.weapon.enabled=false;ci.externalBodyCollisionAuthority=true;collision.Update(runtime,ci);
         const auto& result=collision.LastPlayerDamageResult();
@@ -29992,9 +30738,276 @@ void TestRailTitleLoop(RegressionRunner& runner) {
     }
 }
 
+void TestRailTitleBodySway(RegressionRunner& runner) {
+    Matrix4x4 referencePose{};
+    for(int fps : {30,60,120}) {
+        RailTitleScene title;
+        runner.Expect(title.Initialize(),"Title suspension must initialize");
+        bool bounded=true,grounded=true,continuous=true;
+        float minimumHeight=10,maximumHeight=-10;
+        Matrix4x4 previousLocal{};
+        for(int i=0;i<fps*40;++i) {
+            title.Update(1.0f/fps);
+            const auto& wheels=title.Wheels().wheels;
+            Vector3 center{},forward{};
+            for(size_t n=0;n<wheels.size();++n) {
+                const auto& wheel=wheels[n];
+                center.x+=wheel.railContact.x*0.25f;center.y+=wheel.railContact.y*0.25f;center.z+=wheel.railContact.z*0.25f;
+                const float sign=n>=2 ? 0.5f : -0.5f;
+                forward.x+=wheel.railContact.x*sign;forward.z+=wheel.railContact.z*sign;
+                grounded &= wheel.supported && std::abs(wheel.axleCenter.y-wheel.railContact.y-0.62f)<0.0001f;
+            }
+            center.y+=1.0f; // Contact solver's body pivot and clearance.
+            auto neutral=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,std::atan2(forward.x,forward.z),0},center);
+            const auto local=Multiply(title.Vehicle().worldMatrix,Inverse(neutral));
+            const float vertical=local.m[3][1];
+            minimumHeight=(std::min)(minimumHeight,vertical);maximumHeight=(std::max)(maximumHeight,vertical);
+            bounded &= std::abs(vertical)<0.039f && std::abs(local.m[3][0])<0.016f && std::abs(local.m[3][2])<0.0002f &&
+                std::abs(local.m[0][1])<0.015f && std::abs(local.m[2][1])<0.006f &&
+                std::abs(title.CameraPosition().y-title.Path().Evaluate(title.Distance()).position.y-8.0f)<0.0001f;
+            if(i>0) continuous &= std::abs(vertical-previousLocal.m[3][1])<0.024f &&
+                std::abs(local.m[0][1]-previousLocal.m[0][1])<0.004f;
+            previousLocal=local;
+            if(i==fps*10-1) {
+                if(fps==30) referencePose=local;
+                else for(int row=0;row<4;++row) for(int col=0;col<4;++col)
+                    bounded &= std::abs(local.m[row][col]-referencePose.m[row][col])<0.0002f;
+            }
+        }
+        runner.Expect(bounded && grounded && continuous && maximumHeight-minimumHeight>0.05f,
+            "Title body must gently move in local space across a lap, independently of frame rate, while wheels stay grounded and camera stays steady");
+        const auto frozen=title.Vehicle().worldMatrix;
+        title.Update(0);
+        bool paused=true;
+        for(int row=0;row<4;++row) for(int col=0;col<4;++col)
+            paused &= frozen.m[row][col]==title.Vehicle().worldMatrix.m[row][col];
+        runner.Expect(paused,"Pausing the title must also freeze its suspension motion");
+        title.BeginStart();
+        for(int i=0;i<fps*3;++i) title.Update(1.0f/fps);
+        runner.Expect(title.ReadyForGameplay() && title.Blackout()==1.0f,
+            "Body sway must preserve the existing blackout handoff");
+    }
+}
+
+void TestRailTitlePursuit(RegressionRunner& runner) {
+    const auto sub=[](Vector3 a,Vector3 b){return Vector3{a.x-b.x,a.y-b.y,a.z-b.z};};
+    const auto dot=[](Vector3 a,Vector3 b){return a.x*b.x+a.y*b.y+a.z*b.z;};
+    const auto length=[&](Vector3 v){return std::sqrt(dot(v,v));};
+    Vector3 reference{};
+    for (int fps : {30,60,120}) {
+        RailTitleScene title;
+        runner.Expect(title.Initialize(),"Pursuit title must initialize");
+        Vector3 previous=title.Pursuer().position;
+        bool continuous=true,behind=true,composition=true,aim=true;
+        const int frames=int(title.LapLength()/RailTitleScene::Speed*fps*2.1f);
+        for(int i=0;i<frames;++i) {
+            title.Update(1.0f/fps);
+            const auto& drone=title.Pursuer();
+            const auto cart=title.Path().Evaluate(title.Distance());
+            continuous &= length(sub(drone.position,previous))<25.0f/fps;
+            const float gap=dot(sub(cart.position,drone.position),cart.tangent);
+            behind &= drone.visible && gap>22 && gap<34 && drone.position.y-cart.position.y>2.8f;
+            const Vector3 forward=Normalize(sub(title.CameraTarget(),title.CameraPosition()));
+            const Vector3 right=Normalize(Vector3{forward.z,0,-forward.x});
+            const Vector3 up={forward.y*right.z-forward.z*right.y,
+                forward.z*right.x-forward.x*right.z,forward.x*right.y-forward.y*right.x};
+            const Vector3 relative=sub(drone.position,title.CameraPosition());
+            const float depth=dot(relative,forward);
+            const float ndcX=dot(relative,right)/(depth*std::tan(title.CameraFov()*0.5f)*16.0f/9);
+            const float ndcY=dot(relative,up)/(depth*std::tan(title.CameraFov()*0.5f));
+            // Keep the whole shield silhouette in the scene, clear of the left menu/logo.
+            composition &= depth>35 && ndcX>-0.08f && ndcX<0.82f && std::abs(ndcY)<0.79f;
+            const Vector3 front={-std::sin(drone.rotation.y)*std::cos(drone.rotation.x),
+                std::sin(drone.rotation.x),-std::cos(drone.rotation.y)*std::cos(drone.rotation.x)};
+            aim &= dot(front,Normalize(sub(title.PursuerAimTarget(),drone.position)))>0.97f;
+            if (i==fps*10-1) {
+                if(fps==30) reference=drone.position;
+                else runner.Expect(length(sub(reference,drone.position))<0.02f,
+                    "Pursuit timing must remain consistent across frame rates");
+            }
+            previous=drone.position;
+        }
+        runner.Expect(continuous && behind,"Drone must continuously follow behind the cart over two loop wraps");
+        runner.Expect(composition && aim,"Pursuer must track its ground aim and remain visible to the right of the title UI");
+        const Vector3 frozen=title.Pursuer().position;
+        title.Update(0);
+        runner.Expect(length(sub(frozen,title.Pursuer().position))<0.0001f,
+            "Paused title must freeze the pursuer with the cart");
+        title.BeginStart(); title.Update(0);
+        runner.Expect(length(sub(frozen,title.Pursuer().position))<0.06f,
+            "Departure path split must preserve the pursuer world position");
+        bool clear=true,departureContinuous=true;
+        previous=title.Pursuer().position;
+        while(!title.ReadyForGameplay()) {
+            title.Update(1.0f/fps);
+            clear &= length(sub(title.CameraPosition(),title.Pursuer().position))>5.0f;
+            departureContinuous &= length(sub(title.Pursuer().position,previous))<25.0f/fps;
+            previous=title.Pursuer().position;
+        }
+        runner.Expect(clear && departureContinuous,"Starting camera must clear the continuously following drone");
+        runner.Expect(!title.Pursuer().visible && title.Pursuer().alpha<0.001f,
+            "Pursuer must fade out with the title blackout before gameplay handoff");
+    }
+}
+
+void TestRailTitleGroundFire(RegressionRunner& runner) {
+    uint32_t referenceShots=0,referenceImpacts=0;
+    for(int fps : {30,60,120}) {
+        RailTitleScene title;
+        runner.Expect(title.Initialize(),"Ground-fire title must initialize");
+        size_t peakShots=0,peakClouds=0;
+        uint32_t muzzles=0,impacts=0;
+        bool valid=true,fixedTargets=true;
+        std::vector<RailTitleShot> previous;
+        for(int i=0;i<fps*40;++i) {
+            title.Update(1.0f/fps);
+            peakShots=(std::max)(peakShots,title.Shots().size());
+            peakClouds=(std::max)(peakClouds,title.DustClouds().size());
+            for(const auto& cue:title.AttackCues()) {
+                if(cue.kind==RailTitleAttackCueKind::Muzzle) ++muzzles;
+                else {++impacts; valid &= std::abs(cue.position.y+0.27f)<0.001f;}
+            }
+            for(const auto& shot:title.Shots()) {
+                const float radial=std::sqrt(shot.target.x*shot.target.x+shot.target.z*shot.target.z);
+                // Every shot lands off the sleepers, on the actual flat ground corridor.
+                valid &= shot.id>0 && shot.age>=0 && shot.age<shot.duration &&
+                    std::abs(shot.target.y+0.27f)<0.001f && radial>=64.9f && radial<=75.6f &&
+                    std::abs(radial-70.0f)>4.4f && shot.position.y>=shot.target.y;
+                const auto old=std::find_if(previous.begin(),previous.end(),[&](const auto& p){return p.id==shot.id;});
+                if(old!=previous.end()) fixedTargets &= old->origin.x==shot.origin.x &&
+                    old->origin.z==shot.origin.z && old->target.x==shot.target.x && old->target.z==shot.target.z;
+            }
+            previous=title.Shots();
+        }
+        runner.Expect(valid && fixedTargets && peakShots>0 && peakShots<=3 && peakClouds>0 && peakClouds<=3,
+            "Repeated title fire must keep bounded world-space tracers landing beside the rails");
+        runner.Expect(muzzles==title.ShotSequence() && impacts+title.Shots().size()==muzzles && impacts>20,
+            "Each visual shot must create one muzzle cue and exactly one eventual ground impact");
+        if(fps==30) { referenceShots=muzzles; referenceImpacts=impacts; }
+        else runner.Expect(muzzles==referenceShots && impacts==referenceImpacts,
+            "Burst/impact counts must remain independent of title frame rate");
+        const auto frozen=title.Shots(); const uint32_t sequence=title.ShotSequence();
+        title.Update(0);
+        bool paused=title.AttackCues().empty() && title.Shots().size()==frozen.size() && title.ShotSequence()==sequence;
+        for(size_t n=0;n<frozen.size();++n) paused &= title.Shots()[n].age==frozen[n].age;
+        runner.Expect(paused,"Unfocused title must neither advance shots nor replay attack cues");
+        title.BeginStart();
+        for(int i=0;i<fps*3;++i) title.Update(1.0f/fps);
+        runner.Expect(title.ShotSequence()==sequence && title.Shots().empty() && title.AttackCues().empty() && title.DustClouds().empty(),
+            "Start transition must stop new firing and finish/clear all presentation shots before handoff");
+        title.Initialize();
+        runner.Expect(title.ShotSequence()==0 && title.Shots().empty() && title.AttackCues().empty(),
+            "Title reinitialization must clear the attack loop");
+    }
+    // Validate physical ejecta independently of rendering: rise, gravity, ground
+    // contact, finite lifetime and spatial variation across a deterministic burst.
+    bool ballistic=true,settled=true,varied=false;
+    for(uint32_t index=0;index<36;++index) {
+        RailTitleDustCloud cloud{{10.0f,-0.27f,20.0f},0.10f,7};
+        const auto rising=RailTitleScene::EvaluateSandGrain(cloud,index);
+        cloud.age=0.20f; const auto later=RailTitleScene::EvaluateSandGrain(cloud,index);
+        ballistic &= rising.position.y>cloud.origin.y && rising.opacity>0.0f &&
+            std::abs((later.velocity.y-rising.velocity.y)+0.98f)<0.001f;
+        cloud.age=1.40f; const auto ground=RailTitleScene::EvaluateSandGrain(cloud,index);
+        settled &= std::abs(ground.position.y-cloud.origin.y)<0.001f && ground.opacity==0.0f &&
+            ground.velocity.x==0.0f && ground.velocity.y==0.0f;
+        varied |= std::abs(later.position.x-10.0f)>0.1f && std::abs(later.position.z-20.0f)>0.1f;
+    }
+    runner.Expect(ballistic && settled && varied,
+        "Impact sand must scatter, decelerate under gravity, settle at the ground and fade within a bounded lifetime");
+    EffectAssetLoader loader; EffectSystem system;
+    for(const char* file:{"TitleDroneBolt","TitleDroneMuzzle","TitleGroundImpact"}) {
+        LoadedEffectAsset loaded;
+        const bool ok=loader.LoadFile("Resources/effects/"+std::string(file)+".effect",loaded);
+        runner.Expect(ok && loaded.asset.lifetime<=1.65f &&
+            std::none_of(loaded.diagnostics.begin(),loaded.diagnostics.end(),[](const auto& d){return d.severity==EffectAssetDiagnosticSeverity::Error;}),
+            "Title attack effects must load as bounded production assets without errors");
+        if(ok) system.RegisterAsset(loaded.asset);
+    }
+    RailTitleScene title; title.Initialize(); size_t peak=0;
+    for(int i=0;i<60*40;++i) {
+        title.Update(1.0f/60);
+        for(const auto& cue:title.AttackCues()) system.PlayEffect(
+            cue.kind==RailTitleAttackCueKind::GroundImpact ? "title_ground_impact" : "title_drone_muzzle",cue.position);
+        system.Update(1.0f/60); peak=(std::max)(peak,system.Instances().size());
+    }
+    runner.Expect(peak>0 && peak<=7,"Repeated impacts and muzzle flashes must not accumulate unlimited effect instances");
+    system.Update(2.0f);
+    runner.Expect(system.Instances().empty(),"Attack dust and flashes must expire after emission stops");
+}
+
+void TestTwinShieldEnemyAssets(RegressionRunner& runner) {
+    const std::string directory="Resources/enemies/TwinShieldDrone";
+    size_t assembledTriangles=0;
+    for (const char* file : {"TwinShieldHull.obj","TwinShieldPanel.obj","TwinShieldCore.obj","TwinShieldDrone.obj"}) {
+        const auto mesh=LoadObjFile_Assimp(directory,file);
+        runner.Expect(!mesh.vertices.empty() && !mesh.indices.empty() &&
+            ValidateModelGeometryOrientation(mesh) && ValidateModelDataMaterialLayout(mesh),
+            "Reference drone parts must import as valid oriented indexed meshes with usable material ranges");
+        runner.Expect(mesh.materials.size()>=1 && std::any_of(mesh.materials.begin(),mesh.materials.end(),[](const auto& material) {
+            return std::filesystem::exists(material.textureFilePath) &&
+                std::filesystem::exists(material.normalTextureFilePath) &&
+                material.normalTextureFilePath.ends_with(".dds");
+        }),"Reference drone must bind its authored albedo and linear normal/roughness DDS instead of fallback textures");
+        if (std::string_view(file)=="TwinShieldDrone.obj") {
+            assembledTriangles=mesh.indices.size()/3;
+            float minX=100,maxX=-100,minY=100,maxY=-100,minZ=100;
+            for (const auto& vertex:mesh.vertices) {
+                minX=(std::min)(minX,vertex.position.x);maxX=(std::max)(maxX,vertex.position.x);
+                minY=(std::min)(minY,vertex.position.y);maxY=(std::max)(maxY,vertex.position.y);
+                minZ=(std::min)(minZ,vertex.position.z);
+            }
+            runner.Expect(minX < -1.2f && maxX > 1.2f && minY < -1.5f && maxY > 1.5f && minZ < -0.90f,
+                "Reference drone must retain two tall shields and forward-facing twin barrels after handedness conversion");
+        }
+    }
+    runner.Expect(assembledTriangles>2000 && assembledTriangles<16000,
+        "Complete reference drone must retain its mechanical detail within a bounded real-time triangle budget");
+    for (const char* id : {"drone_scout","drone_basic","drone_leader","drone_chaser"}) {
+        CourseActorAsset actor;std::string error;
+        runner.Expect(actor.LoadFromFile("Resources/courses/actors/"+std::string(id)+".actor",&error) &&
+            actor.meshId=="twin_shield_hull" && actor.hitPoints>0 && actor.radius>0,
+            "Shipped scout, basic, leader and chaser actors must select the new reference drone and retain combat data");
+    }
+}
+
 void TestRailTitleLandscape(RegressionRunner& runner) {
     RailTitleScene title;
     runner.Expect(title.Initialize(),"Title landscape must initialize");
+    for (const char* id : {"title_ground", "title_cliff", "title_boulder", "title_tunnel"}) {
+        runner.Expect(IsTitleLandscapeMesh(id), "All title surfaces, including the departure cave, must route through terrain PBR");
+        const Material material = BuildTitleLandscapePbrMaterial(id);
+        runner.Expect(material.enableLighting && material.padding[0] > 0.0f &&
+            material.padding[1] > 0.0f && material.padding[2] > 0.0f &&
+            material.shininess > 0.0f && material.shininess <= 0.25f,
+            "Title PBR must enable normals, AO, environment fill and terrain-range specular response");
+        runner.Expect(material.padding2[2] == 1.0f && material.padding2[8] == (std::string_view(id) == "title_ground" ? 0.0f : 1.0f) &&
+            material.padding2[4] > 0.0f && material.padding2[7] > 0.0f &&
+            material.padding2[12] == 0.0f,
+            "Title PBR must use shared detail maps with valid scales and no debug normal view");
+        const int expectedMode = std::string_view(id) == "title_ground" ? 9 : (std::string_view(id) == "title_tunnel" ? 7 : 6);
+        runner.Expect(material.specularMode == expectedMode,
+            "Title OBJ material tags must preserve cave UV semantics rather than decode gameplay AO");
+    }
+    for (const char* id : {"rail_vehicle.mine_cart", "title_loop.rail", "organic_arch_large", "animated_cube", ""}) {
+        runner.Expect(!IsTitleLandscapeMesh(id), "Cart, rail and gameplay props must retain their existing render path");
+    }
+    TerrainPbrMaterialDefinition groundMaterial;
+    std::string groundError;
+    runner.Expect(LoadTerrainMaterialDefinition(DefaultTitleGroundMaterialPath(), groundMaterial, &groundError),
+        "Title ground's supplied PBR material definition must load");
+    for (const auto& path : {groundMaterial.baseColorPath, groundMaterial.normalPath,
+        groundMaterial.ambientOcclusionPath, groundMaterial.roughnessPath, groundMaterial.heightPath}) {
+        runner.Expect(std::filesystem::is_regular_file(path), "All supplied Ground054 PBR maps must be packaged in Resources");
+    }
+    runner.Expect(groundMaterial.ormInputMode == TerrainPbrOrmInputMode::Separate &&
+        groundMaterial.metallicPath.empty() && groundMaterial.normalPath.filename() == "Ground054_1K-JPG_NormalGL.jpg",
+        "Title ground must pack separate AO/roughness with non-metallic output and the existing normal convention");
+    TerrainMaterialLibrary originalMaterials;
+    runner.Expect(originalMaterials.LoadFromSet(DefaultTerrainMaterialSetPath()) &&
+        originalMaterials.Layers().size() == 3 &&
+        originalMaterials.Layers().back().baseColorPath.filename() == "rib_rock_albedo.bmp",
+        "Ground054 must not replace the shared floor layer used by gameplay and title rocks");
     struct Triangle { Vector3 a,b,c; };
     std::vector<Triangle> ground,rocks;
     const auto sub=[](Vector3 a,Vector3 b){return Vector3{a.x-b.x,a.y-b.y,a.z-b.z};};
@@ -30004,12 +31017,13 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
         p.x*m.m[0][0]+p.y*m.m[1][0]+p.z*m.m[2][0]+m.m[3][0],
         p.x*m.m[0][1]+p.y*m.m[1][1]+p.z*m.m[2][1]+m.m[3][1],
         p.x*m.m[0][2]+p.y*m.m[1][2]+p.z*m.m[2][2]+m.m[3][2]};};
-    int groundCount=0,cliffCount=0,rockCount=0;
+    int groundCount=0,cliffCount=0,rockCount=0,stakeCount=0;
     for(const auto& p:title.Scenery().terrainPlacements) {
         const char* file=nullptr;
         if(p.meshId=="title_ground") {file="TitleGround.obj";++groundCount;}
         else if(p.meshId=="title_cliff") {file="TitleCliff.obj";++cliffCount;}
         else if(p.meshId=="title_boulder") {file="TitleBoulder.obj";++rockCount;}
+        else if(p.meshId=="title_stake") {file="TitleStake.obj";++stakeCount;}
         runner.Expect(file!=nullptr,"Title must not reuse fragmented wall tiles");
         const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape",file);
         runner.Expect(!mesh.indices.empty() && !mesh.materials.empty() &&
@@ -30025,8 +31039,8 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
             target.push_back({v(0),v(1),v(2)});
         }
     }
-    runner.Expect(groundCount==1 && cliffCount==3 && rockCount==5 && ground.size()+rocks.size()<12000,
-        "Title scenery should use one continuous ground, sparse large forms and a bounded geometry budget");
+    runner.Expect(groundCount==1 && cliffCount==3 && rockCount==41 && stakeCount==24 && ground.size()+rocks.size()<24000,
+        "Title scenery should retain continuous ground and sparse large forms, with bounded foreground rocks/stakes");
     const auto nearest=[&](const std::vector<Triangle>& mesh,Vector3 origin,Vector3 direction){
         float nearest=10000;
         for(const auto& t:mesh) {
@@ -30148,7 +31162,7 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
 
 void TestTitleImportedSurfaceAudit(RegressionRunner& runner) {
     std::ofstream log("logs/title_surface_audit.log");
-    for(const char* file:{"TitleGround.obj","TitleCliff.obj","TitleBoulder.obj","TitleTunnel.obj"}) {
+    for(const char* file:{"TitleGround.obj","TitleCliff.obj","TitleBoulder.obj","TitleTunnel.obj","TitleStake.obj"}) {
         const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape",file);
         const auto audit=AuditModelClosedSurface(mesh);
         log<<file<<" triangles="<<audit.triangleCount<<" boundary="<<audit.boundaryEdges
@@ -30173,6 +31187,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
     for(int fps : {30,60,120}) {
         RailTitleScene title;
         runner.Expect(title.Initialize(),"Cinematic title should initialize");
+        const size_t idlePlacementCount=title.Scenery().terrainPlacements.size();
         title.Update(0.02f);
         const Vector3 initial=title.CameraPosition();
         title.BeginStart();
@@ -30180,10 +31195,15 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             "Starting must not teleport the camera or flash the screen");
         float previousFade=0,previousMenu=1;
         const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
-        const float lightLuma=luminance({1.0f,0.93f,0.83f});
-        const float skyLuma=luminance({0.30f,0.36f,0.40f});
+        const auto defaultLight=RailTitleColors{}.light;
+        const float lightLuma=luminance({defaultLight.x,defaultLight.y,defaultLight.z});
+        const float skyLuma=luminance(RailTitleColors{}.background);
         const Vector4 courseSun{1.0f,0.68f,0.50f,1.0f};
         auto previousColors=title.Colors(courseSun);
+        runner.Expect(std::abs(previousColors.light.y/previousColors.light.x-courseSun.y/courseSun.x)<0.035f &&
+            std::abs(previousColors.light.z/previousColors.light.x-courseSun.z/courseSun.x)<0.035f &&
+            previousColors.background.x>previousColors.background.z && lightLuma>0.90f,
+            "Title menu must share the opening course warm hue while retaining readable outdoor luminance");
         bool colorContinuous=true;
         Vector3 previous=initial;
         bool continuous=true;
@@ -30221,7 +31241,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f,
             "Cinematic must remain outside the cart and switch worlds only under full blackout with silent title audio");
         runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
-            title.Scenery().terrainPlacements.size()==10,
+            title.Scenery().terrainPlacements.size()==idlePlacementCount+1,
             "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
         runner.Expect(steadyApproach,
             "The cave approach must keep constant speed and FOV, with a fixed close chase distance after the orbit");
@@ -30792,7 +31812,8 @@ void TestCameraMotionContinuity(RegressionRunner& runner) {
     for (const int fps : {30, 60, 120}) {
         for (const bool framing : {false, true}) {
             RailCameraDirector director, reference;
-            reference.MutableSegmentTransitionSettings().enabled = false;
+            { auto settings = reference.SegmentTransitionSettings(); settings.enabled = false;
+              runner.Expect(reference.ConfigureSegmentTransition(settings), "Reference transition settings must be valid"); }
             RailCameraDirectorFrameInput input;
             input.course = &course;
             input.railPath = &rail;
@@ -30851,7 +31872,8 @@ void TestCameraMotionContinuity(RegressionRunner& runner) {
     // basis, even if the next section interrupts an unfinished transition.
     course.railPoints = production.railPoints;
     RailCameraDirector curved, curvedReference;
-    curvedReference.MutableSegmentTransitionSettings().enabled = false;
+    { auto settings = curvedReference.SegmentTransitionSettings(); settings.enabled = false;
+      runner.Expect(curvedReference.ConfigureSegmentTransition(settings), "Curved reference settings must be valid"); }
     RailCameraDirectorFrameInput curvedInput;
     curvedInput.course = &course;
     curvedInput.railPath = &rail;
@@ -30896,6 +31918,9 @@ int RunEditorCoreRegressionTests() {
 
     RegressionRunner runner(log);
     const std::vector<RegressionCase> tests{
+        {"gameplay settings encapsulation", [&]() { TestGameplaySettingsEncapsulation(runner); }},
+        {"weapon state encapsulation", [&]() { TestWeaponStateEncapsulation(runner); }},
+        {"runtime encapsulation and validated settings", [&]() { TestRuntimeEncapsulation(runner); }},
         {"submission obstacle readability and clearance", [&]() { TestSubmissionObstacleReadability(runner); }},
         {"player damage cause notice", [&]() { TestPlayerDamageNotice(runner); }},
         {"vehicle camera framing", [&]() { TestVehicleCameraFraming(runner); }},
@@ -30905,6 +31930,9 @@ int RunEditorCoreRegressionTests() {
         {"title landscape ground and camera clearance", [&]() { TestRailTitleLandscape(runner); }},
         {"title cinematic and ambience lifecycle", [&]() { TestRailTitleCinematic(runner); }},
         {"title running loop and menu layout", [&]() { TestRailTitleLoop(runner); }},
+        {"title body suspension and wheel contact", [&]() { TestRailTitleBodySway(runner); }},
+        {"title twin shield pursuit", [&]() { TestRailTitlePursuit(runner); }},
+        {"title repeating ground fire", [&]() { TestRailTitleGroundFire(runner); }},
         {"authored drone attack timing", [&]() { TestAuthoredDroneAttackTiming(runner); }},
         {"vehicle impact audiovisual and damage HUD", [&]() { TestVehicleImpactAudiovisualAndHud(runner); }},
         {"normal drone approach pose warn fire and depart", [&]() { TestNormalDroneAttackPass(runner); }},
@@ -30915,6 +31943,10 @@ int RunEditorCoreRegressionTests() {
         {"transaction core dependency boundary", [&]() { TestTransactionCoreDependencyBoundary(runner); }},
         {"selection and property registry", [&]() { TestSelectionAndPropertyRegistry(runner); }},
         {"property edit service", [&]() { TestPropertyEditService(runner); }},
+        {"remaining editor settings boundaries", [&]() { TestRemainingEditorSettingsBoundaries(runner); }},
+        {"effect mutation encapsulation", [&]() { TestEffectMutationEncapsulation(runner); }},
+        {"post-process mutation encapsulation", [&]() { TestPostProcessMutationEncapsulation(runner); }},
+        {"preview settings encapsulation", [&]() { TestPreviewSettingsEncapsulation(runner); }},
         {"production property adapters", [&]() { TestProductionPropertyAdapters(runner); }},
         {"details section providers", [&]() { TestDetailsSectionProviders(runner); }},
         {"runtime watch builder", [&]() { TestRuntimeWatchBuilder(runner); }},
@@ -31111,6 +32143,7 @@ int RunEditorCoreRegressionTests() {
          {"course multi view elevation and constraints", [&]() {
               TestCourseMultiViewElevationConstraintSuite(runner);
           }},
+         {"twin shield reference enemy assets", [&]() { TestTwinShieldEnemyAssets(runner); }},
          {"course enemy presentation fallback", [&]() {
               TestCourseEnemyPresentationFallback(runner);
           }},

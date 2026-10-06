@@ -28,6 +28,8 @@ struct CourseEnemyViewportEditSettings final {
     bool offsetSnap = false;
     float offsetSnapSize = 1.0f;
     uint32_t railProjectionSubdivisions = 48;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseEnemyViewportEditInput final {
@@ -76,7 +78,7 @@ public:
     void SetActive(bool active);
     void SetMode(CourseEnemyEditMode mode);
     void SetSelectedPlacements(std::vector<std::string> guids);
-    void SetSettings(CourseEnemyViewportEditSettings settings);
+    bool SetSettings(CourseEnemyViewportEditSettings settings, std::string* errorMessage = nullptr);
     void Tick(const CourseEnemyViewportEditInput& input);
     void CancelDrag(std::string message = {});
     void BuildViewportOverlay(EditorViewportOverlayService& overlay) const;

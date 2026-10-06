@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -124,6 +125,19 @@ public:
     const EnemyCombatFrameStats& FrameStats() const noexcept { return frameStats_; }
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    void UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const EnemyCombatFrameInput& input);
+    bool SubmitDamageResultActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const DamageResult& damageResult,
+        const WeaponFeedbackEvent* feedbackEvent);
+    bool ForceDefeatActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        uint32_t actorId);
+
     void EnterPhase(
         CourseEnemyActor& actor,
         EnemyCombatPhase phase,

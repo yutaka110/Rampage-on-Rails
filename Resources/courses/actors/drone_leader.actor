@@ -1,4 +1,4 @@
-actor|drone_leader|Combo Leader Drone|ball|1.35|46|16|1.0|0.48|0.16|1.0|assault_magenta_single
+actor|drone_leader|Combo Leader Drone|twin_shield_hull|1.35|46|16|1.0|0.48|0.16|1.0|assault_magenta_single
 combat|1.40|0.35|25|assault_magenta_single
 movement|1.5
 behavior|support|0.20|0.15|0.25|0.70|1.40|0.20|0.35|0|0|0|true

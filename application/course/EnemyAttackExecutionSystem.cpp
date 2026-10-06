@@ -9,12 +9,18 @@ void EnemyAttackExecutionSystem::Reset() {
     revision_ = 0;
 }
 
-void EnemyAttackExecutionSystem::Update(
-    CourseSpawnRuntime& runtime,
+void EnemyAttackExecutionSystem::Update(CourseSpawnRuntime& runtime,
     EnemyAttackCoordinator& coordinator,
     EnemyBehaviorSystem& behaviorSystem) {
+    runtime.ExecuteEnemyAttacks(*this, coordinator, behaviorSystem);
+}
+
+void EnemyAttackExecutionSystem::UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        EnemyAttackCoordinator& coordinator,
+        EnemyBehaviorSystem& behaviorSystem) {
     frame_ = {};
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         if (!actor.behaviorDefinition.commercialBehavior ||
             !coordinator.CanExecute(actor)) {
             continue;
@@ -34,7 +40,7 @@ void EnemyAttackExecutionSystem::Update(
             tokenId,
             0});
 
-        const uint32_t emitted = runtime.EmitEnemyBullets(actor);
+        const uint32_t emitted = runtime.CommitEnemyVolley(actor.actorId, intentSequence, tokenId);
         if (emitted == 0) {
             coordinator.CancelActor(
                 actor, EnemyAttackCancelReason::ActorUnavailable);
@@ -46,8 +52,6 @@ void EnemyAttackExecutionSystem::Update(
                 0});
             continue;
         }
-        actor.bulletsEmittedThisFrame += emitted;
-        ++actor.fireSequence;
         if (!coordinator.NotifyExecutionCommitted(actor, emitted) ||
             !behaviorSystem.NotifyAttackCommitted(actor)) {
             coordinator.CancelActor(

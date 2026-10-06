@@ -2,7 +2,6 @@
 
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 struct PostProcessPass {
@@ -111,6 +110,7 @@ struct PostProcessPass {
         float randomContrast = 1.15f;
         float randomBrightness = 0.0f;
         float randomColorAmount = 0.0f;
+        bool operator==(const Parameters&) const = default;
     };
 
     std::string name;
@@ -123,6 +123,8 @@ struct PostProcessPass {
     float intensity = 1.0f;
     float resolutionScale = 1.0f;
     Parameters parameters{};
+    bool operator==(const PostProcessPass&) const = default;
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct PostProcessExecutionPass {
@@ -178,7 +180,13 @@ public:
     std::string FinalOutputResource() const;
     PostProcessExecutionPlan BuildExecutionPlan() const;
     const std::vector<PostProcessPass>& Passes() const { return passes_; }
-    std::vector<PostProcessPass>& MutablePasses() { return passes_; }
+    // Live tuning preserves controller-owned enable flags and transition progress.
+    // Warp/dissolve enablement uses SetEnabled or the explicit start/stop operations.
+    bool ConfigurePass(const PostProcessPass& pass, std::string* errorMessage = nullptr);
+    bool ConfigurePasses(const std::vector<PostProcessPass>& passes, std::string* errorMessage = nullptr);
+    // Full authoring restore cancels transient progress and reconciles pass flags.
+    bool ReplacePasses(std::vector<PostProcessPass> passes, std::string* errorMessage = nullptr);
+    static bool ValidatePasses(const std::vector<PostProcessPass>& passes, std::string* errorMessage = nullptr);
 
 private:
     void SyncWarpTunnelPasses_();

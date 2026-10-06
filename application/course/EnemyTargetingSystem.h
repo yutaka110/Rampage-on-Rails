@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 
 #include "EnemyProjectileDefinitionAsset.h"
 
@@ -59,6 +60,12 @@ public:
     const EnemyTargetingFrame& Frame() const noexcept { return frame_; }
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    void UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const EnemyTargetingFrameInput& input);
+
     void LockSolution(
         CourseEnemyActor& actor,
         const EnemyTargetingFrameInput& input,

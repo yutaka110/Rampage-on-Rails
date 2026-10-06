@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "RailTargetRegistry.h"
@@ -49,6 +50,8 @@ struct RailAimAssistSettings {
     float enemyPriorityBonus = 0.08f;
     float retainedTargetBonus = 0.10f;
     uint32_t maximumVisibilityQueries = 8;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailAimAssistCandidate {

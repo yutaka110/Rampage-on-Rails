@@ -1,4 +1,5 @@
 #include "CourseTerrainMapBakePipeline.h"
+#include "../EditorSettingsValidation.h"
 
 #include "../../terrain/TerrainVolumeField.h"
 
@@ -266,17 +267,20 @@ void CourseTerrainMapBakePipeline::InvalidateAsset() noexcept {
     forceRebuild_ = true;
 }
 
-void CourseTerrainMapBakePipeline::SetSettings(
-    CourseTerrainMapBakeSettings settings) {
-    settings.tileLength = (std::clamp)(settings.tileLength, 40.0f, 2000.0f);
-    for (uint32_t& value : settings.longitudinalSegments) {
-        value = (std::clamp)(value, 16u, 2048u);
-    }
-    for (uint32_t& value : settings.radialSegments) {
-        value = (std::clamp)(value, 8u, 128u);
-    }
+bool CourseTerrainMapBakeSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(tileLength, 40.0f, 2000.0f) &&
+        std::all_of(longitudinalSegments.begin(), longitudinalSegments.end(), [](uint32_t n) { return settings::InRange(n, 16u, 2048u); }) &&
+        std::all_of(radialSegments.begin(), radialSegments.end(), [](uint32_t n) { return settings::InRange(n, 8u, 128u); });
+    return settings::Result(valid, errorMessage,
+        "CourseTerrainMapBakeSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseTerrainMapBakePipeline::SetSettings(
+    CourseTerrainMapBakeSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
     forceRebuild_ = true;
+    return true;
 }
 
 void CourseTerrainMapBakePipeline::SetCacheRoot(std::filesystem::path path) {

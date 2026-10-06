@@ -1,4 +1,5 @@
 #include "PlayerNearMissSystem.h"
+#include "GameplaySettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +15,28 @@ bool Finite(float value) noexcept {
 }
 
 } // namespace
+
+bool PlayerNearMissSettings::Validate(std::string* errorMessage) const {
+    return gameplay::settings::Result(
+        projectileHistoryCapacity > 0 && projectileHistoryCapacity <= 65536 &&
+        maximumResultsPerFrame > 0 && maximumResultsPerFrame <= 4096,
+        errorMessage, "Near-miss history and per-frame limits must be bounded and nonzero.");
+}
+
+bool PlayerNearMissSystem::Configure(
+    const PlayerNearMissSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    // 容量を減らす場合は最新のIDを残し、二重通知を防ぐ履歴を維持する。
+    if (state_.processedProjectileIds.size() > settings.projectileHistoryCapacity) {
+        state_.processedProjectileIds.erase(state_.processedProjectileIds.begin(),
+            state_.processedProjectileIds.end() - settings.projectileHistoryCapacity);
+        ++state_.revision;
+    }
+    // Already accepted events must still reach consumers. A smaller frame
+    // budget stops further submissions and takes full effect next Update.
+    settings_ = settings;
+    return true;
+}
 
 void PlayerNearMissSystem::Reset() {
     state_ = {};
@@ -52,9 +75,16 @@ PlayerNearMissResult PlayerNearMissSystem::Submit(
 bool PlayerNearMissSystem::RestoreState(
     const PlayerNearMissRuntimeState& state,
     std::string* errorMessage) {
-    if (state.processedProjectileIds.size() >
+    if (state.nextSequence == 0 || state.processedProjectileIds.size() >
             settings_.projectileHistoryCapacity) {
         SetError(errorMessage, "Player near-miss checkpoint is invalid.");
+        return false;
+    }
+    std::vector<uint64_t> sortedIds = state.processedProjectileIds;
+    std::sort(sortedIds.begin(), sortedIds.end());
+    if ((!sortedIds.empty() && sortedIds.front() == 0) ||
+        std::adjacent_find(sortedIds.begin(), sortedIds.end()) != sortedIds.end()) {
+        SetError(errorMessage, "Near-miss history requires unique nonzero projectile IDs.");
         return false;
     }
     state_ = state;

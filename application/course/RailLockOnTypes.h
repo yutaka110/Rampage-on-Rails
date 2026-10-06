@@ -123,6 +123,8 @@ struct RailLockSettings {
     float lockHudTargetScoreAlpha = 0.42f;
     float lockHudReticleGlowScale = 1.0f;
     float lockHudReleaseFlash = 0.22f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailReticleState {

@@ -263,6 +263,7 @@ struct AppImGuiFrameContext {
     editor::EditorTransactionStack* editorTransactions = nullptr;
     std::function<bool(std::string*)> onBeginGameplaySpawns;
     std::function<void()> onStopGameplaySpawns;
+    bool railGameplayScene = false;
 };
 
 class AppImGuiLayer {

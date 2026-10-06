@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -168,6 +169,16 @@ public:
     std::vector<EnemyBehaviorEvent> ConsumeEvents();
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    void UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const EnemyBehaviorFrameInput& input);
+    bool MarkTelegraphPresentedActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        uint32_t actorId,
+        uint64_t attackIntentSequence);
+
     void EnterState(
         CourseEnemyActor& actor,
         EnemyBehaviorState state,

@@ -74,21 +74,17 @@ struct TerrainPbrLayerConstants
 
 struct TerrainPbrLibraryConstants
 {
-    TerrainPbrLayerConstants layers[3];
+    TerrainPbrLayerConstants layers[4]; // 0..2 gameplay; 3 title Ground054.
     float4 blendParameters;
 };
 
 ConstantBuffer<Material> gMaterial : register(b0);
 ConstantBuffer<DirectionalLight> gDirectionalLight : register(b1);
-cbuffer Camera : register(b2)
-{
-    float3 cameraWorldPosition;
-    float padCam;
-}
 ConstantBuffer<PointLight> gPointLight : register(b3);
 ConstantBuffer<SpotLight> gSpotLight : register(b4);
 ConstantBuffer<CascadeShadowData> gCascadeShadow : register(b5);
 ConstantBuffer<TerrainPbrLibraryConstants> gTerrainPbr : register(b8);
+#include "TitleLighting.hlsli"
 
 Texture2DArray<float4> gTerrainBaseColorArray : register(t0);
 TextureCube<float4> gEnvironmentTexture : register(t1);
@@ -624,15 +620,18 @@ static TerrainPbrSurface SampleTerrainPbrSurface(
         normal.y);
     float wetNoise = 1.0f - TerrainNoise(worldPosition * 0.31f + 43.0f);
     float wetWeight = (1.0f - floorWeight) * smoothstep(0.46f, 0.82f, wetNoise) * 0.78f;
-    float3 weights = float3(
+    float4 weights = float4(
         max(1.0f - floorWeight - wetWeight, 0.001f),
         max(wetWeight, 0.001f),
-        max(floorWeight, 0.001f));
+        max(floorWeight, 0.001f), 0.0f);
+    if (titleSubject.w > 0.5f && gMaterial.specularMode == 9)
+        weights = float4(0.0f,0.0f,0.0f,1.0f);
 
-    float3 heights;
+    float4 heights;
     [unroll]
-    for (uint layerIndex = 0u; layerIndex < 3u; ++layerIndex)
+    for (uint layerIndex = 0u; layerIndex < 4u; ++layerIndex)
     {
+        if (weights[layerIndex] <= 0.0f) continue;
         heights[layerIndex] = SampleTerrainPbrHeight(worldPosition, normal, layerIndex);
         float heightScale = gTerrainPbr.layers[layerIndex].surfaceParameters.w;
         float heightBias =
@@ -642,7 +641,7 @@ static TerrainPbrSurface SampleTerrainPbrSurface(
             24.0f;
         weights[layerIndex] *= exp2(heightBias);
     }
-    weights /= max(weights.x + weights.y + weights.z, 0.0001f);
+    weights /= max(weights.x + weights.y + weights.z + weights.w, 0.0001f);
 
     surface.baseColor = 0.0f;
     surface.mappedNormal = 0.0f;
@@ -653,9 +652,10 @@ static TerrainPbrSurface SampleTerrainPbrSurface(
     surface.detailNormalStrength = 0.0f;
     surface.wetness = 0.0f;
     [unroll]
-    for (uint materialIndex = 0u; materialIndex < 3u; ++materialIndex)
+    for (uint materialIndex = 0u; materialIndex < 4u; ++materialIndex)
     {
         float weight = weights[materialIndex];
+        if (weight <= 0.0f) continue;
         TerrainPbrLayerConstants material = gTerrainPbr.layers[materialIndex];
         float4 baseColor =
             SampleTerrainPbrBaseColor(worldPosition, normal, materialIndex);
@@ -914,8 +914,12 @@ PixelShaderOutput main(VertexShaderOutput input)
     float3 normal = SafeNormalize(input.normal);
     float2 terrainUv = input.texcoord;
     float2 surfaceAttributes = DecodeTerrainSurfaceAttributes(terrainUv);
-    float contactAo = surfaceAttributes.x;
-    float rockVariation = surfaceAttributes.y;
+    // Authored title OBJ UVs carry ordinary coordinates / cave depth, whereas
+    // streamed gameplay terrain packs contact AO and rock variation into UVs.
+    bool titleLandscape = titleSubject.w > 0.5f &&
+        (gMaterial.specularMode == 6 || gMaterial.specularMode == 7 || gMaterial.specularMode == 9);
+    float contactAo = titleLandscape ? 0.0f : surfaceAttributes.x;
+    float rockVariation = titleLandscape ? 0.5f : surfaceAttributes.y;
     TerrainPbrSurface pbrSurface =
         SampleTerrainPbrSurface(input.worldPosition, normal);
     float4 texColor = pbrSurface.baseColor;
@@ -1108,7 +1112,8 @@ PixelShaderOutput main(VertexShaderOutput input)
     float nDotL = saturate(dot(normal, lightDir));
     float nDotH = saturate(dot(normal, halfDir));
     float vDotH = saturate(dot(viewDir, halfDir));
-    float shadowVisibility =
+    float titleShadow = titleLandscape ? TitleGroundShadow(input.worldPosition,SafeNormalize(input.normal)) : 0.0f;
+    float shadowVisibility = titleLandscape ? 1.0f-titleShadow :
         SampleCascadeShadow(input.worldPosition, normal, lightDir);
 
     float wetSurface = saturate(
@@ -1152,6 +1157,14 @@ PixelShaderOutput main(VertexShaderOutput input)
         roughness,
         ao,
         skyFillStrength);
+    if (titleLandscape) {
+        // The title uses a clear-colour sky instead of the gameplay skybox.
+        // Supply its diffuse sky irradiance alongside the shared specular IBL
+        // so physically shaded ground remains readable beneath the cart.
+        float skyVisibility = lerp(0.65f,1.0f,saturate(normal.y*0.5f+0.5f));
+        environmentLighting += rockColor*ao*TitleSkyIrradiance()*0.962f*skyFillStrength*skyVisibility;
+        environmentLighting *= 1.0f-titleShadow*0.65f;
+    }
     float3 lit = directLighting + environmentLighting;
     float3 canyonAirLight = lerp(float3(0.42f, 0.46f, 0.47f), float3(0.76f, 0.78f, 0.76f), distanceAir);
     lit = lerp(lit, canyonAirLight, distantWallAtmosphere * 0.26f);
@@ -1171,6 +1184,14 @@ PixelShaderOutput main(VertexShaderOutput input)
     float3 rimTint = lerp(float3(1.08f, 0.94f, 0.78f), float3(0.72f, 0.84f, 1.02f), saturate(wetCanyonMask * 0.72f + backlightRimBoost * 0.18f));
     lit += gDirectionalLight.color.rgb * rimTint * rim * gDirectionalLight.intensity;
 
+    if (titleLandscape) {
+        if (gMaterial.specularMode == 7) {
+            float recess = saturate(input.texcoord.x)*smoothstep(0.0f,38.0f,max(0.0f,1.0f-input.texcoord.y));
+            lit *= lerp(1.0f,0.16f,recess);
+        } else {
+            lit = TitleAtmosphere(lit,input.worldPosition);
+        }
+    }
     output.color = float4(saturate(lit), texColor.a);
     return output;
 }

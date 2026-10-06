@@ -67,16 +67,25 @@ void EditorViewportCameraController::SetLens(
     RebuildMatrices();
 }
 
-void EditorViewportCameraController::SetSettings(
-    const EditorViewportCameraSettings& settings) {
+bool EditorViewportCameraSettings::Validate(std::string* errorMessage) const {
+    const bool valid = Finite(moveSpeed) && moveSpeed >= 0.0f && moveSpeed <= 100000.0f &&
+        Finite(rotationSensitivity) && rotationSensitivity >= 0.0f && rotationSensitivity <= 1.0f &&
+        Finite(fastMoveMultiplier) && fastMoveMultiplier >= 1.0f && fastMoveMultiplier <= 1000.0f &&
+        Finite(slowMoveMultiplier) && slowMoveMultiplier >= 0.01f && slowMoveMultiplier <= 1.0f &&
+        Finite(maximumDeltaTime) && maximumDeltaTime >= 0.001f && maximumDeltaTime <= 0.25f &&
+        Finite(maximumPitch) && maximumPitch >= 0.1f && maximumPitch <= 1.57069633f;
+    if (errorMessage != nullptr) {
+        *errorMessage = valid ? "" : "Viewport camera settings require finite, bounded speed, sensitivity, time and pitch.";
+    }
+    return valid;
+}
+
+bool EditorViewportCameraController::SetSettings(
+    const EditorViewportCameraSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
-    settings_.moveSpeed = (std::max)(0.0f, settings_.moveSpeed);
-    settings_.rotationSensitivity = (std::max)(0.0f, settings_.rotationSensitivity);
-    settings_.fastMoveMultiplier = (std::max)(1.0f, settings_.fastMoveMultiplier);
-    settings_.slowMoveMultiplier = (std::clamp)(settings_.slowMoveMultiplier, 0.01f, 1.0f);
-    settings_.maximumDeltaTime = (std::clamp)(settings_.maximumDeltaTime, 0.001f, 0.25f);
-    settings_.maximumPitch = (std::clamp)(settings_.maximumPitch, 0.1f, 1.57069633f);
     SetTransform(transform_);
+    return true;
 }
 
 void EditorViewportCameraController::Update(const EditorViewportCameraInput& input) {

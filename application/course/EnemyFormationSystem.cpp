@@ -78,7 +78,12 @@ void EnemyFormationSystem::Reset() {
 }
 
 void EnemyFormationSystem::BeginFrame(CourseSpawnRuntime& runtime) {
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    runtime.BeginEnemyFormationFrame(*this);
+}
+
+void EnemyFormationSystem::BeginFrameActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime) {
+    for (CourseEnemyActor& actor : actors) {
         EnemyFormationMemberRuntimeState& member = actor.formationState;
         if (!member.initialized) continue;
         actor.desc.distanceOffset -= member.appliedForwardOffset;
@@ -119,11 +124,17 @@ EnemyFormationDefinition EnemyFormationSystem::ResolveDefinition(
 }
 
 void EnemyFormationSystem::Update(CourseSpawnRuntime& runtime, float deltaTime) {
+    runtime.UpdateEnemyFormations(*this, deltaTime);
+}
+
+void EnemyFormationSystem::UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        float deltaTime) {
     frame_ = {};
     const float dt = std::isfinite(deltaTime)
         ? (std::clamp)(deltaTime, 0.0f, 0.25f) : 0.0f;
     std::unordered_map<std::string, std::vector<CourseEnemyActor*>> groups;
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         const std::string formationId = FormationId(actor);
         const bool explicitlyAuthored =
             !actor.desc.formationDefinition.definitionId.empty();

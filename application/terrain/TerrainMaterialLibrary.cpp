@@ -259,6 +259,10 @@ void TerrainMaterialLibrary::BuildFallback() {
         0.20f);
 }
 
+std::filesystem::path DefaultTitleGroundMaterialPath() {
+    return "Resources/terrain/materials/title_ground.terrainmaterial";
+}
+
 std::filesystem::path DefaultTerrainMaterialSetPath() {
     return std::filesystem::path{"Resources"} /
         "terrain" /

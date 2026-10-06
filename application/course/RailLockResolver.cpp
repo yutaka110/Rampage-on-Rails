@@ -132,6 +132,13 @@ void RailLockResolver::Reset() {
     acceptedThisFrame_ = 0;
 }
 
+void RailLockResolver::LimitTokenCapacity(size_t capacity) {
+    if (tokens_.size() <= capacity) return;
+    tokens_.resize(capacity);
+    acceptedTokensThisFrame_.clear();
+    acceptedThisFrame_ = 0;
+}
+
 void RailLockResolver::Update(const RailLockResolverFrameInput& input) {
     candidates_.clear();
     acceptedTokensThisFrame_.clear();

@@ -58,6 +58,8 @@ struct CoursePreviewSimulationSettings final {
     bool loop = false;
     bool automaticallyDefeatEnemies = true;
     bool showViewportOverlay = true;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CoursePreviewWaveState final {
@@ -157,7 +159,7 @@ public:
     const CoursePreviewViewportStats& ViewportStats() const noexcept {
         return viewportStats_;
     }
-    CoursePreviewSimulationSettings& MutableSettings() noexcept { return settings_; }
+    bool Configure(const CoursePreviewSimulationSettings& settings, std::string* errorMessage = nullptr);
     const CoursePreviewSimulationSettings& Settings() const noexcept { return settings_; }
 
 private:

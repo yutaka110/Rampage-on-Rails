@@ -31,6 +31,8 @@ struct CourseMapGeometryExtractionSettings final {
     uint32_t maximumVerticesPerSource = 65535;
     uint32_t maximumTrianglesPerSource = 131072;
     uint32_t maximumSources = 16384;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMapGeometryExtractionInput final {
@@ -71,7 +73,7 @@ public:
     CourseMapGeometryExtractionResult Extract(
         const CourseMapGeometryExtractionInput& input) const;
 
-    void SetSettings(CourseMapGeometryExtractionSettings settings);
+    bool SetSettings(CourseMapGeometryExtractionSettings settings, std::string* errorMessage = nullptr);
     const CourseMapGeometryExtractionSettings& Settings() const noexcept {
         return settings_;
     }

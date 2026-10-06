@@ -36,6 +36,8 @@ struct RailCameraComfortSettings {
     float hardTransitionAngularVelocityDeg = 105.0f;
     float hardTransitionFovChangeRateDeg = 55.0f;
     float hardTransitionRollDeg = 18.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailCameraAimFocusSettings {
@@ -50,6 +52,8 @@ struct RailCameraAimFocusSettings {
     float lateralSuppression = 0.22f;
     float lookAheadBoost = 7.0f;
     float backDistanceBoost = 1.8f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 enum class RailCameraLookAtPolicy {
@@ -72,6 +76,8 @@ struct RailCameraLookAtSettings {
     float obstacleWeight = 0.42f;
     float centerRetention = 0.34f;
     float maxTargetOffset = 46.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailCameraCompositionSafetySettings {
@@ -93,6 +99,8 @@ struct RailCameraCompositionSafetySettings {
     float enemyWeight = 1.0f;
     float obstacleWeight = 0.45f;
     float fireBlockRisk = 0.62f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailCameraLineOfSightSettings {
@@ -105,6 +113,8 @@ struct RailCameraLineOfSightSettings {
     float maxFovDeg = 76.0f;
     bool blockEnemyFireWhenOccluded = true;
     bool preferBaseTargetWhenOccluded = true;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailCameraCollisionProtectionSettings {
@@ -117,6 +127,8 @@ struct RailCameraCollisionProtectionSettings {
     float fovExpandDeg = 2.6f;
     float maxFovDeg = 76.0f;
     bool blockEnemyFireWhenUnsafe = true;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailCameraSegmentTransitionSettings {
@@ -133,6 +145,8 @@ struct RailCameraSegmentTransitionSettings {
     float shakeDampen = 0.35f;
     float enemyFireHold = 0.20f;
     float comfortGraceMultiplier = 1.35f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailCameraEncounterFramingSettings {
@@ -162,6 +176,8 @@ struct RailCameraEncounterFramingSettings {
     float lateralDampen = 0.70f;
     float rollDampen = 0.65f;
     float fireHoldDuration = 0.28f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct RailCameraDirectorFrameInput {
@@ -312,21 +328,21 @@ public:
     RailCameraDirectorFrame Evaluate(const RailCameraDirectorFrameInput& input);
     const RailCameraDirectorFrame& LastFrame() const { return lastFrame_; }
     const RailCameraComfortSettings& ComfortSettings() const { return comfortSettings_; }
-    RailCameraComfortSettings& MutableComfortSettings() { return comfortSettings_; }
+    bool ConfigureComfort(const RailCameraComfortSettings& settings, std::string* errorMessage = nullptr);
     const RailCameraAimFocusSettings& AimFocusSettings() const { return aimFocusSettings_; }
-    RailCameraAimFocusSettings& MutableAimFocusSettings() { return aimFocusSettings_; }
+    bool ConfigureAimFocus(const RailCameraAimFocusSettings& settings, std::string* errorMessage = nullptr);
     const RailCameraLookAtSettings& LookAtSettings() const { return lookAtSettings_; }
-    RailCameraLookAtSettings& MutableLookAtSettings() { return lookAtSettings_; }
+    bool ConfigureLookAt(const RailCameraLookAtSettings& settings, std::string* errorMessage = nullptr);
     const RailCameraCompositionSafetySettings& CompositionSafetySettings() const { return compositionSafetySettings_; }
-    RailCameraCompositionSafetySettings& MutableCompositionSafetySettings() { return compositionSafetySettings_; }
+    bool ConfigureCompositionSafety(const RailCameraCompositionSafetySettings& settings, std::string* errorMessage = nullptr);
     const RailCameraLineOfSightSettings& LineOfSightSettings() const { return lineOfSightSettings_; }
-    RailCameraLineOfSightSettings& MutableLineOfSightSettings() { return lineOfSightSettings_; }
+    bool ConfigureLineOfSight(const RailCameraLineOfSightSettings& settings, std::string* errorMessage = nullptr);
     const RailCameraCollisionProtectionSettings& CollisionProtectionSettings() const { return collisionProtectionSettings_; }
-    RailCameraCollisionProtectionSettings& MutableCollisionProtectionSettings() { return collisionProtectionSettings_; }
+    bool ConfigureCollisionProtection(const RailCameraCollisionProtectionSettings& settings, std::string* errorMessage = nullptr);
     const RailCameraSegmentTransitionSettings& SegmentTransitionSettings() const { return segmentTransitionSettings_; }
-    RailCameraSegmentTransitionSettings& MutableSegmentTransitionSettings() { return segmentTransitionSettings_; }
+    bool ConfigureSegmentTransition(const RailCameraSegmentTransitionSettings& settings, std::string* errorMessage = nullptr);
     const RailCameraEncounterFramingSettings& EncounterFramingSettings() const { return encounterFramingSettings_; }
-    RailCameraEncounterFramingSettings& MutableEncounterFramingSettings() { return encounterFramingSettings_; }
+    bool ConfigureEncounterFraming(const RailCameraEncounterFramingSettings& settings, std::string* errorMessage = nullptr);
 
 private:
     void ApplyVehicleFraming(

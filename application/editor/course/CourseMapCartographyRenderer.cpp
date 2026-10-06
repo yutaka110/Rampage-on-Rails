@@ -1,4 +1,5 @@
 #include "CourseMapCartographyRenderer.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <chrono>
@@ -498,25 +499,27 @@ CourseMapCartographyRenderer::AcquireSourceSnapshot(
     return sourceSnapshot_;
 }
 
-void CourseMapCartographyRenderer::SetSettings(
-    CourseMapCartographyRenderSettings settings) {
-    settings.terrainOpacity = (std::clamp)(settings.terrainOpacity, 0.0f, 1.0f);
-    settings.structureOpacity = (std::clamp)(settings.structureOpacity, 0.0f, 1.0f);
-    settings.vistaOpacity = (std::clamp)(settings.vistaOpacity, 0.0f, 1.0f);
-    settings.courseTriangleBudget = (std::clamp)(
-        settings.courseTriangleBudget, 1u, 1000000u);
-    settings.regionTriangleBudget = (std::clamp)(
-        settings.regionTriangleBudget, 1u, 1000000u);
-    settings.detailTriangleBudget = (std::clamp)(
-        settings.detailTriangleBudget, 1u, 1000000u);
-    settings.inspectTriangleBudget = (std::clamp)(
-        settings.inspectTriangleBudget, 1u, 1000000u);
-    settings.maximumOutlines = (std::clamp)(
-        settings.maximumOutlines, 1u, 262144u);
-    if (SameSettings(settings_, settings)) return;
+bool CourseMapCartographyRenderSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(terrainOpacity, 0.0f, 1.0f) &&
+        settings::InRange(structureOpacity, 0.0f, 1.0f) &&
+        settings::InRange(vistaOpacity, 0.0f, 1.0f) &&
+        settings::InRange(courseTriangleBudget, 1u, 1000000u) &&
+        settings::InRange(regionTriangleBudget, 1u, 1000000u) &&
+        settings::InRange(detailTriangleBudget, 1u, 1000000u) &&
+        settings::InRange(inspectTriangleBudget, 1u, 1000000u) &&
+        settings::InRange(maximumOutlines, 1u, 262144u);
+    return settings::Result(valid, errorMessage,
+        "CourseMapCartographyRenderSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapCartographyRenderer::SetSettings(
+    CourseMapCartographyRenderSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++settingsRevision_;
     Invalidate();
+    return true;
 }
 
 void CourseMapCartographyRenderer::Invalidate() noexcept {

@@ -3,6 +3,9 @@
 #include "TechniqueRegistry.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <unordered_set>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -314,25 +317,166 @@ CylinderRenderInput EffectRuntimeFrame::CylinderInput() const {
     return input;
 }
 
-void EffectSystem::RegisterAsset(EffectAsset asset) {
-    RegisterAsset(std::move(asset), EffectAuthoringRegistry::Default());
+
+namespace {
+bool FiniteVector(const Vector3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+bool FiniteVector(const Vector4& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z) && std::isfinite(v.w); }
+bool ValidTransform(const Transform& t) {
+    return FiniteVector(t.translate) && FiniteVector(t.rotate) && FiniteVector(t.scale) &&
+        t.scale.x >= 0.0f && t.scale.y >= 0.0f && t.scale.z >= 0.0f;
+}
+bool ValidCommon(const EffectComponentCommon& c) {
+    return std::isfinite(c.startTime) && c.startTime >= 0.0f && std::isfinite(c.duration) && c.duration >= 0.0f &&
+        FiniteVector(c.color) && FiniteVector(c.size) && FiniteVector(c.uvRect) &&
+        c.size.x >= 0.0f && c.size.y >= 0.0f && c.size.z >= 0.0f;
+}
+bool ValidSettings(const EffectParticleSettings& s) {
+    for (float v : {
+        s.lifetime, s.emissive, s.distortionStrength,
+        s.noiseStrength, s.uvScrollSpeed, s.pulseSpeed,
+        s.spawnRadius, s.spawnCount, s.spawnFrequency,
+        s.randomRotation, s.scaleYMin, s.scaleYMax,
+        s.depthFadeSoftness, s.edgeSoftness}) {
+        if (!std::isfinite(v) || std::abs(v) > 100000.0f) return false;
+    }
+    return s.scaleYMin >= 0.0f && s.scaleYMax >= s.scaleYMin && s.spawnCount >= 0.0f && s.spawnCount <= 65536 && s.spawnFrequency >= 0.0f;
+}
+bool ValidSettings(const EffectTrailSettings& s) {
+    for (float v : {
+        s.depthFadeSoftness, s.trailTailFade, s.length,
+        s.width, s.sampleDistance, s.smoothing,
+        s.widthHead, s.widthTail, s.alphaTail,
+        s.miterLimit}) {
+        if (!std::isfinite(v) || std::abs(v) > 100000.0f) return false;
+    }
+    return FiniteVector(s.colorTail) && s.segmentBudget > 0 && s.segmentBudget <= 4096 && s.followMode <= EffectTrailFollowMode::MovementHistory && s.length >= 0 && s.width >= 0 && s.sampleDistance >= 0;
+}
+bool ValidSettings(const EffectBeamSettings& s) {
+    for (float v : {
+        s.emissive}) {
+        if (!std::isfinite(v) || std::abs(v) > 100000.0f) return false;
+    }
+    return true;
+}
+bool ValidSettings(const EffectDistortionSettings& s) {
+    for (float v : {
+        s.strength, s.noiseStrength, s.uvScrollSpeed,
+        s.depthFadeSoftness, s.depthAttenuation}) {
+        if (!std::isfinite(v) || std::abs(v) > 100000.0f) return false;
+    }
+    return true;
+}
+bool ValidSettings(const EffectRingSettings& s) {
+    for (float v : {
+        s.outerRadius, s.innerRadius, s.emissive,
+        s.uvScrollSpeed, s.expansion, s.fadeOut,
+        s.depthFadeSoftness}) {
+        if (!std::isfinite(v) || std::abs(v) > 100000.0f) return false;
+    }
+    return s.divide >= 3 && s.divide <= 4096 && s.innerRadius >= 0 && s.outerRadius >= s.innerRadius;
+}
+bool ValidSettings(const EffectCylinderSettings& s) {
+    for (float v : {
+        s.topRadius, s.bottomRadius, s.height,
+        s.emissive, s.uvScrollSpeed, s.alphaReference,
+        s.fadeOut, s.depthFadeSoftness}) {
+        if (!std::isfinite(v) || std::abs(v) > 100000.0f) return false;
+    }
+    return s.divide >= 3 && s.divide <= 4096 && s.topRadius >= 0 && s.bottomRadius >= 0 && s.height >= 0;
+}
+} // namespace
+
+bool EffectAsset::Validate(std::string* errorMessage) const {
+    bool valid = !name.empty() && name.size() <= 256 && std::isfinite(lifetime) && lifetime >= 0.0f &&
+        FiniteVector(color) && FiniteVector(size) && FiniteVector(uvRect) &&
+        size.x >= 0.0f && size.y >= 0.0f && size.z >= 0.0f && Components().ComponentCount() <= 4096 &&
+        ValidSettings(defaultParticle) && ValidSettings(defaultTrail) && ValidSettings(defaultBeam) &&
+        ValidSettings(defaultDistortion) && ValidSettings(defaultRing) && ValidSettings(defaultCylinder);
+    std::unordered_set<uint32_t> ids;
+    Components().ForEachComponentCommon([&](const EffectComponentCommon& c) {
+        valid = valid && ValidCommon(c);
+        if (c.id != 0 && !ids.insert(c.id).second) valid = false;
+    });
+    ForEachParticleComponent(Components().ParticleStorageView(), [&](const ParticleComponentAssetView& c) { valid = valid && ValidSettings(*c.settings); });
+    ForEachTrailComponent(Components().TrailStorageView(), [&](const TrailComponentAssetView& c) { valid = valid && ValidSettings(*c.settings); });
+    ForEachBeamComponent(Components().BeamStorageView(), [&](const BeamComponentAssetView& c) { valid = valid && ValidSettings(*c.settings); });
+    ForEachDistortionComponent(Components().DistortionStorageView(), [&](const DistortionComponentAssetView& c) { valid = valid && ValidSettings(*c.settings); });
+    ForEachRingComponent(Components().RingStorageView(), [&](const RingComponentAssetView& c) { valid = valid && ValidSettings(*c.settings); });
+    ForEachCylinderComponent(Components().CylinderStorageView(), [&](const CylinderComponentAssetView& c) { valid = valid && ValidSettings(*c.settings); });
+    if (errorMessage != nullptr) *errorMessage = valid ? "" : "Effect asset requires finite geometry/settings, valid shape budgets and unique component IDs.";
+    return valid;
 }
 
-void EffectSystem::RegisterAsset(
-    EffectAsset asset,
-    const EffectAuthoringRegistry& authoringRegistry) {
-    if (asset.name.empty()) {
-        return;
-    }
-    EnsureDefaultComponent(asset, authoringRegistry);
-    const std::string assetName = asset.name;
-    assets_[assetName] = std::move(asset);
-
-    for (EffectInstance& instance : instances_) {
-        if (instance.assetName == assetName) {
-            instance.asset = FindAsset(assetName);
+bool EffectSystem::ValidateAssets(const std::unordered_map<std::string, EffectAsset>& assets, std::string* errorMessage) {
+    if (assets.size() > 65536) { if (errorMessage != nullptr) *errorMessage = "Effect asset count exceeds its budget."; return false; }
+    for (const auto& [name, asset] : assets) {
+        if (name != asset.name || !asset.Validate(errorMessage)) {
+            if (errorMessage != nullptr && name != asset.name) *errorMessage = "Effect asset key must match its name.";
+            return false;
         }
     }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
+
+void EffectSystem::RebindInstances() {
+    std::erase_if(instances_, [&](EffectInstance& instance) {
+        instance.asset = FindAsset(instance.assetName);
+        if (instance.asset == nullptr) return true;
+        std::vector<EffectComponentInstance> components;
+        instance.asset->Components().ForEachComponentCommon([&](const EffectComponentCommon& c) {
+            const auto previous = std::find_if(instance.components.begin(), instance.components.end(),
+                [&](const auto& state) { return state.componentId == c.id; });
+            components.push_back(previous != instance.components.end() ? *previous : EffectComponentInstance{c.id, instance.age, true});
+        });
+        instance.components = std::move(components);
+        return false;
+    });
+    ++particlePoolResetSerial_;
+}
+
+bool EffectSystem::ReplaceAssets(std::unordered_map<std::string, EffectAsset> assets,
+    const EffectAuthoringRegistry& authoringRegistry, std::string* errorMessage) {
+    if (!ValidateAssets(assets, errorMessage)) return false;
+    for (auto& [name, asset] : assets) EnsureDefaultComponent(asset, authoringRegistry);
+    if (!ValidateAssets(assets, errorMessage)) return false;
+    // 全候補の検証後に差し替え、再生中の参照とコンポーネントを所有者が更新する。
+    assets_ = std::move(assets);
+    RebindInstances();
+    return true;
+}
+
+bool EffectSystem::SetInstanceAppearance(uint32_t id, const Transform& transform, const Vector4& color, bool attached) {
+    if (!ValidTransform(transform) || !FiniteVector(color)) return false;
+    EffectInstance* instance = FindMutableInstance(id);
+    if (instance == nullptr) return false;
+    instance->transform = transform; instance->color = color; instance->attached = attached;
+    return true;
+}
+
+bool EffectSystem::MoveInstance(uint32_t id, const Vector3& position, bool resetVelocity) {
+    if (!FiniteVector(position)) return false;
+    EffectInstance* instance = FindMutableInstance(id);
+    if (instance == nullptr) return false;
+    instance->transform.translate = position;
+    if (resetVelocity) { instance->previousPosition = position; instance->velocity = {}; }
+    return true;
+}
+
+bool EffectSystem::RegisterAsset(EffectAsset asset) {
+    return RegisterAsset(std::move(asset), EffectAuthoringRegistry::Default());
+}
+
+bool EffectSystem::RegisterAsset(
+    EffectAsset asset,
+    const EffectAuthoringRegistry& authoringRegistry) {
+    if (!asset.Validate()) return false;
+    EnsureDefaultComponent(asset, authoringRegistry);
+    if (!asset.Validate()) return false;
+    const std::string assetName = asset.name;
+    assets_[assetName] = std::move(asset);
+    RebindInstances();
+    return true;
 }
 
 const EffectAsset* EffectSystem::FindAsset(std::string_view name) const {
@@ -362,7 +506,8 @@ uint32_t EffectSystem::PlayEffectWithParams(
     }
 
     EffectInstance instance{};
-    instance.id = nextInstanceId_++;
+    if (nextInstanceId_ == 0 || nextInstanceId_ == (std::numeric_limits<uint32_t>::max)()) return 0;
+    instance.id = nextInstanceId_;
     instance.assetName = asset->name;
     instance.asset = asset;
     instance.components.reserve(asset->Components().ComponentCount());
@@ -387,6 +532,8 @@ uint32_t EffectSystem::PlayEffectWithParams(
         asset->color.z * color.z,
         asset->color.w * color.w,
     };
+    if (!ValidTransform(instance.transform) || !FiniteVector(instance.color) || instance.id == 0) return 0;
+    ++nextInstanceId_;
     instances_.push_back(instance);
     ++particlePoolResetSerial_;
     return instance.id;
@@ -404,6 +551,7 @@ void EffectSystem::StopEffect(uint32_t id) {
 }
 
 void EffectSystem::Update(float deltaTime) {
+    if (!std::isfinite(deltaTime) || deltaTime < 0.0f) return;
     for (EffectInstance& instance : instances_) {
         const Vector3 currentPosition = instance.transform.translate;
         if (deltaTime > 0.0f) {
@@ -448,7 +596,7 @@ void EffectSystem::ClearInstances() {
     ++particlePoolResetSerial_;
 }
 
-EffectInstance* EffectSystem::FindInstance(uint32_t id) {
+EffectInstance* EffectSystem::FindMutableInstance(uint32_t id) {
     for (EffectInstance& instance : instances_) {
         if (instance.id == id) {
             return &instance;
@@ -467,13 +615,13 @@ const EffectInstance* EffectSystem::FindInstance(uint32_t id) const {
 }
 
 void EffectSystem::SetEffectPreviewLoop(uint32_t id, bool enabled) {
-    if (EffectInstance* instance = FindInstance(id)) {
+    if (EffectInstance* instance = FindMutableInstance(id)) {
         instance->previewLoop = enabled;
     }
 }
 
 void EffectSystem::RestartInstance(uint32_t id) {
-    EffectInstance* instance = FindInstance(id);
+    EffectInstance* instance = FindMutableInstance(id);
     if (instance != nullptr) {
         RestartEffectInstanceState(*instance);
         ++particlePoolResetSerial_;
@@ -481,11 +629,12 @@ void EffectSystem::RestartInstance(uint32_t id) {
 }
 
 void EffectSystem::SetInstanceAge(uint32_t id, float age) {
-    EffectInstance* instance = FindInstance(id);
+    EffectInstance* instance = FindMutableInstance(id);
     if (instance == nullptr) {
         return;
     }
 
+    if (!std::isfinite(age)) return;
     const float clampedAge = (std::max)(0.0f, age);
     if (clampedAge != instance->age) {
         instance->age = clampedAge;

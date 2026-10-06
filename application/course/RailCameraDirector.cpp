@@ -1,4 +1,5 @@
 #include "RailCameraDirector.h"
+#include "GameplaySettingsValidation.h"
 
 #include "CourseSpawnRuntime.h"
 
@@ -422,6 +423,149 @@ const char* ToRailCameraLookAtPolicyString(RailCameraLookAtPolicy policy) {
         return "Obstacle";
     }
     return "Rail Look-Ahead";
+}
+
+bool RailCameraComfortSettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    return Result(NonNegative({stableAngularVelocityDeg, stableAngularAccelerationDeg,
+        stableFovChangeRateDeg, stableRollDeg, stableShakeAmount,
+        hardTransitionAngularVelocityDeg, hardTransitionFovChangeRateDeg, hardTransitionRollDeg}) &&
+        hardTransitionAngularVelocityDeg >= stableAngularVelocityDeg &&
+        hardTransitionFovChangeRateDeg >= stableFovChangeRateDeg &&
+        hardTransitionRollDeg >= stableRollDeg,
+        errorMessage, "Camera comfort limits must be finite/nonnegative; hard limits must be at least stable limits.");
+}
+
+bool RailCameraAimFocusSettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    return Result(NonNegative({blendInRate, blendOutRate, maxReticleVelocityForFullFocus,
+        lookAheadBoost, backDistanceBoost}) &&
+        InRange(fovOffsetDeg, -178.0f, 178.0f) && InRange(maxLockFovOffsetDeg, -178.0f, 178.0f) &&
+        UnitInterval({rollSuppression, shakeSuppression, lateralSuppression}),
+        errorMessage, "Aim-focus rates/offsets must be finite and suppression must be in [0,1].");
+}
+
+bool RailCameraLookAtSettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    return Result(NonNegative({blendRate, releaseBlendRate, maxForwardDistance,
+        lockTokenWeight, enemyWeight, bossWeight, obstacleWeight, maxTargetOffset}) &&
+        InRange(minForwardDistance, -100000.0f, maxForwardDistance) &&
+        minForwardDistance < maxForwardDistance && UnitInterval({centerRetention}),
+        errorMessage, "Look-at settings require ordered finite distances, nonnegative weights and retention in [0,1].");
+}
+
+bool RailCameraCompositionSafetySettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    return Result(InRange(aimableZoneWidth, 0.01f, 1.0f) && InRange(aimableZoneHeight, 0.01f, 1.0f) &&
+        InRange(readabilityZoneWidth, aimableZoneWidth, 1.0f) &&
+        InRange(readabilityZoneHeight, aimableZoneHeight, 1.0f) &&
+        NonNegative({minForwardDistance, maxForwardDistance, blendInRate, blendOutRate,
+            maxTargetCorrection, fovExpandDeg, lockTokenWeight, bossWeight, enemyWeight, obstacleWeight}) &&
+        minForwardDistance < maxForwardDistance && InRange(maxFovDeg, 1.0f, 179.0f) &&
+        UnitInterval({correctionGain, fireBlockRisk}),
+        errorMessage, "Composition zones must be nested in (0,1], distances ordered, FOV valid and strengths in [0,1].");
+}
+
+bool RailCameraLineOfSightSettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    return Result(NonNegative({minForwardDistance, maxForwardDistance, obstaclePadding, fovExpandDeg}) &&
+        minForwardDistance < maxForwardDistance && UnitInterval({targetReleaseStrength}) &&
+        InRange(maxFovDeg, 1.0f, 179.0f),
+        errorMessage, "Line-of-sight settings require ordered distances, nonnegative padding, valid FOV and strength in [0,1].");
+}
+
+bool RailCameraCollisionProtectionSettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    return Result(NonNegative({obstaclePadding, minClearance, nearClipClearanceMultiplier,
+        maxPushDistance, fovExpandDeg}) && UnitInterval({targetCompensation}) &&
+        InRange(maxFovDeg, 1.0f, 179.0f),
+        errorMessage, "Camera collision clearances must be finite/nonnegative, FOV valid and compensation in [0,1].");
+}
+
+bool RailCameraSegmentTransitionSettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    return Result(InRange(minDuration, 0.01f, 30.0f) &&
+        InRange(duration, minDuration, 30.0f) && InRange(highSpeedDuration, minDuration, 30.0f) &&
+        InRange(bossDuration, minDuration, 30.0f) && InRange(tunnelDuration, minDuration, 30.0f) &&
+        NonNegative({maxPositionBlendDistance, maxTargetBlendDistance, enemyFireHold}) &&
+        UnitInterval({rollBlendStrength, fovBlendStrength, shakeDampen}) &&
+        InRange(comfortGraceMultiplier, 1.0f, 100.0f),
+        errorMessage, "Transition durations must respect a positive minimum, blend strengths [0,1] and grace >= 1.");
+}
+
+bool RailCameraEncounterFramingSettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    return Result(NonNegative({blendInRate, blendOutRate, waveHoldDuration, bossHoldDuration,
+        obstacleHoldDuration, maxForwardDistance, minActiveEnemyFocus, enemyCountForFullWide,
+        enemySpreadForFullWide, fovExpandDeg, bossFovExpandDeg, singleThreatFovTightenDeg,
+        singleThreatBackDistancePullIn, singleThreatLookAheadReduction, lookAheadBoost,
+        backDistanceBoost, fireHoldDuration}) &&
+        InRange(minForwardDistance, -100000.0f, maxForwardDistance) && minForwardDistance < maxForwardDistance &&
+        enemyCountForFullWide >= minActiveEnemyFocus && enemyCountForFullWide > 0.0f &&
+        enemySpreadForFullWide > 0.0f && InRange(maxFovDeg, 1.0f, 179.0f) &&
+        UnitInterval({bossFocusBoost, lateralDampen, rollDampen}),
+        errorMessage, "Encounter framing requires ordered distances/counts, positive spread, valid FOV and strengths [0,1].");
+}
+
+// 設定変更は検証後に反映する。毎フレームの調整でカメラの平滑化履歴は消さない。
+bool RailCameraDirector::ConfigureComfort(const RailCameraComfortSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    comfortSettings_ = settings;
+    return true;
+}
+
+bool RailCameraDirector::ConfigureAimFocus(const RailCameraAimFocusSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    aimFocusSettings_ = settings;
+    return true;
+}
+
+bool RailCameraDirector::ConfigureLookAt(const RailCameraLookAtSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    lookAtSettings_ = settings;
+    return true;
+}
+
+bool RailCameraDirector::ConfigureCompositionSafety(
+    const RailCameraCompositionSafetySettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    compositionSafetySettings_ = settings;
+    return true;
+}
+
+bool RailCameraDirector::ConfigureLineOfSight(
+    const RailCameraLineOfSightSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    lineOfSightSettings_ = settings;
+    return true;
+}
+
+bool RailCameraDirector::ConfigureCollisionProtection(
+    const RailCameraCollisionProtectionSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    collisionProtectionSettings_ = settings;
+    return true;
+}
+
+bool RailCameraDirector::ConfigureSegmentTransition(
+    const RailCameraSegmentTransitionSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    segmentTransitionSettings_ = settings;
+    if (!settings.enabled) {
+        segmentTransitionElapsed_ = segmentTransitionDuration_ = 0.0f;
+        hasSegmentTransitionStartFrame_ = false;
+    }
+    return true;
+}
+
+bool RailCameraDirector::ConfigureEncounterFraming(
+    const RailCameraEncounterFramingSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    encounterFramingSettings_ = settings;
+    const float maxHold = (std::max)({settings.waveHoldDuration, settings.bossHoldDuration, settings.obstacleHoldDuration});
+    encounterFramingHoldRemaining_ = settings.enabled ? (std::min)(encounterFramingHoldRemaining_, maxHold) : 0.0f;
+    encounterFireHoldRemaining_ = settings.enabled ? (std::min)(encounterFireHoldRemaining_, settings.fireHoldDuration) : 0.0f;
+    return true;
 }
 
 void RailCameraDirector::Reset() {

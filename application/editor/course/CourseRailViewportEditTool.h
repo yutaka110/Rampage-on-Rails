@@ -20,6 +20,8 @@ struct CourseRailViewportEditSettings final {
     bool gridSnap = false;
     float gridSize = 1.0f;
     bool mirrorTangents = true;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseRailViewportEditInput final {
@@ -60,7 +62,7 @@ public:
     void SetActive(bool active);
     void SetMode(CourseRailEditMode mode);
     void SetSelectedPoint(std::string guid);
-    void SetSettings(CourseRailViewportEditSettings settings);
+    bool SetSettings(CourseRailViewportEditSettings settings, std::string* errorMessage = nullptr);
     void Tick(const CourseRailViewportEditInput& input);
     void CancelDrag(std::string message = {});
 

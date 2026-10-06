@@ -617,6 +617,26 @@ bool NeedsVfxRuntimeStatusTelemetry(
                 vfx.enableBeamDedicatedAutoFallback));
 }
 
+#if defined(_DEBUG) || defined(DEVELOP)
+bool DrawDeveloperToolsSwitch(bool& showDeveloperTools) {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(
+        ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - 12.0f,
+            viewport->WorkPos.y + 12.0f),
+        ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.80f);
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
+    bool changed = false;
+    if (ImGui::Begin("Developer Tools Switch", nullptr, flags)) {
+        changed = ImGui::Checkbox("Developer Tools", &showDeveloperTools);
+    }
+    ImGui::End();
+    return changed;
+}
+#endif
+
 void DrawViewportFocusStatusBar(bool& viewportFocusMode) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const ImVec2 workPos = viewport ? viewport->WorkPos : ImVec2(0.0f, 0.0f);
@@ -820,7 +840,7 @@ void ConfigureShowcasePostProcess(PostProcessStack& postProcessStack, AppVfxRunt
     postProcessStack.SetIntensity("GlowComposite", blackHole ? (0.92f + tuning.param4 * 0.42f) : 1.0f);
     postProcessStack.SetIntensity("DistortionComposite", blackHole ? (0.85f + tuning.param3 * 0.58f) : 1.0f);
 
-    for (PostProcessPass& pass : postProcessStack.MutablePasses()) {
+    for (PostProcessPass pass : postProcessStack.Passes()) {
         if (pass.name == "AccretionComposite") {
             pass.parameters.accretionRadius = 0.30f + tuning.param2 * 0.14f;
             pass.parameters.accretionDiskStretch = 1.65f + tuning.param2 * 0.92f;
@@ -834,6 +854,8 @@ void ConfigureShowcasePostProcess(PostProcessStack& postProcessStack, AppVfxRunt
         } else if (pass.name == "DistortionComposite") {
             pass.parameters.distortionScale = blackHole ? (0.010f + tuning.param3 * 0.026f) : 0.020f;
         }
+
+        (void)postProcessStack.ConfigurePass(pass);
     }
 }
 
@@ -1888,6 +1910,18 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     AppRuntimeState& runtimeState = *context.runtimeState;
     EffectRuntime& effectRuntime = *context.effectRuntime;
     PostProcessStack& postProcessStack = *context.postProcessStack;
+#if defined(_DEBUG) || defined(DEVELOP)
+    if (DrawDeveloperToolsSwitch(showDeveloperTools_)) {
+        viewportFocusMode_ = false;
+    }
+#endif
+    // A gameplay screen needs only the switch until its editor is requested.
+    // Avoid running showcase controls or changing gameplay VFX in this mode.
+    if (context.railGameplayScene && !showDeveloperTools_) {
+        imguiTiming.buildUiMs = EditorUiElapsedMs(buildUiStart, EditorUiTimingClock::now());
+        LogEditorImguiBreakdown(imguiTiming);
+        return;
+    }
     editorPlaySession_.TickFrame();
     editor::EditorTransactionStack& editorTransactions =
         context.editorTransactions != nullptr ? *context.editorTransactions : editorTransactions_;
@@ -4459,7 +4493,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &beamDedicatedStableFrames_,
         &beamDedicatedActiveStableFrames_};
 
-    if (!showcasePresentationInitialized_) {
+    if (!context.railGameplayScene && !showcasePresentationInitialized_) {
         showcasePresentationInitialized_ = true;
         runtimeState.vfx.showcaseAutoRotate = false;
         runtimeState.vfx.showcaseHudVisible = true;
@@ -4484,15 +4518,17 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         return;
     }
 
-    if (runtimeState.submissionShowcase.enabled) {
-        DrawSubmissionShowcasePanel(runtimeState, showDeveloperTools_);
-    } else {
-        DrawShowcasePresentationPanel(
-            runtimeState,
-            effectRuntime,
-            postProcessStack,
-            showDeveloperTools_,
-            showcaseLoopCurrent_);
+    if (!context.railGameplayScene) {
+        if (runtimeState.submissionShowcase.enabled) {
+            DrawSubmissionShowcasePanel(runtimeState, showDeveloperTools_);
+        } else {
+            DrawShowcasePresentationPanel(
+                runtimeState,
+                effectRuntime,
+                postProcessStack,
+                showDeveloperTools_,
+                showcaseLoopCurrent_);
+        }
     }
     if (!showDeveloperTools_) {
         if (NeedsVfxRuntimeStatusTelemetry(runtimeState.vfx, hiddenRuntimeTelemetryFrame_++)) {

@@ -39,9 +39,14 @@ void EnemyTargetingSystem::Reset() {
     revision_ = 0;
 }
 
-void EnemyTargetingSystem::Update(
-    CourseSpawnRuntime& runtime,
+void EnemyTargetingSystem::Update(CourseSpawnRuntime& runtime,
     const EnemyTargetingFrameInput& input) {
+    runtime.UpdateEnemyTargeting(*this, input);
+}
+
+void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const EnemyTargetingFrameInput& input) {
     const float dt = (std::max)(0.0f, input.deltaTime);
     float forwardVelocity = 0.0f;
     float lateralVelocity = 0.0f;
@@ -63,7 +68,7 @@ void EnemyTargetingSystem::Update(
     hasPreviousPlayerSample_ = true;
 
     frame_ = {};
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         const bool turret = actor.desc.meshId == "combat_turret";
         const Vector3 previousAim = actor.targetingState.turretAimDirection;
         if (turret && actor.combatState.canBeTargeted) {

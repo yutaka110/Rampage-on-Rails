@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -8,6 +9,7 @@
 #include "EnemyFormationDefinition.h"
 
 class CourseSpawnRuntime;
+struct CourseEnemyActor;
 
 enum class EnemyEntranceExitPhase : uint8_t {
     Pending,
@@ -71,6 +73,14 @@ public:
     const EnemyEntranceExitFrame& Frame() const noexcept { return frame_; }
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    void BeginFrameActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime);
+    void UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        float deltaTime);
+
     void QueueEvent(
         EnemyEntranceExitEventKind kind,
         uint32_t actorId,

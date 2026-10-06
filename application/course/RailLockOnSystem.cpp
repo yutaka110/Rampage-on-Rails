@@ -1,9 +1,55 @@
 #include "RailLockOnSystem.h"
+#include "GameplaySettingsValidation.h"
 
 #include "../diagnostics/DebugDrawSystem.h"
 
 #include <algorithm>
 #include <cmath>
+
+bool RailLockSettings::Validate(std::string* errorMessage) const {
+    using namespace gameplay::settings;
+    const bool valid = maxLocks >= 1 && maxLocks <= 64 &&
+        lockVfxMaxConcurrentShots >= 1 && lockVfxMaxConcurrentShots <= 256 &&
+        NonNegative({minForwardDistance, maxForwardDistance, enemyScreenRadius,
+            obstacleScreenRadius, assistRadius, reticleKeyboardSpeed, reticleGamepadSpeed,
+            releaseDamage, lockVfxTravelDurationMin, lockVfxTravelDurationMax,
+            lockVfxVisualScaleMin, lockVfxVisualScaleMax, lockVfxVisualScalePerDistance,
+            lockVfxImpactScaleMin, lockVfxImpactScaleMax, lockVfxImpactScalePerDistance,
+            lockVfxReleaseShotInterval, lockPriorityReticleWeight, lockPriorityCenterWeight,
+            lockPriorityForwardThreatWeight, lockPriorityAnchorWeight, lockPriorityEnemyBonus,
+            lockPriorityObstacleBonus, lockPriorityDistanceTieBreak, lockLineOfSightObstaclePadding,
+            lockAimMagnetRadius, lockAimMaxPullSpeed, lockAimDeadZone, lockAimReticleIntentWeight,
+            lockAimCenterIntentWeight, lockAimForwardIntentWeight, lockHudScale, lockHudSafeArea,
+            lockHudReticleGlowScale, lockHudReleaseFlash}) &&
+        maxForwardDistance > minForwardDistance &&
+        lockVfxTravelDurationMax >= lockVfxTravelDurationMin &&
+        InRange(lockVfxTravelDistanceDivisor, 0.01f, 100000.0f) &&
+        lockVfxVisualScaleMin > 0.0f && lockVfxVisualScaleMax >= lockVfxVisualScaleMin &&
+        lockVfxImpactScaleMin > 0.0f && lockVfxImpactScaleMax >= lockVfxImpactScaleMin &&
+        InRange(lockVfxMuzzleForwardOffset, -100000.0f, 100000.0f) &&
+        UnitInterval({lockAimMagnetStrength, lockAimTargetBlend, lockHudOpacity, lockHudTargetScoreAlpha});
+    return Result(valid, errorMessage,
+        "Lock settings require bounded counts, ordered distance/visual ranges and finite strengths in [0,1].");
+}
+
+bool RailLockOnSystem::Configure(const RailLockSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    settings_ = settings;
+    // 上限を縮めても、すでに持っているロックが上限を超えないよう所有者が調整する。
+    resolver_.LimitTokenCapacity(static_cast<size_t>(settings_.maxLocks));
+    debugFrame_.tokens = resolver_.Tokens();
+    debugFrame_.acquiredTokens = resolver_.AcceptedTokensThisFrame();
+    debugFrame_.acceptedThisFrame = resolver_.AcceptedThisFrame();
+    return true;
+}
+
+bool RailLockOnSystem::ConfigureAimAssist(
+    const RailAimAssistSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (aimAssistSettings_.enabled && !settings.enabled) aimAssist_.Reset();
+    aimAssistSettings_ = settings;
+    return true;
+}
 
 void RailLockOnSystem::Reset() {
     reticle_.Reset();

@@ -526,6 +526,8 @@ private:
     D3D12_GPU_DESCRIPTOR_HANDLE railLockOnHudAtlasSrvGpu_{};
     D3D12_VERTEX_BUFFER_VIEW railLockOnHudAtlasVertexBufferView_{};
     uint32_t railLockOnHudAtlasVertexCount_ = 0;
+    uint32_t railTitleDustVertexCount_ = 0;
+    uint32_t railTitleTracerVertexCount_ = 0;
     bool railLockOnHudAtlasReady_ = false;
     bool railTitleLogoReady_ = false;
     Microsoft::WRL::ComPtr<ID3D12Resource> submissionHudVertexResource_;
@@ -808,6 +810,7 @@ private:
     std::array<float,4> railTitleSavedClearColor_{};
     bool railTitleSavedSkybox_ = false;
     bool railTitleSavedBackdrop_ = false;
+    std::vector<PostProcessPass> railTitleSavedPostProcess_;
     audio::SoundHandle railTitleAmbience_{};
     bool railTitleAmbiencePlaying_ = false;
     float railTitleAudioGain_ = 0.0f;

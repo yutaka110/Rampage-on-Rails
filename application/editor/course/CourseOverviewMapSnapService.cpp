@@ -1,4 +1,5 @@
 #include "CourseOverviewMapSnapService.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,14 +16,20 @@ float SquaredDistance(Vector2 a, Vector2 b) {
 
 } // namespace
 
-void CourseOverviewMapSnapService::SetSettings(
-    CourseOverviewMapSnapSettings settings) {
-    settings.worldGridSize = (std::clamp)(settings.worldGridSize, 0.001f, 10000.0f);
-    settings.railDistanceStep = (std::clamp)(settings.railDistanceStep, 0.001f, 10000.0f);
-    settings.lateralOffsetStep = (std::clamp)(settings.lateralOffsetStep, 0.001f, 10000.0f);
-    settings.controlPointMagnetPixels =
-        (std::clamp)(settings.controlPointMagnetPixels, 0.0f, 128.0f);
+bool CourseOverviewMapSnapSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(worldGridSize, .001f, 10000.0f) &&
+        settings::InRange(railDistanceStep, .001f, 10000.0f) &&
+        settings::InRange(lateralOffsetStep, .001f, 10000.0f) &&
+        settings::InRange(controlPointMagnetPixels, 0.0f, 128.0f);
+    return settings::Result(valid, errorMessage,
+        "CourseOverviewMapSnapSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseOverviewMapSnapService::SetSettings(
+    CourseOverviewMapSnapSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
+    return true;
 }
 
 CourseOverviewMapSnapResult CourseOverviewMapSnapService::SnapControlPoint(

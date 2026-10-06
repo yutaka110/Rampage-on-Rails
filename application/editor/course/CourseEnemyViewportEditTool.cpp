@@ -1,4 +1,5 @@
 #include "CourseEnemyViewportEditTool.h"
+#include "../EditorSettingsValidation.h"
 
 #include "../EditorViewportOverlay.h"
 
@@ -76,13 +77,20 @@ void CourseEnemyViewportEditTool::SetSelectedPlacements(
     state_.primaryPlacementGuid = selectedGuids_.empty() ? std::string{} : selectedGuids_.front();
 }
 
-void CourseEnemyViewportEditTool::SetSettings(
-    CourseEnemyViewportEditSettings settings) {
+bool CourseEnemyViewportEditSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(offsetSnapSize, .01f, 1000.0f) &&
+        settings::InRange(railProjectionSubdivisions, 8u, 256u) &&
+        settings::Finite(duplicateOffset.x) && settings::Finite(duplicateOffset.y) && settings::Finite(duplicateOffset.z);
+    return settings::Result(valid, errorMessage,
+        "CourseEnemyViewportEditSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseEnemyViewportEditTool::SetSettings(
+    CourseEnemyViewportEditSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     if (settings.defaultActorAssetId.empty()) settings.defaultActorAssetId = "drone";
-    settings.offsetSnapSize = (std::clamp)(settings.offsetSnapSize, 0.01f, 1000.0f);
-    settings.railProjectionSubdivisions =
-        (std::clamp)(settings.railProjectionSubdivisions, 8u, 256u);
     settings_ = std::move(settings);
+    return true;
 }
 
 void CourseEnemyViewportEditTool::Tick(const CourseEnemyViewportEditInput& input) {

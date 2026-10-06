@@ -1,4 +1,4 @@
-actor|drone_chaser|Rear Chase Drone|ball|1.25|34|10|1.0|0.72|0.18|1.0|twin_chase
+actor|drone_chaser|Rear Chase Drone|twin_shield_hull|1.25|34|10|1.0|0.72|0.18|1.0|twin_chase
 combat|0.46|0.20|64|twin_chase
 movement|12
 behavior|flanker|0.28|0.24|0.20|0.48|0.72|0.30|0.30|4.2|0.85|0.58|true

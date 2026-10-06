@@ -3,12 +3,14 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <d3d12.h>
 #include <wrl/client.h>
 
 #include "CourseAsset.h"
+#include "TwinShieldDronePose.h"
 #include "../terrain/RailPath.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
@@ -41,6 +43,10 @@ bool IsCourseMeshRenderEligible(
     CourseMeshRenderKind kind,
     const std::string& meshId);
 
+// These authored OBJ surfaces share the gameplay terrain PBR pipeline.
+bool IsTitleLandscapeMesh(std::string_view meshId);
+Material BuildTitleLandscapePbrMaterial(std::string_view meshId);
+
 struct CourseMeshRenderItem {
     CourseMeshRenderKind kind = CourseMeshRenderKind::Obstacle;
     std::string name;
@@ -62,6 +68,9 @@ class CourseMeshRenderQueue {
 public:
     bool Initialize(Microsoft::WRL::ComPtr<ID3D12Device> device, size_t capacity = 128);
     void Reset();
+    void AppendTwinShieldDrone(const TwinShieldDronePose& pose,
+        std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& viewMatrix, const Matrix4x4& projMatrix);
     void SyncFromCourseRuntime(
         const CourseSpawnRuntime& runtime,
         const CourseAsset* course,
@@ -78,6 +87,9 @@ public:
     size_t VisibleCount() const { return visibleCount_; }
 
 private:
+    void WriteTwinShieldDrone(CourseMeshRenderItem& hull,
+        const TwinShieldDronePose& pose, std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& viewProjection);
     void AddObstacleInstances(
         const CourseSpawnRuntime& runtime,
         const RailPath& railPath,

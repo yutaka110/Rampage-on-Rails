@@ -31,6 +31,8 @@ struct CourseRailCurveFitSettings final {
     uint32_t smoothingIterations = 2;
     uint32_t maximumInputSamples = 4096;
     uint32_t maximumControlPoints = 256;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseRailCurveFitResult final {

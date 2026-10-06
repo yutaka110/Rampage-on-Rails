@@ -99,6 +99,48 @@ bool IsCourseMeshRenderEligible(
         !IsPlaceholderCourseMesh(meshId);
 }
 
+bool IsTitleLandscapeMesh(std::string_view meshId) {
+    return meshId == "title_ground" || meshId == "title_cliff" ||
+        meshId == "title_boulder" || meshId == "title_tunnel";
+}
+
+Material BuildTitleLandscapePbrMaterial(std::string_view meshId) {
+    Material material{};
+    material.color = {1.12f, 0.98f, 0.89f, 0.18f}; // Warm canyon tint, macro noise amount.
+    material.enableLighting = true;
+    material.uvTransform = MakeIdentity4x4();
+    material.padding[0] = 0.65f; // Detail normal strength.
+    material.padding[1] = 0.30f; // Cavity AO strength.
+    material.padding[2] = 1.00f; // Environment sky fill.
+    material.shininess = 0.18f; // Terrain specular strength (not a Phong exponent).
+    material.environmentCoefficient = 0.15f; // Strata strength.
+    material.specularMode = meshId == "title_ground" ? 9 : (meshId == "title_tunnel" ? 7 : 6);
+    material.padding2[0] = 0.10f; // Rim strength.
+    material.padding2[1] = 0.55f; // Micro detail strength.
+    material.padding2[2] = 1.0f; // Shared detail cache.
+    material.padding2[3] = 1.0f; // Cache scale.
+    material.padding2[4] = 96.0f; // Detail tile world size.
+    material.padding2[5] = 1.0f; // Near scale.
+    material.padding2[6] = 0.45f; // Far scale.
+    material.padding2[7] = 85.0f; // Distance blend.
+    material.padding2[8] = 1.0f; // Shared detail normal map.
+    material.padding2[9] = 0.60f; // Detail map strength.
+    material.padding2[10] = 0.70f; // Hybrid blend.
+    material.padding2[13] = 0.55f; // Strata breakup.
+    material.padding2[14] = 0.25f; // Floor sand shadow.
+    material.padding2[15] = 0.10f; // Backlight rim boost.
+    if (meshId == "title_ground") {
+        // Ground054's normal map supplies the relief; avoid overlaying the
+        // old procedural sand ripples / shared rock detail normal on top.
+        material.padding[0] = 0.20f;
+        material.padding2[1] = 0.20f;
+        material.padding2[8] = 0.0f;
+        material.padding2[14] = 0.0f;
+        material.environmentCoefficient = 0.0f;
+    }
+    return material;
+}
+
 bool CourseMeshRenderQueue::Initialize(
     Microsoft::WRL::ComPtr<ID3D12Device> device,
     size_t capacity) {
@@ -243,25 +285,18 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 item->materialData->specularMode = 2; // Diffuse-only stone.
                 item->useMaterialOverride = true;
             }
-            if ((placement.meshId == "title_ground" || placement.meshId == "title_cliff" ||
-                 placement.meshId == "title_boulder") && item->materialData != nullptr) {
-                // Quiet matte sandstone: geometry defines the large forms,
-                // without environment highlights or high-frequency rock noise.
-                item->materialData->color = placement.meshId == "title_ground"
-                    ? Vector4{0.90f,0.85f,0.75f,1.0f} : Vector4{0.84f,0.82f,0.78f,1.0f};
-                item->materialData->enableLighting = true;
-                item->materialData->shininess = 1.0f;
-                item->materialData->environmentCoefficient = 0.0f;
-                item->materialData->specularMode = 6; // Bounded title diffuse + distance haze.
+            if (IsTitleLandscapeMesh(placement.meshId) && item->materialData != nullptr) {
+                *item->materialData = BuildTitleLandscapePbrMaterial(placement.meshId);
                 item->useMaterialOverride = true;
             }
-            if (placement.meshId == "title_tunnel" && item->materialData != nullptr) {
-                item->materialData->color = {0.70f,0.61f,0.53f,1.0f};
-                item->materialData->enableLighting = true;
-                item->materialData->shininess = 1.0f;
-                item->materialData->environmentCoefficient = 0.0f;
-                item->materialData->specularMode = 7; // Rock mass with shaded cave interior.
-                item->useMaterialOverride = true;
+            if (placement.meshId == "title_stake" && item->materialData != nullptr) {
+                Material timber{};
+                timber.color={1,1,1,1};
+                timber.enableLighting=true;
+                timber.uvTransform=MakeIdentity4x4();
+                timber.specularMode=2; // Matte timber, using its authored wood albedo.
+                *item->materialData=timber;
+                item->useMaterialOverride=true;
             }
             const Vector3 center = ResolveRailLocal(
                 railPath,
@@ -445,6 +480,32 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         if (presentation != nullptr) {
             rotation = Add(rotation, presentation->rotationOffset);
             if (presentation->turret) rotation = Add(presentation->turretWorldRotation,presentation->rotationOffset);
+        }
+        if (enemy.desc.meshId == "twin_shield_hull" && model.name == "twin_shield_hull") {
+            // Rigid reference geometry: no legacy sphere/pod scaling or squash.
+            // Model forward is -Z after Assimp's right-handed -> LH conversion.
+            const Vector3 toCamera{cameraPosition.x-center.x,cameraPosition.y-center.y,cameraPosition.z-center.z};
+            const float distance = std::sqrt(toCamera.x*toCamera.x+toCamera.y*toCamera.y+toCamera.z*toCamera.z);
+            if (distance > 0.001f) {
+                rotation = Add({std::asin((std::clamp)(toCamera.y/distance,-1.0f,1.0f)),
+                    std::atan2(-toCamera.x,-toCamera.z),0.0f},enemy.desc.localRotation);
+                if (presentation) rotation = Add(rotation,presentation->rotationOffset);
+            }
+            const Vector3 scale{baseScale*(std::max)(0.01f,enemy.desc.localScale.x),
+                baseScale*(std::max)(0.01f,enemy.desc.localScale.y),
+                baseScale*(std::max)(0.01f,enemy.desc.localScale.z)};
+            const float alpha = (presentation ? presentation->materialColor.w :
+                (enemy.combatState.initialized ? enemy.combatState.presentationAlpha : 1.0f)) *
+                (readability ? readability->presentationAlpha : 1.0f);
+            TwinShieldDronePose pose;
+            pose.visible = true; pose.position = center; pose.rotation = rotation; pose.scale = scale;
+            pose.alpha = alpha;
+            pose.charge = presentation ? presentation->weaponCharge : 0.0f;
+            pose.flash = presentation ? presentation->flashStrength : 0.0f;
+            pose.death = presentation && presentation->animation == EnemyCombatAnimationState::Death
+                ? presentation->animationNormalizedTime : 0.0f;
+            WriteTwinShieldDrone(*item,pose,models,viewProjection);
+            continue;
         }
         if (item->materialData != nullptr) {
             const float alpha = enemy.combatState.initialized
@@ -875,4 +936,76 @@ void CourseMeshRenderQueue::WriteItemTransform(
     item.transformData->World = world;
     item.transformData->WVP = Multiply(world, viewProjection);
     item.transformData->WorldInverseTranspose = Transpose(Inverse(world));
+}
+
+void CourseMeshRenderQueue::AppendTwinShieldDrone(const TwinShieldDronePose& pose,
+    std::span<const CourseMeshModelBinding> models,
+    const Matrix4x4& viewMatrix, const Matrix4x4& projMatrix) {
+    if (!pose.visible || pose.alpha <= 0.0f || models.empty()) return;
+    const uint32_t index = ResolveModelIndex(models,"twin_shield_hull",nullptr);
+    if (models[index].name != "twin_shield_hull" || !models[index].loaded) return;
+    CourseMeshRenderItem* hull = AllocateItem();
+    if (!hull) return;
+    hull->kind = CourseMeshRenderKind::Enemy;
+    hull->name = "title_pursuer";
+    hull->meshId = "twin_shield_hull";
+    hull->sourceActorId = 0;
+    hull->sortDistance = 0.0f;
+    hull->collisionMode = CourseTerrainCollisionMode::None;
+    hull->modelIndex = index;
+    hull->visible = hull->transformData != nullptr;
+    if (hull->visible) WriteTwinShieldDrone(*hull,pose,models,Multiply(viewMatrix,projMatrix));
+}
+
+void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
+    const TwinShieldDronePose& pose, std::span<const CourseMeshModelBinding> models,
+    const Matrix4x4& viewProjection) {
+    if (hull.materialData) {
+        *hull.materialData = {};
+        hull.materialData->color = {1,1,1,pose.alpha};
+        hull.materialData->uvTransform = MakeIdentity4x4();
+        hull.materialData->enableLighting = true;
+        hull.materialData->specularMode = 10; // Normal/roughness-mapped industrial metal.
+        hull.materialData->environmentCoefficient = 0.72f;
+        hull.materialData->padding2[0] = pose.flash;
+        hull.useMaterialOverride = true;
+    }
+    WriteItemTransform(hull,models[hull.modelIndex].rootLocal,pose.scale,pose.rotation,pose.position,viewProjection);
+    const Matrix4x4 actorWorld = MakeAffineMatrix(pose.scale,pose.rotation,pose.position);
+    auto addReferencePart = [&](const char* id, const char* suffix,Vector3 offset,float yaw,bool core) {
+        const uint32_t index = ResolveModelIndex(models,id,nullptr);
+        if (models[index].name != id || !models[index].loaded) return;
+        CourseMeshRenderItem* part = AllocateItem();
+        if (!part) return;
+        part->kind = CourseMeshRenderKind::Enemy;
+        part->name = hull.name + suffix;
+        part->meshId = id;
+        part->sourceActorId = hull.sourceActorId;
+        part->modelIndex = index;
+        part->sortDistance = hull.sortDistance;
+        part->visible = part->transformData != nullptr;
+        if (part->materialData && hull.materialData) {
+            *part->materialData = *hull.materialData;
+            if (core) {
+                part->materialData->enableLighting = false;
+                part->materialData->specularMode = 11;
+                part->materialData->environmentCoefficient = 0.0f;
+                part->materialData->padding2[0] = 1.8f+pose.charge*3.2f;
+            }
+            part->useMaterialOverride = true;
+        }
+        if (part->transformData) {
+            // Compose in actor space, keeping each shield attached during banking.
+            const Matrix4x4 local = MakeAffineMatrix(Vector3{1,1,1},Vector3{0,yaw,0},offset);
+            Matrix4x4 world = Multiply(Multiply(models[index].rootLocal,local),actorWorld);
+            part->transformData->World = world;
+            part->transformData->WVP = Multiply(world,viewProjection);
+            part->transformData->WorldInverseTranspose = Transpose(Inverse(world));
+        }
+    };
+    const float spread = 1.09f + pose.charge*0.14f + pose.death*0.40f;
+    const float opening = 0.08f + pose.charge*0.42f + pose.death*0.55f;
+    addReferencePart("twin_shield_panel","/left-shield",{-spread,-pose.death*0.30f,0},-opening,false);
+    addReferencePart("twin_shield_panel","/right-shield",{spread,-pose.death*0.30f,0},opening,false);
+    addReferencePart("twin_shield_core","/sensor-core",{},0,true);
 }

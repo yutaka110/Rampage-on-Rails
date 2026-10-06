@@ -1,4 +1,5 @@
 #include "CourseOverviewMapEditTool.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -47,12 +48,19 @@ void CourseOverviewMapEditTool::SetMode(CourseOverviewMapEditMode mode) {
     state_.message = std::string("Overview tool mode: ") + ToString(mode);
 }
 
-void CourseOverviewMapEditTool::SetSettings(CourseOverviewMapEditSettings settings) {
+bool CourseOverviewMapEditSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(defaultWavePrewarmDistance, 0.0f, 100000.0f);
+    return settings::Result(valid, errorMessage,
+        "CourseOverviewMapEditSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseOverviewMapEditTool::SetSettings(
+    CourseOverviewMapEditSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     if (settings.defaultActorAssetId.empty()) settings.defaultActorAssetId = "drone";
     if (settings.defaultWaveName.empty()) settings.defaultWaveName = "Wave";
-    settings.defaultWavePrewarmDistance =
-        (std::max)(0.0f, settings.defaultWavePrewarmDistance);
     settings_ = std::move(settings);
+    return true;
 }
 
 void CourseOverviewMapEditTool::Tick(const CourseOverviewMapEditInput& input) {

@@ -1,4 +1,5 @@
 #include "CourseMapCartographyBakePipeline.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <chrono>
@@ -703,19 +704,21 @@ void CourseMapCartographyBakePipeline::InvalidateAsset() noexcept {
     ++invalidationEpoch_;
 }
 
-void CourseMapCartographyBakePipeline::SetSettings(
-    CourseMapCartographyBakeSettings settings) {
-    settings.tileWorldSize = (std::clamp)(settings.tileWorldSize, 16.0f, 8192.0f);
-    settings.footprintSimplificationTolerance = (std::clamp)(
-        settings.footprintSimplificationTolerance, 0.0f, 1000.0f);
-    settings.minimumProjectedArea = (std::clamp)(
-        settings.minimumProjectedArea, 0.0f, 1000000.0f);
-    settings.maximumRegions = (std::clamp)(settings.maximumRegions, 1u, 262144u);
-    settings.maximumTrianglesPerRegion = (std::clamp)(
-        settings.maximumTrianglesPerRegion, 12u, 2097152u);
-    settings.maximumFootprintPoints = (std::clamp)(
-        settings.maximumFootprintPoints, 3u, 4096u);
-    if (SameSettings(settings_, settings)) return;
+bool CourseMapCartographyBakeSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(tileWorldSize, 16.0f, 8192.0f) &&
+        settings::InRange(footprintSimplificationTolerance, 0.0f, 1000.0f) &&
+        settings::InRange(minimumProjectedArea, 0.0f, 1000000.0f) &&
+        settings::InRange(maximumRegions, 1u, 262144u) &&
+        settings::InRange(maximumTrianglesPerRegion, 12u, 2097152u) &&
+        settings::InRange(maximumFootprintPoints, 3u, 4096u);
+    return settings::Result(valid, errorMessage,
+        "CourseMapCartographyBakeSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapCartographyBakePipeline::SetSettings(
+    CourseMapCartographyBakeSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++settingsRevision_;
     extractionValid_ = false;
@@ -725,6 +728,7 @@ void CourseMapCartographyBakePipeline::SetSettings(
     // opt-in through autoBake).
     forceRebuild_ = false;
     ++invalidationEpoch_;
+    return true;
 }
 
 void CourseMapCartographyBakePipeline::SetCacheRoot(

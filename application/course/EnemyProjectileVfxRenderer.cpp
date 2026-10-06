@@ -36,13 +36,12 @@ void UpdateEffectInstance(
     const Vector3& position,
     const Vector4& color,
     float radius) {
-    EffectInstance* instance = runtime.FindInstance(instanceId);
+    const EffectInstance* instance = runtime.FindInstance(instanceId);
     if (instance == nullptr) return;
-    instance->transform.translate = position;
-    instance->transform.scale = {radius, radius, radius};
-    instance->color = color;
-    instance->attached = true;
-    instance->previewLoop = true;
+    Transform transform = instance->transform;
+    transform.translate = position;
+    transform.scale = {radius, radius, radius};
+    if (runtime.SetInstanceAppearance(instanceId, transform, color, true)) runtime.SetEffectPreviewLoop(instanceId, true);
 }
 
 bool IsRenderableEffectInstance(

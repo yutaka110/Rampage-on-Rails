@@ -969,7 +969,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             for (const CourseMeshRenderItem& item : ctx.scene->CourseMeshes().Items()) {
                 const AppManagedModelResource* model =
                     ctx.scene->FindManagedModel(item.modelIndex);
-                if (!item.visible ||
+                if (IsTitleLandscapeMesh(item.meshId) || !item.visible ||
                     model == nullptr ||
                     !item.transformResource) {
                     continue;
@@ -1237,8 +1237,15 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         },
         "SceneDepth",
         [ctx](ge3::graphics::RenderPassContext& passContext) {
-            if (!ctx.runtimeState->terrain.enabled ||
-                ctx.terrainChunkManager == nullptr ||
+            const auto& courseItems = ctx.scene->CourseMeshes().Items();
+            const bool hasTitleLandscape = std::any_of(courseItems.begin(), courseItems.end(),
+                [](const CourseMeshRenderItem& item) {
+                    return item.visible && IsTitleLandscapeMesh(item.meshId);
+                });
+            const bool drawGameplayTerrain = ctx.runtimeState->terrain.enabled &&
+                ctx.terrainChunkManager != nullptr;
+            if ((!drawGameplayTerrain && !hasTitleLandscape) ||
+                ctx.appPipelines->GetTerrainPSO() == nullptr ||
                 ctx.scene->terrainMaterialResource == nullptr ||
                 ctx.scene->directionalLightResource == nullptr ||
                 ctx.scene->cameraResource == nullptr ||
@@ -1247,16 +1254,15 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 return;
             }
 
-            const std::vector<TerrainRenderChunk>& chunks =
-                ctx.terrainChunkManager->RenderChunks();
-            if (chunks.empty()) {
+            const std::vector<TerrainRenderChunk> emptyChunks;
+            const std::vector<TerrainRenderChunk>& chunks = drawGameplayTerrain
+                ? ctx.terrainChunkManager->RenderChunks() : emptyChunks;
+            if (chunks.empty() && !hasTitleLandscape) {
                 return;
             }
 
-            ID3D12PipelineState* terrainPipeline = ctx.appPipelines->GetTerrainPSO() != nullptr
-                ? ctx.appPipelines->GetTerrainPSO()
-                : ctx.appPipelines->GetMainPSO();
-            if (ctx.runtimeState->terrain.displayMode == TerrainDisplayMode::Wireframe &&
+            ID3D12PipelineState* terrainPipeline = ctx.appPipelines->GetTerrainPSO();
+            if (!hasTitleLandscape && ctx.runtimeState->terrain.displayMode == TerrainDisplayMode::Wireframe &&
                 ctx.appPipelines->GetTerrainWireframePSO() != nullptr) {
                 terrainPipeline = ctx.appPipelines->GetTerrainWireframePSO();
             }
@@ -1303,6 +1309,22 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     11,
                     ctx.scene->cascadeShadowSrvTableGpu);
             }
+            for (const CourseMeshRenderItem& item : courseItems) {
+                if (!item.visible || !IsTitleLandscapeMesh(item.meshId) ||
+                    !item.transformResource || !item.materialResource) continue;
+                const AppManagedModelResource* model = ctx.scene->FindManagedModel(item.modelIndex);
+                if (model == nullptr || model->mesh.indexCount == 0) continue;
+                ctx.frameRenderer->DrawMainModel(
+                    passContext.commandList, model->mesh.vbv, model->mesh.ibv,
+                    item.materialResource->GetGPUVirtualAddress(),
+                    item.transformResource->GetGPUVirtualAddress(),
+                    terrainTexture, terrainDetailCache, terrainDetailNormalMap,
+                    ctx.scene->skyboxTextureSrvHandleGPU,
+                    ctx.scene->directionalLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->cameraResource->GetGPUVirtualAddress(),
+                    ctx.scene->pointLightResource->GetGPUVirtualAddress(),
+                    ctx.scene->spotLightResource->GetGPUVirtualAddress(), model->mesh.indexCount);
+            }
             for (const TerrainRenderChunk& chunk : chunks) {
                 if (chunk.indexCount == 0 || chunk.transformResource == nullptr || chunk.transformGpuAddress == 0) {
                     continue;
@@ -1324,7 +1346,8 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     chunk.indexCount);
             }
 
-            if (ctx.runtimeState->terrain.displayMode != TerrainDisplayMode::Wireframe &&
+            if (drawGameplayTerrain && !chunks.empty() &&
+                ctx.runtimeState->terrain.displayMode != TerrainDisplayMode::Wireframe &&
                 ctx.runtimeState->terrain.enableDebrisRendering &&
                 ctx.appPipelines->GetTerrainDebrisPSO() != nullptr) {
                 if (ctx.appPipelines->GetTerrainDebrisCullRootSignature() != nullptr &&

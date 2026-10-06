@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
+#include <string_view>
 #include <string>
 #include <vector>
 
@@ -19,6 +21,12 @@
 #include "utils/math/MathUtils.h"
 
 class EffectRuntime;
+class EnemyAttackInterruptSystem;
+struct EnemyAttackInterruptResult;
+class CourseActorDamageReceiver;
+class EnemyProjectileShootDownSystem;
+struct EnemyProjectileShootDownRequest;
+struct EnemyProjectileShootDownResult;
 struct CourseAsset;
 struct TerrainGenerationSettings;
 class TerrainEditLayer;
@@ -37,6 +45,8 @@ struct CourseEnemyFireSafetySettings {
     float maxForwardDistance = 150.0f;
     float minVisibleBeforeFire = 0.22f;
     float blockedRetryDelay = 0.05f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseEnemyFireSafetyFrameInput {
@@ -201,18 +211,80 @@ struct CourseSpawnRuntimeCheckpoint final {
 
 class CourseSpawnRuntime {
 public:
+    // 敵・弾・障害物の実体はこのクラスが所有する。
+    // 戦闘/AIの公開関数はここへ処理を委譲し、Runtimeだけが非公開の
+    // 更新アルゴリズムへ一時的なspanを渡す。UIや描画にはconst参照だけを渡す。
+    // Purpose-specific dispatch: callers never receive mutable owned storage.
+    void UpdateEnemyCombat(EnemyCombatSystem& system,
+        const EnemyCombatFrameInput& input);
+    bool NotifyEnemyDamage(EnemyCombatSystem& system,
+        const DamageResult& damageResult,
+        const WeaponFeedbackEvent* feedbackEvent);
+    bool DefeatEnemy(EnemyCombatSystem& system,
+        uint32_t actorId);
+    void UpdateEnemyBehavior(EnemyBehaviorSystem& system,
+        const EnemyBehaviorFrameInput& input);
+    bool MarkEnemyBehaviorTelegraph(EnemyBehaviorSystem& system,
+        uint32_t actorId,
+        uint64_t attackIntentSequence);
+    void RebuildEnemyAttacks(EnemyAttackCoordinator& system);
+    void UpdateEnemyAttacks(EnemyAttackCoordinator& system,
+        const EnemyBehaviorFrame& behaviorFrame,
+        float deltaTime);
+    bool MarkEnemyCoordinatorTelegraph(EnemyAttackCoordinator& system,
+        uint32_t actorId,
+        uint64_t intentSequence);
+    void BeginEnemyFormationFrame(EnemyFormationSystem& system);
+    void UpdateEnemyFormations(EnemyFormationSystem& system,
+        float deltaTime);
+    void BeginEnemyEntranceExitFrame(EnemyEntranceExitDirector& system);
+    void UpdateEnemyEntranceExit(EnemyEntranceExitDirector& system,
+        float deltaTime);
+    void UpdateEnemyTargeting(EnemyTargetingSystem& system,
+        const EnemyTargetingFrameInput& input);
+    EnemyAttackInterruptResult InterruptEnemyAttack(EnemyAttackInterruptSystem& system,
+        const DamageResult& damageResult);
+    void ExecuteEnemyAttacks(EnemyAttackExecutionSystem& system,
+        EnemyAttackCoordinator& coordinator,
+        EnemyBehaviorSystem& behaviorSystem);
+    DamageResult ApplyWeaponHit(CourseActorDamageReceiver& system,
+        const CourseAsset* course,
+        const WeaponHitRequest& request);
+    uint32_t CommitEnemyVolley(uint32_t actorId, uint64_t intentSequence, uint64_t tokenId);
+    // 消費済み・非アクティブ・寿命の状態をまとめて更新し、二重消費を拒否する。
+    bool ConsumeProjectile(uint64_t projectileId);
+    bool SpawnProjectile(CourseBulletActor projectile, std::string* errorMessage = nullptr);
+    EnemyProjectileShootDownResult ShootDownProjectile(EnemyProjectileShootDownSystem& system,
+        const RailPath& railPath, const EnemyProjectileShootDownRequest& request);
+    void ClearProjectiles();
+    void SetEnemyScreenPresence(uint32_t actorId, bool evaluated, bool attackAllowed);
+    void SetEnemyEncounterPacing(uint32_t actorId, bool evaluated, bool attackAllowed);
+    void ResetEnemyScreenPresence();
+    void ResetEnemyEncounterPacing();
+    bool SetEnemyRailPose(uint32_t actorId, float distanceOffset, float lateralOffset,
+        float verticalOffset, float forwardSpeed);
+    void RetireEnemies(std::span<const uint32_t> actorIds, bool playAuthoredExit = true);
+    // 敵を消す場合、その敵が所有する弾も停止する。
+    void ClearEnemies();
+    void ClearObstacles();
+    bool SynchronizePreviewEnemy(uint32_t actorId, CourseEnemyActorDesc desc);
+
     void Reset();
     CourseSpawnRuntimeCheckpoint CaptureCheckpoint() const;
-    void RestoreCheckpoint(
+    static bool ValidateCheckpoint(const CourseSpawnRuntimeCheckpoint& checkpoint,
+        bool restoreProjectiles = false, std::string* errorMessage = nullptr);
+    // 候補全体のID・HP・座標などを先に検証する。失敗時は現在の状態を維持する。
+    bool RestoreCheckpoint(
         const CourseSpawnRuntimeCheckpoint& checkpoint,
-        bool restoreProjectiles = false);
+        bool restoreProjectiles = false,
+        std::string* errorMessage = nullptr);
     void Update(float deltaTime);
     void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput);
     void EnforceEnemyEngagementClearance(const CourseEnemyFireSafetyFrameInput& safetyInput);
     bool InvalidateEnemyAttackWarning(uint32_t actorId);
 
-    void SpawnEnemyActor(CourseEnemyActorDesc desc);
-    void SpawnObstacle(CourseObstacleActorDesc desc);
+    bool SpawnEnemyActor(CourseEnemyActorDesc desc, std::string* errorMessage = nullptr);
+    bool SpawnObstacle(CourseObstacleActorDesc desc, std::string* errorMessage = nullptr);
     void SpawnVfxCue(CourseVfxCueDesc desc);
     void SubmitPendingVfx(EffectRuntime& effectRuntime, const RailPath& railPath);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw, const RailPath& railPath) const;
@@ -221,16 +293,15 @@ public:
     size_t ActiveBulletCount() const { return bullets_.size(); }
     size_t ActiveObstacleCount() const { return obstacles_.size(); }
     size_t ActiveVfxCueCount() const { return vfxCues_.size(); }
+    // 読み取り専用。追加・削除・HP変更は上の目的別操作を使う。
     const std::vector<CourseEnemyActor>& Enemies() const { return enemies_; }
-    std::vector<CourseEnemyActor>& MutableEnemies() { return enemies_; }
     const std::vector<CourseBulletActor>& Bullets() const { return bullets_; }
-    std::vector<CourseBulletActor>& MutableBullets() { return bullets_; }
     const std::vector<CourseObstacleActor>& Obstacles() const { return obstacles_; }
-    std::vector<CourseObstacleActor>& MutableObstacles() { return obstacles_; }
     const std::vector<CourseVfxCue>& VfxCues() const { return vfxCues_; }
     void PruneDestroyedActors();
     const CourseEnemyFireSafetySettings& FireSafetySettings() const { return fireSafetySettings_; }
-    CourseEnemyFireSafetySettings& MutableFireSafetySettings() { return fireSafetySettings_; }
+    bool ConfigureFireSafety(const CourseEnemyFireSafetySettings& settings,
+        std::string* errorMessage = nullptr);
     const CourseEnemyFireSafetyStats& LastFireSafetyStats() const { return fireSafetyStats_; }
     const EnemyCombatSystem& EnemyCombat() const noexcept { return enemyCombatSystem_; }
     EnemyCombatSystem& EnemyCombat() noexcept { return enemyCombatSystem_; }
@@ -268,7 +339,6 @@ public:
         uint64_t attackIntentSequence);
 
 private:
-    friend class EnemyAttackExecutionSystem;
     bool CanEnemyFire(CourseEnemyActor& enemy, const CourseEnemyFireSafetyFrameInput& safetyInput, float dt);
     bool UpdateEnemyFireEnvironment(CourseEnemyActor& enemy, const CourseEnemyFireSafetyFrameInput& safetyInput, float dt);
     uint32_t EmitEnemyBullets(const CourseEnemyActor& enemy);

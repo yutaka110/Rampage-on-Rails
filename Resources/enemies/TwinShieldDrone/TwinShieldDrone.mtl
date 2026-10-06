@@ -1,0 +1,6 @@
+newmtl industrial_armour
+Kd 1 1 1
+Ks .5 .5 .5
+Ns 48
+map_Kd TwinShieldDrone_Color.png
+map_Bump TwinShieldDrone_NormalRoughness.dds

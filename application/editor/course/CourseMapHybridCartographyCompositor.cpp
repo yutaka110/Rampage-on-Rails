@@ -1,4 +1,5 @@
 #include "CourseMapHybridCartographyCompositor.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -163,22 +164,24 @@ CourseMapHybridCartographyCompositor::BuildFrame(
     return result;
 }
 
-void CourseMapHybridCartographyCompositor::SetSettings(
-    CourseMapHybridCartographySettings settings) {
-    settings.coverageGridResolution = (std::clamp)(
-        settings.coverageGridResolution, 8u, 128u);
-    settings.terrainCoverageThreshold = (std::clamp)(
-        settings.terrainCoverageThreshold, 0.0f, 1.0f);
-    settings.rockCoverageThreshold = (std::clamp)(
-        settings.rockCoverageThreshold, 0.0f, 1.0f);
-    settings.structureCoverageThreshold = (std::clamp)(
-        settings.structureCoverageThreshold, 0.0f, 1.0f);
-    settings.largestRegionThreshold = (std::clamp)(
-        settings.largestRegionThreshold, 0.0f, 1.0f);
-    if (SameSettings(settings_, settings)) return;
+bool CourseMapHybridCartographySettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(coverageGridResolution, 8u, 128u) &&
+        settings::InRange(terrainCoverageThreshold, 0.0f, 1.0f) &&
+        settings::InRange(rockCoverageThreshold, 0.0f, 1.0f) &&
+        settings::InRange(structureCoverageThreshold, 0.0f, 1.0f) &&
+        settings::InRange(largestRegionThreshold, 0.0f, 1.0f);
+    return settings::Result(valid, errorMessage,
+        "CourseMapHybridCartographySettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapHybridCartographyCompositor::SetSettings(
+    CourseMapHybridCartographySettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++settingsRevision_;
     Invalidate();
+    return true;
 }
 
 void CourseMapHybridCartographyCompositor::Invalidate() noexcept {

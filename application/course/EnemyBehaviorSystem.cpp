@@ -319,9 +319,14 @@ void EnemyBehaviorSystem::InitializeActor(CourseEnemyActor& actor) {
     state.revision = ++revision_;
 }
 
-void EnemyBehaviorSystem::Update(
-    CourseSpawnRuntime& runtime,
+void EnemyBehaviorSystem::Update(CourseSpawnRuntime& runtime,
     const EnemyBehaviorFrameInput& input) {
+    runtime.UpdateEnemyBehavior(*this, input);
+}
+
+void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const EnemyBehaviorFrameInput& input) {
     frame_ = {};
     const float dt = std::isfinite(input.deltaTime)
         ? (std::clamp)(input.deltaTime, 0.0f, 0.25f)
@@ -339,7 +344,7 @@ void EnemyBehaviorSystem::Update(
     }
     previousPlayerDistance_ = playerDistance;
     hasPreviousPlayerDistance_ = true;
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         if (!actor.behaviorState.initialized) InitializeActor(actor);
         EnemyBehaviorRuntimeState& state = actor.behaviorState;
         const EnemyBehaviorDefinition& definition = actor.behaviorDefinition;
@@ -492,11 +497,17 @@ void EnemyBehaviorSystem::Update(
     frame_.revision = revision_;
 }
 
-bool EnemyBehaviorSystem::MarkTelegraphPresented(
-    CourseSpawnRuntime& runtime,
+bool EnemyBehaviorSystem::MarkTelegraphPresented(CourseSpawnRuntime& runtime,
     uint32_t actorId,
     uint64_t attackIntentSequence) {
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    return runtime.MarkEnemyBehaviorTelegraph(*this, actorId, attackIntentSequence);
+}
+
+bool EnemyBehaviorSystem::MarkTelegraphPresentedActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        uint32_t actorId,
+        uint64_t attackIntentSequence) {
+    for (CourseEnemyActor& actor : actors) {
         EnemyBehaviorRuntimeState& state = actor.behaviorState;
         if (actor.actorId == actorId && state.attackIntentActive &&
             state.attackIntentSequence == attackIntentSequence) {

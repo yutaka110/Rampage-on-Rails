@@ -1,4 +1,5 @@
 #include "CourseMapSceneBoundsService.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -236,14 +237,21 @@ const CourseMapSceneBoundsFrame& CourseMapSceneBoundsService::Build(
     return frame_;
 }
 
-void CourseMapSceneBoundsService::SetSettings(
-    CourseMapSceneBoundsSettings settings) {
-    settings.worldPadding = (std::clamp)(settings.worldPadding, 0.0f, 10000.0f);
-    settings.maximumFitPoints = (std::clamp)(settings.maximumFitPoints, 16u, 131072u);
-    if (SameSettings(settings_, settings)) return;
+bool CourseMapSceneBoundsSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(worldPadding, 0.0f, 10000.0f) &&
+        settings::InRange(maximumFitPoints, 16u, 131072u);
+    return settings::Result(valid, errorMessage,
+        "CourseMapSceneBoundsSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapSceneBoundsService::SetSettings(
+    CourseMapSceneBoundsSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++settingsRevision_;
     Invalidate();
+    return true;
 }
 
 void CourseMapSceneBoundsService::Invalidate() noexcept {

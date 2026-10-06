@@ -85,7 +85,6 @@ public:
     }
     const CourseEnemyEditorControllerState& State() const noexcept { return state_; }
     const CourseAsset* Course() const noexcept { return binding_.course; }
-    CourseAsset* MutableCourse() noexcept { return binding_.course; }
     const CourseEnemyMutationService* MutationService() const noexcept {
         return mutations_.get();
     }

@@ -488,14 +488,26 @@ namespace {
         return true;
     }
 
+    using TerrainPbrTextureLayers = std::array<TerrainPbrMaterialDefinition,
+        TerrainPbrLibraryGpuConstants::kGpuLayerCount>;
+
+    TerrainPbrTextureLayers BuildTerrainPbrTextureLayers(
+        const std::array<TerrainPbrMaterialDefinition, TerrainMaterialLibrary::kLayerCount>& gameplay,
+        const TerrainPbrMaterialDefinition& titleGround) {
+        TerrainPbrTextureLayers layers{};
+        std::copy(gameplay.begin(), gameplay.end(), layers.begin());
+        layers.back() = titleGround;
+        return layers;
+    }
+
     bool BuildTerrainPbrTextureArray(
-        const std::array<TerrainPbrMaterialDefinition, TerrainMaterialLibrary::kLayerCount>& materials,
+        const TerrainPbrTextureLayers& materials,
         TerrainPbrTextureKind kind,
         DirectX::ScratchImage& output,
         std::string& diagnostics) {
         constexpr uint32_t kTextureSize = 512;
-        std::array<DirectX::ScratchImage, TerrainMaterialLibrary::kLayerCount> layers;
-        std::array<bool, TerrainMaterialLibrary::kLayerCount> loadedFromFile{};
+        std::array<DirectX::ScratchImage, TerrainPbrLibraryGpuConstants::kGpuLayerCount> layers;
+        std::array<bool, TerrainPbrLibraryGpuConstants::kGpuLayerCount> loadedFromFile{};
         for (size_t index = 0; index < layers.size(); ++index) {
             if (!NormalizeTerrainPbrLayer(
                     materials[index],
@@ -513,7 +525,7 @@ namespace {
             DXGI_FORMAT_R8G8B8A8_UNORM,
             metadata.width,
             metadata.height,
-            TerrainMaterialLibrary::kLayerCount,
+            layers.size(),
             metadata.mipLevels);
         if (FAILED(initializeHr)) {
             return false;
@@ -560,11 +572,13 @@ namespace {
     }
 
     TerrainPbrLibraryGpuConstants BuildTerrainPbrGpuConstants(
-        const std::array<TerrainPbrMaterialDefinition, TerrainMaterialLibrary::kLayerCount>& layers) {
+        const std::array<TerrainPbrMaterialDefinition, TerrainMaterialLibrary::kLayerCount>& layers,
+        const TerrainPbrMaterialDefinition& titleGround) {
         TerrainPbrLibraryGpuConstants constants{};
         float heightBlendSharpness = 0.0f;
-        for (size_t layerIndex = 0; layerIndex < layers.size(); ++layerIndex) {
-            const TerrainPbrMaterialDefinition& source = layers[layerIndex];
+        for (size_t layerIndex = 0; layerIndex < constants.layers.size(); ++layerIndex) {
+            const TerrainPbrMaterialDefinition& source = layerIndex < layers.size()
+                ? layers[layerIndex] : titleGround;
             TerrainPbrLayerGpuConstants& destination =
                 constants.layers[layerIndex];
             destination.baseColorTintAndNormalStrength = {
@@ -585,14 +599,14 @@ namespace {
                 source.macroVariationStrength,
                 source.wetnessResponse,
             };
-            heightBlendSharpness += source.heightBlendSharpness;
+            if (layerIndex < layers.size()) heightBlendSharpness += source.heightBlendSharpness;
         }
         heightBlendSharpness /= static_cast<float>(layers.size());
         constants.blendParameters = {
             0.38f,
             0.82f,
             heightBlendSharpness,
-            static_cast<float>(layers.size()),
+            static_cast<float>(constants.layers.size()),
         };
         return constants;
     }
@@ -638,7 +652,7 @@ namespace {
         const TerrainMaterialLibrary& library) {
         uint64_t hash = 1469598103934665603ull;
         HashTerrainWatchPath(hash, setPath);
-        for (const TerrainPbrMaterialDefinition& layer : library.Layers()) {
+        const auto hashDefinition = [&](const TerrainPbrMaterialDefinition& layer) {
             HashTerrainWatchPath(hash, layer.sourcePath);
             HashTerrainWatchPath(hash, layer.baseColorPath);
             HashTerrainWatchPath(hash, layer.normalPath);
@@ -647,7 +661,11 @@ namespace {
             HashTerrainWatchPath(hash, layer.roughnessPath);
             HashTerrainWatchPath(hash, layer.metallicPath);
             HashTerrainWatchPath(hash, layer.heightPath);
-        }
+        };
+        for (const auto& layer : library.Layers()) hashDefinition(layer);
+        HashTerrainWatchPath(hash, DefaultTitleGroundMaterialPath());
+        TerrainPbrMaterialDefinition titleGround;
+        if (LoadTerrainMaterialDefinition(DefaultTitleGroundMaterialPath(), titleGround)) hashDefinition(titleGround);
         return hash;
     }
 
@@ -1119,6 +1137,60 @@ namespace {
         return model;
     }
 
+    // Closed chamfered solid: six inset faces, twelve edge strips and eight
+    // corner triangles. Face normals keep the narrow bevel highlight crisp.
+    void AppendCartBeveledBox(ModelData& model, Vector3 minimum, Vector3 maximum, float bevel) {
+        const float lo[3]={minimum.x,minimum.y,minimum.z};
+        const float hi[3]={maximum.x,maximum.y,maximum.z};
+        bevel=(std::min)(bevel,(std::min)({hi[0]-lo[0],hi[1]-lo[1],hi[2]-lo[2]})*0.24f);
+        auto point=[&](const int signs[3], int outerAxis) {
+            float p[3];
+            for(int i=0;i<3;++i) p[i]=signs[i]>0 ? hi[i]-(i==outerAxis?0.0f:bevel)
+                : lo[i]+(i==outerAxis?0.0f:bevel);
+            return Vector3{p[0],p[1],p[2]};
+        };
+        auto face=[&](std::vector<Vector3> points, Vector3 normal, bool edge) {
+            const Vector3 a={points[1].x-points[0].x,points[1].y-points[0].y,points[1].z-points[0].z};
+            const Vector3 b={points[2].x-points[0].x,points[2].y-points[0].y,points[2].z-points[0].z};
+            const Vector3 cross={a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};
+            if(cross.x*normal.x+cross.y*normal.y+cross.z*normal.z<0.0f)
+                std::reverse(points.begin(),points.end());
+            const uint32_t base=static_cast<uint32_t>(model.vertices.size());
+            const Vector2 uv[4]={{0,1},{0,0},{1,0},{1,1}};
+            for(size_t i=0;i<points.size();++i) {
+                const auto& p=points[i];
+                // U+2 marks chamfers for title edge wear; the shared white
+                // fallback albedo keeps ordinary gameplay materials intact.
+                model.vertices.push_back({{p.x,p.y,p.z,1},{uv[i].x+(edge?2.0f:0.0f),uv[i].y},normal});
+            }
+            for(uint32_t i=1;i+1<points.size();++i)
+                model.indices.insert(model.indices.end(),{base,base+i,base+i+1});
+        };
+        for(int axis=0;axis<3;++axis) for(int sign : {-1,1}) {
+            const int b=(axis+1)%3,c=(axis+2)%3;
+            std::vector<Vector3> points;
+            for(const auto& pair : {std::pair{-1,-1},std::pair{-1,1},std::pair{1,1},std::pair{1,-1}}) {
+                int signs[3]; signs[axis]=sign; signs[b]=pair.first; signs[c]=pair.second;
+                points.push_back(point(signs,axis));
+            }
+            float n[3]={}; n[axis]=static_cast<float>(sign);
+            face(points,{n[0],n[1],n[2]},false);
+        }
+        for(int a=0;a<3;++a) for(int b=a+1;b<3;++b) for(int sa : {-1,1}) for(int sb : {-1,1}) {
+            const int c=3-a-b;
+            int signs[3]; signs[a]=sa;signs[b]=sb;signs[c]=-1;
+            std::vector<Vector3> points={point(signs,a),point(signs,b)};
+            signs[c]=1; points.push_back(point(signs,b));points.push_back(point(signs,a));
+            float n[3]={};n[a]=static_cast<float>(sa);n[b]=static_cast<float>(sb);
+            face(points,Normalize(Vector3{n[0],n[1],n[2]}),true);
+        }
+        for(int x : {-1,1}) for(int y : {-1,1}) for(int z : {-1,1}) {
+            const int signs[3]={x,y,z};
+            face({point(signs,0),point(signs,1),point(signs,2)},
+                Normalize(Vector3{static_cast<float>(x),static_cast<float>(y),static_cast<float>(z)}),true);
+        }
+    }
+
     ModelData BuildRailVehicleModelData() {
         ModelData model;
         constexpr const char* kWhiteAlbedo = "Resources/human/white.png";
@@ -1140,23 +1212,23 @@ namespace {
             });
         };
         appendPart("cart_body", 0, [&]() {
-            AppendBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 3.15f});
-            AppendBox(model, {-2.25f, 0.38f, -3.20f}, {-1.78f, 1.82f, 3.20f});
-            AppendBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f});
-            AppendBox(model, {-1.78f, 0.38f, -3.20f}, {1.78f, 1.25f, -2.75f});
-            AppendBox(model, {-1.78f, 0.38f, 2.75f}, {1.78f, 1.25f, 3.20f});
+            AppendCartBeveledBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 3.15f},0.045f);
+            AppendCartBeveledBox(model, {-2.25f, 0.38f, -3.20f}, {-1.78f, 1.82f, 3.20f},0.05f);
+            AppendCartBeveledBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f},0.05f);
+            AppendCartBeveledBox(model, {-1.78f, 0.38f, -3.20f}, {1.78f, 1.25f, -2.75f},0.045f);
+            AppendCartBeveledBox(model, {-1.78f, 0.38f, 2.75f}, {1.78f, 1.25f, 3.20f},0.045f);
         });
         appendPart("running_gear", 1, [&]() {
             // Four wheel meshes are intentionally not baked into the body.
             // RailVehicleWheelContactPresentationBridge owns their individual
             // rail-contact transforms and rotation.
-            AppendBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f});
-            AppendBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f});
+            AppendCartBeveledBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f},0.035f);
+            AppendCartBeveledBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f},0.035f);
         });
         appendPart("safety_trim", 2, [&]() {
-            AppendBox(model, {-2.31f, 1.55f, -3.26f}, {-1.72f, 1.88f, 3.26f});
-            AppendBox(model, {1.72f, 1.55f, -3.26f}, {2.31f, 1.88f, 3.26f});
-            AppendBox(model, {-1.72f, 1.18f, -3.26f}, {1.72f, 1.48f, -2.68f});
+            AppendCartBeveledBox(model, {-2.31f, 1.55f, -3.26f}, {-1.72f, 1.88f, 3.26f},0.035f);
+            AppendCartBeveledBox(model, {1.72f, 1.55f, -3.26f}, {2.31f, 1.88f, 3.26f},0.035f);
+            AppendCartBeveledBox(model, {-1.72f, 1.18f, -3.26f}, {1.72f, 1.48f, -2.68f},0.035f);
         });
         model.rootNode.name = "rail_vehicle_mine_cart_root";
         model.rootNode.transform = {
@@ -1871,6 +1943,43 @@ ModelData BuildRailVehicleModelDataForSubmission() {
     return BuildRailVehicleModelData();
 }
 
+Material BuildRailVehicleTitleMaterial(const MaterialData& source, const Material& gameplayMaterial,
+    const DirectionalLight& gameplayLight, Vector3 referenceNormal,
+    Vector3 referenceView, float exposureRatio) {
+    Material material{};
+    const Vector3 normal = Normalize(referenceNormal);
+    const Vector3 light = Normalize(Vector3{-gameplayLight.direction.x,-gameplayLight.direction.y,-gameplayLight.direction.z});
+    const Vector3 view = Normalize(referenceView);
+    const auto dot=[](Vector3 a,Vector3 b){return a.x*b.x+a.y*b.y+a.z*b.z;};
+    const float diffuse = std::pow((std::max)(0.0f,dot(normal,light))*0.5f+0.5f,2.0f);
+    const Vector3 halfway = Normalize(Vector3{light.x+view.x,light.y+view.y,light.z+view.z});
+    const float specular = std::pow((std::max)(0.0f,dot(normal,halfway)),
+        (std::max)(1.0f,gameplayMaterial.shininess));
+    // Match the existing gameplay Blinn-Phong response, including the broad
+    // warm highlight. Clamp as the RGBA8 scene target does before tone mapping.
+    const auto channel=[&](float albedo,float tint,float sun){
+        return (std::clamp)((albedo*tint*diffuse+specular)*sun*gameplayLight.intensity,0.0f,1.0f);
+    };
+    material.color = {
+        channel(source.baseColorFactor.x,gameplayMaterial.color.x,gameplayLight.color.x),
+        channel(source.baseColorFactor.y,gameplayMaterial.color.y,gameplayLight.color.y),
+        channel(source.baseColorFactor.z,gameplayMaterial.color.z,gameplayLight.color.z),
+        source.baseColorFactor.w*gameplayMaterial.color.w};
+    material.enableLighting = true;
+    material.uvTransform = MakeIdentity4x4();
+    // Keep the opening gameplay palette as the colour reference, then shade
+    // each surface normal on the GPU. Running gear must retain its iron value
+    // instead of inheriting the reference's broad white highlight.
+    const bool iron=source.name=="iron_running_gear";
+    const float reflectance=iron ? 0.26f : 0.84f;
+    material.color.x*=reflectance; material.color.y*=reflectance; material.color.z*=reflectance;
+    material.shininess = iron ? 0.46f : 0.62f; // Mode 8: linear roughness.
+    material.environmentCoefficient = iron ? 0.75f : 0.0f; // Mode 8: metalness.
+    material.specularMode = 8; // Title per-face material; gameplay retains its shader.
+    material.padding2[0] = std::isfinite(exposureRatio) && exposureRatio > 0.0f ? exposureRatio : 1.0f;
+    return material;
+}
+
 bool AppSceneResources::Initialize(
     ComPtr<ID3D12Device> device,
     ID3D12GraphicsCommandList* uploadCommandList,
@@ -2033,6 +2142,7 @@ bool AppSceneResources::Initialize(
     // =========================================================
     cameraResource = CreateBufferResource(device, sizeof(CameraForGPU));
     cameraResource->Map(0, nullptr, reinterpret_cast<void**>(&mappedCamera));
+    *mappedCamera = {};
     mappedCamera->worldPosition = Vector3{ 0.0f, 0.0f, -5.0f };
     mappedCamera->padding = 0.0f;
 
@@ -2171,7 +2281,13 @@ bool AppSceneResources::Initialize(
     }
 
     const auto& terrainPbrLayers = terrainMaterialLibrary.Layers();
-    *terrainPbrMaterialData = BuildTerrainPbrGpuConstants(terrainPbrLayers);
+    if (!LoadTerrainMaterialDefinition(DefaultTitleGroundMaterialPath(),
+            titleGroundMaterialDefinition, &terrainMaterialLibraryError)) {
+        titleGroundMaterialDefinition = terrainPbrLayers.back();
+        OutputDebugStringA(("[TitleGround] " + terrainMaterialLibraryError + " -- using floor fallback.\n").c_str());
+    }
+    *terrainPbrMaterialData = BuildTerrainPbrGpuConstants(terrainPbrLayers, titleGroundMaterialDefinition);
+    const auto terrainTextureLayers = BuildTerrainPbrTextureLayers(terrainPbrLayers, titleGroundMaterialDefinition);
     terrainMaterialWatchSignature_ =
         ComputeTerrainMaterialWatchSignature(
             DefaultTerrainMaterialSetPath(),
@@ -2187,22 +2303,22 @@ bool AppSceneResources::Initialize(
     std::string terrainOrmDiagnostics;
     std::string terrainHeightDiagnostics;
     if (!BuildTerrainPbrTextureArray(
-            terrainPbrLayers,
+            terrainTextureLayers,
             TerrainPbrTextureKind::BaseColor,
             terrainAlbedoImages,
             terrainAlbedoDiagnostics) ||
         !BuildTerrainPbrTextureArray(
-            terrainPbrLayers,
+            terrainTextureLayers,
             TerrainPbrTextureKind::Normal,
             terrainPbrNormalImages,
             terrainNormalDiagnostics) ||
         !BuildTerrainPbrTextureArray(
-            terrainPbrLayers,
+            terrainTextureLayers,
             TerrainPbrTextureKind::Orm,
             terrainPbrOrmImages,
             terrainOrmDiagnostics) ||
         !BuildTerrainPbrTextureArray(
-            terrainPbrLayers,
+            terrainTextureLayers,
             TerrainPbrTextureKind::Height,
             terrainPbrHeightImages,
             terrainHeightDiagnostics)) {
@@ -3001,7 +3117,8 @@ bool AppSceneResources::Initialize(
         }
 
         const bool titleSolid = std::string_view(name) == "title_tunnel" || std::string_view(name) == "title_ground" ||
-            std::string_view(name) == "title_cliff" || std::string_view(name) == "title_boulder";
+            std::string_view(name) == "title_cliff" || std::string_view(name) == "title_boulder" ||
+            std::string_view(name) == "title_stake";
         if (titleSolid && (!ValidateModelGeometryOrientation(courseMeshData) ||
             !AuditModelClosedSurface(courseMeshData).IsValid())) {
             OutputDebugStringA(("[TitleLandscape] Rejected broken imported solid: " + std::string(name) + "\n").c_str());
@@ -3032,10 +3149,14 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
     registerCourseMesh("combat_turret_base", "Resources/enemies/CombatTurretBase", "CombatTurretBase.obj", "default");
     registerCourseMesh("combat_turret_head", "Resources/enemies/CombatTurretHead", "CombatTurretHead.obj", "default");
+    registerCourseMesh("twin_shield_hull", "Resources/enemies/TwinShieldDrone", "TwinShieldHull.obj", "default");
+    registerCourseMesh("twin_shield_panel", "Resources/enemies/TwinShieldDrone", "TwinShieldPanel.obj", "default");
+    registerCourseMesh("twin_shield_core", "Resources/enemies/TwinShieldDrone", "TwinShieldCore.obj", "default");
     registerCourseMesh("root_spire_column", "Resources/course_meshes/RootSpireColumn", "RootSpireColumn.obj", "courseRootRock");
-    registerCourseMesh("title_ground", "Resources/course_meshes/TitleLandscape", "TitleGround.obj", "titleSandstone");
-    registerCourseMesh("title_cliff", "Resources/course_meshes/TitleLandscape", "TitleCliff.obj", "titleSandstone");
-    registerCourseMesh("title_boulder", "Resources/course_meshes/TitleLandscape", "TitleBoulder.obj", "titleSandstone");
+    registerCourseMesh("title_ground", "Resources/course_meshes/TitleLandscape", "TitleGround.obj", "titleCaveRock");
+    registerCourseMesh("title_cliff", "Resources/course_meshes/TitleLandscape", "TitleCliff.obj", "titleCaveRock");
+    registerCourseMesh("title_boulder", "Resources/course_meshes/TitleLandscape", "TitleBoulder.obj", "titleCaveRock");
+    registerCourseMesh("title_stake", "Resources/course_meshes/TitleLandscape", "TitleStake.obj", "default");
     registerCourseMesh("title_tunnel", "Resources/course_meshes/TitleLandscape", "TitleTunnel.obj", "titleCaveRock");
     registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj", "courseOrganicRock");
     registerCourseMesh("vista_hole_wall", "Resources/course_meshes/VistaHoleWall", "VistaHoleWall.obj", "courseVistaRock");
@@ -3410,7 +3531,10 @@ bool AppSceneResources::ReloadTerrainMaterialAssets(
         return fail(definitionError);
     }
 
-    const auto& layers = reloadedLibrary.Layers();
+    TerrainPbrMaterialDefinition reloadedTitleGround;
+    if (!LoadTerrainMaterialDefinition(DefaultTitleGroundMaterialPath(),
+            reloadedTitleGround, &definitionError)) return fail(definitionError);
+    const auto layers = BuildTerrainPbrTextureLayers(reloadedLibrary.Layers(), reloadedTitleGround);
     DirectX::ScratchImage baseColorImages;
     DirectX::ScratchImage normalImages;
     DirectX::ScratchImage ormImages;
@@ -3547,8 +3671,9 @@ bool AppSceneResources::ReloadTerrainMaterialAssets(
     terrainPbrOrmTextureResource = std::move(newOrm);
     terrainPbrHeightTextureResource = std::move(newHeight);
     terrainMaterialLibrary = std::move(reloadedLibrary);
+    titleGroundMaterialDefinition = std::move(reloadedTitleGround);
     *terrainPbrMaterialData =
-        BuildTerrainPbrGpuConstants(terrainMaterialLibrary.Layers());
+        BuildTerrainPbrGpuConstants(terrainMaterialLibrary.Layers(), titleGroundMaterialDefinition);
 
     auto refreshManagedTexture = [&](
                                      const char* name,
@@ -3617,7 +3742,7 @@ void AppSceneResources::PreviewTerrainMaterialDefinitions(
     if (terrainPbrMaterialData == nullptr) {
         return;
     }
-    *terrainPbrMaterialData = BuildTerrainPbrGpuConstants(definitions);
+    *terrainPbrMaterialData = BuildTerrainPbrGpuConstants(definitions, titleGroundMaterialDefinition);
 }
 
 void AppSceneResources::ResetTerrainMaterialPreview() {
@@ -3634,6 +3759,7 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     }
 
     mappedCamera->worldPosition = worldPosition;
+    mappedCamera->titleSubject.w = 0.0f;
 }
 
 SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {
@@ -3689,7 +3815,8 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     const Matrix4x4& viewMatrix,
     const Matrix4x4& projMatrix,
     const EnemyCombatPresentationBridge* enemyPresentation,
-    const EnemyEncounterReadabilityDirector* enemyReadability) {
+    const EnemyEncounterReadabilityDirector* enemyReadability,
+    const TwinShieldDronePose* titlePursuer) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3713,6 +3840,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         projMatrix,
         enemyPresentation,
         enemyReadability);
+    if (titlePursuer) courseMeshRenderQueue.AppendTwinShieldDrone(*titlePursuer,bindings,viewMatrix,projMatrix);
 }
 
 void AppSceneResources::SyncRailVehicleRenderFrame(
@@ -3768,6 +3896,18 @@ void AppSceneResources::SyncCourseRailTrackRenderer(
     }
     courseRailTrackRenderer.Sync(
         baked, currentDistance, wheels, bindings, viewMatrix, projMatrix);
+    if(mappedCamera!=nullptr && mappedCamera->titleSubject.w>0.5f) {
+        for(const auto& item:courseRailTrackRenderer.Items()) {
+            if(!item.visible || item.materialData==nullptr) continue;
+            if(item.kind==CourseMeshRenderKind::VehicleWheel) {
+                item.materialData->specularMode=13; // Title iron, with actual wheel normals.
+                item.materialData->shininess=0.46f;
+                item.materialData->environmentCoefficient=0.75f;
+            } else {
+                item.materialData->specularMode=12; // Receives title contact shadows.
+            }
+        }
+    }
 }
 
 void AppSceneResources::SyncRailVehicleOccupantActorFrame(
@@ -4034,7 +4174,8 @@ void AppSceneResources::UpdateTransforms(
     }
 }
 
-void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime) {
+void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime,
+    float vehicleToneExposure) {
     RuntimeSkinnedAnimationBlendState& animationBlend =
         runtimeState.skinnedAnimationBlend;
     const bool validAnimationBlend =
@@ -4189,6 +4330,13 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         };
         for (AppManagedModelResource& managedModel : vfxModelLibrary) {
             for (AppGpuMaterialResource& gpuMaterial : managedModel.gpuMaterials) {
+                if (mappedCamera != nullptr && mappedCamera->titleSubject.w > 0.5f &&
+                    managedModel.name == "rail_vehicle.mine_cart" && gpuMaterial.mappedConstants != nullptr) {
+                    *gpuMaterial.mappedConstants = BuildRailVehicleTitleMaterial(
+                        gpuMaterial.source,runtimeState.materialData,titleVehicleReferenceLight,
+                        titleVehicleReferenceNormal,titleVehicleReferenceView,vehicleToneExposure);
+                    continue;
+                }
                 syncGpuMaterial(gpuMaterial);
             }
         }

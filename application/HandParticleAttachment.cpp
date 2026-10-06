@@ -66,7 +66,7 @@ void HandParticleAttachment::Update(
         StopInstance(effectRuntime);
     }
 
-    EffectInstance* instance = effectInstanceId_ != 0
+    const EffectInstance* instance = effectInstanceId_ != 0
         ? effectRuntime.FindInstance(effectInstanceId_)
         : nullptr;
     if (instance == nullptr) {
@@ -89,20 +89,24 @@ void HandParticleAttachment::Update(
         return;
     }
 
-    instance->transform.translate = telemetry_.worldPosition;
-    instance->transform.scale = {
+    Transform transform = instance->transform;
+    Vector4 color;
+    transform.translate = telemetry_.worldPosition;
+    transform.scale = {
         instance->asset->size.x * settings.effectScale.x,
         instance->asset->size.y * settings.effectScale.y,
         instance->asset->size.z * settings.effectScale.z,
     };
-    instance->color = {
+    color = {
         instance->asset->color.x * settings.color.x,
         instance->asset->color.y * settings.color.y,
         instance->asset->color.z * settings.color.z,
         instance->asset->color.w * settings.color.w,
     };
-    instance->attached = true;
-    instance->previewLoop = true;
+    if (!effectRuntime.SetInstanceAppearance(effectInstanceId_, transform, color, true)) {
+        StopInstance(effectRuntime); telemetry_.status = HandParticleAttachmentStatus::InvalidWorldTransform; return;
+    }
+    effectRuntime.SetEffectPreviewLoop(effectInstanceId_, true);
 
     telemetry_.effectInstanceId = effectInstanceId_;
     telemetry_.status = HandParticleAttachmentStatus::Active;
