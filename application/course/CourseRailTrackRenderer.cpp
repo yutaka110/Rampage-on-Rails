@@ -172,7 +172,14 @@ void CourseRailTrackRenderer::WriteItem(
     item.transformData->World = world;
     item.transformData->WVP = Multiply(world, viewProjection);
     item.transformData->WorldInverseTranspose = Transpose(Inverse(world));
+    // Reused slots may have held title-only shadow/iron material modes.
+    // Restore the gameplay defaults before applying any per-frame overrides.
+    *item.materialData = {};
     item.materialData->color = color;
+    item.materialData->enableLighting = true;
+    item.materialData->uvTransform = MakeIdentity4x4();
+    item.materialData->environmentCoefficient = 0.24f;
+    item.materialData->specularMode = 1;
     item.materialData->shininess = item.kind == CourseMeshRenderKind::VehicleWheel ? 10.0f : 22.0f;
     item.useMaterialOverride = true;
 }

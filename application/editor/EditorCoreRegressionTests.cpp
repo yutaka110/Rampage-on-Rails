@@ -20904,6 +20904,48 @@ void TestRailVehicleMovementAndPresentation(RegressionRunner& runner) {
             ValidateModelDataMaterialLayout(cartModel) &&
             ValidateModelGeometryOrientation(cartModel),
         "packaged rail vehicle fallback should be validated multi-material production geometry");
+    const auto cartAudit=AuditModelClosedSurface(cartModel);
+    bool beveledNormals=false;
+    for(const auto& vertex : cartModel.vertices) {
+        const int axes=(std::abs(vertex.normal.x)>0.1f ? 1:0)+
+            (std::abs(vertex.normal.y)>0.1f ? 1:0)+(std::abs(vertex.normal.z)>0.1f ? 1:0);
+        beveledNormals=beveledNormals || (axes>=2 && vertex.texcoord.x>=2.0f);
+    }
+    runner.Expect(cartAudit.IsValid() && beveledNormals && cartAudit.triangleCount<600,
+        "Cart chamfers must retain closed consistently wound solids and encoded edge normals within a small geometry budget");
+
+    Material gameplayMaterial{};
+    gameplayMaterial.color={0.4f,0.3f,0.2f,1};
+    gameplayMaterial.shininess=6.0f;
+    gameplayMaterial.specularMode=1;
+    const DirectionalLight openingLight{{1,0.68f,0.5f,1},{-0.5f,-0.42f,0.76f},2.15f};
+    for (const auto& source : cartModel.materials) {
+        const Material titlePaint=BuildRailVehicleTitleMaterial(source,gameplayMaterial,
+            openingLight,{0,0,-1},{0,0.32f,-0.95f},1.0f/1.55f);
+        const Material reference=BuildRailVehicleTitleMaterial(source,gameplayMaterial,
+            openingLight,{0,0,-1},{0,0.32f,-0.95f});
+        runner.Expect(titlePaint.color.x==reference.color.x && titlePaint.color.y==reference.color.y &&
+            titlePaint.color.z==reference.color.z && titlePaint.color.x>titlePaint.color.y &&
+            titlePaint.color.y>titlePaint.color.z && titlePaint.color.w==source.baseColorFactor.w,
+            "Title preview must inherit the warm opening gameplay appearance rather than replace gameplay with the blue title palette");
+        runner.Expect(std::abs(titlePaint.padding2[0]*1.55f-reference.padding2[0])<0.0001f &&
+            gameplayMaterial.specularMode==1 && gameplayMaterial.color.x==0.4f,
+            "Title exposure compensation must preserve the gameplay reference and leave the source gameplay material unchanged");
+    }
+    const auto titleBody=BuildRailVehicleTitleMaterial(cartModel.materials[0],gameplayMaterial,
+        openingLight,{0,0,-1},{0,0.32f,-0.95f});
+    const auto titleIron=BuildRailVehicleTitleMaterial(cartModel.materials[1],gameplayMaterial,
+        openingLight,{0,0,-1},{0,0.32f,-0.95f});
+    runner.Expect(titleBody.specularMode==8 && titleIron.specularMode==8 &&
+        titleBody.shininess>titleIron.shininess && titleBody.environmentCoefficient==0 &&
+        titleIron.environmentCoefficient>0.5f && titleIron.color.x<titleBody.color.x*0.5f,
+        "Title paint and iron must retain different roughness, reflectance and value under the shared gameplay palette");
+    for (float exposure : {0.0f,-1.0f,std::numeric_limits<float>::quiet_NaN()}) {
+        const auto material=BuildRailVehicleTitleMaterial(cartModel.materials[0],gameplayMaterial,
+            openingLight,{0,0,-1},{0,0.32f,-0.95f},exposure);
+        runner.Expect(std::isfinite(material.padding2[0]) && material.padding2[0]==1.0f,
+            "Invalid title exposure ratio must fall back to a finite preview");
+    }
 
     input.emergencyBrake = true;
     const RailVehicleMovementFrame emergencyFrame = vehicle.Update(input);
@@ -22801,7 +22843,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
     runner.Expect(
         openingScout.LoadFromFile(
             "Resources/courses/actors/drone_scout.actor", &openingScoutError) &&
-            openingScout.meshId == "combat_assault_hull" &&
+            openingScout.meshId == "twin_shield_hull" &&
             openingScout.radius == 1.05f,
         "opening scout uses a distinct production hull without enlarging its hitbox");
     const char* waveIds[]{"intro_scout_pair", "intro_lockon_line",
@@ -30696,9 +30738,276 @@ void TestRailTitleLoop(RegressionRunner& runner) {
     }
 }
 
+void TestRailTitleBodySway(RegressionRunner& runner) {
+    Matrix4x4 referencePose{};
+    for(int fps : {30,60,120}) {
+        RailTitleScene title;
+        runner.Expect(title.Initialize(),"Title suspension must initialize");
+        bool bounded=true,grounded=true,continuous=true;
+        float minimumHeight=10,maximumHeight=-10;
+        Matrix4x4 previousLocal{};
+        for(int i=0;i<fps*40;++i) {
+            title.Update(1.0f/fps);
+            const auto& wheels=title.Wheels().wheels;
+            Vector3 center{},forward{};
+            for(size_t n=0;n<wheels.size();++n) {
+                const auto& wheel=wheels[n];
+                center.x+=wheel.railContact.x*0.25f;center.y+=wheel.railContact.y*0.25f;center.z+=wheel.railContact.z*0.25f;
+                const float sign=n>=2 ? 0.5f : -0.5f;
+                forward.x+=wheel.railContact.x*sign;forward.z+=wheel.railContact.z*sign;
+                grounded &= wheel.supported && std::abs(wheel.axleCenter.y-wheel.railContact.y-0.62f)<0.0001f;
+            }
+            center.y+=1.0f; // Contact solver's body pivot and clearance.
+            auto neutral=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,std::atan2(forward.x,forward.z),0},center);
+            const auto local=Multiply(title.Vehicle().worldMatrix,Inverse(neutral));
+            const float vertical=local.m[3][1];
+            minimumHeight=(std::min)(minimumHeight,vertical);maximumHeight=(std::max)(maximumHeight,vertical);
+            bounded &= std::abs(vertical)<0.039f && std::abs(local.m[3][0])<0.016f && std::abs(local.m[3][2])<0.0002f &&
+                std::abs(local.m[0][1])<0.015f && std::abs(local.m[2][1])<0.006f &&
+                std::abs(title.CameraPosition().y-title.Path().Evaluate(title.Distance()).position.y-8.0f)<0.0001f;
+            if(i>0) continuous &= std::abs(vertical-previousLocal.m[3][1])<0.024f &&
+                std::abs(local.m[0][1]-previousLocal.m[0][1])<0.004f;
+            previousLocal=local;
+            if(i==fps*10-1) {
+                if(fps==30) referencePose=local;
+                else for(int row=0;row<4;++row) for(int col=0;col<4;++col)
+                    bounded &= std::abs(local.m[row][col]-referencePose.m[row][col])<0.0002f;
+            }
+        }
+        runner.Expect(bounded && grounded && continuous && maximumHeight-minimumHeight>0.05f,
+            "Title body must gently move in local space across a lap, independently of frame rate, while wheels stay grounded and camera stays steady");
+        const auto frozen=title.Vehicle().worldMatrix;
+        title.Update(0);
+        bool paused=true;
+        for(int row=0;row<4;++row) for(int col=0;col<4;++col)
+            paused &= frozen.m[row][col]==title.Vehicle().worldMatrix.m[row][col];
+        runner.Expect(paused,"Pausing the title must also freeze its suspension motion");
+        title.BeginStart();
+        for(int i=0;i<fps*3;++i) title.Update(1.0f/fps);
+        runner.Expect(title.ReadyForGameplay() && title.Blackout()==1.0f,
+            "Body sway must preserve the existing blackout handoff");
+    }
+}
+
+void TestRailTitlePursuit(RegressionRunner& runner) {
+    const auto sub=[](Vector3 a,Vector3 b){return Vector3{a.x-b.x,a.y-b.y,a.z-b.z};};
+    const auto dot=[](Vector3 a,Vector3 b){return a.x*b.x+a.y*b.y+a.z*b.z;};
+    const auto length=[&](Vector3 v){return std::sqrt(dot(v,v));};
+    Vector3 reference{};
+    for (int fps : {30,60,120}) {
+        RailTitleScene title;
+        runner.Expect(title.Initialize(),"Pursuit title must initialize");
+        Vector3 previous=title.Pursuer().position;
+        bool continuous=true,behind=true,composition=true,aim=true;
+        const int frames=int(title.LapLength()/RailTitleScene::Speed*fps*2.1f);
+        for(int i=0;i<frames;++i) {
+            title.Update(1.0f/fps);
+            const auto& drone=title.Pursuer();
+            const auto cart=title.Path().Evaluate(title.Distance());
+            continuous &= length(sub(drone.position,previous))<25.0f/fps;
+            const float gap=dot(sub(cart.position,drone.position),cart.tangent);
+            behind &= drone.visible && gap>22 && gap<34 && drone.position.y-cart.position.y>2.8f;
+            const Vector3 forward=Normalize(sub(title.CameraTarget(),title.CameraPosition()));
+            const Vector3 right=Normalize(Vector3{forward.z,0,-forward.x});
+            const Vector3 up={forward.y*right.z-forward.z*right.y,
+                forward.z*right.x-forward.x*right.z,forward.x*right.y-forward.y*right.x};
+            const Vector3 relative=sub(drone.position,title.CameraPosition());
+            const float depth=dot(relative,forward);
+            const float ndcX=dot(relative,right)/(depth*std::tan(title.CameraFov()*0.5f)*16.0f/9);
+            const float ndcY=dot(relative,up)/(depth*std::tan(title.CameraFov()*0.5f));
+            // Keep the whole shield silhouette in the scene, clear of the left menu/logo.
+            composition &= depth>35 && ndcX>-0.08f && ndcX<0.82f && std::abs(ndcY)<0.79f;
+            const Vector3 front={-std::sin(drone.rotation.y)*std::cos(drone.rotation.x),
+                std::sin(drone.rotation.x),-std::cos(drone.rotation.y)*std::cos(drone.rotation.x)};
+            aim &= dot(front,Normalize(sub(title.PursuerAimTarget(),drone.position)))>0.97f;
+            if (i==fps*10-1) {
+                if(fps==30) reference=drone.position;
+                else runner.Expect(length(sub(reference,drone.position))<0.02f,
+                    "Pursuit timing must remain consistent across frame rates");
+            }
+            previous=drone.position;
+        }
+        runner.Expect(continuous && behind,"Drone must continuously follow behind the cart over two loop wraps");
+        runner.Expect(composition && aim,"Pursuer must track its ground aim and remain visible to the right of the title UI");
+        const Vector3 frozen=title.Pursuer().position;
+        title.Update(0);
+        runner.Expect(length(sub(frozen,title.Pursuer().position))<0.0001f,
+            "Paused title must freeze the pursuer with the cart");
+        title.BeginStart(); title.Update(0);
+        runner.Expect(length(sub(frozen,title.Pursuer().position))<0.06f,
+            "Departure path split must preserve the pursuer world position");
+        bool clear=true,departureContinuous=true;
+        previous=title.Pursuer().position;
+        while(!title.ReadyForGameplay()) {
+            title.Update(1.0f/fps);
+            clear &= length(sub(title.CameraPosition(),title.Pursuer().position))>5.0f;
+            departureContinuous &= length(sub(title.Pursuer().position,previous))<25.0f/fps;
+            previous=title.Pursuer().position;
+        }
+        runner.Expect(clear && departureContinuous,"Starting camera must clear the continuously following drone");
+        runner.Expect(!title.Pursuer().visible && title.Pursuer().alpha<0.001f,
+            "Pursuer must fade out with the title blackout before gameplay handoff");
+    }
+}
+
+void TestRailTitleGroundFire(RegressionRunner& runner) {
+    uint32_t referenceShots=0,referenceImpacts=0;
+    for(int fps : {30,60,120}) {
+        RailTitleScene title;
+        runner.Expect(title.Initialize(),"Ground-fire title must initialize");
+        size_t peakShots=0,peakClouds=0;
+        uint32_t muzzles=0,impacts=0;
+        bool valid=true,fixedTargets=true;
+        std::vector<RailTitleShot> previous;
+        for(int i=0;i<fps*40;++i) {
+            title.Update(1.0f/fps);
+            peakShots=(std::max)(peakShots,title.Shots().size());
+            peakClouds=(std::max)(peakClouds,title.DustClouds().size());
+            for(const auto& cue:title.AttackCues()) {
+                if(cue.kind==RailTitleAttackCueKind::Muzzle) ++muzzles;
+                else {++impacts; valid &= std::abs(cue.position.y+0.27f)<0.001f;}
+            }
+            for(const auto& shot:title.Shots()) {
+                const float radial=std::sqrt(shot.target.x*shot.target.x+shot.target.z*shot.target.z);
+                // Every shot lands off the sleepers, on the actual flat ground corridor.
+                valid &= shot.id>0 && shot.age>=0 && shot.age<shot.duration &&
+                    std::abs(shot.target.y+0.27f)<0.001f && radial>=64.9f && radial<=75.6f &&
+                    std::abs(radial-70.0f)>4.4f && shot.position.y>=shot.target.y;
+                const auto old=std::find_if(previous.begin(),previous.end(),[&](const auto& p){return p.id==shot.id;});
+                if(old!=previous.end()) fixedTargets &= old->origin.x==shot.origin.x &&
+                    old->origin.z==shot.origin.z && old->target.x==shot.target.x && old->target.z==shot.target.z;
+            }
+            previous=title.Shots();
+        }
+        runner.Expect(valid && fixedTargets && peakShots>0 && peakShots<=3 && peakClouds>0 && peakClouds<=3,
+            "Repeated title fire must keep bounded world-space tracers landing beside the rails");
+        runner.Expect(muzzles==title.ShotSequence() && impacts+title.Shots().size()==muzzles && impacts>20,
+            "Each visual shot must create one muzzle cue and exactly one eventual ground impact");
+        if(fps==30) { referenceShots=muzzles; referenceImpacts=impacts; }
+        else runner.Expect(muzzles==referenceShots && impacts==referenceImpacts,
+            "Burst/impact counts must remain independent of title frame rate");
+        const auto frozen=title.Shots(); const uint32_t sequence=title.ShotSequence();
+        title.Update(0);
+        bool paused=title.AttackCues().empty() && title.Shots().size()==frozen.size() && title.ShotSequence()==sequence;
+        for(size_t n=0;n<frozen.size();++n) paused &= title.Shots()[n].age==frozen[n].age;
+        runner.Expect(paused,"Unfocused title must neither advance shots nor replay attack cues");
+        title.BeginStart();
+        for(int i=0;i<fps*3;++i) title.Update(1.0f/fps);
+        runner.Expect(title.ShotSequence()==sequence && title.Shots().empty() && title.AttackCues().empty() && title.DustClouds().empty(),
+            "Start transition must stop new firing and finish/clear all presentation shots before handoff");
+        title.Initialize();
+        runner.Expect(title.ShotSequence()==0 && title.Shots().empty() && title.AttackCues().empty(),
+            "Title reinitialization must clear the attack loop");
+    }
+    // Validate physical ejecta independently of rendering: rise, gravity, ground
+    // contact, finite lifetime and spatial variation across a deterministic burst.
+    bool ballistic=true,settled=true,varied=false;
+    for(uint32_t index=0;index<36;++index) {
+        RailTitleDustCloud cloud{{10.0f,-0.27f,20.0f},0.10f,7};
+        const auto rising=RailTitleScene::EvaluateSandGrain(cloud,index);
+        cloud.age=0.20f; const auto later=RailTitleScene::EvaluateSandGrain(cloud,index);
+        ballistic &= rising.position.y>cloud.origin.y && rising.opacity>0.0f &&
+            std::abs((later.velocity.y-rising.velocity.y)+0.98f)<0.001f;
+        cloud.age=1.40f; const auto ground=RailTitleScene::EvaluateSandGrain(cloud,index);
+        settled &= std::abs(ground.position.y-cloud.origin.y)<0.001f && ground.opacity==0.0f &&
+            ground.velocity.x==0.0f && ground.velocity.y==0.0f;
+        varied |= std::abs(later.position.x-10.0f)>0.1f && std::abs(later.position.z-20.0f)>0.1f;
+    }
+    runner.Expect(ballistic && settled && varied,
+        "Impact sand must scatter, decelerate under gravity, settle at the ground and fade within a bounded lifetime");
+    EffectAssetLoader loader; EffectSystem system;
+    for(const char* file:{"TitleDroneBolt","TitleDroneMuzzle","TitleGroundImpact"}) {
+        LoadedEffectAsset loaded;
+        const bool ok=loader.LoadFile("Resources/effects/"+std::string(file)+".effect",loaded);
+        runner.Expect(ok && loaded.asset.lifetime<=1.65f &&
+            std::none_of(loaded.diagnostics.begin(),loaded.diagnostics.end(),[](const auto& d){return d.severity==EffectAssetDiagnosticSeverity::Error;}),
+            "Title attack effects must load as bounded production assets without errors");
+        if(ok) system.RegisterAsset(loaded.asset);
+    }
+    RailTitleScene title; title.Initialize(); size_t peak=0;
+    for(int i=0;i<60*40;++i) {
+        title.Update(1.0f/60);
+        for(const auto& cue:title.AttackCues()) system.PlayEffect(
+            cue.kind==RailTitleAttackCueKind::GroundImpact ? "title_ground_impact" : "title_drone_muzzle",cue.position);
+        system.Update(1.0f/60); peak=(std::max)(peak,system.Instances().size());
+    }
+    runner.Expect(peak>0 && peak<=7,"Repeated impacts and muzzle flashes must not accumulate unlimited effect instances");
+    system.Update(2.0f);
+    runner.Expect(system.Instances().empty(),"Attack dust and flashes must expire after emission stops");
+}
+
+void TestTwinShieldEnemyAssets(RegressionRunner& runner) {
+    const std::string directory="Resources/enemies/TwinShieldDrone";
+    size_t assembledTriangles=0;
+    for (const char* file : {"TwinShieldHull.obj","TwinShieldPanel.obj","TwinShieldCore.obj","TwinShieldDrone.obj"}) {
+        const auto mesh=LoadObjFile_Assimp(directory,file);
+        runner.Expect(!mesh.vertices.empty() && !mesh.indices.empty() &&
+            ValidateModelGeometryOrientation(mesh) && ValidateModelDataMaterialLayout(mesh),
+            "Reference drone parts must import as valid oriented indexed meshes with usable material ranges");
+        runner.Expect(mesh.materials.size()>=1 && std::any_of(mesh.materials.begin(),mesh.materials.end(),[](const auto& material) {
+            return std::filesystem::exists(material.textureFilePath) &&
+                std::filesystem::exists(material.normalTextureFilePath) &&
+                material.normalTextureFilePath.ends_with(".dds");
+        }),"Reference drone must bind its authored albedo and linear normal/roughness DDS instead of fallback textures");
+        if (std::string_view(file)=="TwinShieldDrone.obj") {
+            assembledTriangles=mesh.indices.size()/3;
+            float minX=100,maxX=-100,minY=100,maxY=-100,minZ=100;
+            for (const auto& vertex:mesh.vertices) {
+                minX=(std::min)(minX,vertex.position.x);maxX=(std::max)(maxX,vertex.position.x);
+                minY=(std::min)(minY,vertex.position.y);maxY=(std::max)(maxY,vertex.position.y);
+                minZ=(std::min)(minZ,vertex.position.z);
+            }
+            runner.Expect(minX < -1.2f && maxX > 1.2f && minY < -1.5f && maxY > 1.5f && minZ < -0.90f,
+                "Reference drone must retain two tall shields and forward-facing twin barrels after handedness conversion");
+        }
+    }
+    runner.Expect(assembledTriangles>2000 && assembledTriangles<16000,
+        "Complete reference drone must retain its mechanical detail within a bounded real-time triangle budget");
+    for (const char* id : {"drone_scout","drone_basic","drone_leader","drone_chaser"}) {
+        CourseActorAsset actor;std::string error;
+        runner.Expect(actor.LoadFromFile("Resources/courses/actors/"+std::string(id)+".actor",&error) &&
+            actor.meshId=="twin_shield_hull" && actor.hitPoints>0 && actor.radius>0,
+            "Shipped scout, basic, leader and chaser actors must select the new reference drone and retain combat data");
+    }
+}
+
 void TestRailTitleLandscape(RegressionRunner& runner) {
     RailTitleScene title;
     runner.Expect(title.Initialize(),"Title landscape must initialize");
+    for (const char* id : {"title_ground", "title_cliff", "title_boulder", "title_tunnel"}) {
+        runner.Expect(IsTitleLandscapeMesh(id), "All title surfaces, including the departure cave, must route through terrain PBR");
+        const Material material = BuildTitleLandscapePbrMaterial(id);
+        runner.Expect(material.enableLighting && material.padding[0] > 0.0f &&
+            material.padding[1] > 0.0f && material.padding[2] > 0.0f &&
+            material.shininess > 0.0f && material.shininess <= 0.25f,
+            "Title PBR must enable normals, AO, environment fill and terrain-range specular response");
+        runner.Expect(material.padding2[2] == 1.0f && material.padding2[8] == (std::string_view(id) == "title_ground" ? 0.0f : 1.0f) &&
+            material.padding2[4] > 0.0f && material.padding2[7] > 0.0f &&
+            material.padding2[12] == 0.0f,
+            "Title PBR must use shared detail maps with valid scales and no debug normal view");
+        const int expectedMode = std::string_view(id) == "title_ground" ? 9 : (std::string_view(id) == "title_tunnel" ? 7 : 6);
+        runner.Expect(material.specularMode == expectedMode,
+            "Title OBJ material tags must preserve cave UV semantics rather than decode gameplay AO");
+    }
+    for (const char* id : {"rail_vehicle.mine_cart", "title_loop.rail", "organic_arch_large", "animated_cube", ""}) {
+        runner.Expect(!IsTitleLandscapeMesh(id), "Cart, rail and gameplay props must retain their existing render path");
+    }
+    TerrainPbrMaterialDefinition groundMaterial;
+    std::string groundError;
+    runner.Expect(LoadTerrainMaterialDefinition(DefaultTitleGroundMaterialPath(), groundMaterial, &groundError),
+        "Title ground's supplied PBR material definition must load");
+    for (const auto& path : {groundMaterial.baseColorPath, groundMaterial.normalPath,
+        groundMaterial.ambientOcclusionPath, groundMaterial.roughnessPath, groundMaterial.heightPath}) {
+        runner.Expect(std::filesystem::is_regular_file(path), "All supplied Ground054 PBR maps must be packaged in Resources");
+    }
+    runner.Expect(groundMaterial.ormInputMode == TerrainPbrOrmInputMode::Separate &&
+        groundMaterial.metallicPath.empty() && groundMaterial.normalPath.filename() == "Ground054_1K-JPG_NormalGL.jpg",
+        "Title ground must pack separate AO/roughness with non-metallic output and the existing normal convention");
+    TerrainMaterialLibrary originalMaterials;
+    runner.Expect(originalMaterials.LoadFromSet(DefaultTerrainMaterialSetPath()) &&
+        originalMaterials.Layers().size() == 3 &&
+        originalMaterials.Layers().back().baseColorPath.filename() == "rib_rock_albedo.bmp",
+        "Ground054 must not replace the shared floor layer used by gameplay and title rocks");
     struct Triangle { Vector3 a,b,c; };
     std::vector<Triangle> ground,rocks;
     const auto sub=[](Vector3 a,Vector3 b){return Vector3{a.x-b.x,a.y-b.y,a.z-b.z};};
@@ -30708,12 +31017,13 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
         p.x*m.m[0][0]+p.y*m.m[1][0]+p.z*m.m[2][0]+m.m[3][0],
         p.x*m.m[0][1]+p.y*m.m[1][1]+p.z*m.m[2][1]+m.m[3][1],
         p.x*m.m[0][2]+p.y*m.m[1][2]+p.z*m.m[2][2]+m.m[3][2]};};
-    int groundCount=0,cliffCount=0,rockCount=0;
+    int groundCount=0,cliffCount=0,rockCount=0,stakeCount=0;
     for(const auto& p:title.Scenery().terrainPlacements) {
         const char* file=nullptr;
         if(p.meshId=="title_ground") {file="TitleGround.obj";++groundCount;}
         else if(p.meshId=="title_cliff") {file="TitleCliff.obj";++cliffCount;}
         else if(p.meshId=="title_boulder") {file="TitleBoulder.obj";++rockCount;}
+        else if(p.meshId=="title_stake") {file="TitleStake.obj";++stakeCount;}
         runner.Expect(file!=nullptr,"Title must not reuse fragmented wall tiles");
         const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape",file);
         runner.Expect(!mesh.indices.empty() && !mesh.materials.empty() &&
@@ -30729,8 +31039,8 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
             target.push_back({v(0),v(1),v(2)});
         }
     }
-    runner.Expect(groundCount==1 && cliffCount==3 && rockCount==5 && ground.size()+rocks.size()<12000,
-        "Title scenery should use one continuous ground, sparse large forms and a bounded geometry budget");
+    runner.Expect(groundCount==1 && cliffCount==3 && rockCount==41 && stakeCount==24 && ground.size()+rocks.size()<24000,
+        "Title scenery should retain continuous ground and sparse large forms, with bounded foreground rocks/stakes");
     const auto nearest=[&](const std::vector<Triangle>& mesh,Vector3 origin,Vector3 direction){
         float nearest=10000;
         for(const auto& t:mesh) {
@@ -30852,7 +31162,7 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
 
 void TestTitleImportedSurfaceAudit(RegressionRunner& runner) {
     std::ofstream log("logs/title_surface_audit.log");
-    for(const char* file:{"TitleGround.obj","TitleCliff.obj","TitleBoulder.obj","TitleTunnel.obj"}) {
+    for(const char* file:{"TitleGround.obj","TitleCliff.obj","TitleBoulder.obj","TitleTunnel.obj","TitleStake.obj"}) {
         const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape",file);
         const auto audit=AuditModelClosedSurface(mesh);
         log<<file<<" triangles="<<audit.triangleCount<<" boundary="<<audit.boundaryEdges
@@ -30877,6 +31187,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
     for(int fps : {30,60,120}) {
         RailTitleScene title;
         runner.Expect(title.Initialize(),"Cinematic title should initialize");
+        const size_t idlePlacementCount=title.Scenery().terrainPlacements.size();
         title.Update(0.02f);
         const Vector3 initial=title.CameraPosition();
         title.BeginStart();
@@ -30884,10 +31195,15 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             "Starting must not teleport the camera or flash the screen");
         float previousFade=0,previousMenu=1;
         const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
-        const float lightLuma=luminance({1.0f,0.93f,0.83f});
-        const float skyLuma=luminance({0.30f,0.36f,0.40f});
+        const auto defaultLight=RailTitleColors{}.light;
+        const float lightLuma=luminance({defaultLight.x,defaultLight.y,defaultLight.z});
+        const float skyLuma=luminance(RailTitleColors{}.background);
         const Vector4 courseSun{1.0f,0.68f,0.50f,1.0f};
         auto previousColors=title.Colors(courseSun);
+        runner.Expect(std::abs(previousColors.light.y/previousColors.light.x-courseSun.y/courseSun.x)<0.035f &&
+            std::abs(previousColors.light.z/previousColors.light.x-courseSun.z/courseSun.x)<0.035f &&
+            previousColors.background.x>previousColors.background.z && lightLuma>0.90f,
+            "Title menu must share the opening course warm hue while retaining readable outdoor luminance");
         bool colorContinuous=true;
         Vector3 previous=initial;
         bool continuous=true;
@@ -30925,7 +31241,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f,
             "Cinematic must remain outside the cart and switch worlds only under full blackout with silent title audio");
         runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
-            title.Scenery().terrainPlacements.size()==10,
+            title.Scenery().terrainPlacements.size()==idlePlacementCount+1,
             "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
         runner.Expect(steadyApproach,
             "The cave approach must keep constant speed and FOV, with a fixed close chase distance after the orbit");
@@ -31614,6 +31930,9 @@ int RunEditorCoreRegressionTests() {
         {"title landscape ground and camera clearance", [&]() { TestRailTitleLandscape(runner); }},
         {"title cinematic and ambience lifecycle", [&]() { TestRailTitleCinematic(runner); }},
         {"title running loop and menu layout", [&]() { TestRailTitleLoop(runner); }},
+        {"title body suspension and wheel contact", [&]() { TestRailTitleBodySway(runner); }},
+        {"title twin shield pursuit", [&]() { TestRailTitlePursuit(runner); }},
+        {"title repeating ground fire", [&]() { TestRailTitleGroundFire(runner); }},
         {"authored drone attack timing", [&]() { TestAuthoredDroneAttackTiming(runner); }},
         {"vehicle impact audiovisual and damage HUD", [&]() { TestVehicleImpactAudiovisualAndHud(runner); }},
         {"normal drone approach pose warn fire and depart", [&]() { TestNormalDroneAttackPass(runner); }},
@@ -31824,6 +32143,7 @@ int RunEditorCoreRegressionTests() {
          {"course multi view elevation and constraints", [&]() {
               TestCourseMultiViewElevationConstraintSuite(runner);
           }},
+         {"twin shield reference enemy assets", [&]() { TestTwinShieldEnemyAssets(runner); }},
          {"course enemy presentation fallback", [&]() {
               TestCourseEnemyPresentationFallback(runner);
           }},

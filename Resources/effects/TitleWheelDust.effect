@@ -25,5 +25,5 @@ particle.noiseStrength = 0.08
 particle.pulseSpeed = 0
 particle.scaleYMin = 0.65
 particle.scaleYMax = 1.10
-particle.depthFadeSoftness = 0.4
+particle.depthFadeSoftness = 0.0002
 particle.edgeSoftness = 0.7

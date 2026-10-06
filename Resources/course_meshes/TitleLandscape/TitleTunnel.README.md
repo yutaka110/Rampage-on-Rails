@@ -2,11 +2,11 @@
 
 Original procedural geometry created with AI coding assistance on 2026-09-30.
 Regenerate from the repository root with `python tools/generate_title_tunnel.py`.
-The runtime uses the existing gameplay rock albedo at
-`Resources/terrain/Rocks016_1K-JPG/Rocks016.png`; this external texture is not
-claimed as original. Its existing attribution and license review still apply.
-The OBJ's sandstone MTL is a fallback; `AppSceneResources` binds `titleCaveRock`
-and `CourseMeshRenderQueue` selects the dedicated cave material at runtime.
+The runtime uses the existing gameplay terrain PBR material library (base colour,
+normal, ORM and height arrays); these external textures are not claimed as
+original. Their existing attribution and license review still apply.
+The OBJ's sandstone MTL is a fallback; `CourseMeshRenderQueue` selects the title
+PBR cave material and `Geometry.Terrain` draws it through the gameplay terrain PSO.
 
 The passage extends straight into the mountain, with an irregular opening
 roughly 17 units wide and 12 units high. An asymmetric mountain about

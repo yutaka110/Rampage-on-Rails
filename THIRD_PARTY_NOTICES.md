@@ -13,3 +13,7 @@ approved content hashes are recorded in `Build/GE3.Dependencies.lock.json`.
 Release packaging must reproduce every applicable notice alongside the
 product documentation. Adding or upgrading a dependency requires an explicit
 lock-file update and license review.
+
+The title ground uses [Ground054 from ambientCG](https://ambientcg.com/view?id=Ground054),
+provided under [CC0 1.0 Universal](https://docs.ambientcg.com/license/).
+Import provenance is recorded in `Resources/terrain/Ground054_1K-JPG/README.md`.

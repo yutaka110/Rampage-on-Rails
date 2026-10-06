@@ -11,7 +11,7 @@ struct Material
     float shininess;
     float environmentCoefficient;
     int32_t specularMode;
-    float pad_; // 16byte alignment
+    float pad_; // Mode 8: gameplay/title exposure ratio; otherwise padding.
 };
 
 struct DirectionalLight
@@ -46,12 +46,6 @@ struct SpotLight
 ConstantBuffer<SpotLight> gSpotLight : register(b4);
 
 
-
-cbuffer Camera : register(b2)
-{
-    float3 cameraWorldPosition;
-    float padCam;
-}
 
 ConstantBuffer<Material> gMaterial : register(b0);
 ConstantBuffer<DirectionalLight> gDirectionalLight : register(b1);
@@ -106,6 +100,53 @@ static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int
     return pow(saturate(dot(N, H)), power);
 }
 
+#include "TitleLighting.hlsli"
+
+// Mode 10 uses the existing normal SRV (t4); alpha carries linear roughness.
+// Other models continue to use their existing material modes and shader path.
+static float3 DroneNormal(VertexShaderOutput input, float3 sampledNormal)
+{
+    float3 N = SafeNormalize(input.normal);
+    float3 dx = ddx(input.worldPosition), dy = ddy(input.worldPosition);
+    float2 ux = ddx(input.texcoord), uy = ddy(input.texcoord);
+    float determinant = ux.x*uy.y-ux.y*uy.x;
+    if (abs(determinant)<1e-8f) return N;
+    float3 T = (dx*uy.y-dy*ux.y)/determinant;
+    float3 B = (dy*ux.x-dx*uy.x)/determinant;
+    T = SafeNormalize(T-N*dot(N,T));
+    float handedness = dot(cross(N,T),B)<0 ? -1.0f : 1.0f;
+    B = cross(N,T)*handedness;
+    float3 mapped = sampledNormal*2.0f-1.0f;
+    return SafeNormalize(T*mapped.x+B*mapped.y+N*mapped.z);
+}
+
+static float3 DroneDirect(float3 base, float metal, float rough, float3 N, float3 V, float3 L, float3 radiance)
+{
+    float nv = max(saturate(dot(N,V)),0.001f), nl = saturate(dot(N,L));
+    float3 H = SafeNormalize(V+L);
+    float nh = saturate(dot(N,H)), vh = saturate(dot(V,H));
+    float a = rough*rough, a2 = a*a;
+    float denominator = nh*nh*(a2-1.0f)+1.0f;
+    float D = a2/max(3.14159265f*denominator*denominator,0.0001f);
+    float k = (rough+1.0f)*(rough+1.0f)*0.125f;
+    float G = nv/(nv*(1.0f-k)+k)*nl/(nl*(1.0f-k)+k);
+    float3 F = lerp(float3(0.04f,0.04f,0.04f),base,metal);
+    F += (1.0f-F)*pow(1.0f-vh,5.0f);
+    return ((1.0f-F)*(1.0f-metal)*base/3.14159265f + D*G*F/max(4.0f*nv*max(nl,0.001f),0.001f))*radiance*nl;
+}
+
+static float CartSurfaceNoise(float2 p)
+{
+    float2 cell=floor(p), f=frac(p);
+    f=f*f*(3.0f-2.0f*f);
+    float4 h=float4(dot(cell,float2(127.1f,311.7f)),
+        dot(cell+float2(1,0),float2(127.1f,311.7f)),
+        dot(cell+float2(0,1),float2(127.1f,311.7f)),
+        dot(cell+float2(1,1),float2(127.1f,311.7f)));
+    h=frac(sin(h)*43758.5453f);
+    return lerp(lerp(h.x,h.y,f.x),lerp(h.z,h.w,f.x),f.y);
+}
+
 // ------------------------------------------------------------
 // PS Main
 // ------------------------------------------------------------
@@ -121,46 +162,111 @@ PixelShaderOutput main(VertexShaderOutput input)
     float3 baseRgb = texColor.rgb * gMaterial.color.rgb;
     float baseA = texColor.a * gMaterial.color.a;
 
-    if (gMaterial.specularMode == 7) {
-        // Same albedo as gameplay terrain; world projection keeps rock scale
-        // consistent over the broad facade and the irregular inner surfaces.
-        float3 N = SafeNormalize(input.normal);
-        float3 weights = pow(abs(N), 4.0f);
-        weights /= max(weights.x + weights.y + weights.z, 1e-5f);
-        float3 p = input.worldPosition * 0.16f;
-        float3 rock = gTexture.Sample(gSampler, p.yz).rgb * weights.x +
-                      gTexture.Sample(gSampler, p.xz).rgb * weights.y +
-                      gTexture.Sample(gSampler, p.xy).rgb * weights.z;
-        // Assimp flips the authored V coordinate: V=1-depth after import.
-        float depth = max(0.0f, 1.0f-input.texcoord.y);
-        float interior = saturate(input.texcoord.x);
-        float recess = interior * smoothstep(0.0f, 38.0f, depth);
-        float diffuse = saturate(dot(N, SafeNormalize(-gDirectionalLight.direction)));
-        float3 key = gDirectionalLight.color.rgb * (0.38f + 0.42f*diffuse);
-        float3 lit = rock * gMaterial.color.rgb * key;
-        lit *= lerp(1.0f, 0.16f, recess);
-        output.color = float4(lit, 1.0f);
+    if (gMaterial.specularMode == 11) {
+        float3 core = baseRgb*max(gMaterial.pad_,1.0f);
+        if (titleSubject.w > 0.5f) core = TitleAtmosphere(core,input.worldPosition);
+        output.color = float4(core,baseA);
+        return output;
+    }
+    if (gMaterial.specularMode == 10) {
+        float4 surface = gReceivedTex.Sample(gSampler,uv);
+        float3 N = DroneNormal(input,surface.rgb);
+        float3 V = SafeNormalize(cameraWorldPosition-input.worldPosition);
+        float rough = clamp(surface.a,0.30f,0.90f);
+        float painted = saturate((texColor.r-texColor.b)*4.0f);
+        float metal = lerp(saturate(gMaterial.environmentCoefficient),0.10f,painted);
+        float3 lit = DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(-gDirectionalLight.direction),
+            gDirectionalLight.color.rgb*gDirectionalLight.intensity);
+        float3 toPoint = gPointLight.position-input.worldPosition;
+        float pointAtten = pow(saturate(1.0f-length(toPoint)/max(gPointLight.radius,0.001f)),gPointLight.decay);
+        lit += DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(toPoint),gPointLight.color.rgb*gPointLight.intensity*pointAtten);
+        float3 toSpot = gSpotLight.position-input.worldPosition;
+        float spotAtten = pow(saturate(1.0f-length(toSpot)/max(gSpotLight.distance,0.001f)),gSpotLight.decay);
+        spotAtten *= saturate((dot(-SafeNormalize(toSpot),SafeNormalize(gSpotLight.direction))-gSpotLight.cosAngle)/max(1.0f-gSpotLight.cosAngle,0.0001f));
+        lit += DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(toSpot),gSpotLight.color.rgb*gSpotLight.intensity*spotAtten);
+        float3 reflected = gEnvironmentTexture.SampleLevel(gSampler,reflect(-V,N),rough*4.0f).rgb;
+        float3 f0 = lerp(float3(0.04f,0.04f,0.04f),baseRgb,metal);
+        lit += reflected*f0*(1.0f-rough*0.55f) + baseRgb*0.38f;
+        float rim = pow(1.0f-saturate(abs(dot(N,V))),3.0f);
+        lit += float3(0.18f,0.20f,0.22f)*rim;
+        lit = lerp(lit,float3(1.4f,1.15f,0.80f),saturate(gMaterial.pad_)*0.85f);
+        if (titleSubject.w > 0.5f) lit = TitleAtmosphere(lit,input.worldPosition);
+        output.color = float4(lit,baseA);
         return output;
     }
 
-    // Title landscape only. Keep silhouette/large forms while limiting the
-    // lighting range; point/spot highlights must not turn stone into glitter.
-    if (gMaterial.specularMode == 6) {
+    // The opening gameplay palette anchors the title, while actual surface
+    // normals and GGX roughness produce distinct lit and shaded faces.
+    if (gMaterial.specularMode == 8 || gMaterial.specularMode == 13) {
         float3 N = SafeNormalize(input.normal);
         float3 L = SafeNormalize(-gDirectionalLight.direction);
-        float facing = saturate(dot(N, L) * 0.5f + 0.5f);
-        float shade = lerp(0.62f, 0.82f, facing);
-        float haze = smoothstep(40.0f, 220.0f, length(cameraWorldPosition-input.worldPosition)) * 0.68f;
-        float3 hazeColor = float3(0.30f, 0.36f, 0.40f);
-        // Borrow the title key's hue without importing gameplay darkness.
-        // The CPU clear color uses this same tint and luminance normalization.
-        float3 hue = max(gDirectionalLight.color.rgb, 0.001f) / float3(1.0f, 0.93f, 0.83f);
-        const float3 luma = float3(0.2126f, 0.7152f, 0.0722f);
-        float3 tintedBase = baseRgb * hue;
-        tintedBase *= dot(baseRgb, luma) / max(dot(tintedBase, luma), 1e-6f);
-        float3 tintedHaze = hazeColor * hue;
-        tintedHaze *= dot(hazeColor, luma) / max(dot(tintedHaze, luma), 1e-6f);
-        output.color = float4(lerp(tintedBase * shade, tintedHaze, haze), baseA);
+        float3 V = SafeNormalize(cameraWorldPosition-input.worldPosition);
+        bool wheel = gMaterial.specularMode == 13;
+        float3 surfaceBase = wheel ? lerp(baseRgb,float3(0.42f,0.43f,0.44f),0.55f) : baseRgb;
+        float rough = clamp(gMaterial.shininess,0.35f,0.85f);
+        float metal = saturate(gMaterial.environmentCoefficient);
+        if (!wheel) {
+            // Object-authored UVs keep weathering attached during suspension
+            // and laps. U+2 identifies the actual chamfer strips/corners.
+            bool bevel = input.texcoord.x > 1.5f;
+            float2 uv = input.texcoord-float2(bevel ? 2.0f : 0.0f,0.0f);
+            float mottling = CartSurfaceNoise(uv*float2(7.0f,5.0f)+3.7f);
+            float grit = CartSurfaceNoise(uv*float2(46.0f,31.0f));
+            float worn = (bevel ? 1.0f : 0.0f)*
+                smoothstep(0.63f,0.86f,CartSurfaceNoise(uv*float2(13,7)+11.0f));
+            float2 scratchesUV=uv*float2(4.0f,18.0f);
+            float scratchLine=abs(frac(scratchesUV.y+CartSurfaceNoise(float2(floor(scratchesUV.x),2.0f))*7.0f)-0.5f);
+            float aa=max(fwidth(scratchesUV.y),0.018f);
+            float scratches=(1.0f-smoothstep(0.018f,0.018f+aa,scratchLine))*
+                smoothstep(0.68f,0.88f,CartSurfaceNoise(scratchesUV*float2(1,0.11f)))*
+                (1.0f-smoothstep(0.25f,0.90f,aa));
+            float dust=(1.0f-smoothstep(0.55f,1.70f,input.worldPosition.y-titleSubject.y))*
+                lerp(0.35f,0.75f,mottling);
+            float exposed=saturate(worn*0.28f+scratches*0.12f)*(1.0f-dust*0.45f);
+            float gritFilter=1.0f-smoothstep(0.35f,1.0f,max(fwidth(uv.x)*46.0f,fwidth(uv.y)*31.0f));
+            surfaceBase *= 0.97f+mottling*0.05f+(grit-0.5f)*0.03f*gritFilter;
+            // Chipped paint exposes subdued iron; dusty lower panels are
+            // matte, with no emissive outline painted onto the rim.
+            surfaceBase=lerp(surfaceBase,float3(0.30f,0.28f,0.25f),exposed);
+            surfaceBase=lerp(surfaceBase,surfaceBase*float3(0.84f,0.78f,0.69f),dust*0.50f);
+            metal=lerp(metal,0.70f,exposed);
+            rough=clamp(rough+(mottling-0.5f)*0.08f+dust*0.13f-exposed*0.16f-(bevel?0.05f:0.0f),0.35f,0.85f);
+        }
+        float3 paint = DroneDirect(surfaceBase,metal,rough,N,V,L,
+            gDirectionalLight.color.rgb*gDirectionalLight.intensity);
+        float hemisphere = lerp(0.48f,1.0f,saturate(N.y*0.5f+0.5f));
+        float cavity = wheel ? 0.80f : lerp(0.62f,1.0f,
+            smoothstep(0.60f,2.8f,input.worldPosition.y-titleSubject.y));
+        float3 sky = TitleSkyIrradiance()*hemisphere*cavity;
+        float3 f0 = lerp(float3(0.04f,0.04f,0.04f),surfaceBase,metal);
+        float3 reflected = gEnvironmentTexture.SampleLevel(gSampler,reflect(-V,N),rough*4.0f).rgb;
+        paint += surfaceBase*sky*0.42f*(1.0f-metal) + f0*(sky*0.24f+reflected*0.16f);
+        if(!wheel) paint *= max(gMaterial.pad_,0.0001f);
+        if (titleSubject.w > 0.5f) paint = TitleAtmosphere(paint,input.worldPosition);
+        output.color = float4(paint,baseA);
+        return output;
+    }
+
+    // Title-only warm key / cool sky fill. The camera flag isolates this rig
+    // from gameplay materials. Landscape/caves use the terrain PBR pipeline.
+    if (titleSubject.w > 0.5f && gMaterial.enableLighting != 0 && gMaterial.specularMode != 7) {
+        float3 N = SafeNormalize(input.normal);
+        float3 L = SafeNormalize(-gDirectionalLight.direction);
+        float diffuse = saturate(dot(N,L));
+        float3 skyFill = TitleSkyIrradiance()*0.370f*lerp(0.65f,1.0f,saturate(N.y*0.5f+0.5f));
+        float3 key = gDirectionalLight.color.rgb*gDirectionalLight.intensity*diffuse*0.82f;
+        float contactShadow = gMaterial.specularMode == 12 ? TitleGroundShadow(input.worldPosition,N) : 0.0f;
+        skyFill *= 1.0f-contactShadow*0.72f;
+        key *= 1.0f-contactShadow;
+        float3 lit = baseRgb*(skyFill+key);
+        if (gMaterial.specularMode != 6) {
+            float3 V = SafeNormalize(cameraWorldPosition-input.worldPosition);
+            float rim = pow(1.0f-saturate(dot(N,V)),3.0f)*smoothstep(-0.25f,0.65f,dot(N,L));
+            float specular = EvaluateSpecular(N,L,V,max(gMaterial.shininess,24.0f),
+                gMaterial.specularMode == 12 ? 1 : gMaterial.specularMode);
+            lit += gDirectionalLight.color.rgb*(rim*0.10f+specular*0.10f)*(1.0f-contactShadow);
+        }
+        output.color = float4(TitleAtmosphere(lit,input.worldPosition),baseA);
         return output;
     }
 

@@ -1921,6 +1921,24 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
         hr = device->CreateGraphicsPipelineState(&railHudAtlasDesc, IID_PPV_ARGS(&railHudAtlasPso_));
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(RailHudAtlas)", hr);
+        const auto titleDustPs = Compile_(L"Resources/TitleDust.PS.hlsl", L"ps_6_0");
+        if (!titleDustPs) return false;
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC titleDustDesc=railHudAtlasDesc;
+        titleDustDesc.PS={titleDustPs->GetBufferPointer(),titleDustPs->GetBufferSize()};
+        titleDustDesc.DepthStencilState.DepthEnable=TRUE;
+        titleDustDesc.DepthStencilState.DepthFunc=D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        titleDustDesc.DSVFormat=DXGI_FORMAT_D24_UNORM_S8_UINT;
+        hr=device->CreateGraphicsPipelineState(&titleDustDesc,IID_PPV_ARGS(&titleDustPso_));
+        if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(TitleDust)",hr);
+        const auto titleTracerPs=Compile_(L"Resources/TitleTracer.PS.hlsl",L"ps_6_0");
+        if(!titleTracerPs) return false;
+        auto titleTracerDesc=titleDustDesc;
+        titleTracerDesc.PS={titleTracerPs->GetBufferPointer(),titleTracerPs->GetBufferSize()};
+        titleTracerDesc.BlendState.RenderTarget[0].SrcBlend=D3D12_BLEND_SRC_ALPHA;
+        titleTracerDesc.BlendState.RenderTarget[0].DestBlend=D3D12_BLEND_ONE;
+        hr=device->CreateGraphicsPipelineState(&titleTracerDesc,IID_PPV_ARGS(&titleTracerPso_));
+        if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(TitleTracer)",hr);
+
     }
 
     // ------------------------------

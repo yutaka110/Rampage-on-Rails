@@ -1450,6 +1450,7 @@
     <ClInclude Include="application\course\RailShooterHudRuntimeModel.h" />
     <ClInclude Include="application\course\RailShooterHudPresentationBridge.h" />
     <ClInclude Include="application\course\RailTitleScene.h" />
+    <ClInclude Include="application\course\TwinShieldDronePose.h" />
     <ClInclude Include="application\course\RailShooterHudRenderer.h" />
     <ClInclude Include="application\course\RailShooterDefensePromptRenderer.h" />
     <ClInclude Include="application\course\CourseRailRideEventDefinition.h" />

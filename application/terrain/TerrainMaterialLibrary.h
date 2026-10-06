@@ -61,6 +61,7 @@ private:
 };
 
 [[nodiscard]] std::filesystem::path DefaultTerrainMaterialSetPath();
+[[nodiscard]] std::filesystem::path DefaultTitleGroundMaterialPath();
 
 bool LoadTerrainMaterialDefinition(
     const std::filesystem::path& path,

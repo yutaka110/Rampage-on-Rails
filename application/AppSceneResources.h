@@ -153,7 +153,14 @@ struct SkeletonDebugLineVertex {
 struct CameraForGPU {
     Vector3 worldPosition;
     float padding;
+    // Object3D b2 extension; the first 16 bytes retain the shared camera ABI.
+    // w enables the title rig. Shadows use the actual rolling wheel contacts.
+    Vector4 titleSubject{};
+    Vector4 titleForward{};
+    Vector4 titleHaze{};
+    std::array<Vector4, 4> titleWheelContacts{};
 };
+static_assert(sizeof(CameraForGPU) == 128);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};
@@ -168,9 +175,12 @@ struct TerrainPbrLayerGpuConstants {
 };
 
 struct TerrainPbrLibraryGpuConstants {
-    std::array<TerrainPbrLayerGpuConstants, TerrainMaterialLibrary::kLayerCount> layers{};
+    // Gameplay keeps layers 0..2; slice/layer 3 is the title-only Ground054.
+    static constexpr size_t kGpuLayerCount = TerrainMaterialLibrary::kLayerCount + 1;
+    std::array<TerrainPbrLayerGpuConstants, kGpuLayerCount> layers{};
     Vector4 blendParameters{}; // x: floor start, y: floor end, z: height blend scale, w: layer count
 };
+static_assert(sizeof(TerrainPbrLibraryGpuConstants) == 208);
 
 struct AppManagedTextureResource {
     std::string name;
@@ -208,6 +218,11 @@ struct AppModelObjectInstance {
 // that is uploaded by AppSceneResources.
 [[nodiscard]] ModelData BuildTrainingSwordModelDataForSubmission();
 [[nodiscard]] ModelData BuildRailVehicleModelDataForSubmission();
+// Title preview of the original gameplay material under the opening key light.
+[[nodiscard]] Material BuildRailVehicleTitleMaterial(
+    const MaterialData& source, const Material& gameplayMaterial,
+    const DirectionalLight& gameplayLight, Vector3 referenceNormal,
+    Vector3 referenceView, float exposureRatio = 1.0f);
 
 class AppSceneResources {
 public:
@@ -250,7 +265,8 @@ public:
         const Matrix4x4& projMatrix,
         uint32_t windowWidth,
         uint32_t windowHeight);
-    void SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime);
+    void SyncRuntimeState(AppRuntimeState& runtimeState, float deltaTime,
+        float vehicleToneExposure = 1.0f);
     SkinnedModelInstance* GetActiveSkinnedModel();
     const SkinnedModelInstance* GetActiveSkinnedModel() const;
     const AppManagedModelResource* FindManagedModel(uint32_t modelIndex) const;
@@ -287,7 +303,8 @@ public:
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix,
         const EnemyCombatPresentationBridge* enemyPresentation = nullptr,
-        const EnemyEncounterReadabilityDirector* enemyReadability = nullptr);
+        const EnemyEncounterReadabilityDirector* enemyReadability = nullptr,
+        const TwinShieldDronePose* titlePursuer = nullptr);
     void SyncRailVehicleRenderFrame(
         const RailVehicleRenderFrame& frame,
         const Matrix4x4& viewMatrix,
@@ -320,6 +337,7 @@ public:
     Microsoft::WRL::ComPtr<ID3D12Resource> terrainPbrMaterialResource;
     TerrainPbrLibraryGpuConstants* terrainPbrMaterialData = nullptr;
     TerrainMaterialLibrary terrainMaterialLibrary;
+    TerrainPbrMaterialDefinition titleGroundMaterialDefinition;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> materialResourceSprite;
     Material* materialDataSprite = nullptr;
@@ -340,6 +358,9 @@ public:
     // Camera
     Microsoft::WRL::ComPtr<ID3D12Resource> cameraResource;
     CameraForGPU* mappedCamera = nullptr;
+    DirectionalLight titleVehicleReferenceLight{};
+    Vector3 titleVehicleReferenceNormal{0,0,-1};
+    Vector3 titleVehicleReferenceView{0,0.32f,-0.95f};
 
     // Cascaded shadow maps
     Microsoft::WRL::ComPtr<ID3D12Resource> cascadeShadowResource;

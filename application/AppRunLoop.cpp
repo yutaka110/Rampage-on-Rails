@@ -3388,6 +3388,8 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
 bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     constexpr uint32_t kMaxAtlasVertices = 16384;
     railLockOnHudAtlasVertexCount_ = 0;
+    railTitleDustVertexCount_ = 0;
+    railTitleTracerVertexCount_ = 0;
     const RenderViewportMetrics hudMetrics =
         ResolveRenderViewportMetrics(
             imguiLayer_.EditorViewportRenderTargetState(),
@@ -4160,7 +4162,154 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         // Suppress every gameplay overlay, including the reticle built above.
         railLockOnHudAtlasVertexCount_ = 0;
         emitHudCommands(railShooterHudRenderer_.Frame().commands);
-        return railLockOnHudAtlasVertexCount_ > 0;
+        // Append world billboards after the UI range. They retain homogeneous
+        // depth and are drawn separately into SceneColor with read-only depth.
+        const Vector3 right=Normalize(Vector3{frameState_.viewMatrix.m[0][0],frameState_.viewMatrix.m[1][0],frameState_.viewMatrix.m[2][0]});
+        const Vector3 up=Normalize(Vector3{frameState_.viewMatrix.m[0][1],frameState_.viewMatrix.m[1][1],frameState_.viewMatrix.m[2][1]});
+        auto dustVertex=[&](Vector3 world,Vector2 texcoord,Vector4 color) {
+            const uint32_t index=railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_;
+            if(index>=kMaxAtlasVertices) return;
+            const auto& m=frameState_.viewProjectionMatrix.m;
+            const Vector4 projected{world.x*m[0][0]+world.y*m[1][0]+world.z*m[2][0]+m[3][0],
+                world.x*m[0][1]+world.y*m[1][1]+world.z*m[2][1]+m[3][1],
+                world.x*m[0][2]+world.y*m[1][2]+world.z*m[2][2]+m[3][2],
+                world.x*m[0][3]+world.y*m[1][3]+world.z*m[2][3]+m[3][3]};
+            railLockOnHudAtlasMappedVertices_[index]={projected,texcoord,color};
+            ++railTitleDustVertexCount_;
+        };
+        struct SandBillboard {
+            Vector3 center,horizontal,vertical; Vector4 color; float seed;
+            Vector3 impactOrigin{};
+            float impactLight=0.0f;
+        };
+        std::vector<SandBillboard> billboards;
+        billboards.reserve(180);
+        const float titleAlpha=railTitleScene_.Pursuer().alpha;
+        for(const auto& cloud:railTitleScene_.DustClouds()) {
+            const float age=cloud.age,t=age/RailTitleDustCloud::Lifetime;
+            const float fade=(1.0f-std::exp(-age*38.0f))*std::pow((std::max)(0.0f,1.0f-t),1.15f)*titleAlpha;
+            const float impactLight=std::exp(-age*9.0f)*(std::max)(0.0f,1.0f-age/0.34f);
+            // Fast, low rolling skirt establishes a contact point on the sand.
+            for(int puff=0;puff<8;++puff) {
+                const float angle=puff*0.785398f+cloud.seed*0.71f;
+                const float spread=0.18f+2.4f*(1.0f-std::exp(-age*3.5f));
+                const float radius=0.38f+0.80f*(1.0f-std::exp(-age*4.0f));
+                const Vector3 center=Add(cloud.origin,{std::cos(angle)*spread,0.20f+age*0.10f,std::sin(angle)*spread});
+                billboards.push_back({center,Scale(right,radius),Scale(up,radius*0.32f),
+                    {0.62f,0.43f,0.25f,fade*std::exp(-age*1.7f)*0.70f},float(2*(1+puff+cloud.seed%47)),
+                    cloud.origin,impactLight});
+            }
+            // Unequal rising lobes slow down and disperse instead of expanding as one circle.
+            for(int puff=0;puff<10;++puff) {
+                const float elapsed=(std::max)(0.0f,age-puff*0.012f);
+                const float angle=puff*2.399963f+cloud.seed*0.71f;
+                const float spread=(0.25f+0.09f*puff)*(1.0f-std::exp(-elapsed*3.0f));
+                const float rise=(0.85f+0.10f*(puff%4))*(1.0f-std::exp(-elapsed*1.6f));
+                const Vector3 center=Add(cloud.origin,{std::cos(angle)*spread+elapsed*0.35f,
+                    0.38f+rise,std::sin(angle)*spread});
+                const float radius=(0.34f+1.1f*(1.0f-std::exp(-elapsed*2.1f)))*(0.82f+0.08f*(puff%4));
+                const float rotation=angle*0.7f+elapsed*0.12f;
+                const Vector3 horizontal=Scale(Add(Scale(right,std::cos(rotation)),Scale(up,std::sin(rotation))),radius);
+                const Vector3 vertical=Scale(Add(Scale(up,std::cos(rotation)),Scale(right,-std::sin(rotation))),radius*0.85f);
+                billboards.push_back({center,horizontal,vertical,{0.69f,0.50f,0.31f,fade*0.55f},
+                    float(2*(16+puff+cloud.seed%47)),cloud.origin,impactLight});
+            }
+            // Actual ballistic sand/debris, rendered without the shared GPU pool resets.
+            for(uint32_t grainIndex=0;grainIndex<36;++grainIndex) {
+                const auto grain=RailTitleScene::EvaluateSandGrain(cloud,grainIndex);
+                if(grain.opacity<0.001f) continue;
+                const float r=grain.radius*(grainIndex%7==0 ? 1.8f : 1.0f);
+                billboards.push_back({grain.position,Scale(right,r),Scale(up,r*1.3f),
+                    {0.37f,0.25f,0.14f,grain.opacity*titleAlpha},-2.0f});
+            }
+        }
+        const Vector3 eye=railTitleScene_.CameraPosition();
+        std::sort(billboards.begin(),billboards.end(),[&](const auto& a,const auto& b) {
+            const auto da=Add(a.center,Scale(eye,-1)),db=Add(b.center,Scale(eye,-1));
+            return Dot(da,da)>Dot(db,db);
+        });
+        for(const auto& puff:billboards) {
+            if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+6>kMaxAtlasVertices) break;
+            const auto a=Add(puff.center,Add(Scale(puff.horizontal,-1),puff.vertical));
+            const auto b=Add(puff.center,Add(puff.horizontal,puff.vertical));
+            const auto c=Add(puff.center,Add(Scale(puff.horizontal,-1),Scale(puff.vertical,-1)));
+            const auto d=Add(puff.center,Add(puff.horizontal,Scale(puff.vertical,-1)));
+            // Scatter light from the fixed contact point through the billow.
+            // Leave density/alpha untouched; distance and height dim the upper smoke.
+            const auto litColor=[&](Vector3 corner) {
+                Vector4 color=puff.color;
+                const auto offset=Add(corner,Scale(Add(puff.impactOrigin,{0,0.18f,0}),-1));
+                const float light=3.2f*puff.impactLight/
+                    (1.0f+2.2f*(offset.x*offset.x+offset.z*offset.z)+3.5f*offset.y*offset.y);
+                color.x+=light; color.y+=light*0.30f; color.z+=light*0.045f;
+                return color;
+            };
+            dustVertex(a,{puff.seed,0},litColor(a)); dustVertex(b,{puff.seed+1,0},litColor(b)); dustVertex(c,{puff.seed,1},litColor(c));
+            dustVertex(c,{puff.seed,1},litColor(c)); dustVertex(b,{puff.seed+1,0},litColor(b)); dustVertex(d,{puff.seed+1,1},litColor(d));
+        }
+        // Camera-facing world ribbons aligned to flight, with a tip and tapered tail.
+        // Keep their suffix separate so the glow uses additive rather than smoke blending.
+        const uint32_t dustCount=railTitleDustVertexCount_;
+        const auto glowQuad=[&](Vector3 center,Vector3 h,Vector3 v,float uvBase,Vector4 color) {
+            if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+6>kMaxAtlasVertices) return;
+            const auto a=Add(center,Add(Scale(h,-1),v)),b=Add(center,Add(h,v));
+            const auto c=Add(center,Add(Scale(h,-1),Scale(v,-1))),d=Add(center,Add(h,Scale(v,-1)));
+            dustVertex(a,{uvBase,0},color); dustVertex(b,{uvBase+1,0},color); dustVertex(c,{uvBase,1},color);
+            dustVertex(c,{uvBase,1},color); dustVertex(b,{uvBase+1,0},color); dustVertex(d,{uvBase+1,1},color);
+        };
+        for(const auto& cloud:railTitleScene_.DustClouds()) {
+            const float age=cloud.age;
+            if(age>=0.36f) continue;
+            // A brief hot core, followed by a softer irregular patch on the sand.
+            if(age<0.10f) {
+                glowQuad(Add(cloud.origin,{0,0.18f,0}),Scale(right,0.65f),Scale(up,0.42f),2.0f,
+                    {1.4f,0.36f,0.055f,2.0f*(1.0f-age/0.10f)*titleAlpha});
+            }
+            const float glow=std::exp(-age*10.0f)*(std::max)(0.0f,1.0f-age/0.34f)*titleAlpha;
+            const float angle=float(cloud.seed)*2.399963f;
+            const float radius=0.70f+0.55f*(1.0f-std::exp(-age*18.0f));
+            glowQuad(Add(cloud.origin,{0,0.035f,0}),
+                {std::cos(angle)*radius,0,std::sin(angle)*radius},
+                {-std::sin(angle)*radius,0,std::cos(angle)*radius},6.0f,{1.5f,0.32f,0.045f,glow*2.2f});
+            // Reuse deterministic ballistic motion for a few hot fragments.
+            // Their streaks cool before landing, without resetting the GPU dust pool.
+            for(uint32_t spark=0;spark<10;++spark) {
+                const auto grain=RailTitleScene::EvaluateSandGrain(cloud,72+spark);
+                const float lifetime=0.24f+0.012f*float(spark);
+                if(age>=lifetime || grain.opacity<0.001f) continue;
+                const float brightness=grain.opacity*std::exp(-age*6.0f)*(1.0f-age/lifetime)*titleAlpha;
+                const auto direction=NormalizeOr(grain.velocity,up);
+                const auto side=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(grain.position,-1)),right)),right);
+                const float length=0.12f+0.012f*float(spark);
+                glowQuad(Add(grain.position,Scale(direction,-length*0.5f)),Scale(direction,length*0.5f),
+                    Scale(side,0.025f+0.002f*float(spark%3)),8.0f,
+                    {1.9f,0.85f-1.1f*age,0.18f,brightness*1.8f});
+            }
+        }
+        for(const auto& shot:railTitleScene_.Shots()) {
+            if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+12>kMaxAtlasVertices) break;
+            const auto direction=Normalize(Add(shot.target,Scale(shot.origin,-1)));
+            const auto side=NormalizeOr(Cross(direction,Normalize(Add(eye,Scale(shot.position,-1)))),right);
+            const float flown=std::sqrt(Dot(Add(shot.position,Scale(shot.origin,-1)),Add(shot.position,Scale(shot.origin,-1))));
+            const auto tail=Add(shot.position,Scale(direction,-(std::min)(flown,1.8f)));
+            const auto width=Scale(side,0.26f);
+            const auto a=Add(shot.position,width),b=Add(shot.position,Scale(width,-1));
+            const auto c=Add(tail,width),d=Add(tail,Scale(width,-1));
+            const Vector4 color{1.0f,0.055f,0.015f,titleAlpha};
+            const Vector4 trailColor{color.x,color.y,color.z,titleAlpha*0.72f};
+            dustVertex(a,{0,0},trailColor); dustVertex(b,{0,1},trailColor); dustVertex(c,{1,0},trailColor);
+            dustVertex(c,{1,0},trailColor); dustVertex(b,{0,1},trailColor); dustVertex(d,{1,1},trailColor);
+            // The 1.8 m circular head provides a clear aiming target even near
+            // the distant drone. Keep the shorter, dimmer trail directional.
+            const auto h=Scale(right,0.90f),v=Scale(up,0.90f);
+            const auto ha=Add(shot.position,Add(Scale(h,-1),v)),hb=Add(shot.position,Add(h,v));
+            const auto hc=Add(shot.position,Add(Scale(h,-1),Scale(v,-1))),hd=Add(shot.position,Add(h,Scale(v,-1)));
+            dustVertex(ha,{4,0},color); dustVertex(hb,{5,0},color); dustVertex(hc,{4,1},color);
+            dustVertex(hc,{4,1},color); dustVertex(hb,{5,0},color); dustVertex(hd,{5,1},color);
+        }
+        railTitleTracerVertexCount_=railTitleDustVertexCount_-dustCount;
+        railTitleDustVertexCount_=dustCount;
+        return railLockOnHudAtlasVertexCount_ > 0 || railTitleDustVertexCount_ > 0 || railTitleTracerVertexCount_ > 0;
     }
     emitHudCommands(railShooterHudRenderer_.Frame().commands);
 
@@ -4193,12 +4342,49 @@ void AppRunLoop::RegisterRailLockOnHudPass(
 
     const bool atlasReady =
         EnsureRailLockOnHudAtlas(commandList) &&
-        BuildRailLockOnHudAtlasQuads() &&
-        railLockOnHudAtlasVertexCount_ > 0;
+        BuildRailLockOnHudAtlasQuads();
     if (!atlasReady) {
         return;
     }
 
+    if(railTitleScreenVisible_ && railTitleDustVertexCount_>0 && appPipelines_.GetTitleDustPSO()) {
+        renderGraph_.AddPass({
+            "VFX.TitleGroundDust",
+            ge3::graphics::RenderPassLayer::Vfx,
+            {{"SceneColor",ge3::graphics::RenderResourceAccessType::WriteRtv},
+             {"SceneDepth",ge3::graphics::RenderResourceAccessType::ReadDepth}},
+            "SceneDepth",
+            [this](ge3::graphics::RenderPassContext& passContext) {
+                passContext.commandList->RSSetViewports(1,&runtimeState_.viewport);
+                passContext.commandList->RSSetScissorRects(1,&runtimeState_.scissorRect);
+                passContext.commandList->SetGraphicsRootSignature(appPipelines_.GetRailHudAtlasRootSignature());
+                passContext.commandList->SetPipelineState(appPipelines_.GetTitleDustPSO());
+                ID3D12DescriptorHeap* heaps[]={srvDescriptorHeap_.Get()};
+                passContext.commandList->SetDescriptorHeaps(1,heaps);
+                passContext.commandList->SetGraphicsRootDescriptorTable(0,railLockOnHudAtlasSrvGpu_);
+                passContext.commandList->IASetVertexBuffers(0,1,&railLockOnHudAtlasVertexBufferView_);
+                passContext.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                passContext.commandList->DrawInstanced(railTitleDustVertexCount_,1,railLockOnHudAtlasVertexCount_,0);
+            }});
+    }
+    if(railTitleScreenVisible_ && railTitleTracerVertexCount_>0 && appPipelines_.GetTitleTracerPSO()) {
+        renderGraph_.AddPass({"VFX.TitleTracers",ge3::graphics::RenderPassLayer::Vfx,
+            {{"SceneColor",ge3::graphics::RenderResourceAccessType::WriteRtv},
+             {"SceneDepth",ge3::graphics::RenderResourceAccessType::ReadDepth}},"SceneDepth",
+            [this](ge3::graphics::RenderPassContext& passContext) {
+                passContext.commandList->RSSetViewports(1,&runtimeState_.viewport);
+                passContext.commandList->RSSetScissorRects(1,&runtimeState_.scissorRect);
+                passContext.commandList->SetGraphicsRootSignature(appPipelines_.GetRailHudAtlasRootSignature());
+                passContext.commandList->SetPipelineState(appPipelines_.GetTitleTracerPSO());
+                ID3D12DescriptorHeap* heaps[]={srvDescriptorHeap_.Get()};
+                passContext.commandList->SetDescriptorHeaps(1,heaps);
+                passContext.commandList->SetGraphicsRootDescriptorTable(0,railLockOnHudAtlasSrvGpu_);
+                passContext.commandList->IASetVertexBuffers(0,1,&railLockOnHudAtlasVertexBufferView_);
+                passContext.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                passContext.commandList->DrawInstanced(railTitleTracerVertexCount_,1,railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_,0);
+            }});
+    }
+    if(railLockOnHudAtlasVertexCount_==0) return;
     renderGraph_.AddPass({
         "UI.RailLockOnHud",
         ge3::graphics::RenderPassLayer::Ui,
@@ -6464,6 +6650,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         for(int i=0;i<4;++i) runtimeState_.clearColor[i]=railTitleSavedClearColor_[i];
         runtimeState_.showSkybox = railTitleSavedSkybox_;
         runtimeState_.showProceduralBackdrop = railTitleSavedBackdrop_;
+        for (const auto& pass : railTitleSavedPostProcess_)
+            (void)vfxEngine_.PostProcess().ConfigurePass(pass);
+        railTitleSavedPostProcess_.clear();
         audio_.Stop(railTitleAmbience_);
         railTitleAmbiencePlaying_ = false;
         for(uint32_t id:railTitleDustIds_) vfxEngine_.Runtime().StopEffect(id);
@@ -6475,7 +6664,37 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if (railTitleScreenVisible_) {
         if (!railTitleHasLastUpdate_) {
             railTitleSavedTerrainEnabled_ = runtimeState_.terrain.enabled;
+            // Gameplay fog/AO use a different depth range. Save and restore
+            // only the passes this presentation overrides.
+            railTitleSavedPostProcess_.clear();
+            for (auto pass : vfxEngine_.PostProcess().Passes()) {
+                if (pass.name != "ContactAO" && pass.name != "DistanceFog" && pass.name != "ToneMapping") continue;
+                railTitleSavedPostProcess_.push_back(pass);
+                if (pass.name == "DistanceFog") {
+                    pass.enabled = false; // Title objects own their world-space haze.
+                } else if (pass.name == "ToneMapping") {
+                    pass.enabled = true;
+                    pass.intensity = 1.0f;
+                    pass.parameters.toneExposure = 1.55f;
+                } else {
+                    pass.enabled = true;
+                    pass.intensity = 0.30f;
+                    pass.parameters.contactAoRadiusPixels = 2.5f;
+                    pass.parameters.contactAoBias = 0.08f;
+                    pass.parameters.contactAoFalloff = 1.8f;
+                    pass.parameters.contactAoNearPlane = 0.5f;
+                    pass.parameters.contactAoFarPlane = 800.0f;
+                }
+                (void)vfxEngine_.PostProcess().ConfigurePass(pass);
+            }
             const bool startRequested = railTitleScene_.Starting();
+            const auto openingLight = railShooterCourse_.EvaluateLightingPreset(railShooterDistance_);
+            scene_.titleVehicleReferenceLight = {openingLight.sunColor,
+                Normalize(openingLight.sunDirection),openingLight.sunIntensity};
+            const auto openingPose = railPath_.Evaluate(railShooterDistance_);
+            scene_.titleVehicleReferenceNormal = Scale(openingPose.tangent,-1.0f);
+            scene_.titleVehicleReferenceView = Normalize(Add(
+                Scale(openingPose.tangent,-42.0f),Vector3{0,14.0f,0}));
             if (!railTitleScene_.Initialize()) OutputDebugStringA("[RailTitle] Track bake failed.\n");
             if (startRequested) railTitleScene_.BeginStart();
         }
@@ -6492,8 +6711,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
             railShooterCourse_.EvaluateLightingPreset(railShooterDistance_).sunColor);
         runtimeState_.directionalLightData.color = titleColors.light;
         runtimeState_.directionalLightData.direction = Normalize(Add(
-            Scale(titleSample.tangent,-0.45f),Add(Scale(titleSample.right,-0.65f),Vector3{0,-1,0})));
-        runtimeState_.directionalLightData.intensity = 1.25f*(1.0f-0.35f*railTitleScene_.TunnelShade());
+            Scale(titleSample.tangent,-0.85f),Add(Scale(titleSample.right,-0.35f),Vector3{0,-0.75f,0})));
+        runtimeState_.directionalLightData.intensity = 2.15f*(1.0f-0.35f*railTitleScene_.TunnelShade());
         runtimeState_.pointLightData.intensity = 0.0f;
         runtimeState_.spotLight.intensity = 0.0f;
         // Match the far landscape haze and remove the gameplay sky's bright sun.
@@ -6513,7 +6732,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
             audio_.Stop(railTitleAmbience_); railTitleAmbiencePlaying_=false;
         }
         railTitleDustTimer_ += titleDt;
-        if(railTitleDustTimer_ >= 0.12f && railTitleScene_.Blackout()<0.2f) {
+        // Creating a new effect resets the shared GPU particle pool. Let impact
+        // billows evolve without repeatedly resetting them with wheel puffs.
+        const bool attackParticlesActive = !railTitleScene_.Shots().empty() || !railTitleScene_.DustClouds().empty() || !railTitleScene_.AttackCues().empty() ||
+            std::any_of(vfxEngine_.Runtime().Instances().begin(),vfxEngine_.Runtime().Instances().end(),
+                [](const auto& instance){return instance.assetName=="title_ground_impact" || instance.assetName=="title_drone_muzzle";});
+        if(railTitleDustTimer_ >= 0.12f && !attackParticlesActive && railTitleScene_.Blackout()<0.2f) {
             railTitleDustTimer_ = std::fmod(railTitleDustTimer_,0.12f);
             for(int wheel=0;wheel<2;++wheel) {
                 Vector3 origin=railTitleScene_.Wheels().wheels[wheel].railContact;
@@ -6522,6 +6746,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
                     {1,1,1,1},{1,1,1});
                 if(id!=0) railTitleDustIds_.push_back(id);
             }
+        }
+        // Sand clouds and tracers are deterministic, depth-tested world draws.
+        // Only the brief muzzle flash uses the shared GPU particle pool.
+        for(const auto& cue:railTitleScene_.AttackCues()) {
+            if(cue.kind!=RailTitleAttackCueKind::Muzzle) continue;
+            const uint32_t id=vfxEngine_.Runtime().PlayEffectWithParams(
+                "title_drone_muzzle",cue.position,{1,1,1,1},{1,1,1});
+            if(id) railTitleDustIds_.push_back(id);
         }
         vfxEngine_.Update(runtimeState_.vfx,titleDt);
         std::erase_if(railTitleDustIds_,[this](uint32_t id){return vfxEngine_.Runtime().FindInstance(id)==nullptr;});
@@ -6536,6 +6768,16 @@ void AppRunLoop::UpdateRailShooterFrame() {
         frameState_.deltaTime = titleDt;
         runtimeState_.cameraWorldPosition = eye;
         scene_.UpdateCameraWorldPosition(eye);
+        if (scene_.mappedCamera != nullptr) {
+            auto& camera = *scene_.mappedCamera;
+            camera.titleSubject = {titleSample.position.x,titleSample.position.y,titleSample.position.z,1.0f};
+            camera.titleForward = {titleSample.tangent.x,titleSample.tangent.y,titleSample.tangent.z,railTitleScene_.TunnelShade()};
+            camera.titleHaze = {titleColors.background.x,titleColors.background.y,titleColors.background.z,1.0f};
+            for (size_t i=0;i<camera.titleWheelContacts.size();++i) {
+                const auto& wheel = railTitleScene_.Wheels().wheels[i];
+                camera.titleWheelContacts[i] = {wheel.railContact.x,wheel.railContact.y,wheel.railContact.z,wheel.visible?1.0f:0.0f};
+            }
+        }
         railShooterHasLastUpdateTime_ = false;
         return;
     }
@@ -12158,7 +12400,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             &railTitleScene_.Wheels(),frameState_.viewMatrix,frameState_.projMatrix);
         scene_.SyncRailVehicleOccupantActorFrame({},frameState_.viewMatrix,frameState_.projMatrix);
         scene_.SyncCourseMeshRenderQueue(railTitleEmptySpawns_,&railTitleScene_.Scenery(),
-            railTitleScene_.SceneryDistance(),railTitleScene_.SceneryPath(),frameState_.viewMatrix,frameState_.projMatrix,nullptr,nullptr);
+            railTitleScene_.SceneryDistance(),railTitleScene_.SceneryPath(),frameState_.viewMatrix,frameState_.projMatrix,nullptr,nullptr,
+            &railTitleScene_.Pursuer());
     } else {
     scene_.SyncRailVehicleRenderFrame(
         railShooterVehicleRenderer_.Frame(),
@@ -12190,7 +12433,24 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     }
 
     const auto sceneRuntimeSyncStart = RailPerfClock::now();
-    scene_.SyncRuntimeState(runtimeState_, frameState_.deltaTime);
+    float vehicleToneExposure = 1.0f;
+    for (const auto& pass : vfxEngine_.PostProcess().Passes()) {
+        if (pass.name == "ToneMapping" && pass.enabled) {
+            const float titleExposure = (std::max)(pass.parameters.toneExposure,0.0001f) *
+                (std::max)(pass.intensity,0.0001f);
+            float gameplayExposure = titleExposure;
+            for (const auto& saved : railTitleSavedPostProcess_) {
+                if (saved.name == "ToneMapping" && saved.enabled) {
+                    gameplayExposure = (std::max)(saved.parameters.toneExposure,0.0001f) *
+                        (std::max)(saved.intensity,0.0001f);
+                    break;
+                }
+            }
+            vehicleToneExposure = gameplayExposure/titleExposure;
+            break;
+        }
+    }
+    scene_.SyncRuntimeState(runtimeState_, frameState_.deltaTime, vehicleToneExposure);
     UpdateHandParticleAttachment();
     UpdateWeaponAttachment();
     particleSystem_.SetAccelerationField({

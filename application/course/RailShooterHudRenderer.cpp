@@ -90,10 +90,14 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const Vector4 muted{0.83f,0.81f,0.75f,1};
         // Adjacent bands form a broad, quiet scrim. Overlapping all bands at
         // the left edge made an opaque strip beside the old card-style menu.
-        for (int i=0;i<20;++i) {
-            const float t = float(i)/19.0f;
-            const float bandWidth = (left+640*s)/20.0f;
-            rect(i*bandWidth,0,bandWidth,height,{0.055f,0.045f,0.03f,0.38f*(1-t)*(1-t)});
+        // Leave room for the logo, menu/help and the final transition blackout
+        // even with a smaller authored HUD draw budget.
+        const int scrimBands = int((std::min)(80u, budget > 24u ? budget-20u : 4u));
+        for (int i=0;i<scrimBands;++i) {
+            const float t = float(i)/float(scrimBands-1);
+            const float bandWidth = (left+720*s)/float(scrimBands);
+            const float fade = 1.0f-t*t*(3.0f-2.0f*t);
+            rect(i*bandWidth,0,bandWidth,height,{0.035f,0.045f,0.065f,0.62f*fade});
         }
         const float x = left+96*s;
         if (input.titleLogoAvailable) {

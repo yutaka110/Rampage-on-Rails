@@ -1,0 +1,41 @@
+# Editor preview asset. Live title tracers use the depth-tested TitleTracer world pass.
+name = title_drone_bolt
+lifetime = 1.2
+blend = additive
+layer = additive
+renderQueue = 3340
+color = 1,1,1,1
+size = 1,1,1
+
+component = particle
+name = title_bolt_head
+technique = ParticleAdditive
+texture = circle2
+duration = 1.2
+color = 1.0,0.32,0.045,1.0
+size = 0.40,0.40,1.0
+particle.lifetime = 0.065
+particle.emissive = 1.4
+particle.spawnCount = 1
+particle.spawnFrequency = 0.018
+particle.spawnRadius = 0
+particle.pulseSpeed = 0
+particle.depthFadeSoftness = 0
+particle.edgeSoftness = 0.5
+
+# A short oriented mesh keeps every bolt visible in the lightweight title/game VFX pipeline.
+component = cylinder
+name = title_bolt_streak
+technique = CylinderMesh
+texture = gradationLine
+duration = 1.2
+color = 1.0,0.24,0.025,0.95
+size = 1,1,1
+cylinder.divide = 16
+cylinder.topRadius = 0.065
+cylinder.bottomRadius = 0.045
+cylinder.height = 2.2
+cylinder.emissive = 1.4
+cylinder.uvScrollSpeed = 1
+cylinder.alphaReference = 0
+cylinder.fadeOut = 0

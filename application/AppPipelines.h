@@ -42,6 +42,8 @@ public:
     ID3D12PipelineState* GetMainAlphaPSO() const { return mainAlphaPso_.Get(); }
     ID3D12PipelineState* GetSpritePSO() const { return spritePso_.Get(); }
     ID3D12PipelineState* GetRailHudAtlasPSO() const { return railHudAtlasPso_.Get(); }
+    ID3D12PipelineState* GetTitleDustPSO() const { return titleDustPso_.Get(); }
+    ID3D12PipelineState* GetTitleTracerPSO() const { return titleTracerPso_.Get(); }
     ID3D12PipelineState* GetSkyboxPSO() const { return skyboxPso_.Get(); }
 
     ID3D12PipelineState* GetComputePSO() const { return computePso_.Get(); }
@@ -137,6 +139,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainAlphaPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> spritePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> railHudAtlasPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> titleDustPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> titleTracerPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skyboxPso_;
 
     Microsoft::WRL::ComPtr<ID3D12PipelineState> computePso_;
