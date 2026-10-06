@@ -1,12 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
 #include "WeaponDamageSystem.h"
 
 class CourseSpawnRuntime;
+struct CourseEnemyActor;
 
 struct EnemyAttackInterruptDefinition final {
     float minimumSingleHitDamage = 4.0f;
@@ -50,6 +52,12 @@ public:
     const EnemyAttackInterruptFrame& Frame() const noexcept { return frame_; }
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    EnemyAttackInterruptResult SubmitActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const DamageResult& damageResult);
+
     struct Accumulator final {
         uint64_t intentSequence = 0;
         float damage = 0.0f;

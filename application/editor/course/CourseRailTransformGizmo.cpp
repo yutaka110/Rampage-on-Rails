@@ -1,4 +1,5 @@
 #include "CourseRailTransformGizmo.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -82,10 +83,19 @@ void CourseRailTransformGizmo::Bind(CourseRailEditorController* controller) {
     selectedGuids_.clear();
 }
 
-void CourseRailTransformGizmo::SetSettings(CourseRailTransformGizmoSettings settings) {
-    settings.gridSize = (std::clamp)(settings.gridSize, 0.01f, 1000.0f);
-    settings.handleLengthScale = (std::clamp)(settings.handleLengthScale, 0.1f, 4.0f);
+bool CourseRailTransformGizmoSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(gridSize, .01f, 1000.0f) &&
+        settings::InRange(handleLengthScale, .1f, 4.0f) &&
+        space >= EditorTransformGizmoSpace::World && space <= EditorTransformGizmoSpace::Local;
+    return settings::Result(valid, errorMessage,
+        "CourseRailTransformGizmoSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseRailTransformGizmo::SetSettings(
+    CourseRailTransformGizmoSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
+    return true;
 }
 
 void CourseRailTransformGizmo::Tick(const CourseRailTransformGizmoInput& input) {

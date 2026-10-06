@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -8,6 +9,7 @@
 #include "EnemyFormationDefinition.h"
 
 class CourseSpawnRuntime;
+struct CourseEnemyActor;
 
 struct EnemyFormationMemberRuntimeState final {
     std::string formationId;
@@ -54,6 +56,14 @@ public:
         const std::string& formationId) const noexcept;
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    void BeginFrameActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime);
+    void UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        float deltaTime);
+
     EnemyFormationDefinition ResolveDefinition(
         const std::string& formationId) const;
 

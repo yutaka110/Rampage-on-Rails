@@ -45,10 +45,32 @@ uint32_t EnemyColor(CoursePreviewEnemyPhase phase) {
 
 } // namespace
 
+bool CoursePreviewSimulationSettings::Validate(std::string* errorMessage) const {
+    const bool valid = std::isfinite(fixedStepSeconds) && fixedStepSeconds >= 1.0f / 240.0f && fixedStepSeconds <= 0.25f &&
+        std::isfinite(travelSpeed) && travelSpeed >= 0.0f && travelSpeed <= 100000.0f &&
+        std::isfinite(playbackRate) && playbackRate >= 0.05f && playbackRate <= 8.0f &&
+        std::isfinite(automaticEnemyDefeatSeconds) && automaticEnemyDefeatSeconds >= 0.0f && automaticEnemyDefeatSeconds <= 100000.0f &&
+        maximumSubsteps >= 1 && maximumSubsteps <= 64;
+    if (errorMessage != nullptr) *errorMessage = valid ? "" : "Preview settings require finite values, step 1/240..0.25s, rate 0.05..8 and 1..64 substeps.";
+    return valid;
+}
+
+bool CoursePreviewSimulationSystem::Configure(const CoursePreviewSimulationSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    settings_ = settings;
+    // Preserve playback/snapshot/actors; only bound the unconsumed time budget.
+    accumulator_ = (std::min)(accumulator_, settings_.fixedStepSeconds * settings_.maximumSubsteps);
+    return true;
+}
+
 bool CoursePreviewSimulationSystem::BeginPreview(
     const CourseAsset& source,
     float startDistance,
     std::string* errorMessage) {
+    if (!std::isfinite(startDistance)) {
+        if (errorMessage != nullptr) *errorMessage = "Preview start distance must be finite.";
+        return false;
+    }
     CourseWaveAuthoringModel waveModel(source);
     CourseEnemyAuthoringModel enemyModel(source);
     if (!source.IsValid() || !waveModel.IsValid() || !enemyModel.IsValid()) {
@@ -146,6 +168,10 @@ bool CoursePreviewSimulationSystem::Seek(
         if (errorMessage != nullptr) *errorMessage = "Course preview snapshot is unavailable.";
         return false;
     }
+    if (!std::isfinite(distance)) {
+        if (errorMessage != nullptr) *errorMessage = "Preview seek distance must be finite.";
+        return false;
+    }
     const CoursePreviewPlaybackState previous = frame_.playback;
     if (!RebuildAtDistance(distance, errorMessage)) return false;
     frame_.playback = previous == CoursePreviewPlaybackState::Playing
@@ -175,7 +201,7 @@ bool CoursePreviewSimulationSystem::Step(std::string* errorMessage) {
 }
 
 void CoursePreviewSimulationSystem::Tick(float deltaTime) {
-    if (!IsPlaying() || !hasSnapshot_) return;
+    if (!IsPlaying() || !hasSnapshot_ || !std::isfinite(deltaTime) || deltaTime < 0.0f) return;
     const float fixedStep = (std::clamp)(settings_.fixedStepSeconds, 1.0f / 240.0f, 0.25f);
     const float playbackRate = (std::clamp)(settings_.playbackRate, 0.05f, 8.0f);
     accumulator_ += (std::clamp)(deltaTime, 0.0f, 0.25f) * playbackRate;

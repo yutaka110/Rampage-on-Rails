@@ -32,6 +32,8 @@ struct CourseEnemyTransformGizmoSettings final {
     float rotationSnapDegrees = 15.0f;
     float scaleSnap = 0.1f;
     float handleLengthScale = 0.65f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseEnemyTransformGizmoInput final {
@@ -67,7 +69,7 @@ struct CourseEnemyTransformGizmoState final {
 class CourseEnemyTransformGizmo final {
 public:
     void Bind(CourseEnemyEditorController* controller);
-    void SetSettings(CourseEnemyTransformGizmoSettings settings);
+    bool SetSettings(CourseEnemyTransformGizmoSettings settings, std::string* errorMessage = nullptr);
     void Tick(const CourseEnemyTransformGizmoInput& input);
     void BuildViewportOverlay(EditorViewportOverlayService& overlay) const;
     void Cancel(std::string message = {});

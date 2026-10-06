@@ -121,6 +121,12 @@ GameSessionRetryResult GameSessionRetryCoordinator::Retry(
         SetError(errorMessage, lastResult_.message);
         return lastResult_;
     }
+    if (!CourseSpawnRuntime::ValidateCheckpoint(checkpoint_.spawn, false, &validationError)) {
+        lastResult_.status = GameSessionRetryStatus::SpawnRuntimeMismatch;
+        lastResult_.message = validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
     if (!binding_.session->Retry(&validationError)) {
         lastResult_.status = GameSessionRetryStatus::SessionRejected;
         lastResult_.message = validationError;
@@ -184,7 +190,12 @@ GameSessionRetryResult GameSessionRetryCoordinator::Retry(
         SetError(errorMessage, lastResult_.message);
         return lastResult_;
     }
-    binding_.spawnRuntime->RestoreCheckpoint(checkpoint_.spawn, false);
+    if (!binding_.spawnRuntime->RestoreCheckpoint(checkpoint_.spawn, false, &validationError)) {
+        lastResult_.status = GameSessionRetryStatus::SpawnRuntimeMismatch;
+        lastResult_.message = validationError;
+        SetError(errorMessage, lastResult_.message);
+        return lastResult_;
+    }
     if (checkpoint_.hasEncounterPacingRuntime &&
         (binding_.encounterPacing == nullptr ||
          !binding_.encounterPacing->RestoreCheckpoint(
@@ -295,6 +306,7 @@ const char* ToString(GameSessionRetryStatus status) {
     case GameSessionRetryStatus::SessionRejected: return "SessionRejected";
     case GameSessionRetryStatus::StaleRun: return "StaleRun";
     case GameSessionRetryStatus::WaveMismatch: return "WaveMismatch";
+    case GameSessionRetryStatus::SpawnRuntimeMismatch: return "SpawnRuntimeMismatch";
     case GameSessionRetryStatus::PlayerRuntimeMismatch: return "PlayerRuntimeMismatch";
     case GameSessionRetryStatus::VehicleRuntimeMismatch: return "VehicleRuntimeMismatch";
     case GameSessionRetryStatus::GrazeRuntimeMismatch: return "GrazeRuntimeMismatch";

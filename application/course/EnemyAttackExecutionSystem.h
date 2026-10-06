@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 #include <vector>
 
 class CourseSpawnRuntime;
+struct CourseEnemyActor;
 class EnemyAttackCoordinator;
 class EnemyBehaviorSystem;
 
@@ -43,6 +45,13 @@ public:
     const EnemyAttackExecutionFrame& Frame() const noexcept { return frame_; }
 
 private:
+    // Only the owning Runtime supplies mutable storage to these algorithms.
+    friend class CourseSpawnRuntime;
+    void UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        EnemyAttackCoordinator& coordinator,
+        EnemyBehaviorSystem& behaviorSystem);
+
     EnemyAttackExecutionFrame frame_{};
     uint64_t revision_ = 0;
 };

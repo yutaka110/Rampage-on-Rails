@@ -32,6 +32,7 @@ enum class WeaponFireRejectReason : uint8_t {
     Overheated,
     ChargeInsufficient,
     NoProjectiles,
+    InvalidInput,
 };
 
 // Authoring-time weapon data. Zero magazineCapacity means unlimited ammunition;
@@ -125,7 +126,6 @@ public:
         std::string* errorMessage = nullptr);
     const WeaponDefinition* FindDefinition(const std::string& weaponId) const;
     const WeaponRuntimeState* FindRuntimeState(const std::string& weaponId) const;
-    WeaponRuntimeState* FindMutableRuntimeState(const std::string& weaponId);
 
     WeaponFireResult Update(const WeaponFireInput& input);
     bool BeginReload(const std::string& weaponId);
@@ -133,7 +133,9 @@ public:
     const WeaponFireResult& LastResult() const { return lastResult_; }
     uint64_t TotalProjectilesFired() const { return totalProjectilesFired_; }
 
+// 弾数・熱・タイマーはこのクラスだけが変更する。外部は発射/リロードを要求する。
 private:
+    WeaponRuntimeState* FindMutableRuntimeState(const std::string& weaponId);
     uint64_t AllocateShotId();
 
     std::unordered_map<std::string, WeaponDefinition> definitions_;

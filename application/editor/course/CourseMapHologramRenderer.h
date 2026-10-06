@@ -63,6 +63,8 @@ struct CourseMapHologramSettings final {
     float contourOpacity = 0.48f;
     uint32_t maximumPolygons = 16384;
     uint32_t maximumContours = 32768;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 // Converts the baked, world-space visual asset into retained ImGui-friendly
@@ -75,7 +77,7 @@ public:
         CourseMapVisualBakeStatus sourceStatus,
         const CourseOverviewMapProjection& projection);
 
-    void SetSettings(CourseMapHologramSettings settings);
+    bool SetSettings(CourseMapHologramSettings settings, std::string* errorMessage = nullptr);
     const CourseMapHologramSettings& Settings() const noexcept { return settings_; }
     void Invalidate() noexcept;
     uint64_t SettingsRevision() const noexcept { return settingsRevision_; }

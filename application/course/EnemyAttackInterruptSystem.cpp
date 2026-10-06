@@ -36,9 +36,14 @@ void EnemyAttackInterruptSystem::BeginFrame() {
     frame_.revision = revision_;
 }
 
-EnemyAttackInterruptResult EnemyAttackInterruptSystem::Submit(
-    CourseSpawnRuntime& runtime,
+EnemyAttackInterruptResult EnemyAttackInterruptSystem::Submit(CourseSpawnRuntime& runtime,
     const DamageResult& damageResult) {
+    return runtime.InterruptEnemyAttack(*this, damageResult);
+}
+
+EnemyAttackInterruptResult EnemyAttackInterruptSystem::SubmitActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const DamageResult& damageResult) {
     EnemyAttackInterruptResult result{};
     result.actorId = damageResult.targetActorId;
     result.shotId = damageResult.shotId;
@@ -47,7 +52,7 @@ EnemyAttackInterruptResult EnemyAttackInterruptSystem::Submit(
         !damageResult.damageApplied || damageResult.targetActorId == 0) {
         return result;
     }
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         if (actor.actorId != damageResult.targetActorId) continue;
         const EnemyAttackRuntimePhase phase = actor.attackState.phase;
         const bool preCommit = phase == EnemyAttackRuntimePhase::Reserved ||

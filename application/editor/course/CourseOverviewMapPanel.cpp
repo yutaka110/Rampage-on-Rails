@@ -9,6 +9,15 @@
 namespace editor {
 namespace {
 
+template <typename Owner, typename Settings>
+void ApplyValidatedSettings(Owner& owner, const Settings& candidate) {
+    std::string error;
+    if (!owner.SetSettings(candidate, &error)) {
+        ImGui::TextWrapped("Settings rejected: %s", error.c_str());
+    }
+}
+
+
 ImVec2 ToIm(Vector2 value) { return {value.x, value.y}; }
 
 Vector2 WithOffset(Vector2 value, Vector2 offset) {
@@ -244,7 +253,7 @@ void DrawToolbar(
         changed |= ImGui::DragFloat("##OverviewOffsetStep", &settings.lateralOffsetStep, 0.1f, 0.01f, 1000.0f, "%.2f");
         ImGui::SameLine();
         changed |= ImGui::Checkbox("Point Magnet", &settings.controlPointMagnetEnabled);
-        if (changed) snapping->SetSettings(settings);
+        if (changed) ApplyValidatedSettings(*snapping, settings);
     }
     ImGui::SameLine();
     ImGui::TextDisabled("Wheel zoom | RMB/MMB drag pan | LMB edit | Ctrl add select | Shift cycle | Esc cancel");
@@ -277,7 +286,7 @@ void DrawToolbar(
         ImGui::SameLine();
         changed |= ImGui::Checkbox("Legacy Boxes", &settings.showFallbackGeometry);
         if (!settings.enabled) ImGui::EndDisabled();
-        if (changed) cartographyRenderer->SetSettings(settings);
+        if (changed) ApplyValidatedSettings(*cartographyRenderer, settings);
     }
     if (terrainMapBake != nullptr) {
         ImGui::SameLine();
@@ -295,14 +304,14 @@ void DrawToolbar(
         bool changed = ImGui::Checkbox("Terrain Shell", &settings.enabled);
         ImGui::SameLine();
         changed |= ImGui::Checkbox("Terrain Contours", &settings.showContours);
-        if (changed) terrainMapRenderer->SetSettings(settings);
+        if (changed) ApplyValidatedSettings(*terrainMapRenderer, settings);
     }
     if (hybridCompositor != nullptr) {
         CourseMapHybridCartographySettings settings =
             hybridCompositor->Settings();
         ImGui::SameLine();
         if (ImGui::Checkbox("Hybrid Map", &settings.enabled)) {
-            hybridCompositor->SetSettings(settings);
+            ApplyValidatedSettings(*hybridCompositor, settings);
         }
     }
     if (hologramRenderer != nullptr) {
@@ -311,7 +320,7 @@ void DrawToolbar(
         bool changed = ImGui::Checkbox("Visual Fallback", &settings.enabled);
         ImGui::SameLine();
         changed |= ImGui::Checkbox("Contours", &settings.showContours);
-        if (changed) hologramRenderer->SetSettings(settings);
+        if (changed) ApplyValidatedSettings(*hologramRenderer, settings);
     }
     if (sceneVisualization != nullptr) {
         ImGui::Separator();
@@ -335,7 +344,7 @@ void DrawToolbar(
         if (ImGui::SmallButton("Reload Visual Assets")) {
             sceneVisualization->ReloadVisualAssets();
         }
-        if (changed) sceneVisualization->SetSettings(settings);
+        if (changed) ApplyValidatedSettings(*sceneVisualization, settings);
     }
 }
 

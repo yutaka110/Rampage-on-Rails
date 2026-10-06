@@ -21,8 +21,8 @@ float Saturate(float value) {
     return (std::clamp)(value, 0.0f, 1.0f);
 }
 
-CourseEnemyActor* FindEnemy(CourseSpawnRuntime& runtime, uint32_t actorId) {
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+CourseEnemyActor* FindEnemy(std::span<CourseEnemyActor> actors, uint32_t actorId) {
+    for (CourseEnemyActor& actor : actors) {
         if (actor.actorId == actorId) {
             return &actor;
         }
@@ -145,13 +145,18 @@ void EnemyCombatSystem::InitializeActor(CourseEnemyActor& actor) {
     QueueEvent(actor, EnemyCombatEventKind::Spawned);
 }
 
-void EnemyCombatSystem::Update(
-    CourseSpawnRuntime& runtime,
+void EnemyCombatSystem::Update(CourseSpawnRuntime& runtime,
     const EnemyCombatFrameInput& input) {
+    runtime.UpdateEnemyCombat(*this, input);
+}
+
+void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const EnemyCombatFrameInput& input) {
     const float dt = (std::max)(0.0f, input.deltaTime);
     frameStats_ = {};
 
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         if (!actor.combatState.initialized) {
             InitializeActor(actor);
         }
@@ -246,17 +251,31 @@ void EnemyCombatSystem::Update(
     frameStats_.revision = revision_;
 }
 
-bool EnemyCombatSystem::SubmitDamageResult(
-    CourseSpawnRuntime& runtime,
+bool EnemyCombatSystem::SubmitDamageResult(CourseSpawnRuntime& runtime,
     const DamageResult& damageResult,
     const WeaponFeedbackEvent* feedbackEvent) {
+    return runtime.NotifyEnemyDamage(*this, damageResult, feedbackEvent);
+}
+
+bool EnemyCombatSystem::SubmitDamageResultActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const DamageResult& damageResult,
+        const WeaponFeedbackEvent* feedbackEvent) {
     if (!damageResult.requestAccepted || !damageResult.targetResolved ||
         damageResult.hitKind != RailAimHitKind::Enemy ||
         !damageResult.damageApplied || damageResult.targetActorId == 0) {
         return false;
     }
-    CourseEnemyActor* actor = FindEnemy(runtime, damageResult.targetActorId);
+    CourseEnemyActor* actor = FindEnemy(actors, damageResult.targetActorId);
     if (actor == nullptr) {
+        return false;
+    }
+    const float currentHealth = actor->combatState.initialized
+        ? actor->combatState.currentHitPoints : actor->desc.hitPoints;
+    if (!std::isfinite(damageResult.remainingHitPoints) || damageResult.remainingHitPoints < 0.0f ||
+        !std::isfinite(damageResult.appliedDamage) || damageResult.appliedDamage <= 0.0f ||
+        damageResult.remainingHitPoints > currentHealth ||
+        (damageResult.shotId != 0 && actor->combatState.lastDamageShotId == damageResult.shotId)) {
         return false;
     }
     if (!actor->combatState.initialized) {
@@ -299,10 +318,15 @@ bool EnemyCombatSystem::SubmitDamageResult(
     return true;
 }
 
-bool EnemyCombatSystem::ForceDefeat(
-    CourseSpawnRuntime& runtime,
+bool EnemyCombatSystem::ForceDefeat(CourseSpawnRuntime& runtime,
     uint32_t actorId) {
-    CourseEnemyActor* actor = FindEnemy(runtime, actorId);
+    return runtime.DefeatEnemy(*this, actorId);
+}
+
+bool EnemyCombatSystem::ForceDefeatActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        uint32_t actorId) {
+    CourseEnemyActor* actor = FindEnemy(actors, actorId);
     if (actor == nullptr) {
         return false;
     }

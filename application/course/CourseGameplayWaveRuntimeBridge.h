@@ -44,6 +44,8 @@ struct CourseGameplayWaveRuntimeSettings final {
     bool retireActorsWhenWaveCompletes = true;
     bool detectMissingActiveActorsAsDefeated = true;
     uint32_t maximumStateTransitionsPerFrame = 256;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseGameplayWaveFrameInput final {
@@ -107,7 +109,7 @@ public:
     }
     const std::vector<CourseGameplayWaveEvent>& Events() const noexcept { return events_; }
     const CourseGameplayWaveRuntimeStats& Stats() const noexcept { return stats_; }
-    CourseGameplayWaveRuntimeSettings& MutableSettings() noexcept { return settings_; }
+    bool Configure(const CourseGameplayWaveRuntimeSettings& settings, std::string* errorMessage = nullptr);
     const CourseGameplayWaveRuntimeSettings& Settings() const noexcept { return settings_; }
 
 private:

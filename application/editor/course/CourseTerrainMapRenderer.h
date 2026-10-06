@@ -59,6 +59,8 @@ struct CourseTerrainMapRenderSettings final {
     uint32_t regionTriangleBudget = 6500;
     uint32_t detailTriangleBudget = 13000;
     uint32_t inspectTriangleBudget = 20000;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseTerrainMapBuildOptions final {
@@ -75,7 +77,7 @@ public:
         const CourseOverviewMapProjection& projection,
         CourseTerrainMapBuildOptions options = {});
 
-    void SetSettings(CourseTerrainMapRenderSettings settings);
+    bool SetSettings(CourseTerrainMapRenderSettings settings, std::string* errorMessage = nullptr);
     const CourseTerrainMapRenderSettings& Settings() const noexcept {
         return settings_;
     }

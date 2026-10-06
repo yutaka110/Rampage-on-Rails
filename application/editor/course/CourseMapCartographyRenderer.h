@@ -103,6 +103,8 @@ struct CourseMapCartographyRenderSettings final {
     uint32_t detailTriangleBudget = 12000;
     uint32_t inspectTriangleBudget = 24000;
     uint32_t maximumOutlines = 16384;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 // Retained cartographic renderer for CourseMapRegionAsset. It consumes the
@@ -117,7 +119,7 @@ public:
         const CourseOverviewMapProjection& projection,
         CourseMapCartographyBuildOptions options = {});
 
-    void SetSettings(CourseMapCartographyRenderSettings settings);
+    bool SetSettings(CourseMapCartographyRenderSettings settings, std::string* errorMessage = nullptr);
     const CourseMapCartographyRenderSettings& Settings() const noexcept {
         return settings_;
     }

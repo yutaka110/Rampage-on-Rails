@@ -1,4 +1,5 @@
 #include "CourseMapHologramRenderer.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -255,16 +256,24 @@ CourseMapHologramFrame CourseMapHologramRenderer::BuildFrame(
     return frame;
 }
 
-void CourseMapHologramRenderer::SetSettings(CourseMapHologramSettings settings) {
-    settings.terrainOpacity = (std::clamp)(settings.terrainOpacity, 0.0f, 1.0f);
-    settings.structureOpacity = (std::clamp)(settings.structureOpacity, 0.0f, 1.0f);
-    settings.contourOpacity = (std::clamp)(settings.contourOpacity, 0.0f, 1.0f);
-    settings.maximumPolygons = (std::clamp)(settings.maximumPolygons, 1u, 262144u);
-    settings.maximumContours = (std::clamp)(settings.maximumContours, 1u, 524288u);
-    if (SameSettings(settings_, settings)) return;
+bool CourseMapHologramSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(terrainOpacity, 0.0f, 1.0f) &&
+        settings::InRange(structureOpacity, 0.0f, 1.0f) &&
+        settings::InRange(contourOpacity, 0.0f, 1.0f) &&
+        settings::InRange(maximumPolygons, 1u, 262144u) &&
+        settings::InRange(maximumContours, 1u, 524288u);
+    return settings::Result(valid, errorMessage,
+        "CourseMapHologramSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapHologramRenderer::SetSettings(
+    CourseMapHologramSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++settingsRevision_;
     Invalidate();
+    return true;
 }
 
 void CourseMapHologramRenderer::Invalidate() noexcept {

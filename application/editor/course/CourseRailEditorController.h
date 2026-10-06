@@ -64,7 +64,6 @@ public:
     }
     const CourseRailEditorControllerState& State() const noexcept { return state_; }
     const CourseAsset* Course() const noexcept { return binding_.course; }
-    CourseAsset* MutableCourse() noexcept { return binding_.course; }
     const CourseRailMutationService* MutationService() const noexcept { return mutations_.get(); }
     EditorTransactionStack* Transactions() noexcept;
     const EditorExecutionContext& ExecutionContext() const noexcept { return executionContext_; }

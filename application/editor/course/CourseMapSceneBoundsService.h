@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "CourseEnemyAuthoringModel.h"
 #include "CourseRailAuthoringModel.h"
 #include "../scene/EditorScene.h"
@@ -18,6 +20,8 @@ struct CourseMapSceneBoundsSettings final {
     bool includeEnemies = true;
     float worldPadding = 8.0f;
     uint32_t maximumFitPoints = 8192;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMapSceneBoundsStats final {
@@ -56,7 +60,7 @@ struct CourseMapSceneBoundsFrame final {
 class CourseMapSceneBoundsService final {
 public:
     const CourseMapSceneBoundsFrame& Build(const CourseMapSceneBoundsInput& input);
-    void SetSettings(CourseMapSceneBoundsSettings settings);
+    bool SetSettings(CourseMapSceneBoundsSettings settings, std::string* errorMessage = nullptr);
     const CourseMapSceneBoundsSettings& Settings() const noexcept { return settings_; }
     uint64_t SettingsRevision() const noexcept { return settingsRevision_; }
     void Invalidate() noexcept;

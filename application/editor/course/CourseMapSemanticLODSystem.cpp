@@ -1,4 +1,5 @@
 #include "CourseMapSemanticLODSystem.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 
@@ -57,18 +58,23 @@ CourseMapSemanticLODPolicy CourseMapSemanticLODSystem::Evaluate(
     return policy;
 }
 
-void CourseMapSemanticLODSystem::SetSettings(
-    CourseMapSemanticLODSettings settings) {
-    settings.regionZoom = (std::clamp)(settings.regionZoom, 1.05f, 16.0f);
-    settings.detailZoom = (std::clamp)(settings.detailZoom,
-        settings.regionZoom + 0.1f, 32.0f);
-    settings.inspectZoom = (std::clamp)(settings.inspectZoom,
-        settings.detailZoom + 0.1f, 64.0f);
+bool CourseMapSemanticLODSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(regionZoom, 1.05f, 16.0f) &&
+        settings::InRange(detailZoom, regionZoom + 0.1f, 32.0f) &&
+        settings::InRange(inspectZoom, detailZoom + 0.1f, 64.0f);
+    return settings::Result(valid, errorMessage,
+        "CourseMapSemanticLODSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapSemanticLODSystem::SetSettings(
+    CourseMapSemanticLODSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     if (settings_.regionZoom == settings.regionZoom &&
         settings_.detailZoom == settings.detailZoom &&
-        settings_.inspectZoom == settings.inspectZoom) return;
+        settings_.inspectZoom == settings.inspectZoom) return true;
     settings_ = settings;
     ++settingsRevision_;
+    return true;
 }
 
 const char* ToString(CourseMapSemanticLODLevel level) noexcept {

@@ -1,4 +1,5 @@
 #include "CourseRailSketchTool.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -51,10 +52,18 @@ void CourseRailSketchTool::SetMode(CourseRailSketchMode mode) {
     state_.message = std::string("Rail Sketch mode: ") + ToString(mode);
 }
 
-void CourseRailSketchTool::SetSettings(CourseRailSketchSettings settings) {
-    settings.minimumSamplePixels =
-        (std::clamp)(settings.minimumSamplePixels, 0.5f, 64.0f);
+bool CourseRailSketchSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(minimumSamplePixels, .5f, 64.0f) &&
+        curveFit.Validate();
+    return settings::Result(valid, errorMessage,
+        "CourseRailSketchSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseRailSketchTool::SetSettings(
+    CourseRailSketchSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
+    return true;
 }
 
 void CourseRailSketchTool::Tick(const CourseRailSketchInput& input) {

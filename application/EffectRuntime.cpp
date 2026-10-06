@@ -19,22 +19,12 @@ const std::unordered_map<std::string, EffectAsset>& EmptyAssets() {
     return assets;
 }
 
-std::unordered_map<std::string, EffectAsset>& EmptyMutableAssets() {
-    static std::unordered_map<std::string, EffectAsset> assets;
-    assets.clear();
-    return assets;
-}
 
 const std::vector<EffectInstance>& EmptyInstances() {
     static const std::vector<EffectInstance> instances;
     return instances;
 }
 
-std::vector<EffectInstance>& EmptyMutableInstances() {
-    static std::vector<EffectInstance> instances;
-    instances.clear();
-    return instances;
-}
 
 template <typename Queue>
 void SortRenderQueue(Queue& queue) {
@@ -239,9 +229,6 @@ void EffectRuntime::SetEffectPreviewLoop(uint32_t id, bool enabled) {
     }
 }
 
-EffectInstance* EffectRuntime::FindInstance(uint32_t id) {
-    return effectSystem_ != nullptr ? effectSystem_->FindInstance(id) : nullptr;
-}
 
 const EffectInstance* EffectRuntime::FindInstance(uint32_t id) const {
     return effectSystem_ != nullptr ? effectSystem_->FindInstance(id) : nullptr;
@@ -696,12 +683,6 @@ const std::unordered_map<std::string, EffectAsset>& EffectRuntime::Assets() cons
     return effectSystem_->Assets();
 }
 
-std::unordered_map<std::string, EffectAsset>& EffectRuntime::MutableAssets() {
-    if (effectSystem_ == nullptr) {
-        return EmptyMutableAssets();
-    }
-    return effectSystem_->MutableAssets();
-}
 
 const std::vector<EffectInstance>& EffectRuntime::Instances() const {
     if (effectSystem_ == nullptr) {
@@ -710,13 +691,45 @@ const std::vector<EffectInstance>& EffectRuntime::Instances() const {
     return effectSystem_->Instances();
 }
 
-std::vector<EffectInstance>& EffectRuntime::MutableInstances() {
-    if (effectSystem_ == nullptr) {
-        return EmptyMutableInstances();
-    }
-    return effectSystem_->MutableInstances();
-}
 
 uint64_t EffectRuntime::ParticlePoolResetSerial() const {
     return effectSystem_ != nullptr ? effectSystem_->ParticlePoolResetSerial() : 0;
+}
+
+bool EffectRuntime::RegisterAsset(EffectAsset asset, std::string* errorMessage) {
+    if (effectSystem_ == nullptr || !asset.Validate(errorMessage)) {
+        if (effectSystem_ == nullptr && errorMessage != nullptr) *errorMessage = "Effect system is unavailable.";
+        return false;
+    }
+    if (!effectSystem_->RegisterAsset(std::move(asset), AuthoringRegistry())) {
+        if (errorMessage != nullptr) *errorMessage = "Normalized effect asset failed validation.";
+        return false;
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
+
+bool EffectRuntime::ReplaceAssets(std::unordered_map<std::string, EffectAsset> assets, std::string* errorMessage) {
+    if (effectSystem_ == nullptr) {
+        if (errorMessage != nullptr) *errorMessage = "Effect system is unavailable.";
+        return false;
+    }
+    return effectSystem_->ReplaceAssets(std::move(assets), AuthoringRegistry(), errorMessage);
+}
+
+bool EffectRuntime::SetInstanceAppearance(uint32_t id, const Transform& transform, const Vector4& color, bool attached) {
+    return effectSystem_ != nullptr && effectSystem_->SetInstanceAppearance(id, transform, color, attached);
+}
+
+bool EffectRuntime::MoveInstance(uint32_t id, const Vector3& position, bool resetVelocity) {
+    return effectSystem_ != nullptr && effectSystem_->MoveInstance(id, position, resetVelocity);
+}
+
+bool EffectRuntime::ValidateAssetReplacement(const std::unordered_map<std::string, EffectAsset>& assets, std::string* errorMessage) const {
+    if (effectSystem_ == nullptr) {
+        if (errorMessage != nullptr) *errorMessage = "Effect system is unavailable.";
+        return false;
+    }
+    EffectSystem staged;
+    return staged.ReplaceAssets(assets, AuthoringRegistry(), errorMessage);
 }

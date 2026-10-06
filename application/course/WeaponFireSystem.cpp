@@ -13,6 +13,11 @@ bool FiniteNonNegative(float value) {
     return std::isfinite(value) && value >= 0.0f;
 }
 
+float SaturatedFinite(double value) {
+    const double limit = (std::numeric_limits<float>::max)();
+    return static_cast<float>((std::clamp)(value, -limit, limit));
+}
+
 bool ValidateDefinitionInternal(const WeaponDefinition& definition, std::string* errorMessage) {
     auto reject = [errorMessage](const char* message) {
         if (errorMessage != nullptr) {
@@ -23,14 +28,19 @@ bool ValidateDefinitionInternal(const WeaponDefinition& definition, std::string*
     if (definition.weaponId.empty()) {
         return reject("weaponId must not be empty");
     }
+    if (definition.fireMode < WeaponFireMode::SemiAutomatic || definition.fireMode > WeaponFireMode::ReleaseVolley ||
+        definition.damageType < WeaponDamageType::Kinetic || definition.damageType > WeaponDamageType::Ice) {
+        return reject("weapon fire mode and damage type must be recognized");
+    }
     if (!FiniteNonNegative(definition.baseDamage) ||
         !std::isfinite(definition.range) || definition.range <= 0.0f ||
         !std::isfinite(definition.shotInterval) || definition.shotInterval <= 0.0f ||
-        definition.projectilesPerShot == 0 || definition.maxProjectilesPerTrigger == 0) {
+        definition.projectilesPerShot == 0 || definition.projectilesPerShot > 4096 ||
+        definition.maxProjectilesPerTrigger == 0 || definition.maxProjectilesPerTrigger > 4096) {
         return reject("damage, range, cadence, and projectile counts must be valid");
     }
     if (definition.fireMode == WeaponFireMode::Burst &&
-        (definition.burstCount == 0 || !std::isfinite(definition.burstInterval) ||
+        (definition.burstCount == 0 || definition.burstCount > 4096 || !std::isfinite(definition.burstInterval) ||
          definition.burstInterval <= 0.0f)) {
         return reject("burst weapons require a positive burst count and interval");
     }
@@ -79,7 +89,7 @@ void TickState(
     WeaponRuntimeState& state,
     float deltaTime) {
     const float dt = std::isfinite(deltaTime) ? (std::max)(0.0f, deltaTime) : 0.0f;
-    state.cooldownRemaining -= dt;
+    state.cooldownRemaining = SaturatedFinite(static_cast<double>(state.cooldownRemaining) - dt);
     if (!state.triggerWasHeld && state.burstShotsRemaining == 0) {
         state.cooldownRemaining = (std::max)(0.0f, state.cooldownRemaining);
     }
@@ -129,6 +139,7 @@ bool WeaponFireSystem::RegisterDefinition(
     const auto oldDefinition = definitions_.find(definition.weaponId);
     const bool existed = oldDefinition != definitions_.end();
     const uint32_t oldCapacity = existed ? oldDefinition->second.magazineCapacity : 0;
+    const WeaponFireMode oldMode = existed ? oldDefinition->second.fireMode : definition.fireMode;
     definitions_[definition.weaponId] = definition;
 
     WeaponRuntimeState& state = runtimeStates_[definition.weaponId];
@@ -150,6 +161,29 @@ bool WeaponFireSystem::RegisterDefinition(
     state.heat = definition.heatCapacity > 0.0f
         ? (std::min)(state.heat, definition.heatCapacity)
         : 0.0f;
+    // 定義を再読み込みしても、実行中の状態は新しい定義の範囲を守る。
+    if (definition.magazineCapacity == 0) state.ammoInMagazine = state.reserveAmmo = 0;
+    if (definition.magazineCapacity == 0 || definition.reloadDuration == 0.0f) {
+        state.reloading = false;
+        state.reloadRemaining = 0.0f;
+    } else {
+        state.reloadRemaining = (std::min)(state.reloadRemaining, definition.reloadDuration);
+    }
+    if (oldMode != definition.fireMode) {
+        state.chargeSeconds = 0.0f;
+        state.burstShotsRemaining = 0;
+        state.triggerWasHeld = false;
+    }
+    state.chargeSeconds = definition.fireMode == WeaponFireMode::ChargeRelease
+        ? (std::min)(state.chargeSeconds, definition.maximumChargeSeconds) : 0.0f;
+    state.burstShotsRemaining = definition.fireMode == WeaponFireMode::Burst
+        ? (std::min)(state.burstShotsRemaining, definition.burstCount) : 0;
+    if (definition.heatCapacity == 0.0f ||
+        state.heat <= definition.heatCapacity * definition.overheatRecoveryFraction) {
+        state.overheated = false;
+    } else if (state.heat >= definition.heatCapacity) {
+        state.overheated = true;
+    }
     return true;
 }
 
@@ -253,6 +287,17 @@ WeaponFireResult WeaponFireSystem::Update(const WeaponFireInput& input) {
     }
     const WeaponDefinition& definition = definitionIt->second;
     WeaponRuntimeState& state = stateIt->second;
+    const double chargeMultiplier = definition.fireMode == WeaponFireMode::ChargeRelease
+        ? definition.maximumChargeDamageMultiplier : 1.0;
+    const double maximumShotDamage = static_cast<double>(definition.baseDamage) *
+        input.damageMultiplier * chargeMultiplier;
+    if (!FiniteNonNegative(input.deltaTime) || !FiniteNonNegative(input.damageMultiplier) ||
+        !std::isfinite(maximumShotDamage) || maximumShotDamage > (std::numeric_limits<float>::max)()) {
+        result.rejectReason = WeaponFireRejectReason::InvalidInput;
+        CopyRuntimeToResult(state, result);
+        lastResult_ = result;
+        return result;
+    }
     TickState(definition, state, input.deltaTime);
 
     const bool pressed = input.triggerPressed || (input.triggerHeld && !state.triggerWasHeld);
@@ -300,9 +345,6 @@ WeaponFireResult WeaponFireSystem::Update(const WeaponFireInput& input) {
         }
         return finish(WeaponFireRejectReason::Disabled);
     }
-    if (!std::isfinite(input.damageMultiplier) || input.damageMultiplier < 0.0f) {
-        return finish(WeaponFireRejectReason::InvalidDefinition);
-    }
     if (!activated) {
         if (!input.triggerHeld && definition.fireMode == WeaponFireMode::ChargeRelease) {
             state.chargeSeconds = 0.0f;
@@ -332,13 +374,15 @@ WeaponFireResult WeaponFireSystem::Update(const WeaponFireInput& input) {
     float cadence = definition.shotInterval;
     if (definition.fireMode == WeaponFireMode::Automatic && state.triggerWasHeld) {
         const float overdue = (std::max)(0.0f, -state.cooldownRemaining);
-        salvos = 1u + static_cast<uint32_t>(overdue / definition.shotInterval);
-        salvos = (std::min)(salvos, kMaximumCatchUpSalvos);
+        salvos = 1u + static_cast<uint32_t>((std::min)(
+            static_cast<double>(overdue) / definition.shotInterval,
+            static_cast<double>(kMaximumCatchUpSalvos - 1)));
     } else if (definition.fireMode == WeaponFireMode::Burst) {
         cadence = definition.burstInterval;
         const float overdue = (std::max)(0.0f, -state.cooldownRemaining);
-        salvos = 1u + static_cast<uint32_t>(overdue / definition.burstInterval);
-        salvos = (std::min)(salvos, kMaximumCatchUpSalvos);
+        salvos = 1u + static_cast<uint32_t>((std::min)(
+            static_cast<double>(overdue) / definition.burstInterval,
+            static_cast<double>(kMaximumCatchUpSalvos - 1)));
         salvos = (std::min)(salvos, state.burstShotsRemaining);
     }
 
@@ -359,8 +403,9 @@ WeaponFireResult WeaponFireSystem::Update(const WeaponFireInput& input) {
     }
     if (definition.heatCapacity > 0.0f && definition.heatPerProjectile > 0.0f) {
         const float heatRoom = (std::max)(0.0f, definition.heatCapacity - state.heat);
-        const uint32_t heatLimitedCount = static_cast<uint32_t>(
-            std::floor(heatRoom / definition.heatPerProjectile + kTimerEpsilon));
+        const uint32_t heatLimitedCount = static_cast<uint32_t>((std::min)(
+            std::floor(static_cast<double>(heatRoom) / definition.heatPerProjectile + kTimerEpsilon),
+            static_cast<double>(projectileCount)));
         projectileCount = (std::min)(projectileCount, heatLimitedCount);
         if (projectileCount == 0) {
             state.overheated = true;
@@ -395,18 +440,20 @@ WeaponFireResult WeaponFireSystem::Update(const WeaponFireInput& input) {
     if (definition.magazineCapacity > 0) {
         state.ammoInMagazine -= projectileCount;
     }
-    state.heat += definition.heatPerProjectile * static_cast<float>(projectileCount);
+    if (definition.heatCapacity > 0.0f) {
+        state.heat += definition.heatPerProjectile * static_cast<float>(projectileCount);
+    }
     if (definition.heatCapacity > 0.0f && state.heat + kTimerEpsilon >= definition.heatCapacity) {
         state.heat = (std::min)(state.heat, definition.heatCapacity);
         state.overheated = true;
     }
     if (definition.fireMode == WeaponFireMode::Burst) {
         state.burstShotsRemaining -= (std::min)(salvos, state.burstShotsRemaining);
-        state.cooldownRemaining += state.burstShotsRemaining > 0
-            ? cadence * static_cast<float>(salvos)
-            : definition.shotInterval;
+        state.cooldownRemaining = SaturatedFinite(static_cast<double>(state.cooldownRemaining) +
+            (state.burstShotsRemaining > 0 ? static_cast<double>(cadence) * salvos : definition.shotInterval));
     } else {
-        state.cooldownRemaining += definition.shotInterval * static_cast<float>(salvos);
+        state.cooldownRemaining = SaturatedFinite(static_cast<double>(state.cooldownRemaining) +
+            static_cast<double>(definition.shotInterval) * salvos);
     }
     state.totalProjectilesFired += projectileCount;
     totalProjectilesFired_ += projectileCount;
@@ -440,6 +487,7 @@ const char* ToWeaponFireRejectReasonString(WeaponFireRejectReason reason) {
     case WeaponFireRejectReason::Overheated: return "Overheated";
     case WeaponFireRejectReason::ChargeInsufficient: return "Charge Insufficient";
     case WeaponFireRejectReason::NoProjectiles: return "No Projectiles";
+    case WeaponFireRejectReason::InvalidInput: return "Invalid Input";
     }
     return "Unknown";
 }

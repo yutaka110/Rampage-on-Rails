@@ -1482,6 +1482,8 @@
     <ClInclude Include="application\course\RailAimAssistSystem.h" />
     <ClInclude Include="application\course\RailAimAssistPresetRegistry.h" />
     <ClInclude Include="application\course\RailCameraDirector.h" />
+    <ClInclude Include="application\course\GameplaySettingsValidation.h" />
+    <ClInclude Include="application\editor\EditorSettingsValidation.h" />
     <ClInclude Include="application\course\RailLockOnSystem.h" />
     <ClInclude Include="application\course\RailLockOnTypes.h" />
     <ClInclude Include="application\course\RailLockResolver.h" />

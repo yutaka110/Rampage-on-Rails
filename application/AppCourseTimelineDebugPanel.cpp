@@ -624,7 +624,7 @@ void DrawCoursePreviewSimulation(const CourseTimelineDebugPanelInput& input) {
         if (simulation->Seek(previewDistance, &error)) syncViewportDistance();
     }
 
-    editor::CoursePreviewSimulationSettings& settings = simulation->MutableSettings();
+    editor::CoursePreviewSimulationSettings settings = simulation->Settings();
     ImGui::SetNextItemWidth(120.0f);
     ImGui::DragFloat(
         "Travel Speed (0 = Rail)", &settings.travelSpeed, 0.5f, 0.0f, 500.0f, "%.1fm/s");
@@ -648,10 +648,14 @@ void DrawCoursePreviewSimulation(const CourseTimelineDebugPanelInput& input) {
             "%.1fs");
     }
 
+    std::string settingsError;
+    if (!simulation->Configure(settings, &settingsError)) {
+        ImGui::TextColored(ImVec4(1, 0.3f, 0.25f, 1), "%s", settingsError.c_str());
+    }
+
     if (input.previewActors != nullptr) {
         editor::CoursePreviewActorRuntimeBridge& actors = *input.previewActors;
-        editor::CoursePreviewActorRuntimeSettings& actorSettings =
-            actors.MutableSettings();
+        editor::CoursePreviewActorRuntimeSettings actorSettings = actors.Settings();
         const editor::CoursePreviewActorRuntimeStats& actorStats = actors.Stats();
         ImGui::SeparatorText("Compiled Actor Runtime");
         ImGui::Text(
@@ -683,6 +687,9 @@ void DrawCoursePreviewSimulation(const CourseTimelineDebugPanelInput& input) {
             0.05f,
             1.0f,
             "%.2f");
+        if (!actors.Configure(actorSettings, &settingsError)) {
+            ImGui::TextColored(ImVec4(1, 0.3f, 0.25f, 1), "%s", settingsError.c_str());
+        }
         if (!actorStats.message.empty()) {
             ImGui::TextDisabled("%s", actorStats.message.c_str());
         }

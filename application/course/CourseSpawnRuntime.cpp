@@ -1,5 +1,10 @@
 #include "CourseSpawnRuntime.h"
 #include "RailWorldRaycast.h"
+#include "EnemyAttackInterruptSystem.h"
+#include "EnemyProjectileShootDownSystem.h"
+#include "WeaponDamageSystem.h"
+#include <unordered_set>
+#include <initializer_list>
 
 #include "../EffectRuntime.h"
 
@@ -11,6 +16,42 @@ namespace {
 constexpr float kMinimumEnemyCartClearance = 18.0f;
 constexpr float kMinimumEnemyCameraClearance = 12.0f;
 constexpr float kEnemyPresentationClearancePadding = 2.0f;
+
+bool FiniteValues(std::initializer_list<float> values) {
+    return std::all_of(values.begin(), values.end(), [](float value) { return std::isfinite(value); });
+}
+
+bool ValidEnemyDescription(const CourseEnemyActorDesc& d) {
+    return FiniteValues({d.spawnDistance, d.distanceOffset, d.lateralOffset, d.verticalOffset,
+        d.forwardSpeed, d.radius, d.lifetime, d.hitPoints, d.fireInterval, d.firstShotDelay,
+        d.bulletSpeed, d.bulletLateralSpreadSpeed, d.bulletVerticalSpreadSpeed, d.bulletRadius,
+        d.bulletLifetime, d.bulletDamage, d.color.x, d.color.y, d.color.z, d.color.w,
+        d.bulletColor.x, d.bulletColor.y, d.bulletColor.z, d.bulletColor.w,
+        d.localRotation.x, d.localRotation.y, d.localRotation.z,
+        d.localScale.x, d.localScale.y, d.localScale.z}) &&
+        d.hitPoints >= 0.0f && d.lifetime > 0.0f && d.radius > 0.0f;
+}
+
+bool ValidObstacleDescription(const CourseObstacleActorDesc& d) {
+    return FiniteValues({d.spawnDistance, d.distanceOffset, d.lateralOffset, d.verticalOffset,
+        d.forwardSpeed, d.lifetime, d.hitPoints, d.halfExtents.x, d.halfExtents.y, d.halfExtents.z,
+        d.color.x, d.color.y, d.color.z, d.color.w}) && d.hitPoints >= 0.0f && d.lifetime > 0.0f &&
+        d.halfExtents.x > 0.0f && d.halfExtents.y > 0.0f && d.halfExtents.z > 0.0f;
+}
+
+bool ValidProjectile(const CourseBulletActor& p) {
+    return p.projectileId != UINT64_MAX && FiniteValues({p.spawnDistance, p.distanceOffset,
+        p.lateralOffset, p.verticalOffset, p.previousDistanceOffset, p.previousLateralOffset,
+        p.previousVerticalOffset, p.forwardSpeed, p.lateralSpeed, p.verticalSpeed, p.acceleration,
+        p.maximumSpeed, p.homingTurnRateRadians, p.arcGravity, p.radius, p.lifetime, p.age, p.damage,
+        p.shootDownHitPoints, p.shootDownMaximumHitPoints, p.shootDownRadiusScale,
+        p.lockedTargetDistance, p.lockedTargetLateralOffset, p.lockedTargetVerticalOffset,
+        p.color.x, p.color.y, p.color.z, p.color.w}) && p.radius > 0.0f && p.lifetime > 0.0f &&
+        p.age >= 0.0f && p.damage >= 0.0f && p.maximumSpeed >= 0.0f &&
+        p.homingTurnRateRadians >= 0.0f && p.shootDownHitPoints >= 0.0f &&
+        p.shootDownMaximumHitPoints >= p.shootDownHitPoints && p.shootDownRadiusScale > 0.0f;
+}
+
 Vector3 Add(const Vector3& a, const Vector3& b) {
     return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
@@ -55,6 +96,161 @@ CourseEnemyFirePattern PatternForRole(const std::string& role) {
 }
 } // namespace
 
+bool CourseEnemyFireSafetySettings::Validate(std::string* errorMessage) const {
+    const bool valid = std::isfinite(minForwardDistance) && minForwardDistance >= 0.0f &&
+        std::isfinite(maxForwardDistance) && maxForwardDistance >= minForwardDistance &&
+        std::isfinite(minVisibleBeforeFire) && minVisibleBeforeFire >= 0.0f &&
+        std::isfinite(blockedRetryDelay) && blockedRetryDelay >= 0.0f;
+    if (errorMessage != nullptr) *errorMessage = valid ? "" :
+        "Enemy fire safety requires finite nonnegative distances/durations and min distance <= max distance.";
+    return valid;
+}
+
+bool CourseSpawnRuntime::ConfigureFireSafety(
+    const CourseEnemyFireSafetySettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    fireSafetySettings_ = settings;
+    return true;
+}
+
+uint32_t CourseSpawnRuntime::CommitEnemyVolley(
+    uint32_t actorId, uint64_t intentSequence, uint64_t tokenId) {
+    for (CourseEnemyActor& actor : enemies_) {
+        if (actor.actorId != actorId) continue;
+        if (!actor.fireSafetyAllowed || !actor.attackState.tokenReserved ||
+            actor.attackState.phase != EnemyAttackRuntimePhase::Executing ||
+            intentSequence == 0 || tokenId == 0 ||
+            actor.attackState.intentSequence != intentSequence ||
+            actor.attackState.tokenId != tokenId ||
+            actor.bulletsEmittedThisFrame != 0) return 0;
+        const uint32_t emitted = EmitEnemyBullets(actor);
+        actor.bulletsEmittedThisFrame += emitted;
+        if (emitted != 0) ++actor.fireSequence;
+        return emitted;
+    }
+    return 0;
+}
+
+bool CourseSpawnRuntime::ConsumeProjectile(uint64_t projectileId) {
+    for (CourseBulletActor& bullet : bullets_) {
+        if (bullet.projectileId != projectileId) continue;
+        if (!bullet.active || bullet.hitConsumed) return false;
+        bullet.age = bullet.lifetime;
+        bullet.active = false;
+        bullet.hitConsumed = true;
+        return true;
+    }
+    return false;
+}
+
+bool CourseSpawnRuntime::SpawnProjectile(CourseBulletActor projectile, std::string* errorMessage) {
+    const bool accepted = ValidProjectile(projectile) &&
+        enemyProjectileSystem_.SpawnProjectile(std::move(projectile), bullets_);
+    if (errorMessage != nullptr) *errorMessage = accepted ? "" :
+        "Projectile values are invalid or its ID already exists.";
+    return accepted;
+}
+
+EnemyProjectileShootDownResult CourseSpawnRuntime::ShootDownProjectile(
+    EnemyProjectileShootDownSystem& system, const RailPath& railPath,
+    const EnemyProjectileShootDownRequest& request) {
+    return system.Submit(bullets_, railPath, request);
+}
+
+void CourseSpawnRuntime::ClearProjectiles() {
+    bullets_.clear();
+    // Preserve the ID allocator so an old damage-history ID is never reused.
+}
+
+void CourseSpawnRuntime::SetEnemyScreenPresence(
+    uint32_t actorId, bool evaluated, bool attackAllowed) {
+    for (CourseEnemyActor& actor : enemies_) if (actor.actorId == actorId) {
+        actor.screenPresenceEvaluated = evaluated;
+        actor.screenPresenceAttackAllowed = attackAllowed;
+        return;
+    }
+}
+
+void CourseSpawnRuntime::SetEnemyEncounterPacing(
+    uint32_t actorId, bool evaluated, bool attackAllowed) {
+    for (CourseEnemyActor& actor : enemies_) if (actor.actorId == actorId) {
+        actor.encounterPacingEvaluated = evaluated;
+        actor.encounterPacingAttackAllowed = attackAllowed;
+        return;
+    }
+}
+
+void CourseSpawnRuntime::ResetEnemyScreenPresence() {
+    for (CourseEnemyActor& actor : enemies_) {
+        actor.screenPresenceEvaluated = false;
+        actor.screenPresenceAttackAllowed = true;
+    }
+}
+
+void CourseSpawnRuntime::ResetEnemyEncounterPacing() {
+    for (CourseEnemyActor& actor : enemies_) {
+        actor.encounterPacingEvaluated = false;
+        actor.encounterPacingAttackAllowed = true;
+    }
+}
+
+bool CourseSpawnRuntime::SetEnemyRailPose(uint32_t actorId, float distanceOffset,
+    float lateralOffset, float verticalOffset, float forwardSpeed) {
+    if (!std::isfinite(distanceOffset) || !std::isfinite(lateralOffset) ||
+        !std::isfinite(verticalOffset) || !std::isfinite(forwardSpeed)) return false;
+    for (CourseEnemyActor& actor : enemies_) if (actor.actorId == actorId) {
+        actor.desc.distanceOffset = distanceOffset;
+        actor.desc.lateralOffset = lateralOffset;
+        actor.desc.verticalOffset = verticalOffset;
+        actor.desc.forwardSpeed = forwardSpeed;
+        return true;
+    }
+    return false;
+}
+
+bool CourseSpawnRuntime::SynchronizePreviewEnemy(uint32_t actorId, CourseEnemyActorDesc desc) {
+    // Preview authoring can change a description, but never a gameplay actor's HP.
+    for (CourseEnemyActor& actor : enemies_) if (actor.actorId == actorId && actor.desc.previewOnly) {
+        if (!ValidEnemyDescription(desc)) return false;
+        // Identity is fixed at spawn, even while authoring updates the preview pose.
+        desc.sourcePlacementGuid = actor.desc.sourcePlacementGuid;
+        desc.waveId = actor.desc.waveId;
+        desc.previewOnly = true;
+        desc.hitPoints = actor.desc.hitPoints;
+        actor.desc = std::move(desc);
+        return true;
+    }
+    return false;
+}
+
+void CourseSpawnRuntime::RetireEnemies(std::span<const uint32_t> actorIds, bool playAuthoredExit) {
+    const std::unordered_set<uint32_t> ids(actorIds.begin(), actorIds.end());
+    std::erase_if(enemies_, [&](CourseEnemyActor& actor) {
+        if (!ids.contains(actor.actorId)) return false;
+        const std::string formationId = !actor.desc.formationDefinition.definitionId.empty()
+            ? actor.desc.formationDefinition.definitionId : actor.desc.waveId;
+        const bool hasAuthoredExit = !actor.desc.formationDefinition.definitionId.empty() ||
+            enemyFormationSystem_.FindDefinition(formationId) != nullptr;
+        if (!playAuthoredExit || !hasAuthoredExit) return true;
+        actor.entranceExitState.exitRequested = true;
+        actor.entranceExitState.attackSuppressed = true;
+        actor.entranceExitState.targetable = false;
+        if (formationId.empty()) enemyEntranceExitDirector_.RequestActorExit(actor.actorId);
+        else enemyEntranceExitDirector_.RequestFormationExit(formationId);
+        return false;
+    });
+    // Both immediate removal and animated retirement stop owned projectiles.
+    std::erase_if(bullets_, [&](const CourseBulletActor& bullet) { return ids.contains(bullet.ownerActorId); });
+}
+
+void CourseSpawnRuntime::ClearEnemies() {
+    std::vector<uint32_t> ids;
+    for (const CourseEnemyActor& actor : enemies_) ids.push_back(actor.actorId);
+    RetireEnemies(ids, false);
+}
+
+void CourseSpawnRuntime::ClearObstacles() { obstacles_.clear(); }
+
 void CourseSpawnRuntime::Reset() {
     enemies_.clear();
     bullets_.clear();
@@ -81,9 +277,45 @@ CourseSpawnRuntimeCheckpoint CourseSpawnRuntime::CaptureCheckpoint() const {
     return checkpoint;
 }
 
-void CourseSpawnRuntime::RestoreCheckpoint(
+bool CourseSpawnRuntime::ValidateCheckpoint(
+    const CourseSpawnRuntimeCheckpoint& checkpoint, bool restoreProjectiles, std::string* errorMessage) {
+    // Validate the entire candidate before publishing any part of it.
+    std::unordered_set<uint32_t> actorIds;
+    const auto validId = [&](uint32_t id) {
+        return id != 0 && id < checkpoint.nextActorId && actorIds.insert(id).second;
+    };
+    bool valid = checkpoint.nextActorId != 0;
+    for (const CourseEnemyActor& actor : checkpoint.enemies) {
+        valid = valid && validId(actor.actorId) && ValidEnemyDescription(actor.desc) &&
+            FiniteValues({actor.age, actor.fireTimer, actor.fireVisibleTime}) && actor.age >= 0.0f &&
+            (!actor.combatState.initialized ||
+                (FiniteValues({actor.combatState.currentHitPoints, actor.combatDefinition.maximumHitPoints}) &&
+                 actor.combatDefinition.maximumHitPoints > 0.0f && actor.combatState.currentHitPoints >= 0.0f &&
+                 actor.combatState.currentHitPoints <= actor.combatDefinition.maximumHitPoints &&
+                 std::abs(actor.desc.hitPoints - actor.combatState.currentHitPoints) < 0.001f));
+    }
+    for (const CourseObstacleActor& actor : checkpoint.obstacles) {
+        valid = valid && validId(actor.actorId) && ValidObstacleDescription(actor.desc) &&
+            std::isfinite(actor.age) && actor.age >= 0.0f;
+    }
+    std::unordered_set<uint64_t> projectileIds;
+    if (restoreProjectiles) for (const CourseBulletActor& bullet : checkpoint.bullets) {
+        valid = valid && ValidProjectile(bullet) && bullet.projectileId != 0 &&
+            projectileIds.insert(bullet.projectileId).second;
+    }
+    if (!valid) {
+        if (errorMessage != nullptr) *errorMessage = "Spawn checkpoint has invalid IDs, geometry, health or projectile state.";
+        return false;
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
+
+bool CourseSpawnRuntime::RestoreCheckpoint(
     const CourseSpawnRuntimeCheckpoint& checkpoint,
-    bool restoreProjectiles) {
+    bool restoreProjectiles,
+    std::string* errorMessage) {
+    if (!ValidateCheckpoint(checkpoint, restoreProjectiles, errorMessage)) return false;
     enemies_ = checkpoint.enemies;
     bullets_ = restoreProjectiles
         ? checkpoint.bullets
@@ -102,6 +334,8 @@ void CourseSpawnRuntime::RestoreCheckpoint(
     enemyFormationSystem_.Reset();
     enemyEntranceExitDirector_.Reset();
     nextActorId_ = (std::max)(1u, checkpoint.nextActorId);
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
 }
 
 void CourseSpawnRuntime::Update(float deltaTime) {
@@ -530,7 +764,12 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
         vfxCues_.end());
 }
 
-void CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc) {
+bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string* errorMessage) {
+    if (!ValidEnemyDescription(desc) || desc.bulletCount < 0 || desc.bulletCount > 4096 ||
+        nextActorId_ == UINT32_MAX) {
+        if (errorMessage != nullptr) *errorMessage = "Enemy spawn requires finite valid geometry/health and a bounded projectile count.";
+        return false;
+    }
     desc.lifetime = (std::max)(0.1f, desc.lifetime);
     desc.radius = (std::max)(0.05f, desc.radius);
     desc.hitPoints = (std::max)(1.0f, desc.hitPoints);
@@ -591,6 +830,8 @@ void CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc) {
     actor.desc.projectileDefinitionId = actor.desc.projectileDefinition.id;
     enemyAttackCoordinator_.InitializeActor(actor);
     enemies_.push_back(std::move(actor));
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
 }
 
 bool CourseSpawnRuntime::MarkEnemyAttackTelegraphPresented(
@@ -604,7 +845,11 @@ bool CourseSpawnRuntime::MarkEnemyAttackTelegraphPresented(
         *this, actorId, attackIntentSequence);
 }
 
-void CourseSpawnRuntime::SpawnObstacle(CourseObstacleActorDesc desc) {
+bool CourseSpawnRuntime::SpawnObstacle(CourseObstacleActorDesc desc, std::string* errorMessage) {
+    if (!ValidObstacleDescription(desc) || nextActorId_ == UINT32_MAX) {
+        if (errorMessage != nullptr) *errorMessage = "Obstacle spawn requires finite valid geometry and nonnegative health.";
+        return false;
+    }
     desc.lifetime = (std::max)(0.1f, desc.lifetime);
     desc.halfExtents.x = (std::max)(0.25f, desc.halfExtents.x);
     desc.halfExtents.y = (std::max)(0.25f, desc.halfExtents.y);
@@ -614,6 +859,8 @@ void CourseSpawnRuntime::SpawnObstacle(CourseObstacleActorDesc desc) {
     actor.desc = std::move(desc);
     actor.actorId = nextActorId_++;
     obstacles_.push_back(std::move(actor));
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
 }
 
 void CourseSpawnRuntime::SpawnVfxCue(CourseVfxCueDesc desc) {
@@ -718,4 +965,87 @@ void CourseSpawnRuntime::AppendDebugDraw(
         debugDraw.AddCircle(center, axisU, axisV, cue.desc.radius, color, 32);
         debugDraw.AddLine(center, Add(center, Scale(axisV, cue.desc.radius * 1.4f)), color);
     }
+}
+
+void CourseSpawnRuntime::UpdateEnemyCombat(EnemyCombatSystem& system,
+        const EnemyCombatFrameInput& input) {
+    system.UpdateActors(enemies_, *this, input);
+}
+
+bool CourseSpawnRuntime::NotifyEnemyDamage(EnemyCombatSystem& system,
+        const DamageResult& damageResult,
+        const WeaponFeedbackEvent* feedbackEvent) {
+    return system.SubmitDamageResultActors(enemies_, *this, damageResult, feedbackEvent);
+}
+
+bool CourseSpawnRuntime::DefeatEnemy(EnemyCombatSystem& system,
+        uint32_t actorId) {
+    return system.ForceDefeatActors(enemies_, *this, actorId);
+}
+
+void CourseSpawnRuntime::UpdateEnemyBehavior(EnemyBehaviorSystem& system,
+        const EnemyBehaviorFrameInput& input) {
+    system.UpdateActors(enemies_, *this, input);
+}
+
+bool CourseSpawnRuntime::MarkEnemyBehaviorTelegraph(EnemyBehaviorSystem& system,
+        uint32_t actorId,
+        uint64_t attackIntentSequence) {
+    return system.MarkTelegraphPresentedActors(enemies_, *this, actorId, attackIntentSequence);
+}
+
+void CourseSpawnRuntime::RebuildEnemyAttacks(EnemyAttackCoordinator& system) {
+    system.RebuildFromRuntimeActors(enemies_, *this);
+}
+
+void CourseSpawnRuntime::UpdateEnemyAttacks(EnemyAttackCoordinator& system,
+        const EnemyBehaviorFrame& behaviorFrame,
+        float deltaTime) {
+    system.UpdateActors(enemies_, *this, behaviorFrame, deltaTime);
+}
+
+bool CourseSpawnRuntime::MarkEnemyCoordinatorTelegraph(EnemyAttackCoordinator& system,
+        uint32_t actorId,
+        uint64_t intentSequence) {
+    return system.MarkTelegraphPresentedActors(enemies_, *this, actorId, intentSequence);
+}
+
+void CourseSpawnRuntime::BeginEnemyFormationFrame(EnemyFormationSystem& system) {
+    system.BeginFrameActors(enemies_, *this);
+}
+
+void CourseSpawnRuntime::UpdateEnemyFormations(EnemyFormationSystem& system,
+        float deltaTime) {
+    system.UpdateActors(enemies_, *this, deltaTime);
+}
+
+void CourseSpawnRuntime::BeginEnemyEntranceExitFrame(EnemyEntranceExitDirector& system) {
+    system.BeginFrameActors(enemies_, *this);
+}
+
+void CourseSpawnRuntime::UpdateEnemyEntranceExit(EnemyEntranceExitDirector& system,
+        float deltaTime) {
+    system.UpdateActors(enemies_, *this, deltaTime);
+}
+
+void CourseSpawnRuntime::UpdateEnemyTargeting(EnemyTargetingSystem& system,
+        const EnemyTargetingFrameInput& input) {
+    system.UpdateActors(enemies_, *this, input);
+}
+
+EnemyAttackInterruptResult CourseSpawnRuntime::InterruptEnemyAttack(EnemyAttackInterruptSystem& system,
+        const DamageResult& damageResult) {
+    return system.SubmitActors(enemies_, *this, damageResult);
+}
+
+void CourseSpawnRuntime::ExecuteEnemyAttacks(EnemyAttackExecutionSystem& system,
+        EnemyAttackCoordinator& coordinator,
+        EnemyBehaviorSystem& behaviorSystem) {
+    system.UpdateActors(enemies_, *this, coordinator, behaviorSystem);
+}
+
+DamageResult CourseSpawnRuntime::ApplyWeaponHit(CourseActorDamageReceiver& system,
+        const CourseAsset* course,
+        const WeaponHitRequest& request) {
+    return system.ApplyActors(enemies_, obstacles_, *this, course, request);
 }

@@ -817,13 +817,14 @@ void ApplyReplacements(
     }
 }
 
-void DrawParticleTypeSection(
+bool DrawParticleTypeSection(
     EffectAsset& asset,
     const EffectAuthoringRegistry& authoringRegistry) {
     if (!HasParticleComponents(asset)) {
-        return;
+        return false;
     }
 
+    bool changed = false;
     if (ImGui::TreeNode(EffectTypeLabel(EffectComponentType::Particle))) {
         std::vector<ParticleComponentAsset> replacements;
         if (ImGui::Button("Reset to Asset Default")) {
@@ -842,18 +843,20 @@ void DrawParticleTypeSection(
                     return DrawEffectComponentNode(component, authoringRegistry);
                 });
         });
+        changed = !replacements.empty();
         ApplyReplacements(asset, replacements);
         ImGui::TreePop();
-    }
+    }    return changed;
 }
 
-void DrawTrailTypeSection(
+bool DrawTrailTypeSection(
     EffectAsset& asset,
     const EffectAuthoringRegistry& authoringRegistry) {
     if (!HasTrailComponents(asset)) {
-        return;
+        return false;
     }
 
+    bool changed = false;
     if (ImGui::TreeNode(EffectTypeLabel(EffectComponentType::Trail))) {
         std::vector<TrailComponentAsset> replacements;
         if (ImGui::Button("Reset to Asset Default")) {
@@ -872,18 +875,20 @@ void DrawTrailTypeSection(
                     return DrawEffectComponentNode(component, authoringRegistry);
                 });
         });
+        changed = !replacements.empty();
         ApplyReplacements(asset, replacements);
         ImGui::TreePop();
-    }
+    }    return changed;
 }
 
-void DrawDistortionTypeSection(
+bool DrawDistortionTypeSection(
     EffectAsset& asset,
     const EffectAuthoringRegistry& authoringRegistry) {
     if (!HasDistortionComponents(asset)) {
-        return;
+        return false;
     }
 
+    bool changed = false;
     if (ImGui::TreeNode(EffectTypeLabel(EffectComponentType::Distortion))) {
         std::vector<DistortionComponentAsset> replacements;
         if (ImGui::Button("Reset to Asset Default")) {
@@ -902,18 +907,20 @@ void DrawDistortionTypeSection(
                     return DrawEffectComponentNode(component, authoringRegistry);
                 });
         });
+        changed = !replacements.empty();
         ApplyReplacements(asset, replacements);
         ImGui::TreePop();
-    }
+    }    return changed;
 }
 
-void DrawBeamTypeSection(
+bool DrawBeamTypeSection(
     EffectAsset& asset,
     const EffectAuthoringRegistry& authoringRegistry) {
     if (!HasBeamComponents(asset)) {
-        return;
+        return false;
     }
 
+    bool changed = false;
     if (ImGui::TreeNode(EffectTypeLabel(EffectComponentType::Beam))) {
         std::vector<BeamComponentAsset> replacements;
         ForEachBeamComponent(asset.Components().BeamStorageView(), [&replacements, &authoringRegistry](const BeamComponentAssetView& beam) {
@@ -924,18 +931,20 @@ void DrawBeamTypeSection(
                     return DrawEffectComponentNode(component, authoringRegistry);
                 });
         });
+        changed = !replacements.empty();
         ApplyReplacements(asset, replacements);
         ImGui::TreePop();
-    }
+    }    return changed;
 }
 
-void DrawRingTypeSection(
+bool DrawRingTypeSection(
     EffectAsset& asset,
     const EffectAuthoringRegistry& authoringRegistry) {
     if (!HasRingComponents(asset)) {
-        return;
+        return false;
     }
 
+    bool changed = false;
     if (ImGui::TreeNode(EffectTypeLabel(EffectComponentType::Ring))) {
         std::vector<RingComponentAsset> replacements;
         if (ImGui::Button("Reset to Asset Default")) {
@@ -954,18 +963,20 @@ void DrawRingTypeSection(
                     return DrawEffectComponentNode(component, authoringRegistry);
                 });
         });
+        changed = !replacements.empty();
         ApplyReplacements(asset, replacements);
         ImGui::TreePop();
-    }
+    }    return changed;
 }
 
-void DrawCylinderTypeSection(
+bool DrawCylinderTypeSection(
     EffectAsset& asset,
     const EffectAuthoringRegistry& authoringRegistry) {
     if (!HasCylinderComponents(asset)) {
-        return;
+        return false;
     }
 
+    bool changed = false;
     if (ImGui::TreeNode(EffectTypeLabel(EffectComponentType::Cylinder))) {
         std::vector<CylinderComponentAsset> replacements;
         if (ImGui::Button("Reset to Asset Default")) {
@@ -984,35 +995,30 @@ void DrawCylinderTypeSection(
                     return DrawEffectComponentNode(component, authoringRegistry);
                 });
         });
+        changed = !replacements.empty();
         ApplyReplacements(asset, replacements);
         ImGui::TreePop();
-    }
+    }    return changed;
 }
 
-void DrawEffectTypeSection(
+bool DrawEffectTypeSection(
     EffectAsset& asset,
     EffectComponentType type,
     const EffectAuthoringRegistry& authoringRegistry) {
     switch (type) {
     case EffectComponentType::Particle:
-        DrawParticleTypeSection(asset, authoringRegistry);
-        break;
+        return DrawParticleTypeSection(asset, authoringRegistry);
     case EffectComponentType::Trail:
-        DrawTrailTypeSection(asset, authoringRegistry);
-        break;
+        return DrawTrailTypeSection(asset, authoringRegistry);
     case EffectComponentType::Distortion:
-        DrawDistortionTypeSection(asset, authoringRegistry);
-        break;
+        return DrawDistortionTypeSection(asset, authoringRegistry);
     case EffectComponentType::Beam:
-        DrawBeamTypeSection(asset, authoringRegistry);
-        break;
+        return DrawBeamTypeSection(asset, authoringRegistry);
     case EffectComponentType::Ring:
-        DrawRingTypeSection(asset, authoringRegistry);
-        break;
+        return DrawRingTypeSection(asset, authoringRegistry);
     case EffectComponentType::Cylinder:
-        DrawCylinderTypeSection(asset, authoringRegistry);
-        break;
-    }
+        return DrawCylinderTypeSection(asset, authoringRegistry);
+    }    return false;
 }
 } // namespace
 
@@ -1059,7 +1065,9 @@ void DrawEffectAssetEditorPanel(
         ImGui::TreePop();
     }
 
-    for (auto& [name, asset] : effectRuntime.MutableAssets()) {
+    for (const auto& [name, currentAsset] : effectRuntime.Assets()) {
+        EffectAsset asset = currentAsset;
+        bool changed = false;
         ImGui::PushID(name.c_str());
         const LoadedEffectAsset* loaded = FindLoadedEffectAsset(loadedEffectAssets, name);
         std::string assetTreeLabel = name;
@@ -1102,62 +1110,67 @@ void DrawEffectAssetEditorPanel(
                 asset.techniqueDescription.empty() ? "none" : asset.techniqueDescription.c_str());
 
             if (ImGui::TreeNode("Asset Defaults")) {
-                ImGui::DragFloat4("Default UV Rect", &asset.uvRect.x, 0.001f, 0.0f, 1.0f, "%.3f");
-                ImGui::SliderFloat("Default Particle Lifetime", &asset.defaultParticle.lifetime, 0.0f, 10.0f, "%.2f s");
-                ImGui::SliderFloat("Default Particle Emissive", &asset.defaultParticle.emissive, 0.0f, 12.0f, "%.2f");
+                changed |= ImGui::DragFloat4("Default UV Rect", &asset.uvRect.x, 0.001f, 0.0f, 1.0f, "%.3f");
+                changed |= ImGui::SliderFloat("Default Particle Lifetime", &asset.defaultParticle.lifetime, 0.0f, 10.0f, "%.2f s");
+                changed |= ImGui::SliderFloat("Default Particle Emissive", &asset.defaultParticle.emissive, 0.0f, 12.0f, "%.2f");
                 int defaultParticleSpawnCount = static_cast<int>(asset.defaultParticle.spawnCount);
                 if (ImGui::SliderInt("Default Particle Spawn Count", &defaultParticleSpawnCount, 0, 256)) {
+                    changed = true;
                     asset.defaultParticle.spawnCount = static_cast<float>(defaultParticleSpawnCount);
                 }
                 bool defaultParticleRandomRotation = asset.defaultParticle.randomRotation > 0.5f;
                 if (ImGui::Checkbox("Default Particle Random Rotation", &defaultParticleRandomRotation)) {
+                    changed = true;
                     asset.defaultParticle.randomRotation = defaultParticleRandomRotation ? 1.0f : 0.0f;
                 }
-                ImGui::SliderFloat("Default Particle Scale Y Min", &asset.defaultParticle.scaleYMin, 0.01f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Particle Scale Y Max", &asset.defaultParticle.scaleYMax, 0.01f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Particle Depth Fade", &asset.defaultParticle.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
-                ImGui::SliderFloat("Default Particle Edge", &asset.defaultParticle.edgeSoftness, 0.0f, 1.0f, "%.2f");
-                ImGui::SliderFloat("Default Trail Depth Fade", &asset.defaultTrail.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
-                ImGui::SliderFloat("Default Trail Tail", &asset.defaultTrail.trailTailFade, 0.1f, 4.0f, "%.2f");
-                ImGui::SliderFloat("Default Trail Length", &asset.defaultTrail.length, 0.01f, 16.0f, "%.2f");
-                ImGui::SliderFloat("Default Trail Width", &asset.defaultTrail.width, 0.001f, 2.0f, "%.3f");
-                ImGui::SliderFloat("Default Trail Sample Distance", &asset.defaultTrail.sampleDistance, 0.0f, 1.0f, "%.3f");
-                ImGui::SliderFloat("Default Trail Smoothing", &asset.defaultTrail.smoothing, 0.0f, 1.0f, "%.2f");
-                ImGui::SliderFloat("Default Trail Width Head", &asset.defaultTrail.widthHead, 0.0f, 4.0f, "%.2f");
-                ImGui::SliderFloat("Default Trail Width Tail", &asset.defaultTrail.widthTail, 0.0f, 4.0f, "%.2f");
-                ImGui::SliderFloat("Default Trail Alpha Tail", &asset.defaultTrail.alphaTail, 0.0f, 1.0f, "%.2f");
-                ImGui::SliderFloat("Default Trail Miter Limit", &asset.defaultTrail.miterLimit, 1.0f, 4.0f, "%.2f");
-                ImGui::ColorEdit3("Default Trail Color Tail", &asset.defaultTrail.colorTail.x);
-                DrawTrailFollowModeCombo("Default Trail Follow", asset.defaultTrail.followMode);
+                changed |= ImGui::SliderFloat("Default Particle Scale Y Min", &asset.defaultParticle.scaleYMin, 0.01f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Particle Scale Y Max", &asset.defaultParticle.scaleYMax, 0.01f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Particle Depth Fade", &asset.defaultParticle.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
+                changed |= ImGui::SliderFloat("Default Particle Edge", &asset.defaultParticle.edgeSoftness, 0.0f, 1.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Trail Depth Fade", &asset.defaultTrail.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
+                changed |= ImGui::SliderFloat("Default Trail Tail", &asset.defaultTrail.trailTailFade, 0.1f, 4.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Trail Length", &asset.defaultTrail.length, 0.01f, 16.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Trail Width", &asset.defaultTrail.width, 0.001f, 2.0f, "%.3f");
+                changed |= ImGui::SliderFloat("Default Trail Sample Distance", &asset.defaultTrail.sampleDistance, 0.0f, 1.0f, "%.3f");
+                changed |= ImGui::SliderFloat("Default Trail Smoothing", &asset.defaultTrail.smoothing, 0.0f, 1.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Trail Width Head", &asset.defaultTrail.widthHead, 0.0f, 4.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Trail Width Tail", &asset.defaultTrail.widthTail, 0.0f, 4.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Trail Alpha Tail", &asset.defaultTrail.alphaTail, 0.0f, 1.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Trail Miter Limit", &asset.defaultTrail.miterLimit, 1.0f, 4.0f, "%.2f");
+                changed |= ImGui::ColorEdit3("Default Trail Color Tail", &asset.defaultTrail.colorTail.x);
+                changed |= DrawTrailFollowModeCombo("Default Trail Follow", asset.defaultTrail.followMode);
                 int defaultTrailSegments = static_cast<int>(asset.defaultTrail.segmentBudget);
                 if (ImGui::SliderInt("Default Trail Segments", &defaultTrailSegments, 1, 128)) {
+                    changed = true;
                     asset.defaultTrail.segmentBudget = static_cast<uint32_t>(defaultTrailSegments);
                 }
-                ImGui::SliderFloat("Default Distortion Depth Fade", &asset.defaultDistortion.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
-                ImGui::SliderFloat("Default Distortion Attenuation", &asset.defaultDistortion.depthAttenuation, 0.1f, 4.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Distortion Depth Fade", &asset.defaultDistortion.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
+                changed |= ImGui::SliderFloat("Default Distortion Attenuation", &asset.defaultDistortion.depthAttenuation, 0.1f, 4.0f, "%.2f");
                 int defaultRingDivide = static_cast<int>(asset.defaultRing.divide);
                 if (ImGui::SliderInt("Default Ring Divide", &defaultRingDivide, 8, 128)) {
+                    changed = true;
                     asset.defaultRing.divide = static_cast<uint32_t>(defaultRingDivide);
                 }
-                ImGui::SliderFloat("Default Ring Outer Radius", &asset.defaultRing.outerRadius, 0.01f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Ring Inner Radius", &asset.defaultRing.innerRadius, 0.0f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Ring Emissive", &asset.defaultRing.emissive, 0.0f, 12.0f, "%.2f");
-                ImGui::SliderFloat("Default Ring UV Scroll", &asset.defaultRing.uvScrollSpeed, -8.0f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Ring Expansion", &asset.defaultRing.expansion, 0.0f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Ring Fade Out", &asset.defaultRing.fadeOut, 0.0f, 4.0f, "%.2f");
-                ImGui::SliderFloat("Default Ring Depth Fade", &asset.defaultRing.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
+                changed |= ImGui::SliderFloat("Default Ring Outer Radius", &asset.defaultRing.outerRadius, 0.01f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Ring Inner Radius", &asset.defaultRing.innerRadius, 0.0f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Ring Emissive", &asset.defaultRing.emissive, 0.0f, 12.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Ring UV Scroll", &asset.defaultRing.uvScrollSpeed, -8.0f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Ring Expansion", &asset.defaultRing.expansion, 0.0f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Ring Fade Out", &asset.defaultRing.fadeOut, 0.0f, 4.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Ring Depth Fade", &asset.defaultRing.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
                 int defaultCylinderDivide = static_cast<int>(asset.defaultCylinder.divide);
                 if (ImGui::SliderInt("Default Cylinder Divide", &defaultCylinderDivide, 3, 128)) {
+                    changed = true;
                     asset.defaultCylinder.divide = static_cast<uint32_t>(defaultCylinderDivide);
                 }
-                ImGui::SliderFloat("Default Cylinder Top Radius", &asset.defaultCylinder.topRadius, 0.0f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Cylinder Bottom Radius", &asset.defaultCylinder.bottomRadius, 0.0f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Cylinder Height", &asset.defaultCylinder.height, 0.01f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Cylinder Emissive", &asset.defaultCylinder.emissive, 0.0f, 12.0f, "%.2f");
-                ImGui::SliderFloat("Default Cylinder UV Scroll", &asset.defaultCylinder.uvScrollSpeed, -8.0f, 8.0f, "%.2f");
-                ImGui::SliderFloat("Default Cylinder Alpha Ref", &asset.defaultCylinder.alphaReference, 0.0f, 1.0f, "%.2f");
-                ImGui::SliderFloat("Default Cylinder Fade Out", &asset.defaultCylinder.fadeOut, 0.0f, 4.0f, "%.2f");
-                ImGui::SliderFloat("Default Cylinder Depth Fade", &asset.defaultCylinder.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
+                changed |= ImGui::SliderFloat("Default Cylinder Top Radius", &asset.defaultCylinder.topRadius, 0.0f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Cylinder Bottom Radius", &asset.defaultCylinder.bottomRadius, 0.0f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Cylinder Height", &asset.defaultCylinder.height, 0.01f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Cylinder Emissive", &asset.defaultCylinder.emissive, 0.0f, 12.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Cylinder UV Scroll", &asset.defaultCylinder.uvScrollSpeed, -8.0f, 8.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Cylinder Alpha Ref", &asset.defaultCylinder.alphaReference, 0.0f, 1.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Cylinder Fade Out", &asset.defaultCylinder.fadeOut, 0.0f, 4.0f, "%.2f");
+                changed |= ImGui::SliderFloat("Default Cylinder Depth Fade", &asset.defaultCylinder.depthFadeSoftness, 0.001f, 0.1f, "%.3f");
                 ImGui::TreePop();
             }
 
@@ -1171,7 +1184,11 @@ void DrawEffectAssetEditorPanel(
             };
 
             for (EffectComponentType type : orderedTypes) {
-                DrawEffectTypeSection(asset, type, authoringRegistry);
+                changed |= DrawEffectTypeSection(asset, type, authoringRegistry);
+            }
+            if (changed) {
+                std::string error;
+                if (!effectRuntime.RegisterAsset(std::move(asset), &error)) ImGui::TextWrapped("Edit rejected: %s", error.c_str());
             }
             ImGui::TreePop();
         }

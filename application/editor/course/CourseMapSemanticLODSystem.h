@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "CourseOverviewMapProjection.h"
 
 #include <cstdint>
@@ -17,6 +19,8 @@ struct CourseMapSemanticLODSettings final {
     float regionZoom = 1.8f;
     float detailZoom = 4.5f;
     float inspectZoom = 10.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMapSemanticLODPolicy final {
@@ -46,7 +50,7 @@ class CourseMapSemanticLODSystem final {
 public:
     CourseMapSemanticLODPolicy Evaluate(
         const CourseOverviewMapProjection& projection) const noexcept;
-    void SetSettings(CourseMapSemanticLODSettings settings);
+    bool SetSettings(CourseMapSemanticLODSettings settings, std::string* errorMessage = nullptr);
     const CourseMapSemanticLODSettings& Settings() const noexcept { return settings_; }
     uint64_t SettingsRevision() const noexcept { return settingsRevision_; }
 

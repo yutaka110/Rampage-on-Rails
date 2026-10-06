@@ -1637,10 +1637,11 @@ AppRunLoop::AppRunLoop(
             railShooterCoursePath_ = combatLoopExpansionEnabled
                 ? "Resources/courses/CombatLoopExpansion.course"
                 : "Resources/courses/CombatLoop10s.course";
-            // The combat-loop executable is a player-facing visual proof, not
-            // an editor tools capture. Keep the viewport unobstructed and let
-            // the runtime advance without requiring editor Play state.
+            // Development and Debug keep the tools switch visible. Presentation
+            // builds run the combat loop with an unobstructed viewport.
+#if !defined(_DEBUG) && !defined(DEVELOP)
             imguiLayer_.SetVisible(false);
+#endif
             // The focused encounter promises a full decision window. Keep this
             // local to the lab course until the telegraph presentation is tuned
             // and promoted to the production route.
@@ -1667,14 +1668,15 @@ AppRunLoop::AppRunLoop(
             railEnemyEncounterReadabilitySettings_.presence.
                 unreadableColorBoost = 1.30f;
             railEnemyEncounterReadabilitySettings_.safeAreaPixels = 64.0f;
-            RailCameraEncounterFramingSettings& combatFraming =
-                railShooterCameraDirector_.MutableEncounterFramingSettings();
+            RailCameraEncounterFramingSettings combatFraming =
+                railShooterCameraDirector_.EncounterFramingSettings();
             combatFraming.singleThreatFovTightenDeg =
                 combatLoopExpansionEnabled ? 4.25f : 6.25f;
             combatFraming.singleThreatBackDistancePullIn =
                 combatLoopExpansionEnabled ? 1.10f : 1.65f;
             combatFraming.singleThreatLookAheadReduction =
                 combatLoopExpansionEnabled ? 1.50f : 2.25f;
+            (void)railShooterCameraDirector_.ConfigureEncounterFraming(combatFraming);
             if (combatLoopExpansionEnabled) {
                 // Video review: keep one actionable prompt primary and fold a
                 // previous success into the score HUD before the next tell.
@@ -1715,7 +1717,10 @@ AppRunLoop::AppRunLoop(
             for(int i=0;i<4;++i) railTitleSavedClearColor_[i]=runtimeState_.clearColor[i];
             railTitleSavedSkybox_ = runtimeState_.showSkybox;
             railTitleSavedBackdrop_ = runtimeState_.showProceduralBackdrop;
+            // Development and Debug expose the tools switch on the title screen.
+#if !defined(_DEBUG) && !defined(DEVELOP)
             imguiLayer_.SetVisible(false);
+#endif
         }
         OutputDebugStringA("[AppRunLoop] Startup scene: RailShooter.\n");
     }
@@ -2863,7 +2868,7 @@ void AppRunLoop::ApplyRailShooterVisualPresets(float distance) {
     runtimeState_.clearColor[2] = lighting.clearColor.z;
     runtimeState_.clearColor[3] = lighting.clearColor.w;
 
-    for (PostProcessPass& pass : vfxEngine_.PostProcess().MutablePasses()) {
+    for (PostProcessPass pass : vfxEngine_.PostProcess().Passes()) {
         if (pass.name != "DistanceFog") {
             continue;
         }
@@ -2880,6 +2885,8 @@ void AppRunLoop::ApplyRailShooterVisualPresets(float distance) {
         pass.parameters.foregroundSilhouetteStrength = lighting.foregroundSilhouetteStrength;
         pass.parameters.lowFogLayerStrength = lighting.lowFogLayerStrength;
         pass.parameters.coolFloorHazeStrength = lighting.coolFloorHazeStrength;
+
+        (void)vfxEngine_.PostProcess().ConfigurePass(pass);
     }
 
     const CourseTerrainMaterialPreset material =
@@ -4547,26 +4554,26 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
     const RailAimAssistFrame& aimAssist = railShooterLockOnSystem_.AimAssist();
     const RailReticleState& reticle = debug.reticle;
     const PlayerCombatFeelStats& combatStats = railShooterCombatFeelSystem_.LastStats();
-    RailLockSettings& settings = railShooterLockOnSystem_.MutableSettings();
-    RailAimAssistSettings& aimAssistSettings =
-        railShooterLockOnSystem_.MutableAimAssistSettings();
-    RailSpeedDirectorSettings& speedSettings = railShooterSpeedDirector_.MutableSettings();
+    RailLockSettings settings = railShooterLockOnSystem_.Settings();
+    RailAimAssistSettings aimAssistSettings =
+        railShooterLockOnSystem_.AimAssistSettings();
+    RailSpeedDirectorSettings speedSettings = railShooterSpeedDirector_.Settings();
     const RailSpeedDirectorFrame& speedFrame = railShooterSpeedDirector_.LastFrame();
-    RailCameraComfortSettings& cameraComfort = railShooterCameraDirector_.MutableComfortSettings();
-    RailCameraAimFocusSettings& aimFocusSettings = railShooterCameraDirector_.MutableAimFocusSettings();
-    RailCameraLookAtSettings& lookAtSettings = railShooterCameraDirector_.MutableLookAtSettings();
-    RailCameraCompositionSafetySettings& compositionSettings =
-        railShooterCameraDirector_.MutableCompositionSafetySettings();
-    RailCameraLineOfSightSettings& lineOfSightSettings =
-        railShooterCameraDirector_.MutableLineOfSightSettings();
-    RailCameraCollisionProtectionSettings& collisionProtectionSettings =
-        railShooterCameraDirector_.MutableCollisionProtectionSettings();
-    RailCameraSegmentTransitionSettings& segmentTransitionSettings =
-        railShooterCameraDirector_.MutableSegmentTransitionSettings();
-    RailCameraEncounterFramingSettings& encounterFramingSettings =
-        railShooterCameraDirector_.MutableEncounterFramingSettings();
+    RailCameraComfortSettings cameraComfort = railShooterCameraDirector_.ComfortSettings();
+    RailCameraAimFocusSettings aimFocusSettings = railShooterCameraDirector_.AimFocusSettings();
+    RailCameraLookAtSettings lookAtSettings = railShooterCameraDirector_.LookAtSettings();
+    RailCameraCompositionSafetySettings compositionSettings =
+        railShooterCameraDirector_.CompositionSafetySettings();
+    RailCameraLineOfSightSettings lineOfSightSettings =
+        railShooterCameraDirector_.LineOfSightSettings();
+    RailCameraCollisionProtectionSettings collisionProtectionSettings =
+        railShooterCameraDirector_.CollisionProtectionSettings();
+    RailCameraSegmentTransitionSettings segmentTransitionSettings =
+        railShooterCameraDirector_.SegmentTransitionSettings();
+    RailCameraEncounterFramingSettings encounterFramingSettings =
+        railShooterCameraDirector_.EncounterFramingSettings();
     const RailCameraDirectorFrame& cameraFrame = railShooterCameraDirector_.LastFrame();
-    CourseEnemyFireSafetySettings& fireSafetySettings = railShooterSpawnRuntime_.MutableFireSafetySettings();
+    CourseEnemyFireSafetySettings fireSafetySettings = railShooterSpawnRuntime_.FireSafetySettings();
     const CourseEnemyFireSafetyStats& fireSafetyStats = railShooterSpawnRuntime_.LastFireSafetyStats();
     EnemyAttackTelegraphSettings& telegraphSettings =
         railEnemyAttackTelegraphSettings_;
@@ -5053,7 +5060,7 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             "Last allowed=%s  last blocked=%s",
             fireSafetyStats.lastAllowedReason.c_str(),
             fireSafetyStats.lastBlockedReason.c_str());
-        ImGui::DragFloat("Fire Min Forward", &fireSafetySettings.minForwardDistance, 1.0f, -40.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Fire Min Forward", &fireSafetySettings.minForwardDistance, 1.0f, 0.0f, 80.0f, "%.1f");
         ImGui::DragFloat("Fire Max Forward", &fireSafetySettings.maxForwardDistance, 1.0f, 20.0f, 360.0f, "%.1f");
         ImGui::DragFloat("Min Visible Before Fire", &fireSafetySettings.minVisibleBeforeFire, 0.01f, 0.0f, 2.0f, "%.2f");
         ImGui::DragFloat("Blocked Retry Delay", &fireSafetySettings.blockedRetryDelay, 0.005f, 0.01f, 0.5f, "%.3f");
@@ -5062,6 +5069,10 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             (std::max)(fireSafetySettings.minForwardDistance + 1.0f, fireSafetySettings.maxForwardDistance);
         fireSafetySettings.minVisibleBeforeFire = (std::max)(0.0f, fireSafetySettings.minVisibleBeforeFire);
         fireSafetySettings.blockedRetryDelay = (std::max)(0.01f, fireSafetySettings.blockedRetryDelay);
+        std::string fireSafetyError;
+        if (!railShooterSpawnRuntime_.ConfigureFireSafety(fireSafetySettings, &fireSafetyError)) {
+            ImGui::TextUnformatted(fireSafetyError.c_str());
+        }
 
         int shown = 0;
         for (const CourseEnemyActor& enemy : railShooterSpawnRuntime_.Enemies()) {
@@ -5256,7 +5267,7 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             0.10f,
             1.00f,
             "%.2f");
-        ImGui::DragFloat("Comp Min Forward", &compositionSettings.minForwardDistance, 1.0f, -40.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("Comp Min Forward", &compositionSettings.minForwardDistance, 1.0f, 0.0f, 80.0f, "%.1f");
         ImGui::DragFloat("Comp Max Forward", &compositionSettings.maxForwardDistance, 1.0f, 20.0f, 360.0f, "%.1f");
         ImGui::DragFloat("Comp Blend In", &compositionSettings.blendInRate, 0.1f, 0.0f, 30.0f, "%.2f");
         ImGui::DragFloat("Comp Blend Out", &compositionSettings.blendOutRate, 0.1f, 0.0f, 30.0f, "%.2f");
@@ -5313,7 +5324,7 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             cameraFrame.allowEnemyFire ? "allowed" : "blocked",
             cameraFrame.comfortReason.c_str(),
             cameraFrame.lineOfSightFovOffsetDeg);
-        ImGui::DragFloat("LOS Min Forward", &lineOfSightSettings.minForwardDistance, 1.0f, -40.0f, 80.0f, "%.1f");
+        ImGui::DragFloat("LOS Min Forward", &lineOfSightSettings.minForwardDistance, 1.0f, 0.0f, 80.0f, "%.1f");
         ImGui::DragFloat("LOS Max Forward", &lineOfSightSettings.maxForwardDistance, 1.0f, 20.0f, 380.0f, "%.1f");
         ImGui::DragFloat("LOS Obstacle Padding", &lineOfSightSettings.obstaclePadding, 0.05f, 0.0f, 8.0f, "%.2f");
         ImGui::DragFloat("LOS Target Release", &lineOfSightSettings.targetReleaseStrength, 0.01f, 0.0f, 1.0f, "%.2f");
@@ -5752,6 +5763,30 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
                 candidate.anchor.screenRadius);
         }
     }
+
+    const auto showSettingsError = [](bool accepted, const std::string& error) {
+        if (!accepted) ImGui::TextWrapped("Settings rejected: %s", error.c_str());
+    };
+    std::string settingsError;
+    // コピーを編集し、各所有者に検証と反映を依頼する。速度の進行状態は保持する。
+    const auto configureSettings = [&showSettingsError](auto& owner, auto configure, const auto& candidate) {
+        std::string error;
+        const bool accepted = (owner.*configure)(candidate, &error);
+        showSettingsError(accepted, error);
+    };
+    configureSettings(railShooterLockOnSystem_, &RailLockOnSystem::Configure, settings);
+    configureSettings(railShooterLockOnSystem_, &RailLockOnSystem::ConfigureAimAssist, aimAssistSettings);
+    const bool speedAccepted = railShooterSpeedDirector_.Configure(speedSettings, true, &settingsError);
+    showSettingsError(speedAccepted, settingsError);
+    configureSettings(railShooterCameraDirector_, &RailCameraDirector::ConfigureComfort, cameraComfort);
+    configureSettings(railShooterCameraDirector_, &RailCameraDirector::ConfigureAimFocus, aimFocusSettings);
+    configureSettings(railShooterCameraDirector_, &RailCameraDirector::ConfigureLookAt, lookAtSettings);
+    configureSettings(railShooterCameraDirector_, &RailCameraDirector::ConfigureCompositionSafety, compositionSettings);
+    configureSettings(railShooterCameraDirector_, &RailCameraDirector::ConfigureLineOfSight, lineOfSightSettings);
+    configureSettings(railShooterCameraDirector_, &RailCameraDirector::ConfigureCollisionProtection, collisionProtectionSettings);
+    configureSettings(railShooterCameraDirector_, &RailCameraDirector::ConfigureSegmentTransition, segmentTransitionSettings);
+    configureSettings(railShooterCameraDirector_, &RailCameraDirector::ConfigureEncounterFraming, encounterFramingSettings);
+
 #endif
 }
 
@@ -6353,6 +6388,17 @@ void AppRunLoop::EnterRailShooterScene() {
 bool AppRunLoop::HandleTitleScreenMessage(
     UINT message, WPARAM wParam, LPARAM lParam) {
     if (!railTitleScreenVisible_) return false;
+#if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
+    if (imguiLayer_.IsVisible()) {
+        const ImGuiIO& io = ImGui::GetIO();
+        const bool mouseMessage = message >= WM_MOUSEFIRST && message <= WM_MOUSELAST;
+        const bool keyboardMessage = message >= WM_KEYFIRST && message <= WM_KEYLAST;
+        // Let the normal window callback deliver UI input instead of using it
+        // to activate a title-menu item underneath the tools switch/editor.
+        if ((mouseMessage && io.WantCaptureMouse) ||
+            (keyboardMessage && io.WantCaptureKeyboard)) return false;
+    }
+#endif
     // Ignore repeated confirm/menu input while the start camera owns the view.
     if (railTitleScene_.Starting()) return (message >= WM_KEYFIRST && message <= WM_KEYLAST) ||
         (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST);
@@ -6388,7 +6434,8 @@ bool AppRunLoop::HandleTitleScreenMessage(
             OutputDebugStringA("[RailTitle] Start camera transition.\n");
         }
     }
-    return true;
+    // Mouse movement also reaches ImGui so it can detect hover on the switch.
+    return message != WM_MOUSEMOVE;
 }
 
 void AppRunLoop::UpdateRailShooterFrame() {
@@ -7143,7 +7190,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
             presetRevision != railAimAssistAppliedPresetRevision_) {
             if (const RailAimAssistPreset* preset =
                     railAimAssistPresetRegistry_.Find(presetId)) {
-                railShooterLockOnSystem_.MutableAimAssistSettings() = preset->settings;
+                (void)railShooterLockOnSystem_.ConfigureAimAssist(preset->settings);
                 railAimAssistAppliedPresetId_ = presetId;
                 railAimAssistAppliedPresetRevision_ = presetRevision;
             } else {
@@ -7155,12 +7202,16 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 railAimAssistAppliedPresetRevision_ = presetRevision;
             }
         }
-        railShooterLockOnSystem_.MutableAimAssistSettings().maximumDistance =
-            pulseCannon->definition.range;
+        auto aimSettings = railShooterLockOnSystem_.AimAssistSettings();
+        aimSettings.maximumDistance = pulseCannon->definition.range;
+        // A short-range weapon may be nearer than the preset's acquisition minimum.
+        aimSettings.minimumDistance = (std::min)(aimSettings.minimumDistance,
+            aimSettings.maximumDistance * 0.5f);
+        (void)railShooterLockOnSystem_.ConfigureAimAssist(aimSettings);
     }
     if (const WeaponDefinitionAsset* lockOn =
             railShooterCollisionSystem_.FindWeaponDefinition(RailWeaponIds::LockOnIce)) {
-        RailLockSettings& lockSettings = railShooterLockOnSystem_.MutableSettings();
+        auto lockSettings = railShooterLockOnSystem_.Settings();
         lockSettings.maxLocks = static_cast<int>((std::clamp)(
             lockOn->definition.maxProjectilesPerTrigger,
             1u,
@@ -7168,6 +7219,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         lockSettings.maxForwardDistance = lockOn->definition.range;
         lockSettings.releaseDamage = lockOn->definition.baseDamage;
         lockSettings.lockVfxMuzzleForwardOffset = lockOn->muzzleForwardOffset;
+        lockSettings.minForwardDistance = (std::min)(lockSettings.minForwardDistance,
+            lockSettings.maxForwardDistance * 0.5f);
+        (void)railShooterLockOnSystem_.Configure(lockSettings);
     }
     runtimeState_.terrain.previewDistance = railShooterDistance_;
     const auto visualPresetStart = RailPerfClock::now();
@@ -11468,7 +11522,7 @@ void AppRunLoop::ConfigureShowcasePostProcess() {
         stack.SetIntensity("DistortionComposite", 1.0f);
         stack.SetIntensity("ToneMapping", 1.0f);
         stack.SetIntensity("GlowComposite", 0.94f);
-        for (PostProcessPass& pass : stack.MutablePasses()) {
+        for (PostProcessPass pass : stack.Passes()) {
             if (pass.name == "ToneMapping") {
                 pass.parameters.toneExposure = 1.12f;
             } else if (pass.name == "GlowComposite") {
@@ -11479,7 +11533,9 @@ void AppRunLoop::ConfigureShowcasePostProcess() {
             } else if (pass.name == "DistortionComposite") {
                 pass.parameters.distortionScale = 0.0f;
             }
-        }
+
+        (void)stack.ConfigurePass(pass);
+    }
         return;
     }
 
@@ -11493,7 +11549,7 @@ void AppRunLoop::ConfigureShowcasePostProcess() {
     vfxEngine_.PostProcess().SetIntensity("GlowComposite", blackHole ? (0.92f + tuning.param4 * 0.42f) : 1.0f);
     vfxEngine_.PostProcess().SetIntensity("DistortionComposite", blackHole ? (0.85f + tuning.param3 * 0.58f) : 1.0f);
 
-    for (PostProcessPass& pass : vfxEngine_.PostProcess().MutablePasses()) {
+    for (PostProcessPass pass : vfxEngine_.PostProcess().Passes()) {
         if (pass.name == "AccretionComposite") {
             pass.parameters.accretionRadius = 0.30f + tuning.param2 * 0.14f;
             pass.parameters.accretionDiskStretch = 1.65f + tuning.param2 * 0.92f;
@@ -11507,6 +11563,8 @@ void AppRunLoop::ConfigureShowcasePostProcess() {
         } else if (pass.name == "DistortionComposite") {
             pass.parameters.distortionScale = blackHole ? (0.010f + tuning.param3 * 0.026f) : 0.020f;
         }
+
+        (void)vfxEngine_.PostProcess().ConfigurePass(pass);
     }
 }
 
@@ -12069,7 +12127,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             },
             [&]() {
                 StopEditorGameplaySpawns();
-            }});
+            },
+            IsRailShooterSceneActive()});
     gRailPerfFrame.imguiBuildUiMs = ElapsedMs(imguiBuildUiStart, RailPerfClock::now());
     const auto imguiEndFrameStart = RailPerfClock::now();
     imguiLayer_.EndFrame();

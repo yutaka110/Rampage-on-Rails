@@ -292,16 +292,16 @@ RailProjection ProjectToRail(
     return {best, Dot(delta, sample.right), Dot(delta, sample.up)};
 }
 
-CourseEnemyActor* FindEnemy(
+const CourseEnemyActor* FindEnemy(
     CourseSpawnRuntime& runtime,
     std::string_view waveId) {
     const auto found = std::find_if(
-        runtime.MutableEnemies().begin(),
-        runtime.MutableEnemies().end(),
+        runtime.Enemies().begin(),
+        runtime.Enemies().end(),
         [&](const CourseEnemyActor& enemy) {
             return enemy.desc.waveId == waveId;
         });
-    return found == runtime.MutableEnemies().end()
+    return found == runtime.Enemies().end()
         ? nullptr : &*found;
 }
 
@@ -449,7 +449,7 @@ void EditorPatrolRuntimeWorld::Update(float deltaTime) {
         return;
     }
     for (EditorPatrolRuntimeInstance& patrol : patrols_) {
-        CourseEnemyActor* enemy =
+        const CourseEnemyActor* enemy =
             FindEnemy(*spawnRuntime_, patrol.enemyWaveId);
         const EditorSplineRouteRuntimeInstance* route =
             FindRoute(patrol.routeEntityGuid);
@@ -470,11 +470,9 @@ void EditorPatrolRuntimeWorld::Update(float deltaTime) {
         if (!sample.valid) continue;
         const RailProjection projection =
             ProjectToRail(sample.position, *railPath_);
-        enemy->desc.forwardSpeed = 0.0f;
-        enemy->desc.distanceOffset =
-            projection.distance - enemy->desc.spawnDistance;
-        enemy->desc.lateralOffset = projection.lateral;
-        enemy->desc.verticalOffset = projection.vertical;
+        spawnRuntime_->SetEnemyRailPose(enemy->actorId,
+            projection.distance - enemy->desc.spawnDistance,
+            projection.lateral, projection.vertical, 0.0f);
     }
 }
 

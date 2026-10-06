@@ -1,9 +1,22 @@
 #include "CoursePreviewActorRuntimeBridge.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace editor {
+
+bool CoursePreviewActorRuntimeSettings::Validate(std::string* errorMessage) const {
+    const bool valid = std::isfinite(prewarmOpacity) && prewarmOpacity >= 0.0f && prewarmOpacity <= 1.0f;
+    if (errorMessage != nullptr) *errorMessage = valid ? "" : "Preview actor opacity must be finite and within 0..1.";
+    return valid;
+}
+
+bool CoursePreviewActorRuntimeBridge::Configure(const CoursePreviewActorRuntimeSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    settings_ = settings;
+    return true;
+}
 
 CoursePreviewActorRuntimeBridge::CoursePreviewActorRuntimeBridge() {
     compileOptions_.allowFallbackActorAssets = true;
@@ -20,6 +33,10 @@ bool CoursePreviewActorRuntimeBridge::Synchronize(
     float deltaTime,
     float playerDistance,
     std::string* errorMessage) {
+    if (!std::isfinite(deltaTime) || deltaTime < 0.0f || !std::isfinite(playerDistance)) {
+        if (errorMessage != nullptr) *errorMessage = "Preview actor synchronization requires finite time and distance.";
+        return false;
+    }
     stats_.spawnedThisFrame = 0;
     stats_.removedThisFrame = 0;
     stats_.prewarmedActors = 0;
@@ -33,17 +50,15 @@ bool CoursePreviewActorRuntimeBridge::Synchronize(
         if (!CompileSnapshot(simulation, errorMessage)) return false;
     }
 
-    auto& runtimeActors = runtime_.MutableEnemies();
-    const std::size_t beforeRemoval = runtimeActors.size();
-    runtimeActors.erase(
-        std::remove_if(runtimeActors.begin(), runtimeActors.end(), [&](const auto& actor) {
-            const CoursePreviewEnemyState* state = FindSimulationEnemy(
-                simulation, actor.desc.sourcePlacementGuid);
-            return state == nullptr || !ShouldMaterialize(state->phase) ||
-                compileResult_.program.FindActor(actor.desc.sourcePlacementGuid) == nullptr;
-        }),
-        runtimeActors.end());
-    stats_.removedThisFrame = static_cast<uint32_t>(beforeRemoval - runtimeActors.size());
+    std::vector<uint32_t> retiredActorIds;
+    for (const CourseEnemyActor& actor : runtime_.Enemies()) {
+        const CoursePreviewEnemyState* state = FindSimulationEnemy(simulation, actor.desc.sourcePlacementGuid);
+        if (state == nullptr || !ShouldMaterialize(state->phase) ||
+            compileResult_.program.FindActor(actor.desc.sourcePlacementGuid) == nullptr) retiredActorIds.push_back(actor.actorId);
+    }
+    runtime_.RetireEnemies(retiredActorIds, false);
+    stats_.removedThisFrame = static_cast<uint32_t>(retiredActorIds.size());
+    const auto& runtimeActors = runtime_.Enemies();
 
     for (const CompiledCourseWaveActor& compiled : compileResult_.program.actors) {
         const CoursePreviewEnemyState* state = FindSimulationEnemy(
@@ -60,7 +75,7 @@ bool CoursePreviewActorRuntimeBridge::Synchronize(
             desc.suppressFire = !settings_.simulateEnemyFire;
             if (!settings_.simulateMovement) desc.forwardSpeed = 0.0f;
             desc.lifetime = (std::max)(desc.lifetime, 3600.0f);
-            runtime_.SpawnEnemyActor(std::move(desc));
+            if (!runtime_.SpawnEnemyActor(std::move(desc), errorMessage)) return false;
             ++stats_.spawnedThisFrame;
             newlySpawned = true;
             existing = std::find_if(
@@ -71,11 +86,12 @@ bool CoursePreviewActorRuntimeBridge::Synchronize(
         if (existing != runtimeActors.end()) {
             if (newlySpawned || settings_.preserveActorsAtAuthoredTransform ||
                 !settings_.simulateMovement) {
-                ApplyCompiledState(*existing, compiled, state->phase);
+                ApplyCompiledState(existing->actorId, compiled, state->phase);
             } else {
-                existing->desc.suppressFire = !settings_.simulateEnemyFire ||
-                    state->phase == CoursePreviewEnemyPhase::Prewarmed;
-                existing->desc.forwardSpeed = compiled.actor.forwardSpeed;
+                CourseEnemyActorDesc desc = existing->desc;
+                desc.suppressFire = !settings_.simulateEnemyFire || state->phase == CoursePreviewEnemyPhase::Prewarmed;
+                desc.forwardSpeed = compiled.actor.forwardSpeed;
+                runtime_.SynchronizePreviewEnemy(existing->actorId, std::move(desc));
             }
             if (state->phase == CoursePreviewEnemyPhase::Prewarmed) {
                 ++stats_.prewarmedActors;
@@ -95,18 +111,18 @@ bool CoursePreviewActorRuntimeBridge::Synchronize(
         ? "preview actor bridge"
         : "preview fire disabled";
     runtime_.Update(deltaTime, safety);
-    if (!settings_.simulateEnemyFire) runtime_.MutableBullets().clear();
+    if (!settings_.simulateEnemyFire) runtime_.ClearProjectiles();
 
     // Movement can be simulated, but the default editor contract keeps the
     // authored placement exact so scrubbing is stable and repeatable.
     if (settings_.preserveActorsAtAuthoredTransform || !settings_.simulateMovement) {
-        for (CourseEnemyActor& actor : runtime_.MutableEnemies()) {
+        for (const CourseEnemyActor& actor : runtime_.Enemies()) {
             const CompiledCourseWaveActor* compiled =
                 compileResult_.program.FindActor(actor.desc.sourcePlacementGuid);
             const CoursePreviewEnemyState* state = FindSimulationEnemy(
                 simulation, actor.desc.sourcePlacementGuid);
             if (compiled != nullptr && state != nullptr) {
-                ApplyCompiledState(actor, *compiled, state->phase);
+                ApplyCompiledState(actor.actorId, *compiled, state->phase);
             }
         }
     }
@@ -169,26 +185,14 @@ bool CoursePreviewActorRuntimeBridge::ShouldMaterialize(
 }
 
 void CoursePreviewActorRuntimeBridge::ApplyCompiledState(
-    CourseEnemyActor& runtimeActor,
-    const CompiledCourseWaveActor& compiled,
-    CoursePreviewEnemyPhase phase) const {
-    const uint32_t actorId = runtimeActor.actorId;
-    const float age = runtimeActor.age;
-    const float fireTimer = runtimeActor.fireTimer;
-    runtimeActor.desc = compiled.actor;
-    runtimeActor.desc.previewOnly = true;
-    runtimeActor.desc.suppressFire = !settings_.simulateEnemyFire ||
-        phase == CoursePreviewEnemyPhase::Prewarmed;
-    if (!settings_.simulateMovement || settings_.preserveActorsAtAuthoredTransform) {
-        runtimeActor.desc.forwardSpeed = 0.0f;
-    }
-    runtimeActor.desc.lifetime = (std::max)(runtimeActor.desc.lifetime, 3600.0f);
-    if (phase == CoursePreviewEnemyPhase::Prewarmed) {
-        runtimeActor.desc.color.w *= (std::clamp)(settings_.prewarmOpacity, 0.05f, 1.0f);
-    }
-    runtimeActor.actorId = actorId;
-    runtimeActor.age = age;
-    runtimeActor.fireTimer = fireTimer;
+    uint32_t actorId, const CompiledCourseWaveActor& compiled, CoursePreviewEnemyPhase phase) {
+    CourseEnemyActorDesc desc = compiled.actor;
+    desc.previewOnly = true;
+    desc.suppressFire = !settings_.simulateEnemyFire || phase == CoursePreviewEnemyPhase::Prewarmed;
+    if (!settings_.simulateMovement || settings_.preserveActorsAtAuthoredTransform) desc.forwardSpeed = 0.0f;
+    desc.lifetime = (std::max)(desc.lifetime, 3600.0f);
+    if (phase == CoursePreviewEnemyPhase::Prewarmed) desc.color.w *= (std::clamp)(settings_.prewarmOpacity, 0.05f, 1.0f);
+    runtime_.SynchronizePreviewEnemy(actorId, std::move(desc));
 }
 
 } // namespace editor

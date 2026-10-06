@@ -32,10 +32,7 @@ bool MatchesWave(
 void EnemyEncounterPacingDirector::Reset(CourseSpawnRuntime* runtime) {
     RestoreCoordinator(runtime);
     if (runtime != nullptr) {
-        for (CourseEnemyActor& actor : runtime->MutableEnemies()) {
-            actor.encounterPacingEvaluated = false;
-            actor.encounterPacingAttackAllowed = true;
-        }
+        runtime->ResetEnemyEncounterPacing();
     }
     frame_ = {};
     activeDefinition_ = nullptr;
@@ -89,11 +86,10 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
 
     if (activeDefinition_ == nullptr) {
         RestoreCoordinator(&runtime);
-        for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+        for (const CourseEnemyActor& actor : runtime.Enemies()) {
             const bool holdForAuthoredBeat = input.gameplayActive &&
                 hasPendingConfiguredBeat(actor.desc.waveId);
-            actor.encounterPacingEvaluated = holdForAuthoredBeat;
-            actor.encounterPacingAttackAllowed = !holdForAuthoredBeat;
+            runtime.SetEnemyEncounterPacing(actor.actorId, holdForAuthoredBeat, !holdForAuthoredBeat);
         }
         frame_ = std::move(next);
         return frame_;
@@ -129,13 +125,12 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
         }
     }
 
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (const CourseEnemyActor& actor : runtime.Enemies()) {
         if (!MatchesWave(actor, definition) || !IsLivingActor(actor)) {
             const bool holdForAuthoredBeat = input.gameplayActive &&
                 IsLivingActor(actor) &&
                 hasPendingConfiguredBeat(actor.desc.waveId);
-            actor.encounterPacingEvaluated = holdForAuthoredBeat;
-            actor.encounterPacingAttackAllowed = !holdForAuthoredBeat;
+            runtime.SetEnemyEncounterPacing(actor.actorId, holdForAuthoredBeat, !holdForAuthoredBeat);
             continue;
         }
         ++next.eligibleActors;
@@ -161,13 +156,13 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
         next.phase != EnemyEncounterBeatPhase::Complete &&
         next.phase != EnemyEncounterBeatPhase::Failed;
 
-    EnemyAttackCoordinatorSettings& coordinator =
-        runtime.EnemyAttacks().MutableSettings();
+    EnemyAttackCoordinatorSettings coordinator = runtime.EnemyAttacks().Settings();
     coordinator.maximumConcurrentAttackers =
         definition.maximumConcurrentAttackers;
     coordinator.maximumAttackersPerWave =
         definition.maximumConcurrentAttackers;
     coordinator.maximumThreatBudget = definition.maximumThreatBudget;
+    (void)runtime.EnemyAttacks().Configure(coordinator);
 
     const bool readableEnough =
         next.readableRatio + 0.0001f >= definition.requiredReadableRatio;
@@ -262,12 +257,10 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
     // Publish the final phase gate after transitions so the frame's
     // attackWindowOpen and actor authorization cannot disagree for one tick.
     next.gatedActors = 0;
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (const CourseEnemyActor& actor : runtime.Enemies()) {
         if (!MatchesWave(actor, definition) || !IsLivingActor(actor)) continue;
-        actor.encounterPacingEvaluated = input.gameplayActive;
-        actor.encounterPacingAttackAllowed =
-            !input.gameplayActive ||
-            next.phase == EnemyEncounterBeatPhase::Attack;
+        runtime.SetEnemyEncounterPacing(actor.actorId, input.gameplayActive,
+            !input.gameplayActive || next.phase == EnemyEncounterBeatPhase::Attack);
         if (!actor.encounterPacingAttackAllowed) ++next.gatedActors;
     }
     next.attackWindowOpen = next.phase == EnemyEncounterBeatPhase::Attack;
@@ -281,12 +274,11 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
             frame_.phase,
             EnemyEncounterBeatPhase::Complete,
             "encounter Beat completed"});
-        for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+        for (const CourseEnemyActor& actor : runtime.Enemies()) {
             const bool holdForNextBeat = input.gameplayActive &&
                 !MatchesWave(actor, definition) && IsLivingActor(actor) &&
                 hasPendingConfiguredBeat(actor.desc.waveId);
-            actor.encounterPacingEvaluated = holdForNextBeat;
-            actor.encounterPacingAttackAllowed = !holdForNextBeat;
+            runtime.SetEnemyEncounterPacing(actor.actorId, holdForNextBeat, !holdForNextBeat);
         }
         RestoreCoordinator(&runtime);
         activeDefinition_ = nullptr;
@@ -394,7 +386,7 @@ void EnemyEncounterPacingDirector::EnterPhase(
 void EnemyEncounterPacingDirector::RestoreCoordinator(
     CourseSpawnRuntime* runtime) {
     if (runtime != nullptr && hasCoordinatorBaseline_) {
-        runtime->EnemyAttacks().MutableSettings() = coordinatorBaseline_;
+        (void)runtime->EnemyAttacks().Configure(coordinatorBaseline_);
     }
     hasCoordinatorBaseline_ = false;
 }

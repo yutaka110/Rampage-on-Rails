@@ -20,6 +20,36 @@ bool ValidState(const PlayerDamageRuntimeState& state) {
 }
 } // namespace
 
+bool PlayerDamageSystemSettings::Validate(std::string* errorMessage) const {
+    if (projectileHistoryCapacity == 0 || projectileHistoryCapacity > 65536 ||
+        !std::isfinite(maximumDamagePerHit) || maximumDamagePerHit <= 0.0f ||
+        !std::isfinite(maximumInvulnerabilitySeconds) || maximumInvulnerabilitySeconds < 0.0f) {
+        SetError(errorMessage, "Player damage settings require a bounded nonzero history, positive damage cap and nonnegative finite invulnerability cap.");
+        return false;
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
+
+bool PlayerDamageSystem::Configure(
+    const PlayerDamageSystemSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    // Keep the newest projectile IDs when reducing the duplicate-hit window.
+    if (state_.consumedProjectileIds.size() > settings.projectileHistoryCapacity) {
+        state_.consumedProjectileIds.erase(state_.consumedProjectileIds.begin(),
+            state_.consumedProjectileIds.end() - settings.projectileHistoryCapacity);
+    }
+    const float remaining = (std::min)(state_.invulnerabilityRemainingSeconds,
+        settings.maximumInvulnerabilitySeconds);
+    if (remaining != state_.invulnerabilityRemainingSeconds ||
+        settings.projectileHistoryCapacity != settings_.projectileHistoryCapacity) {
+        ++state_.revision;
+    }
+    state_.invulnerabilityRemainingSeconds = remaining;
+    settings_ = settings;
+    return true;
+}
+
 bool PlayerDamageSystem::Initialize(
     float maximumHitPoints,
     float hitPoints,

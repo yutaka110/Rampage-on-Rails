@@ -1,4 +1,5 @@
 #include "CourseMapVisualBakePipeline.h"
+#include "../EditorSettingsValidation.h"
 
 #include "../../course/CourseRuntimeProgramAsset.h"
 
@@ -489,20 +490,26 @@ void CourseMapVisualBakePipeline::InvalidateAsset() noexcept {
     lastResult_ = {};
 }
 
-void CourseMapVisualBakePipeline::SetSettings(
-    CourseMapVisualBakeSettings settings) {
-    settings.contourInterval = (std::clamp)(settings.contourInterval, 0.5f, 1000.0f);
-    settings.tileWorldSize = (std::clamp)(settings.tileWorldSize, 16.0f, 8192.0f);
-    settings.minimumPrimitiveExtent =
-        (std::clamp)(settings.minimumPrimitiveExtent, 0.05f, 1000.0f);
-    settings.maximumPrimitives = (std::clamp)(settings.maximumPrimitives, 1u, 262144u);
-    settings.maximumContours = (std::clamp)(settings.maximumContours, 1u, 524288u);
-    if (SameSettings(settings_, settings)) return;
+bool CourseMapVisualBakeSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(contourInterval, .5f, 1000.0f) &&
+        settings::InRange(tileWorldSize, 16.0f, 8192.0f) &&
+        settings::InRange(minimumPrimitiveExtent, .05f, 1000.0f) &&
+        settings::InRange(maximumPrimitives, 1u, 262144u) &&
+        settings::InRange(maximumContours, 1u, 524288u);
+    return settings::Result(valid, errorMessage,
+        "CourseMapVisualBakeSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapVisualBakePipeline::SetSettings(
+    CourseMapVisualBakeSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++settingsRevision_;
     cachedFingerprint_ = 0;
     cacheAttempted_ = false;
     forceRebuild_ = true;
+    return true;
 }
 
 void CourseMapVisualBakePipeline::SetCacheRoot(std::filesystem::path path) {

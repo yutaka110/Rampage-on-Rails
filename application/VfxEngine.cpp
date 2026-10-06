@@ -377,7 +377,7 @@ void UpdateIceProjectilePreview(
             continue;
         }
 
-        EffectInstance* projectile = effectRuntime.FindInstance(shot.instanceId);
+        const EffectInstance* projectile = effectRuntime.FindInstance(shot.instanceId);
         if (projectile == nullptr && localTimer <= (std::max)(0.0f, deltaTime)) {
             shot.instanceId = effectRuntime.PlayEffectWithParams(
                 "ice_projectile",
@@ -393,22 +393,24 @@ void UpdateIceProjectilePreview(
         position.y += std::sin(travelT * 3.14159265f) * 0.05f;
 
         if (projectile != nullptr) {
-            projectile->transform.translate = position;
-            projectile->transform.rotate.z = shot.hasExplicitRotationZ
+            Transform transform = projectile->transform;
+            transform.translate = position;
+            transform.rotate.z = shot.hasExplicitRotationZ
                 ? shot.rotationZ
                 : std::atan2(end.y - start.y, end.x - start.x);
-            projectile->transform.rotate.y = -0.34f;
+            transform.rotate.y = -0.34f;
             const float depthScale = shot.useWorldSpace
                 ? (std::max)(0.1f, shot.visualScale)
                 : 2.05f + (0.58f - 2.05f) * easedT;
             const Vector3 assetScale = projectile->asset != nullptr
                 ? projectile->asset->size
                 : Vector3{1.0f, 1.0f, 1.0f};
-            projectile->transform.scale = {
+            transform.scale = {
                 assetScale.x * depthScale,
                 assetScale.y * depthScale,
                 assetScale.z * depthScale,
             };
+            (void)effectRuntime.SetInstanceAppearance(shot.instanceId, transform, projectile->color, projectile->attached);
         }
 
         if (travelT >= 1.0f && !shot.impactSpawned) {

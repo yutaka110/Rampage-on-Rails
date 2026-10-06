@@ -58,7 +58,7 @@ public:
         return dynamicOverlay_;
     }
     const CourseMap3DCamera& Camera() const noexcept { return camera_; }
-    CourseMap3DCamera& MutableCamera() noexcept { return camera_; }
+    bool ConfigureCamera(const CourseMap3DCamera& camera, std::string* errorMessage = nullptr);
     CourseMap3DViewportRenderer& Renderer() noexcept { return renderer_; }
     const CourseMap3DViewportState& State() const noexcept { return state_; }
 

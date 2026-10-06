@@ -1,4 +1,5 @@
 #include "CourseMapSceneVisualizationPipeline.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cctype>
@@ -388,20 +389,27 @@ CourseMapSceneVisualizationPipeline::CurrentFrame(
     return caches_[index].valid ? &caches_[index].frame : nullptr;
 }
 
-void CourseMapSceneVisualizationPipeline::SetSettings(
-    CourseMapSceneVisualizationSettings settings) {
-    settings.terrainOpacity = (std::clamp)(settings.terrainOpacity, 0.0f, 1.0f);
-    settings.structureOpacity = (std::clamp)(settings.structureOpacity, 0.0f, 1.0f);
-    settings.enemyOpacity = (std::clamp)(settings.enemyOpacity, 0.0f, 1.0f);
-    settings.maxTerrainPrimitives = (std::clamp)(settings.maxTerrainPrimitives, 1u, 16384u);
-    settings.maxRockInstances = (std::clamp)(settings.maxRockInstances, 1u, 32768u);
-    settings.maxSceneStructures = (std::clamp)(settings.maxSceneStructures, 1u, 16384u);
-    settings.maxActorProxies = (std::clamp)(settings.maxActorProxies, 1u, 32768u);
-    settings.labelBudget = (std::clamp)(settings.labelBudget, 0u, 4096u);
-    if (VisualizationSettingsEqual(settings_, settings)) return;
+bool CourseMapSceneVisualizationSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(terrainOpacity, 0.0f, 1.0f) &&
+        settings::InRange(structureOpacity, 0.0f, 1.0f) &&
+        settings::InRange(enemyOpacity, 0.0f, 1.0f) &&
+        settings::InRange(maxTerrainPrimitives, 1u, 16384u) &&
+        settings::InRange(maxRockInstances, 1u, 32768u) &&
+        settings::InRange(maxSceneStructures, 1u, 16384u) &&
+        settings::InRange(maxActorProxies, 1u, 32768u) &&
+        settings::InRange(labelBudget, 0u, 4096u);
+    return settings::Result(valid, errorMessage,
+        "CourseMapSceneVisualizationSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapSceneVisualizationPipeline::SetSettings(
+    CourseMapSceneVisualizationSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (VisualizationSettingsEqual(settings_, settings)) return true;
     settings_ = settings;
     ++settingsRevision_;
     Invalidate();
+    return true;
 }
 
 void CourseMapSceneVisualizationPipeline::SetResourceRoot(

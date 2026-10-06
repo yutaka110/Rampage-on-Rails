@@ -8,6 +8,15 @@
 namespace editor {
 namespace {
 
+template <typename Owner, typename Settings>
+void ApplyValidatedSettings(Owner& owner, const Settings& candidate) {
+    std::string error;
+    if (!owner.SetSettings(candidate, &error)) {
+        ImGui::TextWrapped("Settings rejected: %s", error.c_str());
+    }
+}
+
+
 constexpr std::string_view kPointPrefix = "course-rail-point:";
 constexpr std::string_view kSegmentPrefix = "course-rail-segment:";
 
@@ -313,12 +322,12 @@ void CourseRailDetailsPanel::DrawTransformSettings(
     ImGui::Checkbox("Grid Snap", &settings.snapEnabled);
     ImGui::DragFloat("Grid Size", &settings.gridSize, 0.1f, 0.01f, 1000.0f, "%.3f");
     ImGui::SliderFloat("Handle Scale", &settings.handleLengthScale, 0.1f, 4.0f, "%.2f");
-    context.transformGizmo->SetSettings(settings);
+    ApplyValidatedSettings(*context.transformGizmo, settings);
     if (context.viewportTool != nullptr) {
         CourseRailViewportEditSettings toolSettings = context.viewportTool->Settings();
         toolSettings.gridSnap = settings.snapEnabled;
         toolSettings.gridSize = settings.gridSize;
-        context.viewportTool->SetSettings(toolSettings);
+        ApplyValidatedSettings(*context.viewportTool, toolSettings);
     }
     ImGui::Text("Selected points: %u", context.transformGizmo->State().selectedPointCount);
     ImGui::Text("Hover: %s  Active: %s",

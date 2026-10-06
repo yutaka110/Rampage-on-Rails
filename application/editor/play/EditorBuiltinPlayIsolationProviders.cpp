@@ -412,8 +412,11 @@ bool EditorVfxPlayIsolationProvider::Restore(const EditorPlaySnapshot& snapshot,
     }
     const EditorVfxAuthoringSnapshot* captured = snapshot.Read<EditorVfxAuthoringSnapshot>(Id(), error);
     if (captured == nullptr) return false;
+    std::string validationError;
+    if (!runtime_->ReplaceAssets(*captured, &validationError)) {
+        SetEditorError(error, EditorErrorCode::NotAvailable, validationError); return false;
+    }
     runtime_->ClearInstances();
-    runtime_->MutableAssets() = *captured;
     ClearEditorError(error);
     return true;
 }
@@ -450,7 +453,10 @@ bool EditorPostProcessPlayIsolationProvider::Restore(const EditorPlaySnapshot& s
     }
     const EditorPostProcessAuthoringSnapshot* captured = snapshot.Read<EditorPostProcessAuthoringSnapshot>(Id(), error);
     if (captured == nullptr) return false;
-    stack_->MutablePasses() = *captured;
+    std::string validationError;
+    if (!stack_->ReplacePasses(*captured, &validationError)) {
+        SetEditorError(error, EditorErrorCode::NotAvailable, validationError); return false;
+    }
     ClearEditorError(error);
     return true;
 }

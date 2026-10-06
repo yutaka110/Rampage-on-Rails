@@ -28,6 +28,8 @@ struct CourseRailTransformGizmoSettings final {
     bool snapEnabled = false;
     float gridSize = 1.0f;
     float handleLengthScale = 0.65f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseRailTransformGizmoInput final {
@@ -60,7 +62,7 @@ struct CourseRailTransformGizmoState final {
 class CourseRailTransformGizmo final {
 public:
     void Bind(CourseRailEditorController* controller);
-    void SetSettings(CourseRailTransformGizmoSettings settings);
+    bool SetSettings(CourseRailTransformGizmoSettings settings, std::string* errorMessage = nullptr);
     void Tick(const CourseRailTransformGizmoInput& input);
     void BuildViewportOverlay(EditorViewportOverlayService& overlay) const;
     void Cancel(std::string message = {});

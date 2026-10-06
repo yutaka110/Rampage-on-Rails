@@ -81,9 +81,11 @@ public:
     bool InteractivePanActive() const noexcept { return interactivePanActive_; }
     Vector2 PresentationOffset() const noexcept { return presentationOffset_; }
     const CourseOverviewMapControllerState& State() const noexcept { return state_; }
-    CourseOverviewMapProjectionSettings& MutableProjectionSettings() noexcept {
+    const CourseOverviewMapProjectionSettings& ProjectionSettings() const noexcept {
         return projectionSettings_;
     }
+    bool ConfigureProjection(const CourseOverviewMapProjectionSettings& settings,
+        std::string* errorMessage = nullptr);
     CourseOverviewMapRenderer& Renderer() noexcept { return renderer_; }
     CourseOverviewMapVisibilityService& Visibility() noexcept { return visibility_; }
 

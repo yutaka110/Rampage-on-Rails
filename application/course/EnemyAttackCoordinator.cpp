@@ -70,10 +70,36 @@ void EnemyAttackCoordinator::Reset() {
     revision_ = 0;
 }
 
+bool EnemyAttackCoordinatorSettings::Validate(std::string* errorMessage) const {
+    // Zero capacity intentionally holds queued attacks without disabling arbitration.
+    const bool valid = maximumConcurrentAttackers <= 4096 &&
+        maximumAttackersPerWave <= 4096 && maximumAttackersPerSector <= 4096 &&
+        std::isfinite(maximumThreatBudget) && maximumThreatBudget >= 0.0f &&
+        std::isfinite(maximumReservationSeconds) && maximumReservationSeconds > 0.0f &&
+        std::isfinite(tokenRecoverySeconds) && tokenRecoverySeconds >= 0.0f &&
+        std::isfinite(waitingPriorityPerSecond) && waitingPriorityPerSecond >= 0.0f;
+    if (errorMessage != nullptr) *errorMessage = valid ? "" :
+        "Enemy attack settings require bounded attacker counts and finite nonnegative budgets/durations (positive reservation timeout).";
+    return valid;
+}
+
+bool EnemyAttackCoordinator::Configure(
+    const EnemyAttackCoordinatorSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    // Existing reservations finish normally; the next admission uses the new budget.
+    settings_ = settings;
+    return true;
+}
+
 void EnemyAttackCoordinator::RebuildFromRuntime(CourseSpawnRuntime& runtime) {
+    runtime.RebuildEnemyAttacks(*this);
+}
+
+void EnemyAttackCoordinator::RebuildFromRuntimeActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime) {
     frame_ = {};
     nextTokenId_ = 1;
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         EnemyAttackRuntimeState& state = actor.attackState;
         state.committedThisFrame = false;
         if (!actor.behaviorDefinition.commercialBehavior) {
@@ -105,10 +131,16 @@ void EnemyAttackCoordinator::InitializeActor(CourseEnemyActor& actor) {
     actor.attackState.revision = ++revision_;
 }
 
-void EnemyAttackCoordinator::Update(
-    CourseSpawnRuntime& runtime,
+void EnemyAttackCoordinator::Update(CourseSpawnRuntime& runtime,
     const EnemyBehaviorFrame& behaviorFrame,
     float deltaTime) {
+    runtime.UpdateEnemyAttacks(*this, behaviorFrame, deltaTime);
+}
+
+void EnemyAttackCoordinator::UpdateActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        const EnemyBehaviorFrame& behaviorFrame,
+        float deltaTime) {
     const float dt = (std::max)(0.0f, deltaTime);
     frame_ = {};
 
@@ -118,7 +150,7 @@ void EnemyAttackCoordinator::Update(
         intents[intent.actorId] = &intent;
     }
 
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         EnemyAttackRuntimeState& state = actor.attackState;
         state.committedThisFrame = false;
         if (!actor.behaviorDefinition.commercialBehavior) continue;
@@ -179,7 +211,7 @@ void EnemyAttackCoordinator::Update(
     std::unordered_map<std::string, uint32_t> waveCounts;
     uint32_t sectorCounts[3]{};
     std::vector<CourseEnemyActor*> candidates;
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    for (CourseEnemyActor& actor : actors) {
         EnemyAttackRuntimeState& state = actor.attackState;
         if (OccupiesToken(state)) {
             ++occupiedCount;
@@ -237,11 +269,17 @@ void EnemyAttackCoordinator::Update(
     frame_.revision = revision_;
 }
 
-bool EnemyAttackCoordinator::MarkTelegraphPresented(
-    CourseSpawnRuntime& runtime,
+bool EnemyAttackCoordinator::MarkTelegraphPresented(CourseSpawnRuntime& runtime,
     uint32_t actorId,
     uint64_t intentSequence) {
-    for (CourseEnemyActor& actor : runtime.MutableEnemies()) {
+    return runtime.MarkEnemyCoordinatorTelegraph(*this, actorId, intentSequence);
+}
+
+bool EnemyAttackCoordinator::MarkTelegraphPresentedActors(std::span<CourseEnemyActor> actors,
+        CourseSpawnRuntime& runtime,
+        uint32_t actorId,
+        uint64_t intentSequence) {
+    for (CourseEnemyActor& actor : actors) {
         EnemyAttackRuntimeState& state = actor.attackState;
         if (actor.actorId != actorId || !state.tokenReserved ||
             state.intentSequence != intentSequence) {

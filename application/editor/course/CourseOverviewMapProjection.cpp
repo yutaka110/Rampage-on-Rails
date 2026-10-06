@@ -34,6 +34,17 @@ Vector3 Normalize(Vector3 value, Vector3 fallback) {
 
 } // namespace
 
+bool CourseOverviewMapProjectionSettings::Validate(std::string* errorMessage) const {
+    const bool valid = mode <= CourseOverviewMapProjectionMode::Free &&
+        std::isfinite(zoom) && zoom >= 0.05f && zoom <= 64.0f &&
+        std::isfinite(panPixels.x) && std::isfinite(panPixels.y) &&
+        std::isfinite(paddingPixels) && paddingPixels >= 0.0f && paddingPixels <= 256.0f &&
+        std::isfinite(freeYawRadians) && std::isfinite(freePitchRadians) &&
+        fitSamplesPerSegment >= 2 && fitSamplesPerSegment <= 256;
+    if (errorMessage != nullptr) *errorMessage = valid ? "" : "Map projection requires finite values, zoom 0.05..64, padding 0..256 and 2..256 samples.";
+    return valid;
+}
+
 bool CourseOverviewMapProjection::Configure(
     const CourseRailAuthoringModel* rail,
     CourseOverviewMapRect rect,
@@ -41,6 +52,11 @@ bool CourseOverviewMapProjection::Configure(
     std::string* errorMessage,
     const CourseRailAuthoringModel* boundsRail,
     const std::vector<Vector3>* additionalFitPoints) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.width) || !std::isfinite(rect.height)) {
+        if (errorMessage != nullptr) *errorMessage = "Map viewport must be finite.";
+        return false;
+    }
     ownedRailSnapshot_.reset();
     rail_ = rail;
     boundsRail_ = boundsRail != nullptr ? boundsRail : rail;

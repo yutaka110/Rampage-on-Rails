@@ -86,9 +86,6 @@ bool ValidId(const std::string& value) {
         });
 }
 
-bool FiniteInRange(float value, float minimum, float maximum) {
-    return std::isfinite(value) && value >= minimum && value <= maximum;
-}
 
 std::string ReadAllBytes(const std::filesystem::path& path, std::string& errorMessage) {
     std::ifstream input(path, std::ios::binary);
@@ -274,34 +271,7 @@ bool RailAimAssistPreset::Validate(std::string* errorMessage) const {
     if (displayName.empty() || displayName.size() > 128) {
         return reject("displayName must contain 1-128 characters");
     }
-    const RailAimAssistSettings& s = settings;
-    if (!FiniteInRange(s.minimumDistance, 0.0f, 100000.0f) ||
-        !FiniteInRange(s.maximumDistance, 0.01f, 100000.0f) ||
-        s.minimumDistance >= s.maximumDistance ||
-        !FiniteInRange(s.mouseAcquireAngleDegrees, 0.01f, 45.0f) ||
-        !FiniteInRange(s.gamepadAcquireAngleDegrees, 0.01f, 45.0f) ||
-        !FiniteInRange(s.retentionAngleMultiplier, 1.0f, 4.0f) ||
-        !FiniteInRange(s.mouseMagnetismStrength, 0.0f, 1.0f) ||
-        !FiniteInRange(s.gamepadMagnetismStrength, 0.0f, 1.0f) ||
-        !FiniteInRange(s.mouseMaximumCorrectionDegrees, 0.0f, 45.0f) ||
-        !FiniteInRange(s.gamepadMaximumCorrectionDegrees, 0.0f, 45.0f) ||
-        !FiniteInRange(s.maximumCorrectionSpeedDegrees, 0.0f, 2000.0f) ||
-        !FiniteInRange(s.highIntentReticleSpeed, 1.0f, 100000.0f) ||
-        !FiniteInRange(s.minimumHighIntentStrength, 0.0f, 1.0f) ||
-        !FiniteInRange(s.targetSwitchAdvantage, 0.0f, 2.0f) ||
-        !FiniteInRange(s.targetRetentionSeconds, 0.0f, 5.0f) ||
-        !FiniteInRange(s.angleWeight, 0.0f, 2.0f) ||
-        !FiniteInRange(s.forwardWeight, 0.0f, 2.0f) ||
-        !FiniteInRange(s.anchorPriorityWeight, 0.0f, 2.0f) ||
-        !FiniteInRange(s.enemyPriorityBonus, 0.0f, 2.0f) ||
-        !FiniteInRange(s.retainedTargetBonus, 0.0f, 2.0f) ||
-        s.maximumVisibilityQueries > 256) {
-        return reject("aim-assist setting is outside commercial safety limits");
-    }
-    if (errorMessage != nullptr) {
-        errorMessage->clear();
-    }
-    return true;
+    return settings.Validate(errorMessage);
 }
 
 RailAimAssistPresetRegistry::RailAimAssistPresetRegistry() {

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include <cstdint>
 #include <vector>
 
@@ -32,6 +34,8 @@ struct CourseOverviewMapVisibilitySettings final {
     float estimatedLabelHeight = 14.0f;
     float labelPaddingPixels = 3.0f;
     float pixelsPerLabel = 5200.0f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseOverviewMapVisibilityStats final {
@@ -75,7 +79,7 @@ public:
     const CourseOverviewMapVisibleFrame& Build(
         const CourseOverviewMapFrame& source,
         uint64_t sourceRevision);
-    void SetSettings(CourseOverviewMapVisibilitySettings settings);
+    bool SetSettings(CourseOverviewMapVisibilitySettings settings, std::string* errorMessage = nullptr);
     void Invalidate() noexcept;
 
     const CourseOverviewMapVisibilitySettings& Settings() const noexcept {

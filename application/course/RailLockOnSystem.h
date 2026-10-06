@@ -48,9 +48,9 @@ public:
     const RailLockRelease& LastRelease() const { return lastRelease_; }
     const RailLockDebugFrame& DebugFrame() const { return debugFrame_; }
     const RailLockSettings& Settings() const { return settings_; }
-    RailLockSettings& MutableSettings() { return settings_; }
+    bool Configure(const RailLockSettings& settings, std::string* errorMessage = nullptr);
     const RailAimAssistSettings& AimAssistSettings() const { return aimAssistSettings_; }
-    RailAimAssistSettings& MutableAimAssistSettings() { return aimAssistSettings_; }
+    bool ConfigureAimAssist(const RailAimAssistSettings& settings, std::string* errorMessage = nullptr);
     const AimInputDeviceRouterState& AimInputDevice() const {
         return reticle_.InputDeviceState();
     }

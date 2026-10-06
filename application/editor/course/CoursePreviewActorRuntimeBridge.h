@@ -15,6 +15,8 @@ struct CoursePreviewActorRuntimeSettings final {
     bool simulateEnemyFire = false;
     bool preserveActorsAtAuthoredTransform = true;
     float prewarmOpacity = 0.42f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CoursePreviewActorRuntimeStats final {
@@ -47,7 +49,6 @@ public:
     void Reset();
 
     const CourseSpawnRuntime& Runtime() const noexcept { return runtime_; }
-    CourseSpawnRuntime& MutableRuntime() noexcept { return runtime_; }
     const CompiledCourseWaveProgram* Program() const noexcept {
         return programValid_ ? &compileResult_.program : nullptr;
     }
@@ -55,7 +56,7 @@ public:
         return compileResult_;
     }
     const CoursePreviewActorRuntimeStats& Stats() const noexcept { return stats_; }
-    CoursePreviewActorRuntimeSettings& MutableSettings() noexcept { return settings_; }
+    bool Configure(const CoursePreviewActorRuntimeSettings& settings, std::string* errorMessage = nullptr);
     const CoursePreviewActorRuntimeSettings& Settings() const noexcept { return settings_; }
     bool Active() const noexcept { return stats_.active && programValid_; }
 
@@ -68,9 +69,9 @@ private:
         std::string_view placementGuid) const;
     bool ShouldMaterialize(CoursePreviewEnemyPhase phase) const;
     void ApplyCompiledState(
-        CourseEnemyActor& runtimeActor,
+        uint32_t actorId,
         const CompiledCourseWaveActor& compiled,
-        CoursePreviewEnemyPhase phase) const;
+        CoursePreviewEnemyPhase phase);
 
     CourseWaveRuntimeCompiler compiler_{};
     CourseWaveRuntimeCompileOptions compileOptions_{};

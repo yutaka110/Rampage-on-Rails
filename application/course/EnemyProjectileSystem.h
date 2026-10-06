@@ -80,6 +80,8 @@ public:
     void Reset();
     void RebuildFromProjectiles(
         std::vector<EnemyProjectileRuntimeState>& projectiles);
+    bool SpawnProjectile(EnemyProjectileRuntimeState projectile,
+        std::vector<EnemyProjectileRuntimeState>& projectiles);
     uint32_t SpawnVolley(
         const CourseEnemyActor& actor,
         std::vector<EnemyProjectileRuntimeState>& projectiles);

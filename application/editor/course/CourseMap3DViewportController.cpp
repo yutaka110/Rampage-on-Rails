@@ -23,6 +23,23 @@ bool SameRect(CourseOverviewMapRect a, CourseOverviewMapRect b) {
 
 } // namespace
 
+bool CourseMap3DCamera::Validate(std::string* errorMessage) const {
+    const bool valid = std::isfinite(target.x) && std::isfinite(target.y) && std::isfinite(target.z) &&
+        std::isfinite(yawRadians) && std::isfinite(pitchRadians) && std::abs(pitchRadians) <= 1.51843645f &&
+        std::isfinite(distance) && distance >= 2.0f && distance <= 200000.0f &&
+        std::isfinite(verticalFovRadians) && verticalFovRadians >= 0.01f && verticalFovRadians <= 3.13f &&
+        std::isfinite(nearPlane) && std::isfinite(farPlane) && nearPlane > 0.0f && farPlane > nearPlane;
+    if (errorMessage != nullptr) *errorMessage = valid ? "" : "Map camera requires finite values, distance 2..200000, safe FOV/pitch and 0 < near < far.";
+    return valid;
+}
+
+bool CourseMap3DViewportController::ConfigureCamera(const CourseMap3DCamera& camera, std::string* errorMessage) {
+    if (!camera.Validate(errorMessage)) return false;
+    camera_ = camera;
+    TouchCamera();
+    return true;
+}
+
 bool CourseMap3DViewportController::Bind(CourseMap3DViewportBinding binding,
     std::string* errorMessage) {
     if (binding_.rail == binding.rail && binding_.enemies == binding.enemies &&
@@ -64,25 +81,27 @@ void CourseMap3DViewportController::SetViewport(CourseOverviewMapRect viewport) 
 }
 
 void CourseMap3DViewportController::Orbit(Vector2 deltaPixels) {
-    camera_.yawRadians += deltaPixels.x * 0.006f;
+    if (!std::isfinite(deltaPixels.x) || !std::isfinite(deltaPixels.y)) return;
+    camera_.yawRadians = std::remainder(camera_.yawRadians + deltaPixels.x * 0.006f, 6.283185307f);
     camera_.pitchRadians = (std::clamp)(camera_.pitchRadians + deltaPixels.y * 0.006f,
         -1.51843645f, 1.51843645f);
     TouchCamera();
 }
 
 void CourseMap3DViewportController::Pan(Vector2 deltaPixels) {
-    if (!viewport_.Valid()) return;
+    if (!viewport_.Valid() || !std::isfinite(deltaPixels.x) || !std::isfinite(deltaPixels.y)) return;
     const CourseMap3DCameraBasis basis = BuildCourseMap3DCameraBasis(camera_);
     const float worldPerPixel = 2.0f * camera_.distance *
         std::tan(camera_.verticalFovRadians * 0.5f) / viewport_.height;
-    camera_.target = Add(camera_.target, Add(
+    CourseMap3DCamera candidate = camera_;
+    candidate.target = Add(camera_.target, Add(
         Scale(basis.right, -deltaPixels.x * worldPerPixel),
         Scale(basis.up, deltaPixels.y * worldPerPixel)));
-    TouchCamera();
+    (void)ConfigureCamera(candidate);
 }
 
 void CourseMap3DViewportController::Dolly(float wheelSteps) {
-    if (wheelSteps == 0.0f) return;
+    if (!std::isfinite(wheelSteps) || wheelSteps == 0.0f) return;
     camera_.distance = (std::clamp)(camera_.distance *
         std::pow(0.86f, wheelSteps), 2.0f, 200000.0f);
     TouchCamera();

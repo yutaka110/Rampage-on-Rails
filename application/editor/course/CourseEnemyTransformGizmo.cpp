@@ -1,4 +1,5 @@
 #include "CourseEnemyTransformGizmo.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -93,14 +94,22 @@ void CourseEnemyTransformGizmo::Bind(CourseEnemyEditorController* controller) {
     selectedGuids_.clear();
 }
 
-void CourseEnemyTransformGizmo::SetSettings(
-    CourseEnemyTransformGizmoSettings settings) {
-    settings.translationSnap = (std::clamp)(settings.translationSnap, 0.01f, 1000.0f);
-    settings.rotationSnapDegrees =
-        (std::clamp)(settings.rotationSnapDegrees, 0.1f, 180.0f);
-    settings.scaleSnap = (std::clamp)(settings.scaleSnap, 0.001f, 10.0f);
-    settings.handleLengthScale = (std::clamp)(settings.handleLengthScale, 0.1f, 4.0f);
+bool CourseEnemyTransformGizmoSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(translationSnap, .01f, 1000.0f) &&
+        settings::InRange(rotationSnapDegrees, .1f, 180.0f) &&
+        settings::InRange(scaleSnap, .001f, 10.0f) &&
+        settings::InRange(handleLengthScale, .1f, 4.0f) &&
+        mode >= EditorTransformGizmoMode::Translate && mode <= EditorTransformGizmoMode::Rotate &&
+        space >= EditorTransformGizmoSpace::World && space <= EditorTransformGizmoSpace::Local;
+    return settings::Result(valid, errorMessage,
+        "CourseEnemyTransformGizmoSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseEnemyTransformGizmo::SetSettings(
+    CourseEnemyTransformGizmoSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
+    return true;
 }
 
 void CourseEnemyTransformGizmo::Tick(

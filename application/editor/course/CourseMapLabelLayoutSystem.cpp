@@ -1,4 +1,5 @@
 #include "CourseMapLabelLayoutSystem.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -205,21 +206,27 @@ const CourseMapLabelLayoutFrame& CourseMapLabelLayoutSystem::Build(
     return frame_;
 }
 
-void CourseMapLabelLayoutSystem::SetSettings(
-    CourseMapLabelLayoutSettings settings) {
-    settings.maximumLabels = (std::clamp)(settings.maximumLabels, 1u, 4096u);
-    settings.estimatedGlyphWidth = (std::clamp)(settings.estimatedGlyphWidth, 2.0f, 32.0f);
-    settings.estimatedLineHeight = (std::clamp)(settings.estimatedLineHeight, 6.0f, 64.0f);
-    settings.paddingPixels = (std::clamp)(settings.paddingPixels, 0.0f, 24.0f);
-    settings.edgePaddingPixels = (std::clamp)(settings.edgePaddingPixels, 0.0f, 64.0f);
-    settings.displacementStepPixels = (std::clamp)(settings.displacementStepPixels, 4.0f, 64.0f);
-    settings.displacementRings = (std::clamp)(settings.displacementRings, 0u, 12u);
-    settings.leaderLineThresholdPixels =
-        (std::clamp)(settings.leaderLineThresholdPixels, 0.0f, 128.0f);
-    if (SameSettings(settings_, settings)) return;
+bool CourseMapLabelLayoutSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(maximumLabels, 1u, 4096u) &&
+        settings::InRange(estimatedGlyphWidth, 2.0f, 32.0f) &&
+        settings::InRange(estimatedLineHeight, 6.0f, 64.0f) &&
+        settings::InRange(paddingPixels, 0.0f, 24.0f) &&
+        settings::InRange(edgePaddingPixels, 0.0f, 64.0f) &&
+        settings::InRange(displacementStepPixels, 4.0f, 64.0f) &&
+        settings::InRange(displacementRings, 0u, 12u) &&
+        settings::InRange(leaderLineThresholdPixels, 0.0f, 128.0f);
+    return settings::Result(valid, errorMessage,
+        "CourseMapLabelLayoutSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapLabelLayoutSystem::SetSettings(
+    CourseMapLabelLayoutSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    if (SameSettings(settings_, settings)) return true;
     settings_ = settings;
     ++settingsRevision_;
     Invalidate();
+    return true;
 }
 
 void CourseMapLabelLayoutSystem::Invalidate() noexcept {

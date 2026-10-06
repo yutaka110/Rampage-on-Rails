@@ -1,4 +1,5 @@
 #include "CourseTerrainMapRenderer.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -142,20 +143,23 @@ const CourseTerrainMapFrame& CourseTerrainMapRenderer::Build(
     return cache.frame;
 }
 
-void CourseTerrainMapRenderer::SetSettings(
-    CourseTerrainMapRenderSettings settings) {
-    settings.opacity = (std::clamp)(settings.opacity, 0.02f, 0.95f);
-    settings.courseTriangleBudget = (std::clamp)(
-        settings.courseTriangleBudget, 100u, 100000u);
-    settings.regionTriangleBudget = (std::clamp)(
-        settings.regionTriangleBudget, 100u, 200000u);
-    settings.detailTriangleBudget = (std::clamp)(
-        settings.detailTriangleBudget, 100u, 400000u);
-    settings.inspectTriangleBudget = (std::clamp)(
-        settings.inspectTriangleBudget, 100u, 800000u);
+bool CourseTerrainMapRenderSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(opacity, .02f, .95f) &&
+        settings::InRange(courseTriangleBudget, 100u, 100000u) &&
+        settings::InRange(regionTriangleBudget, 100u, 200000u) &&
+        settings::InRange(detailTriangleBudget, 100u, 400000u) &&
+        settings::InRange(inspectTriangleBudget, 100u, 800000u);
+    return settings::Result(valid, errorMessage,
+        "CourseTerrainMapRenderSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseTerrainMapRenderer::SetSettings(
+    CourseTerrainMapRenderSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
     ++settingsRevision_;
     Invalidate();
+    return true;
 }
 
 void CourseTerrainMapRenderer::Invalidate() noexcept {

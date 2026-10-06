@@ -100,10 +100,7 @@ void EnemyEncounterReadabilityDirector::Update(
         input.viewportHeight > 0;
     if (!projectionValid) {
         if (input.runtime != nullptr) {
-            for (CourseEnemyActor& actor : input.runtime->MutableEnemies()) {
-                actor.screenPresenceEvaluated = false;
-                actor.screenPresenceAttackAllowed = true;
-            }
+            input.runtime->ResetEnemyScreenPresence();
         }
         frame_ = std::move(next);
         return;
@@ -122,7 +119,7 @@ void EnemyEncounterReadabilityDirector::Update(
         }
     }
 
-    for (CourseEnemyActor& actor : input.runtime->MutableEnemies()) {
+    for (const CourseEnemyActor& actor : input.runtime->Enemies()) {
         const RailPathSample sample = input.railPath->Evaluate(
             actor.desc.spawnDistance + actor.desc.distanceOffset);
         const Vector3 world = Add(
@@ -195,9 +192,8 @@ void EnemyEncounterReadabilityDirector::Update(
             tracked.readableExposureSeconds >=
             (std::max)(0.0f,
                 input.settings.minimumAttackExposureSeconds);
-        actor.screenPresenceEvaluated = input.gameplayActive;
-        actor.screenPresenceAttackAllowed =
-            !input.gameplayActive || attackReady;
+        input.runtime->SetEnemyScreenPresence(actor.actorId, input.gameplayActive,
+            !input.gameplayActive || attackReady);
 
         EnemyEncounterActorReadability output{};
         output.actorId = actor.actorId;

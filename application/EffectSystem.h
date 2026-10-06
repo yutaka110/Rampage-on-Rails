@@ -773,6 +773,7 @@ struct EffectAsset {
     Vector4 color = {1.0f, 1.0f, 1.0f, 1.0f};
     Vector3 size = {1.0f, 1.0f, 1.0f};
     Vector4 uvRect = {0.0f, 0.0f, 1.0f, 1.0f};
+    bool Validate(std::string* errorMessage = nullptr) const;
     const EffectAssetComponentStorage& Components() const { return components_; }
     // Mutable storage is restricted to asset construction/normalization and
     // typed replacement APIs. Runtime/render paths should use Components().
@@ -924,8 +925,8 @@ class EffectSystem {
 public:
     // Compatibility fallback for standalone callers. VfxEngine should register
     // assets with its owned EffectAuthoringRegistry.
-    void RegisterAsset(EffectAsset asset);
-    void RegisterAsset(
+    bool RegisterAsset(EffectAsset asset);
+    bool RegisterAsset(
         EffectAsset asset,
         const EffectAuthoringRegistry& authoringRegistry);
     const EffectAsset* FindAsset(std::string_view name) const;
@@ -939,19 +940,23 @@ public:
     void StopEffect(uint32_t id);
     void Update(float deltaTime);
     void ClearInstances();
-    EffectInstance* FindInstance(uint32_t id);
     const EffectInstance* FindInstance(uint32_t id) const;
     void SetEffectPreviewLoop(uint32_t id, bool enabled);
     void RestartInstance(uint32_t id);
     void SetInstanceAge(uint32_t id, float age);
+    bool SetInstanceAppearance(uint32_t id, const Transform& transform, const Vector4& color, bool attached = false);
+    bool MoveInstance(uint32_t id, const Vector3& position, bool resetVelocity = false);
+    bool ReplaceAssets(std::unordered_map<std::string, EffectAsset> assets,
+        const EffectAuthoringRegistry& authoringRegistry, std::string* errorMessage = nullptr);
+    static bool ValidateAssets(const std::unordered_map<std::string, EffectAsset>& assets, std::string* errorMessage = nullptr);
     uint64_t ParticlePoolResetSerial() const { return particlePoolResetSerial_; }
 
     const std::vector<EffectInstance>& Instances() const { return instances_; }
-    std::vector<EffectInstance>& MutableInstances() { return instances_; }
     const std::unordered_map<std::string, EffectAsset>& Assets() const { return assets_; }
-    std::unordered_map<std::string, EffectAsset>& MutableAssets() { return assets_; }
 
 private:
+    EffectInstance* FindMutableInstance(uint32_t id);
+    void RebindInstances();
     static void EnsureDefaultComponent(EffectAsset& asset);
     static void EnsureDefaultComponent(
         EffectAsset& asset,

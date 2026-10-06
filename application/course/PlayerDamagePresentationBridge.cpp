@@ -1,7 +1,27 @@
 #include "PlayerDamagePresentationBridge.h"
+#include "GameplaySettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
+
+bool PlayerDamagePresentationSettings::Validate(std::string* errorMessage) const {
+    return gameplay::settings::Result(
+        gameplay::settings::NonNegative({flashDecayPerSecond, hapticDurationSeconds,
+            baseCameraShake, lethalCameraShake, baseHitStopSeconds, lethalHitStopSeconds}),
+        errorMessage, "Damage presentation values must be finite, nonnegative and bounded.");
+}
+
+bool PlayerDamagePresentationBridge::Configure(
+    const PlayerDamagePresentationSettings& settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
+    settings_ = settings;
+    hapticRemainingSeconds_ = (std::min)(hapticRemainingSeconds_, settings_.hapticDurationSeconds);
+    if (hapticRemainingSeconds_ == 0.0f) hapticLow_ = hapticHigh_ = 0.0f;
+    frame_.hapticRemainingSeconds = hapticRemainingSeconds_;
+    frame_.hapticLow = hapticLow_;
+    frame_.hapticHigh = hapticHigh_;
+    return true;
+}
 
 void PlayerDamagePresentationBridge::Reset() {
     frame_ = {};

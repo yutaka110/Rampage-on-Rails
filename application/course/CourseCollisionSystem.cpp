@@ -223,7 +223,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         weapon_.tracerRadius = pulseCannon->tracerRadius;
     }
 
-    for (CourseBulletActor& bullet : runtime.MutableBullets()) {
+    for (const CourseBulletActor& bullet : runtime.Bullets()) {
         if (!bullet.active || bullet.age >= bullet.lifetime) {
             continue;
         }
@@ -302,9 +302,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         }
         const PlayerDamageResult result = SubmitPlayerHit(request);
         if (result.projectileConsumed) {
-            bullet.age = bullet.lifetime;
-            bullet.active = false;
-            bullet.hitConsumed = true;
+            runtime.ConsumeProjectile(bullet.projectileId);
         }
         if (!result.accepted) {
             ++lastFrameStats_.playerHitsRejected;
@@ -474,8 +472,8 @@ void CourseCollisionSystem::FirePlayerShot(
             aim->hasWorldHit ? aim->aimDistance : shot.range;
         shootDownRequest.damage = shot.damage;
         const EnemyProjectileShootDownResult shootDown =
-            projectileShootDownSystem_.Submit(
-                runtime.MutableBullets(),
+            runtime.ShootDownProjectile(
+                projectileShootDownSystem_,
                 *input.railPath,
                 shootDownRequest);
         if (shootDown.accepted) {

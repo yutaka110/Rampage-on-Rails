@@ -71,7 +71,6 @@ public:
     RailSpeedDirectorFrame Evaluate(const RailSpeedDirectorFrameInput& input);
 
     const RailSpeedDirectorSettings& Settings() const { return settings_; }
-    RailSpeedDirectorSettings& MutableSettings() { return settings_; }
     const RailSpeedDirectorFrame& LastFrame() const { return lastFrame_; }
 
 private:

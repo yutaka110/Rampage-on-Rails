@@ -34,7 +34,7 @@ void SyncHeldEffect(
         return;
     }
 
-    EffectInstance* instance = effectRuntime.FindInstance(instanceId);
+    const EffectInstance* instance = effectRuntime.FindInstance(instanceId);
     if (instance == nullptr) {
         instanceId = effectRuntime.PlayEffectWithParams(effectName, position, color, scale);
         effectRuntime.SetEffectPreviewLoop(instanceId, true);
@@ -54,8 +54,7 @@ void SyncHeldEffect(
         return;
     }
 
-    instance->transform.translate = position;
-    instance->previousPosition = position;
+    (void)effectRuntime.MoveInstance(instanceId, position, true);
 }
 
 void DisableHeldHitEffects(AppRuntimeState& runtimeState, EffectRuntime& effectRuntime) {

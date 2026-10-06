@@ -36,6 +36,8 @@ struct CourseOverviewMapProjectionSettings final {
     float freeYawRadians = 0.65f;
     float freePitchRadians = -0.65f;
     uint32_t fitSamplesPerSegment = 24;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseOverviewMapProjectedPoint final {

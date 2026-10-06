@@ -32,6 +32,8 @@ struct CourseMapCartographyBakeSettings final {
     uint32_t maximumRegions = 16384;
     uint32_t maximumTrianglesPerRegion = 2048;
     uint32_t maximumFootprintPoints = 256;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseMapCartographyBakeInput final {
@@ -91,7 +93,7 @@ public:
 
     void RequestRebuild() noexcept;
     void InvalidateAsset() noexcept;
-    void SetSettings(CourseMapCartographyBakeSettings settings);
+    bool SetSettings(CourseMapCartographyBakeSettings settings, std::string* errorMessage = nullptr);
     const CourseMapCartographyBakeSettings& Settings() const noexcept {
         return settings_;
     }

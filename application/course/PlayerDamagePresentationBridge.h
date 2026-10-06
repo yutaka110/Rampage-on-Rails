@@ -15,6 +15,8 @@ struct PlayerDamagePresentationSettings final {
     float lethalCameraShake = 1.15f;
     float baseHitStopSeconds = 0.045f;
     float lethalHitStopSeconds = 0.10f;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct PlayerDamageAudioCue final {
@@ -75,9 +77,7 @@ public:
     void Reset();
     void Update(const PlayerDamagePresentationInput& input);
 
-    PlayerDamagePresentationSettings& MutableSettings() noexcept {
-        return settings_;
-    }
+    bool Configure(const PlayerDamagePresentationSettings& settings, std::string* errorMessage = nullptr);
     const PlayerDamagePresentationSettings& Settings() const noexcept {
         return settings_;
     }

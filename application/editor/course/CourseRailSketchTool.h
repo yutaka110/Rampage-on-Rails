@@ -19,6 +19,8 @@ struct CourseRailSketchSettings final {
     CourseRailCurveFitSettings curveFit{};
     float minimumSamplePixels = 3.0f;
     bool reprojectOrphanedAnchors = true;
+
+    bool Validate(std::string* errorMessage = nullptr) const;
 };
 
 struct CourseRailSketchInput final {
@@ -56,7 +58,7 @@ public:
         const CourseRailCurveFitService* curveFit);
     void SetActive(bool active);
     void SetMode(CourseRailSketchMode mode);
-    void SetSettings(CourseRailSketchSettings settings);
+    bool SetSettings(CourseRailSketchSettings settings, std::string* errorMessage = nullptr);
     void Tick(const CourseRailSketchInput& input);
     void Cancel(std::string message = {});
 

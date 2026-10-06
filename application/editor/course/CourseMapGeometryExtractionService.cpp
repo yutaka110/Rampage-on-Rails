@@ -1,4 +1,5 @@
 #include "CourseMapGeometryExtractionService.h"
+#include "../EditorSettingsValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -248,14 +249,19 @@ bool CourseMapGeometryExtractionService::ExtractFallbackBox(
     return true;
 }
 
-void CourseMapGeometryExtractionService::SetSettings(
-    CourseMapGeometryExtractionSettings settings) {
-    settings.maximumVerticesPerSource = (std::clamp)(
-        settings.maximumVerticesPerSource, 8u, 1048576u);
-    settings.maximumTrianglesPerSource = (std::clamp)(
-        settings.maximumTrianglesPerSource, 12u, 2097152u);
-    settings.maximumSources = (std::clamp)(settings.maximumSources, 1u, 262144u);
+bool CourseMapGeometryExtractionSettings::Validate(std::string* errorMessage) const {
+    const bool valid = settings::InRange(maximumVerticesPerSource, 8u, 1048576u) &&
+        settings::InRange(maximumTrianglesPerSource, 12u, 2097152u) &&
+        settings::InRange(maximumSources, 1u, 262144u);
+    return settings::Result(valid, errorMessage,
+        "CourseMapGeometryExtractionSettings requires finite values, valid ranges and bounded work budgets.");
+}
+
+bool CourseMapGeometryExtractionService::SetSettings(
+    CourseMapGeometryExtractionSettings settings, std::string* errorMessage) {
+    if (!settings.Validate(errorMessage)) return false;
     settings_ = settings;
+    return true;
 }
 
 } // namespace editor

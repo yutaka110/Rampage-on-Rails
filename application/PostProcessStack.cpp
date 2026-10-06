@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <unordered_set>
 
 namespace {
 constexpr const char* kPostProcessOutputResource = "PostProcessOutput";
@@ -41,6 +42,124 @@ std::string ResolvePostProcessOutputResource(
     return swapSource == "PostColorA" ? "PostColorB" : "PostColorA";
 }
 } // namespace
+
+
+bool PostProcessPass::Validate(std::string* errorMessage) const {
+    bool valid = !name.empty() && !pipeline.empty() && !inputResource.empty() && !outputResource.empty() &&
+        std::isfinite(intensity) && intensity >= 0.0f && intensity <= 100.0f &&
+        std::isfinite(resolutionScale) && resolutionScale > 0.0f && resolutionScale <= 4.0f;
+    for (float value : {
+        parameters.bloomThresholdMin, parameters.bloomThresholdMax, parameters.bloomSoftKnee,
+        parameters.bloomUpsampleBlend, parameters.bloomUpsampleSoftKnee, parameters.blurRadius,
+        parameters.distortionScale, parameters.toneExposure, parameters.glowWeight,
+        parameters.glowTintR, parameters.glowTintG, parameters.glowTintB,
+        parameters.grayscaleMode, parameters.vignetteRadius, parameters.vignetteSoftness,
+        parameters.vignettePower, parameters.boxBlurKernelRadius, parameters.gaussianBlurKernelRadius,
+        parameters.gaussianBlurSigma, parameters.outlineThreshold, parameters.outlineThickness,
+        parameters.outlineSoftness, parameters.outlineColorR, parameters.outlineColorG,
+        parameters.outlineColorB, parameters.outlineDepthWeight, parameters.accretionRadius,
+        parameters.accretionDiskStretch, parameters.accretionTurbulence, parameters.accretionChromaticAberration,
+        parameters.accretionCoreSize, parameters.accretionCenterX, parameters.accretionCenterY,
+        parameters.accretionFlowSpeed, parameters.accretionRoadDepthFade, parameters.accretionCoreDarkness,
+        parameters.accretionGuideOpacity, parameters.accretionLensStrength, parameters.accretionGuideWidth,
+        parameters.fogStart, parameters.fogEnd, parameters.fogDensity,
+        parameters.fogColorR, parameters.fogColorG, parameters.fogColorB,
+        parameters.fogNearPlane, parameters.fogFarPlane, parameters.fogDepthBoost,
+        parameters.fogDepthBoostStart, parameters.backlitFogLift, parameters.openingGlowStrength,
+        parameters.foregroundSilhouetteStrength, parameters.lowFogLayerStrength, parameters.coolFloorHazeStrength,
+        parameters.contactAoRadiusPixels, parameters.contactAoBias, parameters.contactAoFalloff,
+        parameters.contactAoNearPlane, parameters.contactAoFarPlane, parameters.warpTime,
+        parameters.warpTransition, parameters.warpCenterX, parameters.warpCenterY,
+        parameters.warpRefractionStrength, parameters.warpSceneSwirl, parameters.warpRotationSpeed,
+        parameters.warpFlowSpeed, parameters.warpArms, parameters.warpRings,
+        parameters.warpTwistX, parameters.warpTwistY, parameters.warpTunnelExposure,
+        parameters.warpFlash, parameters.warpAspectRatio, parameters.dissolveTime,
+        parameters.dissolveThreshold, parameters.dissolveEdgeWidth, parameters.dissolveNoiseScale,
+        parameters.dissolveNoiseSpeed, parameters.dissolveEdgeColorR, parameters.dissolveEdgeColorG,
+        parameters.dissolveEdgeColorB, parameters.dissolveBurnStrength, parameters.dissolveCenterX,
+        parameters.dissolveCenterY, parameters.dissolveAspectRatio, parameters.dissolveDirectionBlend,
+        parameters.dissolveSoftness, parameters.dissolveSeed, parameters.randomTime,
+        parameters.randomSeed, parameters.randomScale, parameters.randomSpeed,
+        parameters.randomFrameRate, parameters.randomContrast, parameters.randomBrightness,
+        parameters.randomColorAmount}) {
+        if (!std::isfinite(value) || std::abs(value) > 100000.0f) valid = false;
+    }
+    const auto& p = parameters;
+    valid = valid && p.bloomThresholdMin <= p.bloomThresholdMax && p.fogStart <= p.fogEnd &&
+        p.fogNearPlane > 0 && p.fogFarPlane > p.fogNearPlane &&
+        p.contactAoNearPlane > 0 && p.contactAoFarPlane > p.contactAoNearPlane &&
+        p.gaussianBlurSigma > 0 && p.warpAspectRatio > 0 && p.dissolveAspectRatio > 0 &&
+        p.boxBlurKernelRadius >= 1 && p.boxBlurKernelRadius <= 8 &&
+        p.gaussianBlurKernelRadius >= 1 && p.gaussianBlurKernelRadius <= 8;
+    if (errorMessage != nullptr) *errorMessage = valid ? "" : "Post-process pass requires finite parameters, ordered ranges, positive projection values and bounded intensity/resolution.";
+    return valid;
+}
+
+bool PostProcessStack::ValidatePasses(const std::vector<PostProcessPass>& passes, std::string* errorMessage) {
+    std::unordered_set<std::string> names;
+    if (passes.size() > 256) { if (errorMessage != nullptr) *errorMessage = "Post-process pass budget exceeded."; return false; }
+    for (const auto& pass : passes) {
+        if (!pass.Validate(errorMessage)) return false;
+        if (!names.insert(pass.name).second) { if (errorMessage != nullptr) *errorMessage = "Duplicate post-process pass name."; return false; }
+    }
+    if (errorMessage != nullptr) errorMessage->clear();
+    return true;
+}
+
+bool PostProcessStack::ConfigurePass(const PostProcessPass& candidate, std::string* errorMessage) {
+    if (!candidate.Validate(errorMessage)) return false;
+    for (auto& pass : passes_) {
+        if (pass.name != candidate.name) continue;
+        if (pass.pipeline != candidate.pipeline || pass.inputResource != candidate.inputResource ||
+            pass.outputResource != candidate.outputResource || pass.secondaryInputResource != candidate.secondaryInputResource ||
+            pass.tertiaryInputResource != candidate.tertiaryInputResource) {
+            if (errorMessage != nullptr) *errorMessage = "Pass routing changes require a complete validated replacement.";
+            return false;
+        }
+        pass = candidate;
+        // 遷移の進行値はコントローラーが管理し、編集用コピーからは上書きしない。
+        SyncWarpTunnelPasses_(); SyncDissolvePasses_();
+        return true;
+    }
+    if (errorMessage != nullptr) *errorMessage = "Post-process pass was not found.";
+    return false;
+}
+
+bool PostProcessStack::ReplacePasses(std::vector<PostProcessPass> passes, std::string* errorMessage) {
+    if (!ValidatePasses(passes, errorMessage)) return false;
+    passes_ = std::move(passes);
+    // Complete authoring restoration cancels transient controller state.
+    const bool warpEnabled = IsEnabled("WarpTunnelGenerate") && IsEnabled("WarpTunnelComposite");
+    warpTunnelPhase_ = warpEnabled ? WarpTunnelPhase::Cruise : WarpTunnelPhase::Idle;
+    warpTunnelTransition_ = warpEnabled ? 1.0f : 0.0f;
+    warpTunnelFlash_ = warpTunnelPhaseElapsed_ = 0.0f;
+    dissolvePhase_ = DissolvePhase::Idle;
+    dissolveThreshold_ = dissolvePhaseElapsed_ = 0.0f;
+    dissolveSwitchRequested_ = false;
+    SyncWarpTunnelPasses_(); SyncDissolvePasses_();
+    return true;
+}
+
+bool PostProcessStack::ConfigurePasses(const std::vector<PostProcessPass>& candidates, std::string* errorMessage) {
+    if (!ValidatePasses(candidates, errorMessage)) return false;
+    if (candidates.size() != passes_.size()) {
+        if (errorMessage != nullptr) *errorMessage = "Pass-list edits cannot change routing or count.";
+        return false;
+    }
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        const auto& a = candidates[i]; const auto& b = passes_[i];
+        if (a.name != b.name || a.pipeline != b.pipeline || a.inputResource != b.inputResource ||
+            a.outputResource != b.outputResource || a.secondaryInputResource != b.secondaryInputResource ||
+            a.tertiaryInputResource != b.tertiaryInputResource) {
+            if (errorMessage != nullptr) *errorMessage = "Pass routing changes require a complete validated replacement.";
+            return false;
+        }
+    }
+    // Live tuning preserves the transition phase and elapsed time.
+    passes_ = candidates;
+    SyncWarpTunnelPasses_(); SyncDissolvePasses_();
+    return true;
+}
 
 void PostProcessStack::ResetToVfxDefaults() {
     passes_.clear();
@@ -455,6 +574,14 @@ void PostProcessStack::ResetToVfxDefaults() {
 }
 
 void PostProcessStack::SetEnabled(const std::string& name, bool enabled) {
+    if (name == "WarpTunnelGenerate" || name == "WarpTunnelComposite") {
+        if (enabled) StartWarpTunnel(); else StopWarpTunnel();
+        return;
+    }
+    if (name == "DissolveMask" || name == "Dissolve") {
+        if (enabled) StartDissolveTransition(); else CancelDissolveTransition();
+        return;
+    }
     for (PostProcessPass& pass : passes_) {
         if (pass.name == name) {
             pass.enabled = enabled;
@@ -464,6 +591,7 @@ void PostProcessStack::SetEnabled(const std::string& name, bool enabled) {
 }
 
 void PostProcessStack::SetIntensity(const std::string& name, float intensity) {
+    if (!std::isfinite(intensity) || intensity < 0.0f || intensity > 100.0f) return;
     for (PostProcessPass& pass : passes_) {
         if (pass.name == name) {
             pass.intensity = intensity;
@@ -513,6 +641,7 @@ void PostProcessStack::StopWarpTunnel() {
 }
 
 void PostProcessStack::UpdateWarpTunnel(float deltaTime) {
+    if (!std::isfinite(deltaTime) || deltaTime < 0.0f) return;
     constexpr float kPi = 3.14159265359f;
     const float safeDeltaTime = (std::max)(0.0f, deltaTime);
     warpTunnelPhaseElapsed_ += safeDeltaTime;
@@ -564,8 +693,10 @@ void PostProcessStack::UpdateWarpTunnel(float deltaTime) {
 }
 
 void PostProcessStack::SetWarpTunnelDurations(float enterDuration, float exitDuration) {
-    warpTunnelEnterDuration_ = (std::clamp)(enterDuration, 0.05f, 10.0f);
-    warpTunnelExitDuration_ = (std::clamp)(exitDuration, 0.05f, 10.0f);
+    if (!std::isfinite(enterDuration) || !std::isfinite(exitDuration) ||
+        enterDuration < 0.05f || enterDuration > 10.0f || exitDuration < 0.05f || exitDuration > 10.0f) return;
+    warpTunnelEnterDuration_ = enterDuration;
+    warpTunnelExitDuration_ = exitDuration;
 }
 
 void PostProcessStack::SyncWarpTunnelPasses_() {
@@ -600,6 +731,7 @@ void PostProcessStack::CancelDissolveTransition() {
 }
 
 void PostProcessStack::UpdateDissolve(float deltaTime) {
+    if (!std::isfinite(deltaTime) || deltaTime < 0.0f) return;
     const float safeDeltaTime = (std::max)(0.0f, deltaTime);
     dissolvePhaseElapsed_ += safeDeltaTime;
 
@@ -646,9 +778,12 @@ void PostProcessStack::SetDissolveDurations(
     float outDuration,
     float switchDuration,
     float inDuration) {
-    dissolveOutDuration_ = (std::clamp)(outDuration, 0.05f, 10.0f);
-    dissolveSwitchDuration_ = (std::clamp)(switchDuration, 0.0f, 10.0f);
-    dissolveInDuration_ = (std::clamp)(inDuration, 0.05f, 10.0f);
+    if (!std::isfinite(outDuration) || !std::isfinite(switchDuration) || !std::isfinite(inDuration) ||
+        outDuration < 0.05f || outDuration > 10.0f || switchDuration < 0.0f || switchDuration > 10.0f ||
+        inDuration < 0.05f || inDuration > 10.0f) return;
+    dissolveOutDuration_ = outDuration;
+    dissolveSwitchDuration_ = switchDuration;
+    dissolveInDuration_ = inDuration;
 }
 
 bool PostProcessStack::ConsumeDissolveSwitchRequest() {
