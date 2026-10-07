@@ -1,5 +1,7 @@
 #include "AppRunLoop.h"
 #include "AppLogFile.h"
+#include "diagnostics/DronePerformanceProfile.h"
+#include "course/RailWorldRaycast.h"
 
 #include <DirectXMath.h>
 #include <algorithm>
@@ -156,6 +158,7 @@ double ElapsedMs(RailPerfClock::time_point begin, RailPerfClock::time_point end)
 }
 
 void ResetRailPerfFrame(uint32_t frameIndex, float distance) {
+    drone_perf::ResetFrame();
     gRailPerfFrame = {};
     gRailPerfFrame.frame = frameIndex;
     gRailPerfFrame.distance = distance;
@@ -6198,6 +6201,7 @@ void AppRunLoop::LogRailShooterPerfSpike() {
         gRailPerfFrame.updateMs +
         (std::max)(0.0, gRailPerfFrame.renderMs - gRailPerfFrame.presentMs);
     const bool shouldLog =
+        (drone_perf::Enabled() && gRailPerfFrame.frame % 30 == 0) ||
         cpuNoPresentMs >= 18.0 ||
         gRailPerfFrame.updateMs >= 8.0 ||
         gRailPerfFrame.terrainUpdateMs >= 4.0 ||
@@ -6263,8 +6267,9 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " courseMeshVisible=" << scene_.CourseMeshes().VisibleCount()
          << " terrainChunks=" << terrainChunkManager_.RenderChunks().size()
          << " terrainDebris=" << debrisStats.debrisInstanceCount
-         << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount
-         << "\n";
+         << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount;
+    drone_perf::AppendToLog(line);
+    line << "\n";
     OutputDebugStringA(line.str().c_str());
     std::ofstream log = app::OpenRotatingLog("logs/rail_perf_spikes.log");
     if (log) {
@@ -6783,6 +6788,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     ++railShooterFrameIndex_;
     ResetRailPerfFrame(railShooterFrameIndex_, railShooterDistance_);
+    const RailWorldRaycast::FrameCacheScope raycastFrameCache;
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
 
     // The review capture ran at 30 fps, so advancing a fixed 16 ms only once
@@ -6820,6 +6826,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         gameplayDeltaTime = 0.0f;
     }
     railWeaponHotReloadPollTimer_ += realGameplayDeltaTime;
+    if (drone_perf::Enabled()) drone_perf::frame.simulationDeltaTime = gameplayDeltaTime;
     if (railWeaponHotReloadPollTimer_ >= 0.25f &&
         (!railShooterCollisionSystem_.WeaponDefinitions().Directory().empty() ||
          !railAimAssistPresetRegistry_.Directory().empty() ||

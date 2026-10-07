@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <map>
 #include "../course/RailTitleScene.h"
 #include "EditorCoreRegressionTests.h"
 #include "../PostProcessPresetStore.h"
@@ -22118,6 +22119,242 @@ void TestRailWorldRaycast(RegressionRunner& runner) {
         "world raycast should refine the procedural terrain SDF crossing and return a facing normal");
 }
 
+void TestRailWorldRaycastFrameCache(RegressionRunner& runner) {
+    const auto sameHit = [](const RailAimHit& a, const RailAimHit& b) {
+        const auto closeVector = [](const Vector3& x, const Vector3& y) {
+            return std::abs(x.x-y.x) < 0.00001f && std::abs(x.y-y.y) < 0.00001f &&
+                std::abs(x.z-y.z) < 0.00001f;
+        };
+        return a.hit == b.hit && a.kind == b.kind && a.actorId == b.actorId &&
+            a.sourceIndex == b.sourceIndex && std::abs(a.distance-b.distance) < 0.00001f &&
+            closeVector(a.position,b.position) && closeVector(a.normal,b.normal);
+    };
+    RailPath rail;
+    rail.SetControlPoints({{{0,0,0},18,32}, {{10,4,80},18,32},
+        {{-20,2,160},18,32}, {{30,12,240},18,32}});
+    TerrainGenerationSettings settings{};
+    TerrainEditLayer edits, preview;
+    CourseSpawnRuntime runtime;
+    CourseAsset course;
+    RailAimState aim{};
+    aim.valid = true;
+    aim.maxDistance = 100.0f;
+    RailWorldRaycastInput input{};
+    input.aim = &aim;
+    input.railPath = &rail;
+    input.terrainSettings = &settings;
+    input.terrainEdits = &edits;
+    input.terrainPreview = &preview;
+    input.spawnRuntime = &runtime;
+    input.course = &course;
+    input.playerDistance = 50.0f;
+    std::vector<RailAimState> rays;
+    std::vector<RailAimHit> expected;
+    for (uint32_t i = 0; i < 32; ++i) {
+        const auto sample = rail.Evaluate(25.0f + static_cast<float>(i)*4.0f);
+        aim.worldRayOrigin = sample.position;
+        aim.worldRayDirection = i % 3 == 0 ? sample.right :
+            (i % 3 == 1 ? sample.up : sample.tangent);
+        aim.maxDistance = 24.0f + static_cast<float>(i)*3.0f;
+        rays.push_back(aim);
+        expected.push_back(RailWorldRaycast::Query(input));
+    }
+    {
+        const RailWorldRaycast::FrameCacheScope scope;
+        for (size_t i = 0; i < rays.size(); ++i) {
+            aim = rays[i];
+            runner.Expect(sameHit(RailWorldRaycast::Query(input), expected[i]),
+                "cached curved-rail hits/misses, entry distance and normals must match reference");
+            const auto before = RailWorldRaycast::CacheStats();
+            {
+                const RailWorldRaycast::FrameCacheScope nested;
+                runner.Expect(sameHit(RailWorldRaycast::Query(input), expected[i]),
+                    "nested frame scope should share the identical terrain result");
+            }
+            const auto after = RailWorldRaycast::CacheStats();
+            runner.Expect(after.terrainResultHits == before.terrainResultHits+1 &&
+                after.railEvaluations == before.railEvaluations,
+                "identical terrain query must skip marching and rail evaluation entirely");
+        }
+        const auto stats = RailWorldRaycast::CacheStats();
+        runner.Expect(stats.railEvaluations > 0 && stats.railSampleHits > stats.railEvaluations,
+            "coarse grids and repeated refinement distances should reuse exact rail samples");
+    }
+    const auto compareChanged = [&]() {
+        const auto reference = RailWorldRaycast::Query(input);
+        const RailWorldRaycast::FrameCacheScope scope;
+        RailWorldRaycast::Query(input);
+        const auto before = RailWorldRaycast::CacheStats().terrainResultHits;
+        settings.canyonHalfWidth += 17.0f;
+        const auto changed = RailWorldRaycast::Query(input);
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == before,
+            "same-address terrain settings changes must invalidate result cache");
+        return std::pair<RailAimHit,RailAimHit>{reference,changed};
+    };
+    const auto settingsHits = compareChanged();
+    runner.Expect(sameHit(settingsHits.second, RailWorldRaycast::Query(input)),
+        "changed terrain settings must still match an uncached query");
+    {
+        const RailWorldRaycast::FrameCacheScope scope;
+        RailWorldRaycast::Query(input);
+        const auto before = RailWorldRaycast::CacheStats().terrainResultHits;
+        TerrainBrushStamp stamp{};
+        stamp.strokeGuid = "ray-cache-stroke";
+        stamp.stampGuid = "ray-cache-stamp";
+        stamp.distance = 50.0f;
+        stamp.radius = 30.0f;
+        stamp.strength = 4.0f;
+        runner.Expect(edits.ApplyStroke({stamp}), "ray-cache terrain edit fixture must be valid");
+        RailWorldRaycast::Query(input);
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == before,
+            "same-frame terrain edits must invalidate cached geometry");
+        rail.SetControlPoints({{{0,0,0},18,32}, {{50,20,80},18,32},
+            {{-20,2,160},18,32}, {{30,12,240},18,32}});
+        RailWorldRaycast::Query(input);
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == before,
+            "same-address rebuilt rail must invalidate terrain and rail samples");
+        aim.worldRayOrigin.x += 0.01f;
+        RailWorldRaycast::Query(input);
+        aim.worldRayDirection.y += 0.01f;
+        RailWorldRaycast::Query(input);
+        aim.maxDistance += 0.01f;
+        RailWorldRaycast::Query(input);
+        input.playerDistance += 0.01f;
+        RailWorldRaycast::Query(input);
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == before,
+            "camera origin, direction, range and search window changes must each re-query");
+    }
+    const auto changedReference = RailWorldRaycast::Query(input);
+    {
+        const RailWorldRaycast::FrameCacheScope nextFrame;
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == 0 &&
+            sameHit(RailWorldRaycast::Query(input), changedReference) &&
+            RailWorldRaycast::CacheStats().terrainResultHits == 0,
+            "next frame must start empty and match edited reference terrain");
+    }
+    // Full ray results are intentionally live: adding/moving collision objects
+    // must not reuse a stale enemy/miss even with identical terrain query inputs.
+    rail.SetControlPoints({{{0,0,0},18,32}, {{0,0,200},18,32}});
+    aim.worldRayOrigin = {};
+    aim.worldRayDirection = {0,0,1};
+    aim.maxDistance = 100.0f;
+    input.playerDistance = 0.0f;
+    {
+        const RailWorldRaycast::FrameCacheScope scope;
+        RailWorldRaycast::Query(input);
+        CourseEnemyActorDesc enemy{};
+        enemy.spawnDistance = 30.0f;
+        enemy.radius = 3.0f;
+        runtime.SpawnEnemyActor(enemy);
+        runner.Expect(RailWorldRaycast::Query(input).kind == RailAimHitKind::Enemy,
+            "new enemy must be tested live while the identical terrain result is reused");
+        CourseTerrainPlacement wall{};
+        wall.distance = 10.0f;
+        wall.layer = CourseTerrainLayer::GameplayCollision;
+        wall.collisionMode = CourseTerrainCollisionMode::Solid;
+        wall.scale = {5,5,2};
+        course.terrainPlacements.push_back(wall);
+        runner.Expect(RailWorldRaycast::Query(input).kind == RailAimHitKind::TerrainPlacement,
+            "new wall must immediately occlude the live enemy during a cached frame");
+        course.terrainPlacements[0].lateralOffset = 100.0f;
+        runner.Expect(RailWorldRaycast::Query(input).kind == RailAimHitKind::Enemy,
+            "moving a wall must restore the enemy hit without stale occlusion");
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits >= 3,
+            "live scene changes should still share the unchanged procedural terrain result");
+    }
+}
+
+// Optional controlled timing: both modes use the exact same production rail,
+// camera and 35 target rays, without GPU work or live-frame timing differences.
+// CG4_DRONE_CACHE_BENCHMARK=1 writes logs/drone_cache_benchmark.csv.
+void BenchmarkRailWorldRaycastFrameCache(RegressionRunner& runner) {
+    size_t enabledSize = 0;
+    getenv_s(&enabledSize, nullptr, 0, "CG4_DRONE_CACHE_BENCHMARK");
+    if (enabledSize == 0) return;
+    CourseAsset course;
+    std::string error;
+    if (!course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error)) {
+        runner.Expect(false, "ray-cache benchmark production course must load");
+        return;
+    }
+    RailPath rail;
+    rail.SetControlPoints(course.railPoints);
+    TerrainGenerationSettings settings{};
+    CourseSpawnRuntime runtime;
+    const float playerDistance = 1100.0f;
+    const auto cameraRail = rail.Evaluate(playerDistance-12.0f);
+    const Vector3 camera{cameraRail.position.x + cameraRail.up.x*4.0f,
+        cameraRail.position.y + cameraRail.up.y*4.0f,
+        cameraRail.position.z + cameraRail.up.z*4.0f};
+    std::vector<RailAimState> rays;
+    for (uint32_t i = 0; i < 35; ++i) {
+        const float forward = 42.0f + static_cast<float>(i)*0.6f;
+        const float lateral = -12.0f + static_cast<float>(i%7)*4.0f;
+        const float vertical = 5.0f + static_cast<float>(i%5)*1.2f;
+        CourseEnemyActorDesc enemy{};
+        enemy.spawnDistance = playerDistance+forward;
+        enemy.lateralOffset = lateral;
+        enemy.verticalOffset = vertical;
+        runtime.SpawnEnemyActor(enemy);
+        const auto targetRail = rail.Evaluate(enemy.spawnDistance);
+        const Vector3 target{targetRail.position.x+targetRail.right.x*lateral+targetRail.up.x*vertical,
+            targetRail.position.y+targetRail.right.y*lateral+targetRail.up.y*vertical,
+            targetRail.position.z+targetRail.right.z*lateral+targetRail.up.z*vertical};
+        RailAimState aim{};
+        aim.valid = true;
+        aim.worldRayOrigin = camera;
+        aim.worldRayDirection = {target.x-camera.x,target.y-camera.y,target.z-camera.z};
+        aim.maxDistance = std::sqrt(aim.worldRayDirection.x*aim.worldRayDirection.x+
+            aim.worldRayDirection.y*aim.worldRayDirection.y+aim.worldRayDirection.z*aim.worldRayDirection.z)+enemy.radius;
+        rays.push_back(aim);
+    }
+    RailWorldRaycastInput input{};
+    input.railPath = &rail;
+    input.course = &course;
+    input.spawnRuntime = &runtime;
+    input.terrainSettings = &settings;
+    input.terrainEdits = &course.terrainEditLayer;
+    input.playerDistance = playerDistance;
+    input.includeVisualColumns = true;
+    std::ofstream output("logs/drone_cache_benchmark.csv");
+    output << "scenario,cached,enemies,frames,meanRaycastMs,meanTerrainResultHits,meanRailEvaluations\n";
+    for (bool moving : {false,true}) {
+        std::array<double,2> timings{};
+        uint64_t resultHits = 0, railEvaluations = 0;
+        constexpr uint32_t frames = 24;
+        for (uint32_t frame = 0; frame < frames; ++frame) {
+            // Alternate order to reduce warm-up/thermal bias.
+            for (uint32_t order = 0; order < 2; ++order) {
+                const uint32_t cached = (order + frame) % 2;
+                const auto begin = std::chrono::steady_clock::now();
+                std::optional<RailWorldRaycast::FrameCacheScope> cache;
+                if (cached) cache.emplace();
+                for (uint32_t pass = 0; pass < 2; ++pass) {
+                    for (const auto& source : rays) {
+                        auto aim = source;
+                        if (moving && pass == 1) aim.worldRayOrigin.x += 0.001f;
+                        input.aim = &aim;
+                        RailWorldRaycast::Query(input);
+                    }
+                }
+                timings[cached] += std::chrono::duration<double,std::milli>(
+                    std::chrono::steady_clock::now()-begin).count();
+                if (cached) {
+                    const auto stats = RailWorldRaycast::CacheStats();
+                    resultHits += stats.terrainResultHits;
+                    railEvaluations += stats.railEvaluations;
+                }
+            }
+        }
+        for (uint32_t cached = 0; cached < 2; ++cached) {
+            output << (moving ? "moving_camera" : "identical_conditions") << ',' << cached
+                << ",35," << frames << ',' << timings[cached]/frames << ','
+                << (cached ? static_cast<double>(resultHits)/frames : 0.0) << ','
+                << (cached ? static_cast<double>(railEvaluations)/frames : 0.0) << '\n';
+        }
+    }
+}
+
 void TestRailWorldShotRouting(RegressionRunner& runner) {
     RailPath rail;
     rail.SetControlPoints({
@@ -22866,10 +23103,14 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         bool assetsEnabled = count > 0;
         for (const auto& actor : runtime.Enemies()) {
             assetsEnabled = assetsEnabled && actor.behaviorDefinition.maintainForwardEngagementBand &&
-                actor.behaviorDefinition.choreographedAttackPass &&
+                !actor.behaviorDefinition.choreographedAttackPass &&
+                actor.behaviorDefinition.lateralAmplitude>0.0f &&
+                actor.behaviorDefinition.verticalAmplitude>0.0f &&
                 actor.desc.formationDefinition.exitStyle == EnemyExitStyle::SplitSides;
         }
         bool forwardSafe = true, exitsSafe = true, warningsCleared = true;
+        bool lingerAfterShot = true, hoverSeen = false;
+        std::map<uint32_t,float> firstShots;
         uint32_t exits = 0, shots = 0;
         EnemyAttackTelegraphSystem telegraph;
         EnemyCombatPresentationBridge presentation;
@@ -22878,7 +23119,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         safety.playerDistance = event.distance;
         safety.railPath = &rail;
         safety.hasCameraPosition = true;
-        for (uint32_t frame = 0; frame < 1080; ++frame) {
+        for (uint32_t frame = 0; frame < 2400; ++frame) {
             safety.playerDistance += (frame < 120 ? 12.0f : frame < 300 ? 17.0f : 24.0f) * dt;
             safety.cameraPosition = rail.Evaluate(safety.playerDistance - 24.0f).position;
             runtime.Update(dt, safety);
@@ -22891,6 +23132,13 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
                 forwardSafe = forwardSafe && actor.desc.spawnDistance + actor.desc.distanceOffset -
                     safety.playerDistance >= actor.behaviorDefinition.engagementBandMinimumForwardDistance - 0.001f;
                 shots += actor.attackState.committedThisFrame ? 1 : 0;
+                if(actor.attackState.committedThisFrame) firstShots.emplace(actor.actorId,actor.age);
+                const auto first=firstShots.find(actor.actorId);
+                if(first!=firstShots.end() && actor.age-first->second<2.0f)
+                    lingerAfterShot=lingerAfterShot && !actor.entranceExitState.exitRequested &&
+                        actor.entranceExitState.targetable;
+                hoverSeen=hoverSeen || (std::abs(actor.behaviorState.behaviorLateralOffset)>0.3f &&
+                    std::abs(actor.behaviorState.behaviorVerticalOffset)>0.1f);
                 if (actor.entranceExitState.phase == EnemyEntranceExitPhase::Exiting) {
                     const auto* visual = presentation.FindActor(actor.actorId);
                     const float side = actor.behaviorState.authoredLateralOffset < -0.1f ? -1.0f : 1.0f;
@@ -22935,12 +23183,48 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
             }
         }
         runner.Expect(assetsEnabled && forwardSafe && exitsSafe && warningsCleared &&
-            exits == count && shots == count && runtime.Enemies().empty(),
+            lingerAfterShot && hoverSeen && firstShots.size()==count &&
+            exits == 0 && shots > count && runtime.Enemies().size() == count &&
+            std::all_of(runtime.Enemies().begin(), runtime.Enemies().end(), [](const auto& actor) {
+                return actor.age > actor.desc.lifetime && actor.entranceExitState.targetable &&
+                    !actor.entranceExitState.exitRequested;
+            }),
             std::string(waveId) + " must hold its early threats ahead through acceleration, still fire, "
-                "and retire every survivor sideways without attack tokens or warning cues"
+                "hover and remain targetable beyond their old lifetime without an automatic exit"
                 " (count=" + std::to_string(count) + ", exits=" + std::to_string(exits) +
                 ", shots=" + std::to_string(shots) + ", forward=" + std::to_string(forwardSafe) +
                 ", safeExit=" + std::to_string(exitsSafe) + ", warnings=" + std::to_string(warningsCleared) + ")");
+
+        // Neither section/Wave completion nor an authored exit request may
+        // fade a living drone. Defeat and explicit scene reset still remove it.
+        CourseAsset cleanupCourse;
+        cleanupCourse.sections.push_back({0.0f, safety.playerDistance + 0.1f, "Combat", "Test"});
+        safety.course = &cleanupCourse;
+        safety.playerDistance += 1.0f;
+        std::vector<uint32_t> persistentIds;
+        for (const auto& actor : runtime.Enemies()) persistentIds.push_back(actor.actorId);
+        runtime.RetireEnemies(persistentIds);
+        runtime.EnemyEntranceExit().RequestActorExit(persistentIds.front());
+        runtime.EnemyEntranceExit().RequestFormationExit(runtime.Enemies().front().desc.waveId);
+        for (int step = 0; step < 180; ++step) {
+            runtime.Update(dt, safety);
+            for (const auto& actor : runtime.Enemies()) {
+                runner.Expect(actor.entranceExitState.phase == EnemyEntranceExitPhase::Active &&
+                    actor.entranceExitState.presentationAlpha >= 0.99f &&
+                    actor.entranceExitState.targetable && !actor.entranceExitState.exitRequested,
+                    "living drones remain opaque and targetable after section and formation exit requests");
+            }
+        }
+        runner.Expect(runtime.Enemies().size() == count,
+            "section completion must retain every surviving persistent drone");
+        runtime.EnemyCombat().ForceDefeat(runtime, persistentIds.front());
+        for (int step = 0; step < 120; ++step) runtime.Update(dt, safety);
+        runner.Expect(runtime.Enemies().size() == count - 1 &&
+            std::none_of(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& actor) {
+                return actor.actorId == persistentIds.front();
+            }), "only the defeated persistent drone disappears after its death presentation");
+        runtime.ClearEnemies();
+        runner.Expect(runtime.Enemies().empty(), "scene reset still clears persistent enemies");
     }
 
     // Force camera overlap with an admitted threat. Spatial protection must
@@ -22988,7 +23272,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
     warning.settings.requireWorldVisibility = false;
     telegraph.Update(warning);
     runner.Expect(cameraDistance >= 12.0f + actor.desc.radius &&
-        actor.entranceExitState.exitRequested && !actor.behaviorState.attackIntentActive &&
+        !actor.entranceExitState.exitRequested && !actor.behaviorState.attackIntentActive &&
         !actor.attackState.tokenReserved && !actor.targetingState.solutionLocked &&
         std::none_of(telegraph.Frame().cues.begin(), telegraph.Frame().cues.end(),
             [&](const auto& cue) { return cue.actorId == actor.actorId; }),
@@ -23000,8 +23284,8 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         std::pow(nextSafePosition.y - safety.cameraPosition.y, 2.0f) +
         std::pow(nextSafePosition.z - safety.cameraPosition.z, 2.0f));
     runner.Expect(nextCameraDistance >= 12.0f + runtime.Enemies().front().desc.radius &&
-        std::abs(runtime.Enemies().front().behaviorState.safetyLateralOffset) > 0.01f,
-        "an emergency outward correction must persist across Behavior/formation updates instead of snapping back into the camera");
+        !runtime.Enemies().front().entranceExitState.exitRequested,
+        "camera clearance must persist across updates without retiring the living enemy");
 
     // Rail evaluation clamps at the endpoint: a positive arc-distance offset
     // must not trick the guard into placing an enemy inside the cart itself.
@@ -23016,7 +23300,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         const float distance = std::sqrt(std::pow(p.x - end.x, 2.0f) +
             std::pow(p.y - end.y - safety.playerVerticalOffset, 2.0f) + std::pow(p.z - end.z, 2.0f));
         endpointSafe = endpointSafe && distance >= 18.0f + enemy.desc.radius &&
-            enemy.entranceExitState.exitRequested && !runtime.EnemyBehavior().CanCommitAttack(enemy);
+            !enemy.entranceExitState.exitRequested && !runtime.EnemyBehavior().CanCommitAttack(enemy);
     }
     runner.Expect(endpointSafe && !runtime.Enemies().empty(),
         "rail endpoint/large seek must preserve physical cart clearance and prevent emergency-corrected threats from firing");
@@ -23304,6 +23588,135 @@ void TestEnemyFormationAndEntranceExit(RegressionRunner& runner) {
         "completed exit presentation should retire all formation actors deterministically");
 }
 
+void TestDroneHoverSpacing(RegressionRunner& runner) {
+    RailPath rail;rail.SetControlPoints({{{0,0,0},18,18},{{0,0,1000},18,18}});
+    const auto simulate=[&](int fps,bool defeat) {
+        CourseSpawnRuntime runtime;
+        auto fire=runtime.FireSafetySettings();fire.enabled=false;
+        runner.Expect(runtime.ConfigureFireSafety(fire),"hover spacing fixture disables fire without changing movement");
+        for(uint32_t i=0;i<4;++i) {
+            CourseEnemyActorDesc actor;
+            actor.meshId="twin_shield_hull";actor.waveId=i<2?"hover-wave-a":"hover-wave-b";
+            actor.formationDefinition=EnemyFormationDefinition::CommercialDefault(actor.waveId);
+            actor.spawnDistance=100;actor.distanceOffset=6;actor.lateralOffset=i%2?-4.5f:4.5f;
+            actor.verticalOffset=6;actor.lifetime=40;actor.suppressFire=true;
+            actor.combatDefinition=EnemyCombatDefinition::CommercialStandard();
+            actor.combatDefinition.spawnDurationSeconds=0;actor.combatDefinition.engageDurationSeconds=0;
+            actor.behaviorDefinition=EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Assault);
+            actor.behaviorDefinition.maintainForwardEngagementBand=true;
+            actor.behaviorDefinition.engagementBandMinimumForwardDistance=36;
+            actor.behaviorDefinition.engagementBandPreferredForwardDistance=46;
+            actor.behaviorDefinition.engagementBandMaximumForwardDistance=70;
+            actor.behaviorDefinition.positioningDurationSeconds=30;
+            actor.behaviorDefinition.lateralAmplitude=0;actor.behaviorDefinition.verticalAmplitude=0;
+            runner.Expect(runtime.SpawnEnemyActor(actor),"overlapping hover wave fixture spawns");
+        }
+        CourseEnemyFireSafetyFrameInput safety; safety.playerDistance=60;safety.railPath=&rail;
+        const float dt=1.0f/fps;
+        float maximumStep=0;
+        std::map<uint32_t,Vector3> previous;
+        for(int frame=0;frame<8*fps;++frame) {
+            safety.playerDistance+=12*dt;runtime.Update(dt,safety);
+            for(const auto& actor:runtime.Enemies()) {
+                const auto& member=actor.formationState;
+                const Vector3 offset{member.hoverForwardOffset,member.hoverLateralOffset,member.hoverVerticalOffset};
+                if(previous.contains(actor.actorId)) {
+                    const auto p=previous[actor.actorId];
+                    const float df=offset.x-p.x,dl=offset.y-p.y,dv=offset.z-p.z;
+                    maximumStep=(std::max)(maximumStep,std::sqrt(df*df+dl*dl+dv*dv));
+                }
+                previous[actor.actorId]=offset;
+                runner.Expect(member.hoverInitialized && std::abs(offset.x)<=3.001f &&
+                    std::abs(offset.y)<=8.001f && std::abs(offset.z)<=9.001f,
+                    "personal hover homes remain bounded without accumulating formation corrections");
+            }
+        }
+        runner.Expect(runtime.Enemies().size()==4 && maximumStep<=2.01f*dt,
+            "cross-wave separation moves continuously at a bounded speed at every frame rate");
+        float minGap=100,minForward=100,maxForward=-100,minHeight=100,maxHeight=-100;
+        float minSide=100,maxSide=-100,minHome=100,maxHome=-100;
+        for(size_t i=0;i<runtime.Enemies().size();++i) {
+            const auto& a=runtime.Enemies()[i];
+            const float forward=a.desc.spawnDistance+a.desc.distanceOffset-safety.playerDistance;
+            minForward=(std::min)(minForward,forward);maxForward=(std::max)(maxForward,forward);
+            minHeight=(std::min)(minHeight,a.desc.verticalOffset);maxHeight=(std::max)(maxHeight,a.desc.verticalOffset);
+            minSide=(std::min)(minSide,a.desc.lateralOffset);maxSide=(std::max)(maxSide,a.desc.lateralOffset);
+            minHome=(std::min)(minHome,a.behaviorState.hoverPreferredForwardDistance);
+            maxHome=(std::max)(maxHome,a.behaviorState.hoverPreferredForwardDistance);
+            runner.Expect(a.desc.verticalOffset>=2.99f &&
+                a.desc.lateralOffset*a.desc.lateralOffset+a.desc.verticalOffset*a.desc.verticalOffset<14.0f*14.0f,
+                "wide private flight regions retain rail corridor clearance");
+            for(size_t j=i+1;j<runtime.Enemies().size();++j) {
+                const auto& b=runtime.Enemies()[j];
+                const float dl=a.desc.lateralOffset-b.desc.lateralOffset,dv=a.desc.verticalOffset-b.desc.verticalOffset;
+                const float screenGap=std::sqrt(dl*dl+dv*dv);
+                minGap=(std::min)(minGap,screenGap);
+            }
+        }
+        runner.Expect(minGap>3.5f && maxForward-minForward>15.0f && maxHeight-minHeight>3.0f &&
+            maxSide-minSide>12.0f && maxHome-minHome>15.0f,
+            "coincident enemies in different waves settle into distinct screen positions, depths and heights: gap="+
+            std::to_string(minGap)+" depth="+std::to_string(maxForward-minForward)+
+            " height="+std::to_string(maxHeight-minHeight)+" side="+std::to_string(maxSide-minSide));
+        if(defeat) {
+            const auto checkpoint=runtime.CaptureCheckpoint();
+            runner.Expect(runtime.RestoreCheckpoint(checkpoint,true),"hover positions survive checkpoint restoration");
+            runner.Expect(runtime.EnemyCombat().ForceDefeat(runtime,1),"neighbor defeat accepted");
+            const auto before=previous[2];
+            safety.playerDistance+=12*dt;runtime.Update(dt,safety);
+            const auto& remaining=runtime.Enemies()[1].formationState;
+            const float df=remaining.hoverForwardOffset-before.x,dl=remaining.hoverLateralOffset-before.y,
+                dv=remaining.hoverVerticalOffset-before.z;
+            const float gap=std::sqrt(df*df+dl*dl+dv*dv);
+            runner.Expect(gap<=2.01f*dt,"defeating a neighbor must not reassign or teleport remaining hover homes");
+        }
+        std::vector<Vector3> result;
+        for(const auto& actor:runtime.Enemies()) result.push_back({actor.formationState.hoverForwardOffset,
+            actor.formationState.hoverLateralOffset,actor.formationState.hoverVerticalOffset});
+        return result;
+    };
+    const auto at30=simulate(30,false),at60=simulate(60,false),at120=simulate(120,false);
+    for(size_t i=0;i<at30.size();++i) runner.Expect(
+        std::abs(at30[i].x-at120[i].x)<0.3f && std::abs(at30[i].y-at120[i].y)<0.3f &&
+        std::abs(at30[i].z-at120[i].z)<0.3f,
+        "stable hover homes and separation converge consistently across 30/60/120 fps");
+    simulate(60,true);
+
+    // Actual authored drones must have different paths, and aiming should slow
+    // a continuous path instead of snapping back to a repeated starting pose.
+    CourseSpawnRuntime flight;
+    for(int i=0;i<2;++i) {
+        CourseEnemyActorDesc actor;
+        actor.meshId="twin_shield_hull";actor.spawnDistance=106;
+        actor.verticalOffset=6;actor.lateralOffset=i?8.0f:-8.0f;
+        actor.lifetime=40;actor.suppressFire=true;
+        actor.combatDefinition=EnemyCombatDefinition::CommercialStandard();
+        actor.combatDefinition.spawnDurationSeconds=0;actor.combatDefinition.engageDurationSeconds=0;
+        actor.behaviorDefinition=EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Assault);
+        actor.behaviorDefinition.maintainForwardEngagementBand=true;
+        actor.behaviorDefinition.positioningDurationSeconds=30;
+        flight.SpawnEnemyActor(actor);
+    }
+    CourseEnemyFireSafetyFrameInput flightSafety;flightSafety.playerDistance=60;flightSafety.railPath=&rail;
+    for(int i=0;i<240;++i) {flightSafety.playerDistance+=0.2f;flight.Update(1.0f/60,flightSafety);}
+    const auto& a=flight.Enemies()[0].behaviorState;
+    const auto& b=flight.Enemies()[1].behaviorState;
+    runner.Expect(std::abs(a.behaviorForwardOffset-b.behaviorForwardOffset)>0.1f &&
+        std::abs(a.behaviorLateralOffset-b.behaviorLateralOffset)>0.1f &&
+        std::abs(a.presentationBankRadians)<=0.101f && std::abs(b.presentationBankRadians)<=0.101f,
+        "individual flight paths differ in depth and lateral motion with restrained velocity-based banking");
+    auto checkpoint=flight.CaptureCheckpoint();
+    checkpoint.enemies[0].behaviorState.state=EnemyBehaviorState::Aiming;
+    checkpoint.enemies[0].behaviorState.stateElapsedSeconds=0;
+    checkpoint.enemies[0].behaviorDefinition.aimingDurationSeconds=3;
+    runner.Expect(flight.RestoreCheckpoint(checkpoint,true),"flight clock restores for warning test");
+    const float before=flight.Enemies()[0].behaviorState.hoverMotionSeconds;
+    for(int i=0;i<60;++i) {flightSafety.playerDistance+=0.2f;flight.Update(1.0f/60,flightSafety);}
+    const auto& aiming=flight.Enemies()[0].behaviorState;
+    runner.Expect(aiming.hoverMotionSeconds>before && aiming.hoverMotionSeconds-before<0.6f &&
+        aiming.hoverMotionRate<0.35f,"aiming slows a persistent flight clock without rewinding or stopping it");
+}
+
 void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
     constexpr uint32_t kWidth = 1000;
     constexpr uint32_t kHeight = 600;
@@ -23384,6 +23797,25 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
         "the opening scout must read larger on screen while later encounters and collision keep their authored size");
     input.runtime = &runtime;
     input.playerDistance = -1.0f;
+
+    CourseSpawnRuntime droneSizeRuntime;
+    CourseEnemyActorDesc sizedDrone=openingScout;
+    sizedDrone.meshId="twin_shield_hull";
+    sizedDrone.spawnDistance=46;
+    droneSizeRuntime.SpawnEnemyActor(sizedDrone);
+    input.runtime=&droneSizeRuntime;
+    openingDirector.Update(input);
+    const auto idleDrone=openingDirector.Frame().actors.front();
+    auto sizeCheckpoint=droneSizeRuntime.CaptureCheckpoint();
+    sizeCheckpoint.enemies.front().behaviorState.attackIntentActive=true;
+    droneSizeRuntime.RestoreCheckpoint(sizeCheckpoint,true);
+    openingDirector.Update(input);
+    const auto chargedDrone=openingDirector.Frame().actors.front();
+    runner.Expect(idleDrone.presentationScale<=1.251f && chargedDrone.presentationScale<=1.251f &&
+        std::abs(idleDrone.presentationScale-chargedDrone.presentationScale)<0.001f &&
+        droneSizeRuntime.Enemies().front().desc.radius==1.05f,
+        "shield silhouette measurement bounds magnification and keeps idle/charging hull size identical");
+    input.runtime=&runtime;
 
     runtime.ClearEnemies();
     EnemyProjectileRuntimeState projectile{};
@@ -27383,6 +27815,40 @@ void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
     runner.Expect(
         runtime.ActiveEnemyCount() == 0 && !gameplay.IsBound(),
         "unbinding gameplay Wave runtime should remove only Program-owned Actors");
+
+    // A completed timer-driven Wave is not a defeated drone. Preserve its
+    // actor state across completion/checkpoints until combat actually kills it.
+    CourseRuntimeProgramAsset persistentProgram = loaded;
+    for (auto& record : persistentProgram.actors) {
+        record.actor.meshId = "twin_shield_hull";
+        record.actor.lifetime = 0.5f;
+        record.actor.behaviorDefinition.maintainForwardEngagementBand = true;
+        record.actor.behaviorDefinition.choreographedAttackPass = false;
+    }
+    for (auto& wave : persistentProgram.waves) {
+        wave.completionCondition = CourseWaveCompletionCondition::Timeout;
+        wave.timeoutSeconds = 0.1f;
+    }
+    runner.Expect(gameplay.Bind(&persistentProgram, &runtime, 0.0f, &error),
+        "persistent-drone cooked Wave fixture binds");
+    gameplay.Update({0.0f, first.triggerRailDistance + 0.01f, {}});
+    gameplay.Update({0.11f, first.triggerRailDistance + 0.01f, {}});
+    gameplay.Update({0.11f, first.triggerRailDistance + 0.01f, {}});
+    runner.Expect(gameplay.Stats().completedWaves == 2 && runtime.ActiveEnemyCount() == 2 &&
+        gameplay.Stats().activeActors == 2,
+        "completed Waves must retain living drone actors and accurate actor state");
+    const auto persistentCheckpoint = gameplay.CaptureCheckpoint();
+    runner.Expect(persistentCheckpoint.defeatedPlacementGuids.empty() &&
+        gameplay.RestoreCheckpoint(persistentCheckpoint, &error) && runtime.ActiveEnemyCount() == 2,
+        "checkpoint restores both surviving drones even though their Waves completed");
+    runtime.EnemyCombat().ForceDefeat(runtime, runtime.Enemies().front().actorId);
+    gameplay.Update({0.0f, first.triggerRailDistance + 0.01f, {}});
+    const auto defeatedCheckpoint = gameplay.CaptureCheckpoint();
+    runner.Expect(defeatedCheckpoint.defeatedPlacementGuids.size() == 1 &&
+        gameplay.RestoreCheckpoint(defeatedCheckpoint, &error) && runtime.ActiveEnemyCount() == 1,
+        "completed-Wave checkpoint restores survivors without resurrecting a defeated drone");
+    gameplay.Unbind();
+    runner.Expect(runtime.Enemies().empty(), "scene unload clears persistent cooked drones");
 }
 
 void TestCourseEnemyEditorViewportFoundation(RegressionRunner& runner) {
@@ -31352,6 +31818,7 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
         EnemyAttackTelegraphSystem telegraph;EnemyAttackLaneTelegraphRenderer lanes;
         EnemyEncounterReadabilityDirector readability;
         std::unordered_map<uint32_t,float> firstVisible,firstShot,firstWarning,firstArrival;
+        std::unordered_map<uint32_t,bool> individualFlight;
         std::unordered_map<uint32_t,std::string> lastReason;
         const float dt=1.0f/fps;
         for(int step=0;step<((audit || mode==3)?100:(mode>=2?30:16))*fps;++step) {
@@ -31426,7 +31893,10 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
                 identities[a.actorId]=a.desc.waveId+"/"+a.desc.role;
                 shotCounts[a.actorId]=a.fireSequence; lastSeen[a.actorId]=time;
                 blocked[a.actorId][a.fireSafetyReason]+=dt;
-                if(a.bulletsEmittedThisFrame) firstShot.try_emplace(a.actorId,time);
+                if(a.bulletsEmittedThisFrame) {
+                    firstShot.try_emplace(a.actorId,time);
+                    individualFlight[a.actorId]=a.behaviorState.hoverPreferredForwardDistance>0.0f;
+                }
                 if(a.fireSafetyReason!=lastReason[a.actorId] || a.bulletsEmittedThisFrame || step%fps==0) {
                     log<<"mode="<<mode<<" fps="<<fps<<" t="<<time<<" id="<<a.actorId<<" state="<<ToString(a.behaviorState.state)
                         <<" wave="<<a.desc.waveId<<" actor="<<a.desc.role<<" age="<<a.age<<" life="<<a.desc.lifetime
@@ -31434,6 +31904,15 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
                         <<" remain="<<a.behaviorState.attackTimeRemaining<<" distance="<<a.desc.spawnDistance+a.desc.distanceOffset-distance<<" shots="<<a.fireSequence
                         <<" reason="<<a.fireSafetyReason<<'\n';
                     lastReason[a.actorId]=a.fireSafetyReason;
+                }
+            }
+            // The course traversal fixture represents a player clearing
+            // earlier threats. Survivors no longer time out on their own;
+            // indefinite no-input survival is covered by the 40-second test.
+            if (mode >= 2) for (const auto& actor : runtime.Enemies()) {
+                if (actor.HoldsCombatPositionUntilResolved() && actor.age >= 16.0f &&
+                    actor.fireSequence > 0 && actor.desc.hitPoints > 0.0f) {
+                    runtime.EnemyCombat().ForceDefeat(runtime, actor.actorId);
                 }
             }
         }
@@ -31462,12 +31941,29 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
         }
         runner.Expect(mode>=2 ? firstShot.size()>=16 : firstShot.size()==3,
             "authored and continuous opening encounters must not strand visible drones without a shot");
-        runner.Expect(firstShot.at(1)-firstVisible.at(1)<=1.85f &&
-            firstShot.at(2)-firstVisible.at(2)<=2.6f,
+        if (mode == 2) for (const auto& [id, visibleTime] : firstVisible) {
+            if (visibleTime > 24.0f) continue;
+            runner.Expect(firstShot.contains(id),
+                "persistent opening enemies must give every readable arrival a first attack within the observation window");
+        }
+        // Individual flight paths can admit another visible actor first. The
+        // opening still needs two prompt attacks, without prescribing actor IDs.
+        std::vector<std::pair<float,uint32_t>> openingShots;
+        for(const auto& [id,time]:firstShot) openingShots.emplace_back(time,id);
+        std::sort(openingShots.begin(),openingShots.end());
+        runner.Expect(openingShots.size()>=2 &&
+            openingShots[0].first-firstVisible.at(openingShots[0].second)<=1.85f &&
+            openingShots[1].first-firstVisible.at(openingShots[1].second)<=2.6f,
             "the opening attacker and its successor must act promptly after becoming visible");
         for(const auto& [id,t]:firstShot) {
+            const float observationEnd=(audit || mode==3)?100.0f:(mode>=2?30.0f:16.0f);
+            if(!firstArrival.contains(id)) {
+                runner.Expect(t>observationEnd-1.5f,
+                    "only shots fired at the end of the observation window may still be in flight");
+                continue;
+            }
             const float flight=firstArrival.at(id)-t;
-            runner.Expect(flight>=.85f && flight<=1.4f,
+            runner.Expect(flight>=.85f && flight<=(individualFlight[id]?1.75f:1.4f),
                 "slower aimed shots must preserve a readable approach time at cart speed 15");
             runner.Expect(t-firstVisible.at(id)<=5.5f,
                 "camera holds and wave queuing must not recreate the long idle opening");
@@ -31497,8 +31993,8 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
         const size_t count=std::count_if(runtime.Enemies().begin(),runtime.Enemies().end(),normal);
         EnemyEncounterReadabilityDirector readability;
         std::unordered_map<uint32_t,uint64_t> shots, warnedTokens;
-        std::unordered_map<uint32_t,float> warningTimes, poseDistances, shotTimes;
-        std::unordered_set<uint32_t> charged, posed, departed, visualBullets, visiblePeel;
+        std::unordered_map<uint32_t,float> warningTimes, poseDistances, shotTimes, firstShotTimes;
+        std::unordered_set<uint32_t> charged, posed, visualBullets;
         uint32_t defeated=0;
         float blockedAt=-1;
         EnemyProjectilePresentationBridge projectilePresentation;
@@ -31581,9 +32077,11 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
                 const auto* pose=presentation.FindActor(actor.actorId);
                 if(behavior.state==EnemyBehaviorState::Aiming || behavior.state==EnemyBehaviorState::RequestingAttack) {
                     if(posed.insert(actor.actorId).second) poseDistances[actor.actorId]=behavior.engagementBandForwardDistance;
-                    runner.Expect(std::abs(behavior.engagementBandForwardDistance-poseDistances[actor.actorId])<0.9f &&
-                        std::abs(behavior.behaviorLateralOffset)<0.001f && std::abs(behavior.behaviorVerticalOffset)<0.001f,
-                        "drone must hold its aim pose while the cart moves");
+                    runner.Expect(behavior.engagementBandForwardDistance>=actor.behaviorDefinition.engagementBandMinimumForwardDistance &&
+                        behavior.engagementBandForwardDistance<=actor.behaviorDefinition.engagementBandMaximumForwardDistance &&
+                        std::abs(behavior.behaviorLateralOffset)<=actor.behaviorDefinition.lateralAmplitude+0.01f &&
+                        std::abs(behavior.behaviorVerticalOffset)<=actor.behaviorDefinition.verticalAmplitude+0.01f,
+                        "a hovering drone must remain inside its forward engagement band and authored drift amplitudes while aiming");
                 }
                 if(pose && pose->weaponCharge>0.65f && behavior.attackIntentActive) {
                     charged.insert(actor.actorId);
@@ -31602,29 +32100,18 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
                 }
                 if(actor.bulletsEmittedThisFrame) {
                     shotTimes[actor.actorId]=time;
-                    runner.Expect(actor.bulletsEmittedThisFrame==1 && actor.fireSequence==1 && charged.contains(actor.actorId) &&
+                    firstShotTimes.try_emplace(actor.actorId,time);
+                    runner.Expect(actor.bulletsEmittedThisFrame==1 && charged.contains(actor.actorId) &&
+                        warnedTokens[actor.actorId]==actor.attackState.tokenId &&
                         warningTimes.contains(actor.actorId) && time-warningTimes[actor.actorId]>=actor.behaviorDefinition.attackLeadSeconds-dt*1.5f,
-                        "exactly one visible shot must follow a complete, uninterrupted warning");
+                        "each visible shot must follow its own complete uninterrupted warning");
                     if(mode==2 && blockedAt>=0) runner.Expect(time>=blockedAt+0.30f+actor.behaviorDefinition.attackLeadSeconds-dt*1.5f,
                         "camera safety interruption must restart the full warning before firing");
                 }
-                if(actor.entranceExitState.phase==EnemyEntranceExitPhase::Exiting) {
-                    const bool firstExitFrame=departed.insert(actor.actorId).second;
-                    const float side=behavior.authoredLateralOffset< -0.1f ? -1.0f : 1.0f;
-                    runner.Expect(actor.fireSequence==1 && actor.entranceExitState.appliedLateralOffset*side>0 &&
-                        !behavior.attackIntentActive && !actor.attackState.tokenReserved && pose && pose->weaponCharge==0,
-                        "a fired drone must depart outward without another warning or shot");
-                    if (std::string(wave)=="intro_scout_pair" || std::string(wave)=="intro_lockon_line") {
-                        if (firstExitFrame) runner.Expect(shotTimes.contains(actor.actorId) &&
-                            time-shotTimes[actor.actorId]>=0.80f,
-                            "opening scouts remain shootable briefly after their first shot");
-                        if (actor.entranceExitState.phaseElapsedSeconds>=0.75f &&
-                            actor.entranceExitState.phaseElapsedSeconds<=0.85f &&
-                            actor.entranceExitState.presentationAlpha>=0.98f) {
-                            visiblePeel.insert(actor.actorId);
-                        }
-                    }
-                }
+                runner.Expect(!actor.entranceExitState.exitRequested &&
+                    actor.entranceExitState.phase != EnemyEntranceExitPhase::Exiting &&
+                    actor.entranceExitState.phase != EnemyEntranceExitPhase::Exited,
+                    "an undefeated normal drone never enters a disappearing exit");
                 if (step%fps==0 || actor.bulletsEmittedThisFrame) {
                     metrics<<"fps="<<fps<<" mode="<<mode<<" "<<wave<<" t="<<time<<" id="<<actor.actorId<<" state="<<ToString(actor.behaviorState.state)
                         <<" remaining="<<actor.behaviorState.attackTimeRemaining<<" shots="<<actor.fireSequence
@@ -31634,17 +32121,20 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
             }
         }
         size_t fired=0;for(const auto& [id,n]:shots) if(n>0)++fired;
-        for(const auto& [id,n]:shots) runner.Expect(n<=1 && (n==0 || visualBullets.contains(id)),
-            "normal shots must reach the visible projectile renderer, with no second volley");
-        if (std::string(wave)=="intro_scout_pair" || std::string(wave)=="intro_lockon_line") {
-            runner.Expect(visiblePeel.size()==fired,
-                "opening scouts stay visibly opaque through the first half of their slower exit");
+        bool repeatedAttack=false;
+        for(const auto& [id,n]:shots) {
+            repeatedAttack=repeatedAttack || n>1;
+            runner.Expect(n==0 || visualBullets.contains(id),
+                "hovering drone shots must reach the visible projectile renderer");
         }
         metrics<<"RESULT fps="<<fps<<" mode="<<mode<<" "<<wave<<" fired="<<fired<<"/"<<count<<'\n';metrics.flush();
         runner.Expect((mode!=1 || (defeated!=0 && shots[defeated]==0 && !visualBullets.contains(defeated))) &&
-            fired==count-(mode==1 ? 1:0) && departed.size()==fired &&
+            fired==count-(mode==1 ? 1:0) && repeatedAttack &&
             (mode!=2 || blockedAt>=0) &&
-            std::none_of(runtime.Enemies().begin(),runtime.Enemies().end(),normal),"each untouched normal drone must fire: "+std::string(wave)+" "+std::to_string(fired)+"/"+std::to_string(count));
+            std::count_if(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& actor) {
+                return normal(actor) && !actor.entranceExitState.exitRequested;
+            })==fired,
+            "each untouched drone fires and remains until defeated: "+std::string(wave)+" "+std::to_string(fired)+"/"+std::to_string(count));
     }
 }
 
@@ -31935,7 +32425,7 @@ int RunEditorCoreRegressionTests() {
         {"title repeating ground fire", [&]() { TestRailTitleGroundFire(runner); }},
         {"authored drone attack timing", [&]() { TestAuthoredDroneAttackTiming(runner); }},
         {"vehicle impact audiovisual and damage HUD", [&]() { TestVehicleImpactAudiovisualAndHud(runner); }},
-        {"normal drone approach pose warn fire and depart", [&]() { TestNormalDroneAttackPass(runner); }},
+        {"normal drone hover repeat fire and persist until defeated", [&]() { TestNormalDroneAttackPass(runner); }},
         {"turret discover aim warn fire and interrupt", [&]() { TestTurretInterceptFlow(runner); }},
         {"camera motion continuity", [&]() { TestCameraMotionContinuity(runner); }},
         {"transaction stack undo/redo", [&]() { TestTransactionStack(runner); }},
@@ -32176,6 +32666,10 @@ int RunEditorCoreRegressionTests() {
               TestRailVehicleBodyCollisionAndDamage(runner);
           }},
          {"rail world raycast", [&]() { TestRailWorldRaycast(runner); }},
+         {"rail world raycast frame cache", [&]() {
+              TestRailWorldRaycastFrameCache(runner);
+              BenchmarkRailWorldRaycastFrameCache(runner);
+          }},
          {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},
          {"weapon damage reception", [&]() { TestWeaponDamageReception(runner); }},
          {"enemy combat state machine", [&]() { TestEnemyCombatStateMachine(runner); }},
@@ -32186,6 +32680,7 @@ int RunEditorCoreRegressionTests() {
          {"enemy formation and entrance exit", [&]() {
               TestEnemyFormationAndEntranceExit(runner);
           }},
+         {"drone individual hover homes and cross-wave separation", [&]() { TestDroneHoverSpacing(runner); }},
          {"enemy encounter readability and combat truth", [&]() {
               TestEnemyEncounterReadabilityAuthority(runner);
           }},

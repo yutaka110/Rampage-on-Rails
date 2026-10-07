@@ -9,6 +9,7 @@
 #include "EnemyFormationDefinition.h"
 
 class CourseSpawnRuntime;
+class RailPath;
 struct CourseEnemyActor;
 
 struct EnemyFormationMemberRuntimeState final {
@@ -24,6 +25,12 @@ struct EnemyFormationMemberRuntimeState final {
     float appliedForwardOffset = 0.0f;
     float appliedLateralOffset = 0.0f;
     float appliedVerticalOffset = 0.0f;
+    // Stable per-actor hover home plus bounded, smoothed crowd separation.
+    // Included in applied* so BeginFrame removes it exactly once.
+    float hoverForwardOffset = 0.0f;
+    float hoverLateralOffset = 0.0f;
+    float hoverVerticalOffset = 0.0f;
+    bool hoverInitialized = false;
     uint64_t revision = 0;
     bool initialized = false;
     bool leader = false;
@@ -44,7 +51,7 @@ class EnemyFormationSystem final {
 public:
     void Reset();
     void BeginFrame(CourseSpawnRuntime& runtime);
-    void Update(CourseSpawnRuntime& runtime, float deltaTime);
+    void Update(CourseSpawnRuntime& runtime, float deltaTime, const RailPath* railPath = nullptr);
     bool SetDefinition(
         std::string formationId,
         EnemyFormationDefinition definition,
@@ -62,7 +69,8 @@ private:
         CourseSpawnRuntime& runtime);
     void UpdateActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
-        float deltaTime);
+        float deltaTime, const RailPath* railPath);
+    void ApplyHoverSpacing(std::span<CourseEnemyActor> actors, float deltaTime, const RailPath* railPath);
 
     EnemyFormationDefinition ResolveDefinition(
         const std::string& formationId) const;

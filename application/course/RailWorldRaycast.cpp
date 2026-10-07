@@ -1,4 +1,5 @@
 #include "RailWorldRaycast.h"
+#include "../diagnostics/DronePerformanceProfile.h"
 
 #include "CourseAsset.h"
 #include "CourseSpawnRuntime.h"
@@ -9,8 +10,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <cstring>
 #include <limits>
+#include <vector>
 
 namespace {
 constexpr float kEpsilon = 0.00001f;
@@ -174,51 +178,222 @@ struct TerrainLocalPoint {
     float vertical = 0.0f;
 };
 
-TerrainLocalPoint FindNearestRailPoint(
-    const RailPath& railPath,
-    const Vector3& world,
-    float searchStart,
-    float searchEnd) {
-    const float span = (std::max)(searchEnd - searchStart, 0.001f);
-    const uint32_t samples = (std::clamp)(
-        static_cast<uint32_t>(std::ceil(span / 6.0f)), 16u, 64u);
-    float bestDistance = searchStart;
-    float bestDistanceSquared = (std::numeric_limits<float>::max)();
-    for (uint32_t index = 0; index <= samples; ++index) {
-        const float distance = searchStart + span * static_cast<float>(index) /
-            static_cast<float>(samples);
-        const float candidate = LengthSquared(
-            Subtract(world, railPath.Evaluate(distance).position));
-        if (candidate < bestDistanceSquared) {
-            bestDistanceSquared = candidate;
-            bestDistance = distance;
+bool SameVector(const Vector3& a, const Vector3& b) {
+    return a.x == b.x && a.y == b.y && a.z == b.z;
+}
+
+std::array<float, 12> RailGeometryKey(const RailPathControlPoint& point) {
+    return {point.position.x, point.position.y, point.position.z,
+        point.corridorRadius, point.speed, static_cast<float>(point.tangentMode),
+        point.incomingTangent.x, point.incomingTangent.y, point.incomingTangent.z,
+        point.outgoingTangent.x, point.outgoingTangent.y, point.outgoingTangent.z};
+}
+
+struct EditGeometryKey {
+    TerrainEditOperation operation{};
+    uint32_t materialLayer = 0;
+    std::array<float, 6> values{};
+    std::string strokeGuid;
+    bool operator==(const EditGeometryKey&) const = default;
+};
+
+EditGeometryKey EditKey(const TerrainBrushStamp& stamp) {
+    return {stamp.operation, stamp.materialLayer,
+        {stamp.distance, stamp.angle, stamp.radius, stamp.surfaceRadius,
+         stamp.strength, stamp.hardness}, stamp.strokeGuid};
+}
+
+bool MatchesEditKey(const EditGeometryKey& key, const TerrainBrushStamp& stamp) {
+    // No GUID/string allocation on the per-query validation path.
+    return key.operation == stamp.operation && key.materialLayer == stamp.materialLayer &&
+        key.strokeGuid == stamp.strokeGuid && key.values == std::array<float, 6>{
+            stamp.distance, stamp.angle, stamp.radius, stamp.surfaceRadius,
+            stamp.strength, stamp.hardness};
+}
+
+struct EditSnapshot {
+    const TerrainEditLayer* layer = nullptr;
+    uint32_t revision = 0;
+    std::vector<EditGeometryKey> stamps;
+
+    bool Matches(const TerrainEditLayer* candidate) const {
+        if (layer != candidate) return false;
+        if (candidate == nullptr) return true;
+        if (revision != candidate->Revision() ||
+            stamps.size() != candidate->Stamps().size()) return false;
+        for (size_t i = 0; i < stamps.size(); ++i) {
+            if (!MatchesEditKey(stamps[i], candidate->Stamps()[i])) return false;
+        }
+        return true;
+    }
+    void Capture(const TerrainEditLayer* candidate) {
+        layer = candidate;
+        revision = candidate != nullptr ? candidate->Revision() : 0;
+        stamps.clear();
+        if (candidate != nullptr) {
+            for (const auto& stamp : candidate->Stamps()) stamps.push_back(EditKey(stamp));
+        }
+    }
+};
+
+struct TerrainRayResult {
+    Vector3 origin{}, direction{}, normal{};
+    float maxDistance = 0.0f, playerDistance = 0.0f, hitDistance = 0.0f;
+    bool hit = false;
+};
+
+struct RayFrameCache {
+    struct RailSampleEntry {
+        RailPathSample sample{};
+        uint32_t key = 0, generation = 0;
+    };
+    static constexpr uint32_t kRailSampleSlots = 16384;
+    uint32_t scopeDepth = 0;
+    const RailPath* rail = nullptr;
+    float railLength = 0.0f;
+    std::vector<std::array<float, 12>> railGeometry;
+    std::vector<RailSampleEntry> railSamples;
+    uint32_t railSampleGeneration = 0;
+    std::array<unsigned char, sizeof(TerrainGenerationSettings)> settingsBytes{};
+    bool terrainConfigured = false;
+    EditSnapshot edits, preview;
+    std::vector<TerrainRayResult> terrainResults;
+    RailWorldRaycast::FrameCacheStats stats{};
+
+    void InvalidateRailSamples() {
+        if (railSamples.empty()) railSamples.resize(kRailSampleSlots);
+        if (++railSampleGeneration == 0) {
+            for (auto& entry : railSamples) entry.generation = 0;
+            railSampleGeneration = 1;
         }
     }
 
-    float window = span / static_cast<float>(samples);
-    for (uint32_t iteration = 0; iteration < 5; ++iteration) {
-        const float left = (std::max)(searchStart, bestDistance - window);
-        const float right = (std::min)(searchEnd, bestDistance + window);
-        const float candidates[] = {
-            left, (left + bestDistance) * 0.5f, bestDistance,
-            (bestDistance + right) * 0.5f, right};
-        for (float distance : candidates) {
-            const float candidate = LengthSquared(
-                Subtract(world, railPath.Evaluate(distance).position));
+    void BeginFrame() {
+        rail = nullptr;
+        railGeometry.clear();
+        InvalidateRailSamples();
+        terrainConfigured = false;
+        terrainResults.clear();
+        stats = {};
+    }
+    void Prepare(const RailWorldRaycastInput& input) {
+        const auto& points = input.railPath->ControlPoints();
+        bool sameRail = rail == input.railPath && railLength == input.railPath->Length() &&
+            railGeometry.size() == points.size();
+        for (size_t i = 0; sameRail && i < points.size(); ++i) {
+            sameRail = railGeometry[i] == RailGeometryKey(points[i]);
+        }
+        if (!sameRail) {
+            rail = input.railPath;
+            railLength = rail->Length();
+            railGeometry.clear();
+            for (const auto& point : points) railGeometry.push_back(RailGeometryKey(point));
+            InvalidateRailSamples();
+            terrainConfigured = false;
+        }
+        // Snapshot actual bytes so padding cannot be lost through assignment.
+        // A mismatch merely invalidates a cache; no approximate float matching.
+        std::array<unsigned char, sizeof(TerrainGenerationSettings)> incomingSettings{};
+        std::memcpy(incomingSettings.data(), input.terrainSettings, incomingSettings.size());
+        if (!terrainConfigured || settingsBytes != incomingSettings ||
+            !edits.Matches(input.terrainEdits) || !preview.Matches(input.terrainPreview)) {
+            settingsBytes = incomingSettings;
+            edits.Capture(input.terrainEdits);
+            preview.Capture(input.terrainPreview);
+            terrainResults.clear();
+            terrainConfigured = true;
+        }
+    }
+};
+
+thread_local RayFrameCache gRayCache;
+
+RailPathSample EvaluateTerrainRail(const RailPath& rail, float distance) {
+    const uint32_t key = std::bit_cast<uint32_t>(distance);
+    // Direct-mapped exact-key cache: collision replaces an entry, never returns
+    // another distance's sample. Generations avoid per-frame clearing/allocating.
+    uint32_t hash = key;
+    hash ^= hash >> 16;
+    hash *= 0x7feb352du;
+    hash ^= hash >> 15;
+    hash *= 0x846ca68bu;
+    hash ^= hash >> 16;
+    RayFrameCache::RailSampleEntry* entry = nullptr;
+    if (gRayCache.scopeDepth > 0) {
+        entry = &gRayCache.railSamples[hash & (RayFrameCache::kRailSampleSlots - 1)];
+        if (entry->generation == gRayCache.railSampleGeneration && entry->key == key) {
+            ++gRayCache.stats.railSampleHits;
+            if (drone_perf::Enabled()) ++drone_perf::frame.railSampleCacheHits;
+            return entry->sample;
+        }
+    }
+    if (drone_perf::Enabled()) ++drone_perf::frame.nearestRailEvaluations;
+    const RailPathSample sample = rail.Evaluate(distance);
+    if (gRayCache.scopeDepth > 0) {
+        ++gRayCache.stats.railEvaluations;
+        *entry = {sample, key, gRayCache.railSampleGeneration};
+    }
+    return sample;
+}
+
+// The original coarse grid and refinement order are retained exactly. Build
+// its world positions once per ray, rather than for every marching/SDF sample.
+struct TerrainRailProjection {
+    const RailPath& rail;
+    float start, end, span;
+    uint32_t samples;
+    std::array<float, 65> distances{};
+    std::array<Vector3, 65> positions{};
+
+    TerrainRailProjection(const RailPath& path, float searchStart, float searchEnd)
+        : rail(path), start(searchStart), end(searchEnd),
+          span((std::max)(searchEnd - searchStart, 0.001f)),
+          samples((std::clamp)(static_cast<uint32_t>(std::ceil(span / 6.0f)), 16u, 64u)) {
+        if (gRayCache.scopeDepth > 0) {
+            for (uint32_t i = 0; i <= samples; ++i) {
+                distances[i] = start + span * static_cast<float>(i) / static_cast<float>(samples);
+                positions[i] = EvaluateTerrainRail(rail, distances[i]).position;
+            }
+        }
+    }
+
+    TerrainLocalPoint FindNearest(const Vector3& world) const {
+        float bestDistance = start;
+        float bestDistanceSquared = (std::numeric_limits<float>::max)();
+        for (uint32_t i = 0; i <= samples; ++i) {
+            const float distance = gRayCache.scopeDepth > 0 ? distances[i] :
+                start + span * static_cast<float>(i) / static_cast<float>(samples);
+            const Vector3 position = gRayCache.scopeDepth > 0 ? positions[i] :
+                EvaluateTerrainRail(rail, distance).position;
+            const float candidate = LengthSquared(Subtract(world, position));
             if (candidate < bestDistanceSquared) {
                 bestDistanceSquared = candidate;
                 bestDistance = distance;
             }
         }
-        window *= 0.5f;
+        float window = span / static_cast<float>(samples);
+        for (uint32_t iteration = 0; iteration < 5; ++iteration) {
+            const float left = (std::max)(start, bestDistance - window);
+            const float right = (std::min)(end, bestDistance + window);
+            const float candidates[] = {left, (left + bestDistance) * 0.5f, bestDistance,
+                (bestDistance + right) * 0.5f, right};
+            for (float distance : candidates) {
+                const float candidate = LengthSquared(
+                    Subtract(world, EvaluateTerrainRail(rail, distance).position));
+                if (candidate < bestDistanceSquared) {
+                    bestDistanceSquared = candidate;
+                    bestDistance = distance;
+                }
+            }
+            window *= 0.5f;
+        }
+        const RailPathSample sample = EvaluateTerrainRail(rail, bestDistance);
+        const Vector3 delta = Subtract(world, sample.position);
+        return {bestDistance, Dot(delta, sample.right), Dot(delta, sample.up)};
     }
+};
 
-    const RailPathSample sample = railPath.Evaluate(bestDistance);
-    const Vector3 delta = Subtract(world, sample.position);
-    return {bestDistance, Dot(delta, sample.right), Dot(delta, sample.up)};
-}
-
-bool RayProceduralTerrain(
+bool ComputeProceduralTerrain(
     const RailWorldRaycastInput& input,
     const Vector3& origin,
     const Vector3& direction,
@@ -229,6 +404,7 @@ bool RayProceduralTerrain(
         input.railPath == nullptr || input.railPath->Length() <= 0.0f) {
         return false;
     }
+    const drone_perf::Scope profile(drone_perf::Stage::ProceduralRay);
 
     const float railEnd = (std::max)(input.railPath->Length() - 0.001f, 0.0f);
     const float searchMargin = maxDistance + 32.0f;
@@ -236,6 +412,7 @@ bool RayProceduralTerrain(
         input.playerDistance - searchMargin, 0.0f, railEnd);
     const float searchEnd = (std::clamp)(
         input.playerDistance + searchMargin, searchStart, railEnd);
+    const TerrainRailProjection projection(*input.railPath, searchStart, searchEnd);
     TerrainVolumeField field(
         *input.railPath,
         *input.terrainSettings,
@@ -245,8 +422,7 @@ bool RayProceduralTerrain(
     const uint32_t steps = (std::clamp)(
         static_cast<uint32_t>(std::ceil(maxDistance / 2.0f)), 24u, 128u);
     float previousDistance = 0.0f;
-    TerrainLocalPoint previousLocal = FindNearestRailPoint(
-        *input.railPath, origin, searchStart, searchEnd);
+    TerrainLocalPoint previousLocal = projection.FindNearest(origin);
     float previousSdf = field.SampleLocal(
         previousLocal.distance, previousLocal.lateral, previousLocal.vertical).sdf;
     if (previousSdf >= 0.0f) {
@@ -264,8 +440,7 @@ bool RayProceduralTerrain(
         const float distance = maxDistance * static_cast<float>(index) /
             static_cast<float>(steps);
         const Vector3 point = Add(origin, Scale(direction, distance));
-        const TerrainLocalPoint local = FindNearestRailPoint(
-            *input.railPath, point, searchStart, searchEnd);
+        const TerrainLocalPoint local = projection.FindNearest(point);
         const float sdf = field.SampleLocal(
             local.distance, local.lateral, local.vertical).sdf;
         if (previousSdf < 0.0f && sdf >= 0.0f) {
@@ -275,8 +450,7 @@ bool RayProceduralTerrain(
             for (uint32_t refinement = 0; refinement < 10; ++refinement) {
                 const float middle = (low + high) * 0.5f;
                 const Vector3 middlePoint = Add(origin, Scale(direction, middle));
-                const TerrainLocalPoint middleLocal = FindNearestRailPoint(
-                    *input.railPath, middlePoint, searchStart, searchEnd);
+                const TerrainLocalPoint middleLocal = projection.FindNearest(middlePoint);
                 const float middleSdf = field.SampleLocal(
                     middleLocal.distance,
                     middleLocal.lateral,
@@ -301,6 +475,40 @@ bool RayProceduralTerrain(
         previousSdf = sdf;
     }
     return false;
+}
+
+bool RayProceduralTerrain(
+    const RailWorldRaycastInput& input,
+    const Vector3& origin, const Vector3& direction, float maxDistance,
+    float& outDistance, Vector3& outNormal) {
+    if (!input.includeProceduralTerrain || input.terrainSettings == nullptr ||
+        input.railPath == nullptr || input.railPath->Length() <= 0.0f) return false;
+    if (gRayCache.scopeDepth == 0) {
+        return ComputeProceduralTerrain(input, origin, direction, maxDistance, outDistance, outNormal);
+    }
+    gRayCache.Prepare(input);
+    for (const auto& result : gRayCache.terrainResults) {
+        if (SameVector(origin, result.origin) && SameVector(direction, result.direction) &&
+            maxDistance == result.maxDistance && input.playerDistance == result.playerDistance) {
+            ++gRayCache.stats.terrainResultHits;
+            if (drone_perf::Enabled()) ++drone_perf::frame.terrainRayCacheHits;
+            outDistance = result.hitDistance;
+            outNormal = result.normal;
+            return result.hit;
+        }
+    }
+    TerrainRayResult result{};
+    result.origin = origin;
+    result.direction = direction;
+    result.maxDistance = maxDistance;
+    result.playerDistance = input.playerDistance;
+    result.hit = ComputeProceduralTerrain(input, origin, direction, maxDistance,
+        result.hitDistance, result.normal);
+    outDistance = result.hitDistance;
+    outNormal = result.normal;
+    if (gRayCache.terrainResults.size() >= 512) gRayCache.terrainResults.clear();
+    gRayCache.terrainResults.push_back(result);
+    return result.hit;
 }
 
 int HitPriority(RailAimHitKind kind) {
@@ -341,7 +549,21 @@ void ConsiderHit(
 }
 } // namespace
 
+RailWorldRaycast::FrameCacheScope::FrameCacheScope() {
+    if (gRayCache.scopeDepth == 0) gRayCache.BeginFrame();
+    ++gRayCache.scopeDepth;
+}
+
+RailWorldRaycast::FrameCacheScope::~FrameCacheScope() {
+    --gRayCache.scopeDepth;
+}
+
+RailWorldRaycast::FrameCacheStats RailWorldRaycast::CacheStats() {
+    return gRayCache.stats;
+}
+
 RailAimHit RailWorldRaycast::Query(const RailWorldRaycastInput& input) {
+    const drone_perf::Scope profile(drone_perf::Stage::WorldRay);
     RailAimHit best{};
     if (input.aim == nullptr || !input.aim->valid || input.railPath == nullptr ||
         input.railPath->Length() <= 0.0f || !Finite(input.aim->worldRayOrigin) ||

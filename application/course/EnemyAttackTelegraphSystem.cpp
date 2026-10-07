@@ -1,4 +1,5 @@
 #include "EnemyAttackTelegraphSystem.h"
+#include "../diagnostics/DronePerformanceProfile.h"
 
 #include "CourseAsset.h"
 #include "RailAimState.h"
@@ -284,6 +285,7 @@ void EnemyAttackTelegraphSystem::CancelActor(uint32_t actorId) {
 
 void EnemyAttackTelegraphSystem::Update(
     const EnemyAttackTelegraphFrameInput& input) {
+    const drone_perf::Scope profile(drone_perf::Stage::Telegraph);
     frame_ = {};
     const float dt = (std::clamp)(input.deltaTime, 0.0f, 0.1f);
     elapsedTime_ += dt;

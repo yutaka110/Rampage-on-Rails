@@ -104,8 +104,14 @@ void ApplyProceduralAnimation(
         ? Saturate(state.phaseElapsedSeconds / duration)
         : 0.0f;
     const float pulse = std::sin(progress * kPi);
-    const float ambientPhase = actor.age * 3.2f +
-        static_cast<float>(actor.actorId % 11u) * 0.43f;
+    const bool individualHover = actor.desc.meshId == "twin_shield_hull" &&
+        actor.behaviorDefinition.maintainForwardEngagementBand &&
+        !actor.behaviorDefinition.choreographedAttackPass;
+    const float ambientPhase = individualHover
+        ? actor.behaviorState.hoverMotionSeconds * (0.8f +
+            0.22f * std::sin(actor.behaviorState.deterministicPhase)) +
+            actor.behaviorState.deterministicPhase
+        : actor.age * 3.2f + static_cast<float>(actor.actorId % 11u) * 0.43f;
 
     output.actorId = actor.actorId;
     output.animation = ResolveAnimation(state.phase);
@@ -386,6 +392,15 @@ void ApplyProceduralAnimation(
         output.emissiveStrength = 0.5f;
         output.coreColor = {0.08f, 0.30f, 0.42f, output.materialColor.w};
         output.contrastBackdropStrength = 0.22f;
+    }
+    if (actor.desc.meshId == "twin_shield_hull" &&
+        state.phase != EnemyCombatPhase::Spawning &&
+        state.phase != EnemyCombatPhase::Dying && state.phase != EnemyCombatPhase::Retired) {
+        // Rigid floating machinery: charge/recoil move the pose and shields,
+        // not the hull's size. Keep banking gentle enough to track and aim.
+        output.scaleMultiplier = 1.0f;
+        output.bodyScale = {1,1,1};
+        output.rotationOffset.z = (std::clamp)(output.rotationOffset.z,-0.16f,0.16f);
     }
     if (actor.entranceExitState.initialized) {
         output.scaleMultiplier *= actor.entranceExitState.presentationScale;

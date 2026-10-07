@@ -184,7 +184,14 @@ bool CourseGameplayWaveRuntimeBridge::RestoreCheckpoint(
                    wavePhase == CourseGameplayWavePhase::Blocked) {
             actorPhases_[index] = CourseGameplayActorPhase::Prewarmed;
         } else if (wavePhase == CourseGameplayWavePhase::Completed) {
-            actorPhases_[index] = CourseGameplayActorPhase::Retired;
+            CourseEnemyActor candidate{};
+            candidate.desc = actor.actor;
+            candidate.behaviorDefinition = actor.actor.behaviorDefinition;
+            if (candidate.HoldsCombatPositionUntilResolved()) {
+                SpawnActor(static_cast<uint32_t>(index));
+            } else {
+                actorPhases_[index] = CourseGameplayActorPhase::Retired;
+            }
         }
     }
     RefreshStats();
@@ -392,6 +399,12 @@ void CourseGameplayWaveRuntimeBridge::RemoveActorsForWave(std::size_t waveIndex)
     }
     runtime_->RetireEnemies(retiredActorIds);
     for (const uint32_t actorIndex : program_->waves[waveIndex].actorIndices) {
+        const auto& record = program_->actors[actorIndex];
+        const auto retained = std::find_if(runtime_->Enemies().begin(), runtime_->Enemies().end(), [&](const auto& actor) {
+            return actor.desc.sourcePlacementGuid == record.placementGuid &&
+                actor.HoldsCombatPositionUntilResolved() && actor.desc.hitPoints > 0.0f;
+        });
+        if (retained != runtime_->Enemies().end()) continue;
         if (actorPhases_[actorIndex] != CourseGameplayActorPhase::Defeated) {
             actorPhases_[actorIndex] = CourseGameplayActorPhase::Retired;
         }

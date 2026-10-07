@@ -183,6 +183,15 @@ struct CourseEnemyActor {
     bool encounterPacingEvaluated = false;
     bool encounterPacingAttackAllowed = true;
     uint32_t actorId = 0;
+
+    // Repeating front drones stay alive until defeated, including after their
+    // source section/Wave has completed. Only scene reset clears them outright.
+    bool HoldsCombatPositionUntilResolved() const {
+        return desc.meshId == "twin_shield_hull" &&
+            behaviorDefinition.commercialBehavior &&
+            behaviorDefinition.maintainForwardEngagementBand &&
+            !behaviorDefinition.choreographedAttackPass;
+    }
 };
 
 struct CourseObstacleActor {
@@ -236,7 +245,7 @@ public:
         uint64_t intentSequence);
     void BeginEnemyFormationFrame(EnemyFormationSystem& system);
     void UpdateEnemyFormations(EnemyFormationSystem& system,
-        float deltaTime);
+        float deltaTime, const RailPath* railPath = nullptr);
     void BeginEnemyEntranceExitFrame(EnemyEntranceExitDirector& system);
     void UpdateEnemyEntranceExit(EnemyEntranceExitDirector& system,
         float deltaTime);

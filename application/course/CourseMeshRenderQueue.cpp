@@ -472,8 +472,10 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             bridgeScale *= (std::max)(
                 1.0f, readability->presentationScale);
         }
+        const float modelScale = enemy.desc.meshId == "twin_shield_hull"
+            ? kTwinShieldGameplayModelScale : 1.0f;
         const float baseScale = (std::max)(0.01f,
-            enemy.desc.radius * presentationScale * bridgeScale);
+            enemy.desc.radius * presentationScale * bridgeScale * modelScale);
         Vector3 rotation = Add(
             RotationFromRailTangent(sample.tangent),
             enemy.desc.localRotation);

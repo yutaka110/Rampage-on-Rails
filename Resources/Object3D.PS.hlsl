@@ -186,9 +186,35 @@ PixelShaderOutput main(VertexShaderOutput input)
         lit += DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(toSpot),gSpotLight.color.rgb*gSpotLight.intensity*spotAtten);
         float3 reflected = gEnvironmentTexture.SampleLevel(gSampler,reflect(-V,N),rough*4.0f).rgb;
         float3 f0 = lerp(float3(0.04f,0.04f,0.04f),baseRgb,metal);
-        lit += reflected*f0*(1.0f-rough*0.55f) + baseRgb*0.38f;
         float rim = pow(1.0f-saturate(abs(dot(N,V))),3.0f);
-        lit += float3(0.18f,0.20f,0.22f)*rim;
+        if (titleSubject.w > 0.5f) {
+            lit += reflected*f0*(1.0f-rough*0.55f) + baseRgb*0.38f;
+            lit += float3(0.18f,0.20f,0.22f)*rim;
+        } else {
+            // Cool upper-side key separates the metal from warm cave rock.
+            // Keep the mapped GGX response so opposing faces stay distinct.
+            float3 right=SafeNormalize(cross(float3(0,1,0),V));
+            float3 fill=SafeNormalize(V+right*0.70f+float3(0,0.85f,0));
+            lit += DroneDirect(baseRgb,metal,rough,N,V,fill,float3(4.2f,4.9f,5.8f));
+            // A broad soft frontal source reveals the sensor housing and shield
+            // faces at gameplay distance, rather than lighting only the bevels.
+            float3 front=SafeNormalize(V+right*0.20f+float3(0,0.25f,0));
+            lit += DroneDirect(baseRgb,metal,max(rough,0.55f),N,V,front,float3(2.2f,2.4f,2.7f));
+            float3 bounce=SafeNormalize(V*0.45f-right*0.65f-float3(0,0.40f,0));
+            lit += DroneDirect(baseRgb,metal,rough,N,V,bounce,float3(0.90f,0.73f,0.57f));
+
+            // Broad fill and edge reflection use the geometric normal: normal
+            // map scratches must not become a noisy glowing outline.
+            float3 shapeN=SafeNormalize(input.normal);
+            float skyFacing=saturate(shapeN.y*0.5f+0.5f);
+            float ambient=lerp(0.15f,0.34f,skyFacing);
+            lit += baseRgb*ambient + reflected*f0*(0.55f-rough*0.12f);
+            lit += f0*float3(0.18f,0.22f,0.28f)*lerp(0.50f,1.0f,skyFacing);
+            float3 edgeLight=SafeNormalize(-V*0.45f+right*0.90f+float3(0,0.70f,0));
+            float edge=pow(1.0f-saturate(abs(dot(shapeN,V))),2.8f);
+            edge *= smoothstep(-0.20f,0.65f,dot(shapeN,edgeLight));
+            lit += float3(0.20f,0.30f,0.40f)*edge*lerp(0.65f,1.0f,skyFacing);
+        }
         lit = lerp(lit,float3(1.4f,1.15f,0.80f),saturate(gMaterial.pad_)*0.85f);
         if (titleSubject.w > 0.5f) lit = TitleAtmosphere(lit,input.worldPosition);
         output.color = float4(lit,baseA);

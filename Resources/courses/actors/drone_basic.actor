@@ -4,8 +4,8 @@
 actor|drone_basic|Basic Attack Drone|twin_shield_hull|1.2|28|16|1.0|0.34|0.20|1.0|assault_magenta_single
 combat|1.40|0.35|25|assault_magenta_single
 movement|2
-behavior|assault|0.20|0.15|0.25|0.70|1.40|0.20|0.35|0|0|0|true
+behavior|assault|0.20|0.15|0.25|0.70|2.40|0.65|0.65|3.8|1.5|0.16|true
 engagement_band|true|36|46|70|14|2.2|34|10
-# One readable aimed shot, then an outward departure.
+# Stay ahead, hover and prepare another readable attack after recovery.
 # attack_pass|enabled|startDelay|recoil|nextActorPreparationLead
-attack_pass|true|0.35|0.20|0.30
+attack_pass|false|0.35|0.20|0.30

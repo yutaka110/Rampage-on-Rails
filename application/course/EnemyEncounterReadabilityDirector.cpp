@@ -129,8 +129,14 @@ void EnemyEncounterReadabilityDirector::Update(
         const Projection center = Project(
             world, *input.viewProjection, input.viewportWidth,
             input.viewportHeight, input.settings.safeAreaPixels);
+        // The drone's shields are 3.2 units high, unlike the legacy sphere.
+        // Measuring its collision sphere inflated the visible model again.
+        const bool twinShield = actor.desc.meshId == "twin_shield_hull";
+        const float silhouetteHalfHeight = twinShield
+            ? 1.6f * kTwinShieldGameplayModelScale *
+                (std::max)(0.01f, actor.desc.localScale.y) : 1.0f;
         const Projection edge = Project(
-            Add(world, Scale(sample.up, (std::max)(0.05f, actor.desc.radius))),
+            Add(world, Scale(sample.up, (std::max)(0.05f, actor.desc.radius * silhouetteHalfHeight))),
             *input.viewProjection, input.viewportWidth,
             input.viewportHeight, input.settings.safeAreaPixels);
         const float dx = edge.screen.x - center.screen.x;
@@ -162,7 +168,7 @@ void EnemyEncounterReadabilityDirector::Update(
         presenceInput.readableOffscreenWarning = warning != nullptr &&
             !warning->occluded && warning->phase != EnemyAttackTelegraphPhase::None;
         presenceInput.settings = input.settings.presence;
-        if (actor.desc.actorAssetId == "drone_scout" &&
+        if (!twinShield && actor.desc.actorAssetId == "drone_scout" &&
             input.playerDistance >= 0.0f &&
             input.playerDistance < input.settings.openingScoutEndDistance) {
             // The first targets teach the combat silhouette. Enlarge only the
@@ -173,6 +179,17 @@ void EnemyEncounterReadabilityDirector::Update(
             presenceInput.settings.minimumEngagedDiameterPixels = (std::max)(
                 presenceInput.settings.minimumEngagedDiameterPixels,
                 input.settings.openingScoutEngagedDiameterPixels);
+        }
+        if (twinShield) {
+            // Preserve perspective and physical size across idle/charge. A
+            // warning strengthens the core and HUD rather than growing a hull.
+            // A recognizable shield silhouette needs less pixel height than
+            // the legacy spherical proxy. Keep exposure gating at that size.
+            presenceInput.settings.minimumEngagedDiameterPixels *= 0.65f;
+            presenceInput.settings.minimumIdleDiameterPixels =
+                presenceInput.settings.minimumEngagedDiameterPixels;
+            presenceInput.settings.maximumPresentationScale = (std::min)(
+                presenceInput.settings.maximumPresentationScale, 1.25f);
         }
         const EnemyScreenPresenceResult presence =
             presencePolicy_.Evaluate(presenceInput);

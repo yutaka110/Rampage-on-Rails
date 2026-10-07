@@ -303,6 +303,21 @@ void EnemyBehaviorSystem::InitializeActor(CourseEnemyActor& actor) {
     state.authoredVerticalOffset = actor.desc.verticalOffset;
     state.deterministicPhase =
         static_cast<float>((actor.actorId * 2654435761u) % 1024u) / 1024.0f * kTau;
+    if (actor.desc.meshId == "twin_shield_hull" &&
+        actor.behaviorDefinition.maintainForwardEngagementBand &&
+        !actor.behaviorDefinition.choreographedAttackPass) {
+        uint32_t bits=actor.actorId^0x74e132abu;
+        bits^=bits>>16;bits*=0x7feb352du;bits^=bits>>15;
+        bits*=0x846ca68bu;bits^=bits>>16;
+        const float span=actor.behaviorDefinition.engagementBandMaximumForwardDistance-
+            actor.behaviorDefinition.engagementBandMinimumForwardDistance;
+        const float nearHome=actor.behaviorDefinition.engagementBandMinimumForwardDistance+
+            (std::min)(6.0f,span*0.2f);
+        const float farHome=(std::max)(nearHome,
+            actor.behaviorDefinition.engagementBandMaximumForwardDistance-(std::min)(7.0f,span*0.2f));
+        state.hoverPreferredForwardDistance=nearHome+(farHome-nearHome)*
+            static_cast<float>(bits&0xffffu)/65535.0f;
+    }
     state.attackCooldownRemaining = (std::max)(
         actor.desc.firstShotDelay,
         actor.behaviorDefinition.positioningDurationSeconds);
@@ -457,7 +472,7 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
                     ++frame_.engagementBandSuppressedAttacks;
                 }
             }
-            if (!state.engagementBandExitRequested &&
+            if (!actor.HoldsCombatPositionUntilResolved() && !state.engagementBandExitRequested &&
                 state.engagementBandForwardDistance <=
                     definition.engagementBandDisengageForwardDistance) {
                 state.attackIntentActive = false;
@@ -618,7 +633,8 @@ void EnemyBehaviorSystem::ApplyMovement(
              state.state == EnemyBehaviorState::Retreating);
         const float desiredForwardDistance = holdingPose
             ? state.attackPassHoldForwardDistance
-            : definition.engagementBandPreferredForwardDistance;
+            : state.hoverPreferredForwardDistance > 0.0f
+                ? state.hoverPreferredForwardDistance : definition.engagementBandPreferredForwardDistance;
         const float error = desiredForwardDistance - baseForwardDistance;
         const float correction = (std::clamp)(
             error * definition.engagementBandPositionGain,
@@ -654,6 +670,8 @@ void EnemyBehaviorSystem::ApplyMovement(
         : 1.0f;
     const float phase = actor.age * definition.movementFrequency * kTau +
         state.deterministicPhase;
+    const bool individualHover = actor.desc.meshId == "twin_shield_hull" &&
+        definition.maintainForwardEngagementBand && !definition.choreographedAttackPass;
     float lateral = 0.0f;
     float vertical = 0.0f;
     float forward = 0.0f;
@@ -692,8 +710,27 @@ void EnemyBehaviorSystem::ApplyMovement(
             break;
         }
     }
+    if (individualHover && definition.movementEnabled) {
+        const bool aiming = state.state == EnemyBehaviorState::Aiming ||
+            (state.attackIntentActive && actor.attackState.tokenReserved);
+        state.hoverMotionRate += ((aiming ? 0.24f : 1.0f) - state.hoverMotionRate) *
+            (1.0f - std::exp(-3.0f * deltaTime));
+        state.hoverMotionSeconds += deltaTime * state.hoverMotionRate;
+        const float identity = state.deterministicPhase;
+        const float rate = 0.72f + 0.55f * (0.5f + 0.5f * std::sin(identity * 2.17f));
+        const float t = state.hoverMotionSeconds * definition.movementFrequency * kTau * rate;
+        // Different phases and incommensurate frequencies prevent a shared
+        // pendulum motion, while keeping the authored movement envelope.
+        lateral = definition.lateralAmplitude * (0.65f * std::sin(t + identity) +
+            0.28f * std::sin(t * 0.417f + identity * 2.31f));
+        vertical = definition.verticalAmplitude * (0.60f * std::sin(t * 0.63f + identity * 1.73f) +
+            0.32f * std::sin(t * 1.17f + identity * 0.59f));
+        forward = definition.lateralAmplitude + definition.verticalAmplitude > 0.0f
+            ? 1.25f * std::sin(t * 0.31f + identity * 1.37f) +
+                0.55f * std::sin(t * 0.77f + identity * 2.13f) : 0.0f;
+    }
     if (state.state == EnemyBehaviorState::Evading &&
-        !definition.choreographedAttackPass) {
+        !definition.choreographedAttackPass && !individualHover) {
         const float evadeProgress = actor.behaviorDefinition.evadeDurationSeconds > 0.0f
             ? Saturate(state.stateElapsedSeconds /
                 actor.behaviorDefinition.evadeDurationSeconds)
@@ -702,15 +739,27 @@ void EnemyBehaviorSystem::ApplyMovement(
         lateral += side * std::sin(evadeProgress * 3.14159265f) *
             (std::max)(0.8f, definition.lateralAmplitude * 0.42f);
     }
+    const float lateralVelocity = deltaTime > 0.000001f
+        ? (lateral * entryBlend - state.behaviorLateralOffset) / deltaTime : 0.0f;
+    const float verticalVelocity = deltaTime > 0.000001f
+        ? (vertical * entryBlend - state.behaviorVerticalOffset) / deltaTime : 0.0f;
     state.behaviorForwardOffset = forward * entryBlend;
     state.behaviorLateralOffset = lateral * entryBlend;
     state.behaviorVerticalOffset = vertical * entryBlend;
+    const float previousBank = state.presentationBankRadians;
     state.presentationYawRadians = lateral * 0.025f;
     state.presentationPitchRadians = -forward * 0.035f;
     state.presentationBankRadians = (std::clamp)(
         -std::cos(phase) * definition.maximumBankRadians,
         -definition.maximumBankRadians,
         definition.maximumBankRadians);
+    if (individualHover) {
+        const float response = 1.0f - std::exp(-3.5f * deltaTime);
+        const float desiredBank = (std::clamp)(-lateralVelocity * 0.055f, -0.10f, 0.10f);
+        state.presentationBankRadians = previousBank + (desiredBank - previousBank) * response;
+        state.presentationYawRadians = (std::clamp)(lateralVelocity * 0.045f, -0.10f, 0.10f);
+        state.presentationPitchRadians = (std::clamp)(verticalVelocity * 0.05f, -0.065f, 0.065f);
+    }
     if (definition.choreographedAttackPass) {
         state.presentationYawRadians = 0.0f;
         state.presentationPitchRadians = 0.0f;

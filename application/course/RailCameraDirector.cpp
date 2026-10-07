@@ -1,4 +1,5 @@
 #include "RailCameraDirector.h"
+#include "../diagnostics/DronePerformanceProfile.h"
 #include "GameplaySettingsValidation.h"
 
 #include "CourseSpawnRuntime.h"
@@ -676,6 +677,7 @@ void RailCameraDirector::AddFeedbackImpulse(float shakeAmplitude, float fovKick,
 }
 
 RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFrameInput& input) {
+    const drone_perf::Scope profile(drone_perf::Stage::Camera);
     RailCameraDirectorFrame frame{};
     if (input.course == nullptr || input.railPath == nullptr || input.railPath->Length() <= 0.0f) {
         lastFrame_ = frame;

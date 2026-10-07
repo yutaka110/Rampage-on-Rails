@@ -1,8 +1,8 @@
 actor|drone_leader|Combo Leader Drone|twin_shield_hull|1.35|46|16|1.0|0.48|0.16|1.0|assault_magenta_single
 combat|1.40|0.35|25|assault_magenta_single
 movement|1.5
-behavior|support|0.20|0.15|0.25|0.70|1.40|0.20|0.35|0|0|0|true
+behavior|support|0.20|0.15|0.25|0.70|2.60|0.65|0.65|3.4|1.8|0.14|true
 engagement_band|true|36|46|70|14|2.2|34|10
-# One readable aimed shot, then an outward departure.
+# Stay ahead, hover and prepare another readable attack after recovery.
 # attack_pass|enabled|startDelay|recoil|nextActorPreparationLead
-attack_pass|true|0.35|0.20|0.30
+attack_pass|false|0.35|0.20|0.30

@@ -38,6 +38,12 @@ float ArchetypePriority(EnemyBehaviorArchetype archetype) noexcept {
     return 0.0f;
 }
 
+float FirstHoverAttackPriority(const CourseEnemyActor& actor) noexcept {
+    // Persistent survivors may repeat indefinitely. Let newly arrived drones
+    // take their first turn before those survivors request another volley.
+    return actor.HoldsCombatPositionUntilResolved() && actor.fireSequence == 0 ? 1.0f : 0.0f;
+}
+
 float ThreatCost(float severity, EnemyBehaviorArchetype archetype) noexcept {
     const float base = 0.55f + (std::clamp)(severity, 0.0f, 1.0f) * 0.65f;
     return archetype == EnemyBehaviorArchetype::Boss
@@ -185,6 +191,7 @@ void EnemyAttackCoordinator::UpdateActors(std::span<CourseEnemyActor> actors,
             state.queuedSeconds += dt;
             state.priority = intent->severity +
                 ArchetypePriority(intent->archetype) +
+                FirstHoverAttackPriority(actor) +
                 state.queuedSeconds * settings_.waitingPriorityPerSecond;
             state.revision = ++revision_;
         } else if (OccupiesToken(state) &&
@@ -374,7 +381,8 @@ void EnemyAttackCoordinator::QueueIntent(
     state.queuedSeconds = 0.0f;
     state.reservedSeconds = 0.0f;
     state.recoveryRemaining = 0.0f;
-    state.priority = intent.severity + ArchetypePriority(intent.archetype);
+    state.priority = intent.severity + ArchetypePriority(intent.archetype) +
+        FirstHoverAttackPriority(actor);
     state.threatCost = ThreatCost(intent.severity, intent.archetype);
     state.tokenReserved = false;
     state.telegraphPresented = false;

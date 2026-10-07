@@ -1,4 +1,5 @@
 #include "CourseSpawnRuntime.h"
+#include "../diagnostics/DronePerformanceProfile.h"
 #include "RailWorldRaycast.h"
 #include "EnemyAttackInterruptSystem.h"
 #include "EnemyProjectileShootDownSystem.h"
@@ -227,6 +228,8 @@ void CourseSpawnRuntime::RetireEnemies(std::span<const uint32_t> actorIds, bool 
     const std::unordered_set<uint32_t> ids(actorIds.begin(), actorIds.end());
     std::erase_if(enemies_, [&](CourseEnemyActor& actor) {
         if (!ids.contains(actor.actorId)) return false;
+        if (playAuthoredExit && actor.HoldsCombatPositionUntilResolved() &&
+            actor.desc.hitPoints > 0.0f) return false;
         const std::string formationId = !actor.desc.formationDefinition.definitionId.empty()
             ? actor.desc.formationDefinition.definitionId : actor.desc.waveId;
         const bool hasAuthoredExit = !actor.desc.formationDefinition.definitionId.empty() ||
@@ -240,7 +243,17 @@ void CourseSpawnRuntime::RetireEnemies(std::span<const uint32_t> actorIds, bool 
         return false;
     });
     // Both immediate removal and animated retirement stop owned projectiles.
-    std::erase_if(bullets_, [&](const CourseBulletActor& bullet) { return ids.contains(bullet.ownerActorId); });
+    std::erase_if(bullets_, [&](const CourseBulletActor& bullet) {
+        if (!ids.contains(bullet.ownerActorId)) return false;
+        if (playAuthoredExit) {
+            const auto owner = std::find_if(enemies_.begin(), enemies_.end(), [&](const auto& actor) {
+                return actor.actorId == bullet.ownerActorId;
+            });
+            if (owner != enemies_.end() && owner->HoldsCombatPositionUntilResolved() &&
+                owner->desc.hitPoints > 0.0f) return false;
+        }
+        return true;
+    });
 }
 
 void CourseSpawnRuntime::ClearEnemies() {
@@ -345,6 +358,7 @@ void CourseSpawnRuntime::Update(float deltaTime) {
 }
 
 void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput) {
+    const drone_perf::Scope profile(drone_perf::Stage::Spawn);
     const float dt = (std::max)(0.0f, deltaTime);
     fireSafetyStats_ = {};
 
@@ -367,7 +381,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     behaviorInput.deltaTime = dt;
     behaviorInput.playerDistance = safetyInput.playerDistance;
     enemyBehaviorSystem_.Update(*this, behaviorInput);
-    enemyFormationSystem_.Update(*this, dt);
+    enemyFormationSystem_.Update(*this, dt, safetyInput.railPath);
     enemyEntranceExitDirector_.Update(*this, dt);
     // Check the final staged pose, not just Behavior's pre-formation position.
     EnforceEnemyEngagementClearance(safetyInput);
@@ -433,6 +447,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
 
 void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
     const CourseEnemyFireSafetyFrameInput& input) {
+    const drone_perf::Scope profile(drone_perf::Stage::Clearance);
     const auto dot = [](const Vector3& a, const Vector3& b) {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     };
@@ -480,35 +495,67 @@ void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
                 (input.hasCameraPosition &&
                  dot(toCamera, toCamera) < cameraClearance * cameraClearance);
             if (unsafeSpatialPose) {
-                // Arc distance alone is insufficient at a tight bend or rail
-                // endpoint. Move outward to the safe side of BOTH exclusion
-                // spheres and cancel the attack; never push through the cart.
-                const float side = behavior.authoredLateralOffset < -0.1f ? -1.0f : 1.0f;
-                const Vector3 direction = Scale(rail.Evaluate(
-                    actor.desc.spawnDistance + actor.desc.distanceOffset).right, side);
-                const auto outwardShift = [&](const Vector3& offset, float clearance) {
-                    const float projection = dot(offset, direction);
-                    const float discriminant = projection * projection -
-                        dot(offset, offset) + clearance * clearance;
-                    return discriminant >= 0.0f
-                        ? (std::max)(0.0f, -projection + std::sqrt(discriminant)) : 0.0f;
-                };
-                float shift = outwardShift(toCart, cartClearance);
-                if (input.hasCameraPosition) {
-                    shift = (std::max)(shift, outwardShift(toCamera, cameraClearance));
+                bool relocatedForward = false;
+                if (actor.HoldsCombatPositionUntilResolved()) {
+                    // At bends, an arc-distance floor can still overlap the
+                    // camera. Find a clear place ahead instead of retiring.
+                    float bestDelta = 0.0f;
+                    float bestScore = 1000000.0f;
+                    const float currentDistance = actor.desc.spawnDistance + actor.desc.distanceOffset;
+                    for (float ahead = definition.engagementBandMinimumForwardDistance;
+                         ahead <= definition.engagementBandMaximumForwardDistance; ahead += 2.0f) {
+                        const float distance = input.playerDistance + ahead;
+                        const Vector3 candidate = ResolveRailLocal(rail, distance, 0.0f,
+                            actor.desc.lateralOffset, actor.desc.verticalOffset);
+                        const Vector3 cartDelta = subtract(candidate, cart);
+                        const Vector3 cameraDelta = subtract(candidate, input.cameraPosition);
+                        if (dot(cartDelta, cartDelta) < cartClearance * cartClearance ||
+                            (input.hasCameraPosition && dot(cameraDelta, cameraDelta) < cameraClearance * cameraClearance)) continue;
+                        const float score = std::abs(distance - currentDistance);
+                        if (score < bestScore) {
+                            bestScore = score;
+                            bestDelta = distance - currentDistance;
+                            relocatedForward = true;
+                        }
+                    }
+                    if (relocatedForward) {
+                        actor.desc.distanceOffset += bestDelta;
+                        behavior.integratedForwardOffset += bestDelta;
+                        behavior.engagementBandForwardDistance += bestDelta;
+                    }
                 }
-                actor.desc.lateralOffset += side * (shift + 0.05f);
-                behavior.safetyLateralOffset += side * (shift + 0.05f);
-                enemyEntranceExitDirector_.RequestActorExit(actor.actorId);
-                staging.initialized = true;
-                if (staging.phase != EnemyEntranceExitPhase::Exiting &&
-                    staging.phase != EnemyEntranceExitPhase::Exited) {
-                    staging.phase = EnemyEntranceExitPhase::Exiting;
-                    staging.phaseElapsedSeconds = 0.0f;
-                    staging.presentationAlpha = 1.0f;
-                    staging.presentationScale = 1.0f;
+                if (!relocatedForward) {
+                    // At an endpoint there may be no clear place ahead.
+                    // Preserve both exclusion spheres without removing actors.
+                    const float side = behavior.authoredLateralOffset < -0.1f ? -1.0f : 1.0f;
+                    const Vector3 direction = Scale(rail.Evaluate(
+                        actor.desc.spawnDistance + actor.desc.distanceOffset).right, side);
+                    const auto outwardShift = [&](const Vector3& offset, float clearance) {
+                        const float projection = dot(offset, direction);
+                        const float discriminant = projection * projection -
+                            dot(offset, offset) + clearance * clearance;
+                        return discriminant >= 0.0f
+                            ? (std::max)(0.0f, -projection + std::sqrt(discriminant)) : 0.0f;
+                    };
+                    float shift = outwardShift(toCart, cartClearance);
+                    if (input.hasCameraPosition) {
+                        shift = (std::max)(shift, outwardShift(toCamera, cameraClearance));
+                    }
+                    actor.desc.lateralOffset += side * (shift + 0.05f);
+                    behavior.safetyLateralOffset += side * (shift + 0.05f);
                 }
-                staging.exitRequested = true;
+                if (!actor.HoldsCombatPositionUntilResolved()) {
+                    enemyEntranceExitDirector_.RequestActorExit(actor.actorId);
+                    staging.initialized = true;
+                    if (staging.phase != EnemyEntranceExitPhase::Exiting &&
+                        staging.phase != EnemyEntranceExitPhase::Exited) {
+                        staging.phase = EnemyEntranceExitPhase::Exiting;
+                        staging.phaseElapsedSeconds = 0.0f;
+                        staging.presentationAlpha = 1.0f;
+                        staging.presentationScale = 1.0f;
+                    }
+                    staging.exitRequested = true;
+                }
             }
         }
         const bool departing = behavior.engagementBandExitRequested ||
@@ -516,6 +563,23 @@ void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
              staging.phase == EnemyEntranceExitPhase::Exiting ||
              staging.phase == EnemyEntranceExitPhase::Exited));
         if (departing || unsafeSpatialPose) {
+            if (actor.HoldsCombatPositionUntilResolved()) {
+                // Safety cancels a stale shot, but never fades or removes a
+                // living hover drone. It can acquire a new full warning later.
+                enemyBehaviorSystem_.CancelAttackIntent(actor, 0.25f);
+                behavior.attackIntentActive = false;
+                behavior.telegraphPresented = false;
+                behavior.attackTimeRemaining = 0.0f;
+                behavior.engagementBandExitRequested = false;
+                behavior.engagementBandAttackAllowed = !unsafeSpatialPose;
+                behavior.state = EnemyBehaviorState::Repositioning;
+                behavior.stateElapsedSeconds = 0.0f;
+                staging.exitRequested = false;
+                staging.exitComplete = false;
+                enemyAttackCoordinator_.CancelActor(actor, EnemyAttackCancelReason::ActorUnavailable);
+                actor.targetingState.solutionLocked = false;
+                continue;
+            }
             behavior.attackIntentActive = false;
             behavior.telegraphPresented = false;
             behavior.attackTimeRemaining = 0.0f;
@@ -570,6 +634,7 @@ bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
     CourseEnemyActor& enemy,
     const CourseEnemyFireSafetyFrameInput& safetyInput,
     float dt) {
+    const drone_perf::Scope profile(drone_perf::Stage::Environment);
     const bool entranceExitSuppressesFire =
         enemy.entranceExitState.initialized &&
         enemy.entranceExitState.attackSuppressed;
@@ -725,7 +790,8 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             enemies_.begin(),
             enemies_.end(),
             [](const CourseEnemyActor& enemy) {
-                if (enemy.age >= enemy.desc.lifetime) {
+                if (!enemy.HoldsCombatPositionUntilResolved() &&
+                    enemy.age >= enemy.desc.lifetime) {
                     return true;
                 }
                 if (enemy.entranceExitState.exitComplete) {
@@ -924,7 +990,8 @@ void CourseSpawnRuntime::AppendDebugDraw(
             enemy.desc.distanceOffset,
             enemy.desc.lateralOffset,
             enemy.desc.verticalOffset);
-        const Vector4 color = FadeColor(enemy.desc.color, enemy.age, enemy.desc.lifetime);
+        const Vector4 color = enemy.HoldsCombatPositionUntilResolved() ? enemy.desc.color :
+            FadeColor(enemy.desc.color, enemy.age, enemy.desc.lifetime);
         debugDraw.AddPoint(center, enemy.desc.radius, color);
         debugDraw.AddCircle(center, sample.right, sample.up, enemy.desc.radius * 1.35f, color, 20);
         debugDraw.AddLine(center, Add(center, Scale(sample.tangent, -enemy.desc.radius * 2.0f)), color);
@@ -1015,8 +1082,8 @@ void CourseSpawnRuntime::BeginEnemyFormationFrame(EnemyFormationSystem& system) 
 }
 
 void CourseSpawnRuntime::UpdateEnemyFormations(EnemyFormationSystem& system,
-        float deltaTime) {
-    system.UpdateActors(enemies_, *this, deltaTime);
+        float deltaTime, const RailPath* railPath) {
+    system.UpdateActors(enemies_, *this, deltaTime, railPath);
 }
 
 void CourseSpawnRuntime::BeginEnemyEntranceExitFrame(EnemyEntranceExitDirector& system) {

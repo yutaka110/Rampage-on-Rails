@@ -29,5 +29,22 @@ struct RailWorldRaycastInput {
 
 class RailWorldRaycast {
 public:
+    // Main-thread gameplay update lifetime. Nested scopes share the current
+    // frame; callers without a scope keep the uncached reference behavior.
+    // Only procedural terrain is memoized. Moving actors/placements are always
+    // queried live, and rail/settings/edit changes invalidate terrain results.
+    class FrameCacheScope final {
+    public:
+        FrameCacheScope();
+        ~FrameCacheScope();
+        FrameCacheScope(const FrameCacheScope&) = delete;
+        FrameCacheScope& operator=(const FrameCacheScope&) = delete;
+    };
+    struct FrameCacheStats {
+        uint64_t terrainResultHits = 0;
+        uint64_t railSampleHits = 0;
+        uint64_t railEvaluations = 0;
+    };
+    static FrameCacheStats CacheStats();
     static RailAimHit Query(const RailWorldRaycastInput& input);
 };
