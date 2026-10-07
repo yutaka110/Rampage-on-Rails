@@ -514,6 +514,7 @@
       <ClCompile Include="application\course\WeaponFeedbackSystem.cpp" />
     <ClCompile Include="application\terrain\RailPath.cpp" />
     <ClCompile Include="application\terrain\TerrainChunkManager.cpp" />
+    <ClCompile Include="application\terrain\TerrainCollisionWorld.cpp" />
     <ClCompile Include="application\terrain\TerrainMaterialLibrary.cpp" />
     <ClCompile Include="application\terrain\TerrainPresetStore.cpp" />
     <ClCompile Include="application\terrain\TerrainVolumeField.cpp" />
@@ -1506,6 +1507,7 @@
       <ClInclude Include="application\course\WeaponFeedbackSystem.h" />
     <ClInclude Include="application\terrain\RailPath.h" />
     <ClInclude Include="application\terrain\TerrainChunkManager.h" />
+    <ClInclude Include="application\terrain\TerrainCollisionWorld.h" />
     <ClInclude Include="application\terrain\TerrainGenerationSettings.h" />
     <ClInclude Include="application\terrain\TerrainMaterialLibrary.h" />
     <ClInclude Include="application\terrain\TerrainPresetStore.h" />

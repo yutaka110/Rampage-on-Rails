@@ -6269,6 +6269,13 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " terrainDebris=" << debrisStats.debrisInstanceCount
          << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount;
     drone_perf::AppendToLog(line);
+    if (drone_perf::Enabled()) {
+        const auto collisionStats = terrainCollisionWorld_.GetStats();
+        line << " collisionBvhChunks=" << collisionStats.residentChunks
+             << " collisionBvhPending=" << collisionStats.pendingBuilds
+             << " collisionBvhBytes=" << collisionStats.bytes
+             << " collisionBvhGeneration=" << collisionStats.generation;
+    }
     line << "\n";
     OutputDebugStringA(line.str().c_str());
     std::ofstream log = app::OpenRotatingLog("logs/rail_perf_spikes.log");
@@ -6645,6 +6652,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
             windowWidth_,
             windowHeight_);
     ConfigureViewportAndScissor(runtimeState_, metrics.width, metrics.height);
+    // Prewarm during the title and stream a bounded CPU-only collision window
+    // during gameplay. Update never waits for a worker; unavailable generations
+    // keep the authoritative reference raycast until their BVHs are resident.
+    terrainCollisionWorld_.Update(railPath_, runtimeState_.terrain.settings,
+        &railShooterCourse_.terrainEditLayer, &runtimeState_.terrain.previewEditLayer,
+        railShooterDistance_);
     if (railTitleScreenVisible_ && railTitleScene_.ReadyForGameplay()) {
         railTitleScreenVisible_ = false;
         railTitleGameplayFade_ = 0.40f;
@@ -6788,7 +6801,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     ++railShooterFrameIndex_;
     ResetRailPerfFrame(railShooterFrameIndex_, railShooterDistance_);
-    const RailWorldRaycast::FrameCacheScope raycastFrameCache;
+    const RailWorldRaycast::FrameCacheScope raycastFrameCache(&terrainCollisionWorld_);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
 
     // The review capture ran at 30 fps, so advancing a fixed 16 ms only once

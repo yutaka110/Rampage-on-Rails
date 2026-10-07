@@ -919,6 +919,9 @@
     <ClCompile Include="application\terrain\TerrainChunkManager.cpp">
       <Filter>ソース ファイル\application\terrain</Filter>
     </ClCompile>
+    <ClCompile Include="application\terrain\TerrainCollisionWorld.cpp">
+      <Filter>ソース ファイル\application\terrain</Filter>
+    </ClCompile>
     <ClCompile Include="application\terrain\TerrainMaterialLibrary.cpp">
       <Filter>ソース ファイル\application\terrain</Filter>
     </ClCompile>
@@ -3010,6 +3013,9 @@
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainChunkManager.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainCollisionWorld.h">
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainGenerationSettings.h">

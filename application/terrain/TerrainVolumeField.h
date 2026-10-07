@@ -31,6 +31,11 @@ public:
         float distance,
         float angle,
         Vector3* outNormal = nullptr) const;
+    // Exact zero contour of SampleLocal, including the edited-radius clamp.
+    // The render surface offsets edits along a different radial direction;
+    // collision must preserve the existing authoritative SDF definition.
+    Vector3 CollisionSurfacePoint(float distance, float angle,
+        const RailPathSample& pathSample) const;
     float OpeningMask(float distance, float angle) const;
     float OpenCanyonBlend(float distance) const;
     float PaintVariation(float distance, float angle) const;

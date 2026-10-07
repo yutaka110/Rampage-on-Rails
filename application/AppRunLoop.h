@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "course/RailTitleScene.h"
+#include "terrain/TerrainCollisionWorld.h"
 
 #include <Windows.h>
 #include <array>
@@ -563,6 +564,7 @@ private:
     editor::CourseRailPickingService courseRailPickingService_{};
     editor::CourseRailViewportRenderer courseRailViewportRenderer_{&courseRailEditorController_};
     TerrainChunkManager terrainChunkManager_;
+    TerrainCollisionWorld terrainCollisionWorld_;
     TerrainPresetStore terrainPresetStore_;
     ge3::graphics::RenderGraph renderGraph_;
     ge3::resources::ResourceRegistry resourceRegistry_;

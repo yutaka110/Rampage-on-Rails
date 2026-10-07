@@ -351,6 +351,7 @@
 #include "../course/WeaponDefinitionRegistry.h"
 #include "../course/WeaponFireSystem.h"
 #include "../terrain/TerrainChunkManager.h"
+#include "../terrain/TerrainCollisionWorld.h"
 #include "../terrain/TerrainVolumeField.h"
 #include "audio/AudioSystem.h"
 
@@ -22355,6 +22356,236 @@ void BenchmarkRailWorldRaycastFrameCache(RegressionRunner& runner) {
     }
 }
 
+void TestTerrainCollisionBvh(RegressionRunner& runner) {
+    RailPath rail;
+    rail.SetControlPoints({{{0,0,0},18,32},{{0,0,256},18,32}});
+    TerrainGenerationSettings settings{};
+    settings.volumeRoughness=0; settings.volumeArchScale=0; settings.sdfCarveStrength=0;
+    settings.openingSilhouetteStrength=0; settings.openCanyonStrength=0;
+    settings.motherRockErosionStrength=0; settings.largeScaleErosionStrength=0; settings.surfaceBreakupDensity=0;
+    TerrainEditLayer edits,preview;
+    TerrainCollisionWorld world;
+    world.BuildSynchronously(rail,settings,&edits,&preview,0,rail.Length());
+    runner.Expect(world.GetStats().residentChunks==4 && world.GetStats().triangles>0,
+        "collision chunks must use fixed metre rings independently of render LOD");
+    RailAimState aim{}; aim.valid=true; aim.worldRayOrigin=rail.Evaluate(128).position;
+    aim.worldRayDirection={1,0,0}; aim.maxDistance=70;
+    RailWorldRaycastInput input{}; input.aim=&aim; input.railPath=&rail;
+    input.terrainSettings=&settings; input.terrainEdits=&edits; input.terrainPreview=&preview;
+    input.terrainCollision=&world; input.playerDistance=128; input.includeVisualColumns=true;
+    const auto query=[&](TerrainRaycastMode mode) {
+        input.terrainMode=mode;
+        const RailWorldRaycast::FrameCacheScope frame;
+        return RailWorldRaycast::Query(input);
+    };
+    const auto old=query(TerrainRaycastMode::Reference);
+    const auto fast=query(TerrainRaycastMode::Hybrid);
+    runner.Expect(old.hit && fast.hit && std::abs(old.distance-fast.distance)<0.02f && fast.normal.x< -0.99f,
+        "two-sided BVH must hit the cave wall on a shared chunk boundary");
+    runner.Expect(RailWorldRaycast::CacheStats().bvhQueries==1 && RailWorldRaycast::CacheStats().referenceFallbacks==0,
+        "ordinary visibility must use the BVH without a procedural ray march");
+    aim.worldRayDirection={0,-1,0};
+    runner.Expect(std::abs(query(TerrainRaycastMode::Reference).distance-query(TerrainRaycastMode::Hybrid).distance)<0.02f,
+        "BVH must preserve the floor boundary");
+    aim.worldRayDirection={0,0,1}; aim.maxDistance=50;
+    runner.Expect(!query(TerrainRaycastMode::Hybrid).hit,"interior forward ray must remain unobstructed");
+    aim.worldRayOrigin.x=100;
+    runner.Expect(query(TerrainRaycastMode::Hybrid).distance==0 && query(TerrainRaycastMode::Hybrid).hit,
+        "origin inside solid rock must be blocked at zero distance");
+    aim.worldRayOrigin=rail.Evaluate(128).position; aim.worldRayDirection={1,0,0}; aim.maxDistance=70;
+    for (float lateral:{40.0f,44.0f,48.0f}) {
+        CourseSpawnRuntime actors;
+        CourseEnemyActorDesc enemy{}; enemy.spawnDistance=128; enemy.lateralOffset=lateral; enemy.radius=3;
+        actors.SpawnEnemyActor(enemy); input.spawnRuntime=&actors;
+        const auto reference=query(TerrainRaycastMode::Reference);
+        const auto hybrid=query(TerrainRaycastMode::Hybrid);
+        runner.Expect(reference.kind==hybrid.kind && reference.actorId==hybrid.actorId,
+            "wall-edge actor ordering must match the authoritative reference");
+    }
+    input.spawnRuntime=nullptr;
+    input.includeVisualColumns=false;
+    const auto precise=query(TerrainRaycastMode::Hybrid);
+    runner.Expect(std::abs(precise.distance-old.distance)<0.00001f &&
+        RailWorldRaycast::CacheStats().referenceFallbacks==1,
+        "weapon terrain impacts must preserve exact reference distances");
+    input.includeVisualColumns=true;
+    input.terrainMode=TerrainRaycastMode::Compare;
+    {
+        const RailWorldRaycast::FrameCacheScope frame(&world);
+        const auto comparison=RailWorldRaycast::Query(input);
+        runner.Expect(std::abs(comparison.distance-old.distance)<0.00001f &&
+            RailWorldRaycast::CacheStats().comparisonQueries==1 &&
+            RailWorldRaycast::CacheStats().comparisonHitMismatches==0,
+            "comparison mode must return the old result and record agreement");
+    }
+    TerrainCollisionWorld partial;
+    partial.BuildSynchronously(rail,settings,&edits,&preview,128,150);
+    input.terrainCollision=&partial;
+    runner.Expect(std::abs(query(TerrainRaycastMode::Hybrid).distance-old.distance)<0.00001f &&
+        RailWorldRaycast::CacheStats().referenceFallbacks==1,
+        "incomplete search coverage must fall back instead of reporting a clear ray");
+    input.terrainCollision=&world;
+    settings.lodNearDistance+=10;
+    runner.Expect(world.Matches(rail,settings,&edits,&preview),
+        "render LOD changes must retain the same collision geometry");
+    settings.volumeRoughness+=0.05f;
+    runner.Expect(!world.Matches(rail,settings,&edits,&preview) &&
+        std::abs(query(TerrainRaycastMode::Hybrid).distance-query(TerrainRaycastMode::Reference).distance)<0.00001f,
+        "changed settings must never use a stale collision generation");
+    settings.volumeRoughness-=0.05f;
+    settings.lodNearDistance-=10;
+    TerrainBrushStamp stamp{}; stamp.strokeGuid="bvh-sculpt"; stamp.stampGuid="bvh-sculpt-1";
+    stamp.distance=128; stamp.radius=20; stamp.surfaceRadius=24; stamp.strength=-8;
+    runner.Expect(preview.ApplyStroke({stamp}),"collision preview edit fixture must apply");
+    runner.Expect(!world.Matches(rail,settings,&edits,&preview),"preview changes must invalidate the BVH immediately");
+    world.BuildSynchronously(rail,settings,&edits,&preview,0,rail.Length());
+    runner.Expect(std::abs(query(TerrainRaycastMode::Hybrid).distance-query(TerrainRaycastMode::Reference).distance)<0.1f,
+        "rebuilt collision contour must preserve edited-radius semantics");
+    const auto sample=rail.Evaluate(128);
+    TerrainVolumeField field(rail,settings,&edits,&preview);
+    const auto point=field.CollisionSurfacePoint(128,0,sample);
+    runner.Expect(std::abs(field.SampleLocal(128,point.x-sample.position.x,point.y-sample.position.y).sdf)<0.00001f,
+        "collision surface must lie on the analytical SDF zero contour");
+    TerrainCollisionWorld streaming;
+    streaming.Update(rail,settings,&edits,&preview,128);
+    runner.Expect(streaming.GetStats().pendingBuilds<=2,
+        "collision streaming must bound concurrent workers");
+    bool covered=false;
+    for (uint32_t attempt=0;attempt<2000 && !covered;++attempt) {
+        streaming.Update(rail,settings,&edits,&preview,128);
+        covered=streaming.Query(aim.worldRayOrigin,{1,0,0},70,26,230).available;
+        if (!covered) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    runner.Expect(covered,"background builds must publish a complete usable collision window");
+    const uint64_t generation=streaming.GetStats().generation;
+    settings.seed+=1;
+    streaming.Update(rail,settings,&edits,&preview,128);
+    runner.Expect(streaming.GetStats().generation>generation &&
+        !streaming.Query(aim.worldRayOrigin,{1,0,0},70,26,230).available,
+        "terrain generation changes must invalidate resident meshes before publishing new chunks");
+    settings.seed-=1;
+    rail.SetControlPoints({{{0,0,0},18,32},{{12,0,256},18,32}});
+    runner.Expect(!world.Matches(rail,settings,&edits,&preview),"same-address rail rebuild must reject stale collision chunks");
+}
+
+void ValidateProductionTerrainBvh(RegressionRunner& runner) {
+    CourseAsset course; std::string error;
+    if (!course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course",&error)) {
+        runner.Expect(false,"BVH validation production course must load"); return;
+    }
+    RailPath rail; rail.SetControlPoints(course.railPoints);
+    TerrainGenerationSettings settings{};
+    TerrainCollisionWorld world;
+    const auto buildBegin=std::chrono::steady_clock::now();
+    world.BuildSynchronously(rail,settings,&course.terrainEditLayer,nullptr,0,rail.Length());
+    const double buildMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-buildBegin).count();
+    std::ofstream validation("logs/terrain_bvh_validation.csv");
+    validation << "playerDistance,rays,terrainHits,hitMismatches,distanceMismatches,maxDistanceError,hybridOcclusionMismatches,referenceFallbacks\n";
+    std::ofstream differences("logs/terrain_bvh_differences.csv");
+    differences << "playerDistance,ray,forward,lateral,vertical,referenceHit,referenceDistance,hybridHit,hybridDistance,rawHitMismatches,rawDistanceMismatches\n";
+    uint64_t hybridMismatches=0;
+    for (float player:{120.0f,300.0f,600.0f,900.0f,1100.0f,1240.0f}) {
+        const auto cameraRail=rail.Evaluate(player-12);
+        const Vector3 camera{cameraRail.position.x+cameraRail.up.x*4,
+            cameraRail.position.y+cameraRail.up.y*4,cameraRail.position.z+cameraRail.up.z*4};
+        RailWorldRaycastInput input{}; input.railPath=&rail; input.terrainSettings=&settings;
+        input.terrainEdits=&course.terrainEditLayer; input.terrainCollision=&world;
+        input.playerDistance=player; input.includeVisualColumns=true;
+        uint64_t mismatch=0,fallbacks=0,hitMismatch=0,distanceMismatch=0,terrainHits=0; double maxError=0;
+        for (uint32_t i=0;i<168;++i) {
+            const uint32_t k=i%84;
+            const float forward=24.0f+static_cast<float>(k%6)*9.0f;
+            const float lateral=i<84 ? -24.0f+static_cast<float>((k/6)%7)*8.0f :
+                -120.0f+static_cast<float>((k/6)%7)*40.0f;
+            const float vertical=i<84 ? 2.0f+static_cast<float>(k/42)*12.0f :
+                -40.0f+static_cast<float>(k/42)*130.0f;
+            const auto targetRail=rail.Evaluate(player+forward);
+            const Vector3 target{targetRail.position.x+targetRail.right.x*lateral+targetRail.up.x*vertical,
+                targetRail.position.y+targetRail.right.y*lateral+targetRail.up.y*vertical,
+                targetRail.position.z+targetRail.right.z*lateral+targetRail.up.z*vertical};
+            RailAimState aim{}; aim.valid=true; aim.worldRayOrigin=camera;
+            aim.worldRayDirection={target.x-camera.x,target.y-camera.y,target.z-camera.z};
+            aim.maxDistance=std::sqrt(aim.worldRayDirection.x*aim.worldRayDirection.x+
+                aim.worldRayDirection.y*aim.worldRayDirection.y+aim.worldRayDirection.z*aim.worldRayDirection.z);
+            input.aim=&aim;
+            input.terrainMode=TerrainRaycastMode::Compare;
+            RailAimHit reference{};
+            RailWorldRaycast::FrameCacheStats comparisonStats{};
+            {
+                const RailWorldRaycast::FrameCacheScope frame;
+                reference=RailWorldRaycast::Query(input);
+                const auto stats=RailWorldRaycast::CacheStats();
+                comparisonStats=stats;
+                hitMismatch+=stats.comparisonHitMismatches; distanceMismatch+=stats.comparisonDistanceMismatches;
+                maxError=(std::max)(maxError,stats.comparisonMaximumDistanceError);
+            }
+            input.terrainMode=TerrainRaycastMode::Hybrid;
+            {
+                const RailWorldRaycast::FrameCacheScope frame;
+                const auto hybrid=RailWorldRaycast::Query(input);
+                if (reference.hit) ++terrainHits;
+                fallbacks+=RailWorldRaycast::CacheStats().referenceFallbacks;
+                if (reference.hit!=hybrid.hit) ++mismatch;
+                if (reference.hit!=hybrid.hit || comparisonStats.comparisonHitMismatches || comparisonStats.comparisonDistanceMismatches)
+                    differences << player << ',' << i << ',' << forward << ',' << lateral << ',' << vertical << ','
+                        << reference.hit << ',' << reference.distance << ',' << hybrid.hit << ',' << hybrid.distance << ','
+                        << comparisonStats.comparisonHitMismatches << ',' << comparisonStats.comparisonDistanceMismatches << '\n';
+            }
+        }
+        validation << player << ",168," << terrainHits << ',' << hitMismatch << ',' << distanceMismatch << ',' << maxError << ',' << mismatch << ',' << fallbacks << '\n';
+        hybridMismatches+=mismatch;
+    }
+    runner.Expect(hybridMismatches==0,"hybrid BVH must preserve production cave/canyon visibility across 1008 clear/wall/floor/ceiling rays");
+
+    // Same poses/rays and both cache scopes; query time excludes one-off builds.
+    std::ofstream benchmark("logs/terrain_bvh_benchmark.csv");
+    benchmark << "enemies,mode,frames,meanRaycastMs,bvhQueriesPerFrame,referenceFallbacksPerFrame,buildMs,collisionBytes\n";
+    for (uint32_t count:{35u,50u}) {
+        CourseSpawnRuntime actors;
+        for (uint32_t i=0;i<count;++i) {
+            CourseEnemyActorDesc enemy{}; enemy.spawnDistance=1142.0f+static_cast<float>(i)*0.6f;
+            enemy.lateralOffset=-12.0f+static_cast<float>(i%7)*4.0f;
+            enemy.verticalOffset=5.0f+static_cast<float>(i%5)*1.2f;
+            actors.SpawnEnemyActor(enemy);
+        }
+        std::array<double,2> timings{}; std::array<uint64_t,2> queries{},fallbacks{};
+        constexpr uint32_t frames=12;
+        for (uint32_t frame=0;frame<frames;++frame) {
+            for (uint32_t order=0;order<2;++order) {
+                const uint32_t mode=(frame+order)%2;
+                RailWorldRaycastInput input{}; input.railPath=&rail; input.terrainSettings=&settings;
+                input.terrainEdits=&course.terrainEditLayer; input.terrainCollision=&world;
+                input.spawnRuntime=&actors; input.course=&course;
+                input.playerDistance=1100; input.includeVisualColumns=true;
+                input.terrainMode=mode?TerrainRaycastMode::Hybrid:TerrainRaycastMode::Reference;
+                const auto cameraRail=rail.Evaluate(1088);
+                const auto begin=std::chrono::steady_clock::now();
+                const RailWorldRaycast::FrameCacheScope cache;
+                for (uint32_t pass=0;pass<2;++pass) for (uint32_t i=0;i<count;++i) {
+                    const auto sample=rail.Evaluate(1142.0f+static_cast<float>(i)*0.6f);
+                    const float lateral=-12.0f+static_cast<float>(i%7)*4.0f,vertical=5.0f+static_cast<float>(i%5)*1.2f;
+                    const Vector3 target{sample.position.x+sample.right.x*lateral+sample.up.x*vertical,
+                        sample.position.y+sample.right.y*lateral+sample.up.y*vertical,
+                        sample.position.z+sample.right.z*lateral+sample.up.z*vertical};
+                    RailAimState aim{}; aim.valid=true;
+                    aim.worldRayOrigin={cameraRail.position.x+cameraRail.up.x*4+pass*0.001f+frame*0.001f,
+                        cameraRail.position.y+cameraRail.up.y*4,cameraRail.position.z+cameraRail.up.z*4};
+                    aim.worldRayDirection={target.x-aim.worldRayOrigin.x,target.y-aim.worldRayOrigin.y,target.z-aim.worldRayOrigin.z};
+                    aim.maxDistance=std::sqrt(aim.worldRayDirection.x*aim.worldRayDirection.x+
+                        aim.worldRayDirection.y*aim.worldRayDirection.y+aim.worldRayDirection.z*aim.worldRayDirection.z)+3.0f;
+                    input.aim=&aim; RailWorldRaycast::Query(input);
+                }
+                timings[mode]+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();
+                queries[mode]+=RailWorldRaycast::CacheStats().bvhQueries;
+                fallbacks[mode]+=RailWorldRaycast::CacheStats().referenceFallbacks;
+            }
+        }
+        for (uint32_t mode=0;mode<2;++mode) benchmark << count << ',' << (mode?"hybrid":"reference") << ',' << frames << ','
+            << timings[mode]/frames << ',' << static_cast<double>(queries[mode])/frames << ','
+            << static_cast<double>(fallbacks[mode])/frames << ',' << buildMs << ',' << world.GetStats().bytes << '\n';
+    }
+}
+
 void TestRailWorldShotRouting(RegressionRunner& runner) {
     RailPath rail;
     rail.SetControlPoints({
@@ -32669,6 +32900,10 @@ int RunEditorCoreRegressionTests() {
          {"rail world raycast frame cache", [&]() {
               TestRailWorldRaycastFrameCache(runner);
               BenchmarkRailWorldRaycastFrameCache(runner);
+          }},
+         {"terrain collision BVH and hybrid visibility", [&]() {
+              TestTerrainCollisionBvh(runner);
+              ValidateProductionTerrainBvh(runner);
           }},
          {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},
          {"weapon damage reception", [&]() { TestWeaponDamageReception(runner); }},

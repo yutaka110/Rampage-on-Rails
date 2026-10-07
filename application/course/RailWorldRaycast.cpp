@@ -6,6 +6,7 @@
 #include "../terrain/RailPath.h"
 #include "../terrain/TerrainGenerationSettings.h"
 #include "../terrain/TerrainVolumeField.h"
+#include "../terrain/TerrainCollisionWorld.h"
 #include "utils/math/MathUtils.h"
 
 #include <algorithm>
@@ -242,6 +243,12 @@ struct TerrainRayResult {
     bool hit = false;
 };
 
+struct TerrainOriginResult {
+    Vector3 origin{};
+    float searchStart=0.0f, searchEnd=0.0f, sdf=0.0f;
+    TerrainLocalPoint local{};
+};
+
 struct RayFrameCache {
     struct RailSampleEntry {
         RailPathSample sample{};
@@ -258,6 +265,7 @@ struct RayFrameCache {
     bool terrainConfigured = false;
     EditSnapshot edits, preview;
     std::vector<TerrainRayResult> terrainResults;
+    std::vector<TerrainOriginResult> origins;
     RailWorldRaycast::FrameCacheStats stats{};
 
     void InvalidateRailSamples() {
@@ -274,6 +282,7 @@ struct RayFrameCache {
         InvalidateRailSamples();
         terrainConfigured = false;
         terrainResults.clear();
+        origins.clear();
         stats = {};
     }
     void Prepare(const RailWorldRaycastInput& input) {
@@ -301,12 +310,14 @@ struct RayFrameCache {
             edits.Capture(input.terrainEdits);
             preview.Capture(input.terrainPreview);
             terrainResults.clear();
+            origins.clear();
             terrainConfigured = true;
         }
     }
 };
 
 thread_local RayFrameCache gRayCache;
+thread_local const TerrainCollisionWorld* gTerrainCollision = nullptr;
 
 RailPathSample EvaluateTerrainRail(const RailPath& rail, float distance) {
     const uint32_t key = std::bit_cast<uint32_t>(distance);
@@ -477,7 +488,7 @@ bool ComputeProceduralTerrain(
     return false;
 }
 
-bool RayProceduralTerrain(
+bool RayReferenceTerrain(
     const RailWorldRaycastInput& input,
     const Vector3& origin, const Vector3& direction, float maxDistance,
     float& outDistance, Vector3& outNormal) {
@@ -509,6 +520,132 @@ bool RayProceduralTerrain(
     if (gRayCache.terrainResults.size() >= 512) gRayCache.terrainResults.clear();
     gRayCache.terrainResults.push_back(result);
     return result.hit;
+}
+
+TerrainRaycastMode RuntimeTerrainMode(TerrainRaycastMode requested) {
+    static const TerrainRaycastMode overrideMode = [] {
+        char value[32]{}; size_t size=0;
+        if (getenv_s(&size,value,sizeof(value),"CG4_TERRAIN_RAY_MODE") == 0) {
+            if (std::strcmp(value,"reference")==0) return TerrainRaycastMode::Reference;
+            if (std::strcmp(value,"compare")==0) return TerrainRaycastMode::Compare;
+        }
+        return TerrainRaycastMode::Hybrid;
+    }();
+    // An explicit reference/compare query remains deterministic in validation.
+    return requested==TerrainRaycastMode::Hybrid ? overrideMode : requested;
+}
+
+bool RayProceduralTerrain(
+    const RailWorldRaycastInput& input,
+    const Vector3& origin,const Vector3& direction,float maxDistance,
+    const RailAimHit& nearestActor,float& outDistance,Vector3& outNormal) {
+    if (!input.includeProceduralTerrain || !input.terrainSettings || !input.railPath ||
+        input.railPath->Length()<=0) return false;
+    const auto mode=RuntimeTerrainMode(input.terrainMode);
+    const auto* world=input.terrainCollision?input.terrainCollision:gTerrainCollision;
+    const auto reference=[&]() {
+        ++gRayCache.stats.referenceFallbacks;
+        if (drone_perf::Enabled()) ++drone_perf::frame.terrainReferenceFallbacks;
+        return RayReferenceTerrain(input,origin,direction,maxDistance,outDistance,outNormal);
+    };
+    if (mode==TerrainRaycastMode::Reference || !world ||
+        !world->Matches(*input.railPath,*input.terrainSettings,input.terrainEdits,input.terrainPreview))
+        return reference();
+    if (gRayCache.scopeDepth>0) gRayCache.Prepare(input);
+    const float end=(std::max)(input.railPath->Length()-0.001f,0.0f);
+    const float start=(std::clamp)(input.playerDistance-maxDistance-32.0f,0.0f,end);
+    const float finish=(std::clamp)(input.playerDistance+maxDistance+32.0f,start,end);
+    TerrainCollisionWorld::Hit accelerated{};
+    {
+        const drone_perf::Scope profile(drone_perf::Stage::TerrainBvh);
+        accelerated=world->Query(origin,direction,maxDistance,start,finish);
+    }
+    if (!accelerated.available) return reference();
+    ++gRayCache.stats.bvhQueries;
+    if (drone_perf::Enabled()) {
+        ++drone_perf::frame.terrainBvhQueries;
+        drone_perf::frame.terrainBvhNodes+=accelerated.nodesVisited;
+        drone_perf::frame.terrainBvhTriangles+=accelerated.trianglesTested;
+    }
+    // A triangle surface alone cannot distinguish a ray starting in solid rock.
+    // Preserve the reference's origin-in-solid rule. This is one SDF sample,
+    // shared for identical origins/windows, rather than a full ray march.
+    TerrainOriginResult originResult{}; bool found=false;
+    if (gRayCache.scopeDepth>0) for (const auto& item:gRayCache.origins) {
+        if (SameVector(item.origin,origin) && item.searchStart==start && item.searchEnd==finish) {
+            originResult=item; found=true; break;
+        }
+    }
+    TerrainVolumeField field(*input.railPath,*input.terrainSettings,input.terrainEdits,input.terrainPreview);
+    const TerrainRailProjection projection(*input.railPath,start,finish);
+    if (!found) {
+        originResult.origin=origin; originResult.searchStart=start; originResult.searchEnd=finish;
+        originResult.local=projection.FindNearest(origin);
+        originResult.sdf=field.SampleLocal(originResult.local.distance,
+            originResult.local.lateral,originResult.local.vertical).sdf;
+        if (gRayCache.scopeDepth>0) {
+            if (gRayCache.origins.size()>=128) gRayCache.origins.clear();
+            gRayCache.origins.push_back(originResult);
+        }
+    }
+    if (originResult.sdf>=0.0f) {
+        accelerated.hit=true; accelerated.distance=0.0f;
+        accelerated.normal=FaceAgainstRay(field.EstimateNormal(originResult.local.distance,
+            originResult.local.lateral,originResult.local.vertical),direction);
+    }
+    // The authoritative SDF extends the terminal cross-section indefinitely;
+    // uncapped collision triangles intentionally do not introduce a fake wall.
+    // Queries beyond a course endpoint must therefore use the reference.
+    const TerrainLocalPoint targetLocal=projection.FindNearest(Add(origin,Scale(direction,maxDistance)));
+    const auto endpointOutside=[&](const TerrainLocalPoint& local,const Vector3& position) {
+        if (local.distance>0.05f && local.distance<end-0.05f) return false;
+        const auto sample=EvaluateTerrainRail(*input.railPath,local.distance);
+        const float along=Dot(Subtract(position,sample.position),sample.tangent);
+        return (local.distance<=0.05f && along< -0.01f) || (local.distance>=end-0.05f && along>0.01f);
+    };
+    if (endpointOutside(originResult.local,origin) ||
+        endpointOutside(targetLocal,Add(origin,Scale(direction,maxDistance)))) return reference();
+
+    if (mode==TerrainRaycastMode::Compare) {
+        const bool oldHit=RayReferenceTerrain(input,origin,direction,maxDistance,outDistance,outNormal);
+        ++gRayCache.stats.comparisonQueries;
+        if (oldHit!=accelerated.hit) ++gRayCache.stats.comparisonHitMismatches;
+        if (oldHit && accelerated.hit) {
+            const double error=std::abs(static_cast<double>(outDistance)-accelerated.distance);
+            gRayCache.stats.comparisonMaximumDistanceError=(std::max)(gRayCache.stats.comparisonMaximumDistanceError,error);
+            if (error>0.75) ++gRayCache.stats.comparisonDistanceMismatches;
+        }
+        if (drone_perf::Enabled()) {
+            drone_perf::frame.terrainComparisonQueries=gRayCache.stats.comparisonQueries;
+            drone_perf::frame.terrainComparisonHitMismatches=gRayCache.stats.comparisonHitMismatches;
+            drone_perf::frame.terrainComparisonDistanceMismatches=gRayCache.stats.comparisonDistanceMismatches;
+            drone_perf::frame.terrainComparisonMaximumDistanceError=gRayCache.stats.comparisonMaximumDistanceError;
+        }
+        return oldHit;
+    }
+    // Preserve precise weapon impact points with the reference when terrain
+    // would be the actual target. Visibility rays only need reliable ordering.
+    // Near an actor/ray endpoint, approximation could change that ordering.
+    constexpr float kOrderingMargin=1.5f;
+    const float targetDistance=nearestActor.hit?nearestActor.distance:maxDistance;
+    if (std::abs(originResult.sdf)<0.025f ||
+        (accelerated.hit && (std::abs(accelerated.distance-targetDistance)<=kOrderingMargin ||
+            (!input.includeVisualColumns && accelerated.distance<=targetDistance+kOrderingMargin))))
+        return reference();
+    if (!accelerated.hit && accelerated.nearSurface) return reference();
+    if (accelerated.hit && accelerated.distance>0.0f) {
+        const auto local=projection.FindNearest(Add(origin,Scale(direction,accelerated.distance)));
+        // A coarse triangle on a steep edited/noisy surface may not lie close
+        // enough to the analytic contour. Only such hits require a full march.
+        if (std::abs(field.SampleLocal(local.distance,local.lateral,local.vertical).sdf)>0.01f)
+            return reference();
+    }
+    // If the endpoint lies in solid terrain but triangles reported a miss,
+    // retain the analytic rule rather than allowing a wall-crossing shot.
+    if (!accelerated.hit && field.SampleLocal(targetLocal.distance,
+        targetLocal.lateral,targetLocal.vertical).sdf>= -0.025f) return reference();
+    outDistance=accelerated.distance; outNormal=accelerated.normal;
+    return accelerated.hit;
 }
 
 int HitPriority(RailAimHitKind kind) {
@@ -549,12 +686,15 @@ void ConsiderHit(
 }
 } // namespace
 
-RailWorldRaycast::FrameCacheScope::FrameCacheScope() {
+RailWorldRaycast::FrameCacheScope::FrameCacheScope(const TerrainCollisionWorld* terrainCollision) {
     if (gRayCache.scopeDepth == 0) gRayCache.BeginFrame();
+    previousCollision_=gTerrainCollision;
+    if (terrainCollision) gTerrainCollision=terrainCollision;
     ++gRayCache.scopeDepth;
 }
 
 RailWorldRaycast::FrameCacheScope::~FrameCacheScope() {
+    gTerrainCollision=previousCollision_;
     --gRayCache.scopeDepth;
 }
 
@@ -729,6 +869,7 @@ RailAimHit RailWorldRaycast::Query(const RailWorldRaycastInput& input) {
             origin,
             direction,
             maxDistance,
+            best,
             terrainDistance,
             terrainNormal)) {
         ConsiderHit(

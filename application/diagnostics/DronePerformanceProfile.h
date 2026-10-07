@@ -12,7 +12,7 @@
 namespace drone_perf {
 enum class Stage : size_t {
     Spawn, Environment, Formation, Clearance, Camera, Telegraph,
-    WorldRay, ProceduralRay, Count
+    WorldRay, ProceduralRay, TerrainBvh, Count
 };
 
 struct Sample {
@@ -25,6 +25,10 @@ struct Frame {
     uint64_t nearestRailEvaluations = 0;
     uint64_t terrainRayCacheHits = 0;
     uint64_t railSampleCacheHits = 0;
+    uint64_t terrainBvhQueries = 0, terrainBvhNodes = 0, terrainBvhTriangles = 0;
+    uint64_t terrainReferenceFallbacks = 0;
+    uint64_t terrainComparisonQueries = 0, terrainComparisonHitMismatches = 0, terrainComparisonDistanceMismatches = 0;
+    double terrainComparisonMaximumDistanceError = 0.0;
     float simulationDeltaTime = 0.0f;
 };
 
@@ -69,7 +73,7 @@ inline void AppendToLog(std::ostream& log) {
     if (!Enabled()) return;
     constexpr const char* names[] = {
         "droneSpawn", "droneEnvironment", "droneFormation", "droneClearance",
-        "droneCamera", "droneTelegraph", "worldRay", "proceduralRay"
+        "droneCamera", "droneTelegraph", "worldRay", "proceduralRay", "terrainBvh"
     };
     log << " droneProfile=1";
     for (size_t i = 0; i < frame.stages.size(); ++i) {
@@ -79,6 +83,14 @@ inline void AppendToLog(std::ostream& log) {
     log << " simulationDeltaTime=" << frame.simulationDeltaTime
         << " nearestRailEvaluations=" << frame.nearestRailEvaluations
         << " terrainRayCacheHits=" << frame.terrainRayCacheHits
-        << " railSampleCacheHits=" << frame.railSampleCacheHits;
+        << " railSampleCacheHits=" << frame.railSampleCacheHits
+        << " terrainBvhQueries=" << frame.terrainBvhQueries
+        << " terrainBvhNodes=" << frame.terrainBvhNodes
+        << " terrainBvhTriangles=" << frame.terrainBvhTriangles
+        << " terrainReferenceFallbacks=" << frame.terrainReferenceFallbacks
+        << " terrainComparisonQueries=" << frame.terrainComparisonQueries
+        << " terrainComparisonHitMismatches=" << frame.terrainComparisonHitMismatches
+        << " terrainComparisonDistanceMismatches=" << frame.terrainComparisonDistanceMismatches
+        << " terrainComparisonMaximumDistanceError=" << frame.terrainComparisonMaximumDistanceError;
 }
 } // namespace drone_perf
