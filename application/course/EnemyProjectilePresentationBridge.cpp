@@ -41,10 +41,7 @@ Vector3 ResolveRailLocal(
     float distance,
     float lateral,
     float vertical) noexcept {
-    const RailPathSample sample = railPath.Evaluate(distance);
-    return Add(
-        Add(sample.position, Scale(sample.right, lateral)),
-        Scale(sample.up, vertical));
+    return ResolveEnemyProjectileWorldPosition(railPath,{lateral,vertical,distance});
 }
 
 EnemyProjectilePresentation BuildPresentation(

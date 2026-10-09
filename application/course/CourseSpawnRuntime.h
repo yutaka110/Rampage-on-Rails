@@ -30,6 +30,9 @@ struct EnemyProjectileShootDownResult;
 struct CourseAsset;
 struct TerrainGenerationSettings;
 class TerrainEditLayer;
+class TerrainCollisionWorld;
+struct EnemyCombatPresentationSettings;
+class EnemyEncounterReadabilityDirector;
 
 enum class CourseEnemyFirePattern {
     Single,
@@ -50,6 +53,9 @@ struct CourseEnemyFireSafetySettings {
 };
 
 struct CourseEnemyFireSafetyFrameInput {
+    const RailTravelPredictionInput* travelPredictionInput = nullptr;
+    const EnemyCombatPresentationSettings* presentationSettings = nullptr;
+    const EnemyEncounterReadabilityDirector* readability = nullptr;
     bool cameraAllowsEnemyFire = true;
     bool cameraStableForAiming = true;
     bool cameraHardTransition = false;
@@ -68,6 +74,7 @@ struct CourseEnemyFireSafetyFrameInput {
     const TerrainGenerationSettings* terrainSettings = nullptr;
     const TerrainEditLayer* terrainEdits = nullptr;
     const TerrainEditLayer* terrainPreview = nullptr;
+    const TerrainCollisionWorld* terrainCollision = nullptr;
 };
 
 struct CourseEnemyFireSafetyStats {
@@ -155,6 +162,7 @@ struct CourseVfxCueDesc {
 };
 
 struct CourseEnemyActor {
+    EnemyWeaponMountFrame weaponMount{};
     CourseEnemyActorDesc desc;
     EnemyCombatDefinition combatDefinition{};
     EnemyCombatRuntimeState combatState{};
@@ -245,7 +253,8 @@ public:
         uint64_t intentSequence);
     void BeginEnemyFormationFrame(EnemyFormationSystem& system);
     void UpdateEnemyFormations(EnemyFormationSystem& system,
-        float deltaTime, const RailPath* railPath = nullptr);
+        float deltaTime, const RailPath* railPath = nullptr,
+        const CourseEnemyFireSafetyFrameInput* spatialContext = nullptr);
     void BeginEnemyEntranceExitFrame(EnemyEntranceExitDirector& system);
     void UpdateEnemyEntranceExit(EnemyEntranceExitDirector& system,
         float deltaTime);
@@ -291,6 +300,7 @@ public:
     void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput);
     void EnforceEnemyEngagementClearance(const CourseEnemyFireSafetyFrameInput& safetyInput);
     bool InvalidateEnemyAttackWarning(uint32_t actorId);
+    bool DeferEnemyAttackForUnreachableLaunch(uint32_t actorId);
 
     bool SpawnEnemyActor(CourseEnemyActorDesc desc, std::string* errorMessage = nullptr);
     bool SpawnObstacle(CourseObstacleActorDesc desc, std::string* errorMessage = nullptr);

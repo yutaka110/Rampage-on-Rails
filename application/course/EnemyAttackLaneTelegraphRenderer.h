@@ -31,6 +31,12 @@ struct EnemyAttackLaneTelegraphRendererSettings final {
 };
 
 struct EnemyAttackLaneTelegraphProxy final {
+    struct PathPoint final {
+        Vector3 world{};
+        Vector3 right{1,0,0};
+        Vector3 up{0,1,0};
+    };
+    std::vector<std::vector<PathPoint>> projectilePaths;
     uint32_t actorId = 0;
     uint64_t attackIntentSequence = 0;
     uint64_t attackTokenId = 0;

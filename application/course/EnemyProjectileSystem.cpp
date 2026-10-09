@@ -56,6 +56,139 @@ RailVector TurnTowards(
 }
 } // namespace
 
+EnemyProjectileRuntimeState ResolveEnemyProjectileLaunch(const CourseEnemyActor& actor, int index) {
+    return ResolveEnemyProjectileScheduledLaunch(actor,index,0.0f).projectile;
+}
+
+EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
+        const CourseEnemyActor& actor, int index, float launchDelaySeconds) {
+    const EnemyProjectileDefinitionAsset& definition =
+        actor.desc.projectileDefinition;
+    const int projectileCount = (std::max)(1, actor.desc.bulletCount);
+    const float centerLane = static_cast<float>(projectileCount - 1) * 0.5f;
+    const bool hasTarget = actor.targetingState.solutionLocked &&
+        actor.targetingState.attackIntentSequence ==
+            actor.attackState.intentSequence &&
+        actor.targetingState.attackTokenId == actor.attackState.tokenId;
+
+    const float lane=static_cast<float>(index)-centerLane;
+    EnemyProjectileLaunchSolution solution;
+    auto& projectile = solution.projectile;
+    if (!std::isfinite(launchDelaySeconds) || launchDelaySeconds < 0.0f) {
+        projectile.active = false;
+        return solution;
+    }
+    projectile.ownerActorId = actor.actorId;
+    projectile.attackIntentSequence = actor.attackState.intentSequence;
+    projectile.attackTokenId = actor.attackState.tokenId;
+    projectile.deterministicSeed = actor.attackState.deterministicSeed ^
+        (static_cast<uint64_t>(index + 1) * 0x9e3779b97f4a7c15ULL);
+    projectile.definitionId = definition.id;
+    projectile.sourceRole = actor.desc.role;
+    projectile.trajectory = definition.trajectory;
+    projectile.spawnDistance = 0.0f;
+    const Vector3 muzzle=ResolveEnemyProjectileMuzzleRailPosition(actor,index);
+    projectile.distanceOffset=muzzle.z;
+    projectile.lateralOffset=muzzle.x;
+    projectile.verticalOffset=muzzle.y;
+    projectile.previousDistanceOffset = projectile.distanceOffset;
+    projectile.previousLateralOffset = projectile.lateralOffset;
+    projectile.previousVerticalOffset = projectile.verticalOffset;
+    projectile.acceleration = definition.acceleration;
+    projectile.maximumSpeed = (std::max)(
+        definition.initialSpeed, definition.maximumSpeed);
+    projectile.homingTurnRateRadians = definition.homingTurnRateRadians;
+    projectile.arcGravity = definition.arcGravity;
+    projectile.radius = definition.radius;
+    projectile.lifetime = definition.lifetime;
+    projectile.damage = definition.damage;
+    projectile.color = definition.color;
+    projectile.trailEffectId = definition.trailEffectId;
+    projectile.impactEffectId = definition.impactEffectId;
+    projectile.defenseResponses = definition.defenseResponses;
+    projectile.shootDownHitPoints = definition.shootDownHitPoints;
+    projectile.shootDownMaximumHitPoints = definition.shootDownHitPoints;
+    projectile.shootDownRadiusScale = definition.shootDownRadiusScale;
+    projectile.shootDownEnabled = HasDefenseResponse(
+        definition.defenseResponses,
+        EnemyAttackDefenseResponse::ShootDown);
+
+    if (hasTarget) {
+        const auto aim=ResolveEnemyProjectileAimSolution(actor,
+            {projectile.lateralOffset,projectile.verticalOffset,projectile.distanceOffset},launchDelaySeconds);
+        if(!aim.reachable) {
+            projectile.initialized=true;
+            projectile.active=false;
+            return solution;
+        }
+        solution.flightSeconds = actor.targetingState.compensatesForwardTravel ? aim.flightSeconds : 0.0f;
+        projectile.distanceOffset = aim.muzzleRail.z;
+        projectile.lateralOffset = aim.muzzleRail.x;
+        projectile.verticalOffset = aim.muzzleRail.y;
+        projectile.previousDistanceOffset = projectile.distanceOffset;
+        projectile.previousLateralOffset = projectile.lateralOffset;
+        projectile.previousVerticalOffset = projectile.verticalOffset;
+        const Vector3 target=aim.targetRail;
+        projectile.lockedTargetDistance =
+            target.z;
+        projectile.lockedTargetLateralOffset =
+            target.x;
+        projectile.lockedTargetVerticalOffset =
+            target.y;
+        RailVector direction{
+            projectile.lockedTargetDistance - projectile.distanceOffset,
+            projectile.lockedTargetLateralOffset - projectile.lateralOffset,
+            projectile.lockedTargetVerticalOffset - projectile.verticalOffset};
+        if (definition.trajectory == EnemyProjectileTrajectory::Arc) {
+            const float flight = (std::max)(
+                0.1f, actor.targetingState.predictedFlightSeconds);
+            direction.vertical +=
+                0.5f * definition.arcGravity * flight * flight;
+        }
+        direction = NormalizeOr(direction, {-1.0f, 0.0f, 0.0f});
+        projectile.forwardSpeed = direction.forward * definition.initialSpeed;
+        projectile.lateralSpeed = direction.lateral * definition.initialSpeed +
+            lane * actor.desc.bulletLateralSpreadSpeed;
+        projectile.verticalSpeed = direction.vertical * definition.initialSpeed +
+            std::abs(lane) * actor.desc.bulletVerticalSpreadSpeed;
+    } else {
+        projectile.forwardSpeed = -actor.desc.bulletSpeed;
+        projectile.lateralSpeed =
+            lane * actor.desc.bulletLateralSpreadSpeed;
+        projectile.verticalSpeed =
+            std::abs(lane) * actor.desc.bulletVerticalSpreadSpeed;
+        projectile.radius = actor.desc.bulletRadius;
+        projectile.lifetime = actor.desc.bulletLifetime;
+        projectile.damage = actor.desc.bulletDamage;
+        projectile.color = actor.desc.bulletColor;
+    }
+    projectile.initialized = true;
+    projectile.active = true;
+    return solution;
+}
+
+void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile,float deltaTime) {
+    const float dt=(std::max)(0.0f,deltaTime);
+    RailVector velocity{projectile.forwardSpeed,projectile.lateralSpeed,projectile.verticalSpeed};
+    float speed=std::sqrt((std::max)(0.0f,LengthSquared(velocity)));
+    const RailVector direction=NormalizeOr(velocity,{-1.0f,0.0f,0.0f});
+    speed = (std::clamp)(
+        speed + projectile.acceleration * dt,
+        0.0f,
+        (std::max)(1.0f, projectile.maximumSpeed));
+    velocity = Scale(direction, speed);
+    if (projectile.trajectory == EnemyProjectileTrajectory::Arc) {
+        velocity.vertical -= projectile.arcGravity * dt;
+    }
+    projectile.forwardSpeed = velocity.forward;
+    projectile.lateralSpeed = velocity.lateral;
+    projectile.verticalSpeed = velocity.vertical;
+    projectile.distanceOffset += projectile.forwardSpeed * dt;
+    projectile.lateralOffset += projectile.lateralSpeed * dt;
+    projectile.verticalOffset += projectile.verticalSpeed * dt;
+    projectile.age += dt;
+}
+
 void EnemyProjectileSystem::Reset() {
     frame_ = {};
     pendingSpawned_ = 0;
@@ -100,98 +233,13 @@ uint32_t EnemyProjectileSystem::SpawnVolley(
     if (actor.desc.hitPoints <= 0.0f || (actor.combatState.initialized &&
         (actor.combatState.phase == EnemyCombatPhase::Dying ||
          actor.combatState.phase == EnemyCombatPhase::Retired))) return 0;
-    const EnemyProjectileDefinitionAsset& definition =
-        actor.desc.projectileDefinition;
-    const int projectileCount = (std::max)(1, actor.desc.bulletCount);
-    const float centerLane = static_cast<float>(projectileCount - 1) * 0.5f;
-    const bool hasTarget = actor.targetingState.solutionLocked &&
-        actor.targetingState.attackIntentSequence ==
-            actor.attackState.intentSequence &&
-        actor.targetingState.attackTokenId == actor.attackState.tokenId;
-
-    for (int index = 0; index < projectileCount; ++index) {
-        const float lane = static_cast<float>(index) - centerLane;
-        EnemyProjectileRuntimeState projectile{};
-        projectile.projectileId = nextProjectileId_++;
-        if (nextProjectileId_ == 0) nextProjectileId_ = 1;
-        projectile.ownerActorId = actor.actorId;
-        projectile.attackIntentSequence = actor.attackState.intentSequence;
-        projectile.attackTokenId = actor.attackState.tokenId;
-        projectile.deterministicSeed = actor.attackState.deterministicSeed ^
-            (static_cast<uint64_t>(index + 1) * 0x9e3779b97f4a7c15ULL);
-        projectile.definitionId = definition.id;
-        projectile.sourceRole = actor.desc.role;
-        projectile.trajectory = definition.trajectory;
-        projectile.spawnDistance = 0.0f;
-        projectile.distanceOffset = actor.desc.spawnDistance +
-            actor.desc.distanceOffset - actor.desc.radius * 1.5f;
-        projectile.lateralOffset = actor.desc.lateralOffset +
-            lane * actor.desc.radius * 0.7f;
-        projectile.verticalOffset = actor.desc.verticalOffset;
-        if (actor.desc.meshId == "combat_turret" && hasTarget) {
-            const Vector3 muzzle = ResolveTurretMuzzleRailPosition(actor,(index & 1) ? 1.0f : -1.0f);
-            projectile.distanceOffset = muzzle.z;
-            projectile.lateralOffset = muzzle.x;
-            projectile.verticalOffset = muzzle.y;
-        }
-        projectile.previousDistanceOffset = projectile.distanceOffset;
-        projectile.previousLateralOffset = projectile.lateralOffset;
-        projectile.previousVerticalOffset = projectile.verticalOffset;
-        projectile.acceleration = definition.acceleration;
-        projectile.maximumSpeed = (std::max)(
-            definition.initialSpeed, definition.maximumSpeed);
-        projectile.homingTurnRateRadians = definition.homingTurnRateRadians;
-        projectile.arcGravity = definition.arcGravity;
-        projectile.radius = definition.radius;
-        projectile.lifetime = definition.lifetime;
-        projectile.damage = definition.damage;
-        projectile.color = definition.color;
-        projectile.trailEffectId = definition.trailEffectId;
-        projectile.impactEffectId = definition.impactEffectId;
-        projectile.defenseResponses = definition.defenseResponses;
-        projectile.shootDownHitPoints = definition.shootDownHitPoints;
-        projectile.shootDownMaximumHitPoints = definition.shootDownHitPoints;
-        projectile.shootDownRadiusScale = definition.shootDownRadiusScale;
-        projectile.shootDownEnabled = HasDefenseResponse(
-            definition.defenseResponses,
-            EnemyAttackDefenseResponse::ShootDown);
-
-        if (hasTarget) {
-            projectile.lockedTargetDistance =
-                actor.targetingState.targetDistance;
-            projectile.lockedTargetLateralOffset =
-                actor.targetingState.targetLateralOffset;
-            projectile.lockedTargetVerticalOffset =
-                actor.targetingState.targetVerticalOffset;
-            RailVector direction{
-                projectile.lockedTargetDistance - projectile.distanceOffset,
-                projectile.lockedTargetLateralOffset - projectile.lateralOffset,
-                projectile.lockedTargetVerticalOffset - projectile.verticalOffset};
-            if (definition.trajectory == EnemyProjectileTrajectory::Arc) {
-                const float flight = (std::max)(
-                    0.1f, actor.targetingState.predictedFlightSeconds);
-                direction.vertical +=
-                    0.5f * definition.arcGravity * flight * flight;
-            }
-            direction = NormalizeOr(direction, {-1.0f, 0.0f, 0.0f});
-            projectile.forwardSpeed = direction.forward * definition.initialSpeed;
-            projectile.lateralSpeed = direction.lateral * definition.initialSpeed +
-                lane * actor.desc.bulletLateralSpreadSpeed;
-            projectile.verticalSpeed = direction.vertical * definition.initialSpeed +
-                std::abs(lane) * actor.desc.bulletVerticalSpreadSpeed;
-        } else {
-            projectile.forwardSpeed = -actor.desc.bulletSpeed;
-            projectile.lateralSpeed =
-                lane * actor.desc.bulletLateralSpreadSpeed;
-            projectile.verticalSpeed =
-                std::abs(lane) * actor.desc.bulletVerticalSpreadSpeed;
-            projectile.radius = actor.desc.bulletRadius;
-            projectile.lifetime = actor.desc.bulletLifetime;
-            projectile.damage = actor.desc.bulletDamage;
-            projectile.color = actor.desc.bulletColor;
-        }
-        projectile.initialized = true;
-        projectile.active = true;
+    // Validate the entire volley before allocating an ID or emitting a barrel.
+    if(!CanEnemyProjectileVolleyReachTarget(actor)) return 0;
+    const int projectileCount=(std::max)(1,actor.desc.bulletCount);
+    for(int index=0;index<projectileCount;++index) {
+        auto projectile=ResolveEnemyProjectileLaunch(actor,index);
+        projectile.projectileId=nextProjectileId_++;
+        if(nextProjectileId_==0) nextProjectileId_=1;
         projectiles.push_back(std::move(projectile));
     }
     pendingSpawned_ += static_cast<uint32_t>(projectileCount);
@@ -213,14 +261,11 @@ void EnemyProjectileSystem::Update(
         projectile.previousLateralOffset = projectile.lateralOffset;
         projectile.previousVerticalOffset = projectile.verticalOffset;
 
-        RailVector velocity{
-            projectile.forwardSpeed,
-            projectile.lateralSpeed,
-            projectile.verticalSpeed};
-        float speed = std::sqrt((std::max)(0.0f, LengthSquared(velocity)));
-        RailVector direction = NormalizeOr(velocity, {-1.0f, 0.0f, 0.0f});
         if (projectile.trajectory == EnemyProjectileTrajectory::Homing &&
             projectile.homingTurnRateRadians > 0.0f) {
+            const RailVector velocity{projectile.forwardSpeed,projectile.lateralSpeed,projectile.verticalSpeed};
+            const float speed=std::sqrt((std::max)(0.0f,LengthSquared(velocity)));
+            RailVector direction=NormalizeOr(velocity,{-1.0f,0.0f,0.0f});
             const RailVector desired{
                 input.playerDistance - projectile.distanceOffset,
                 input.playerLateralOffset - projectile.lateralOffset,
@@ -230,22 +275,11 @@ void EnemyProjectileSystem::Update(
                 desired,
                 projectile.homingTurnRateRadians * dt);
             ++frame_.homingProjectiles;
+            projectile.forwardSpeed=direction.forward*speed;
+            projectile.lateralSpeed=direction.lateral*speed;
+            projectile.verticalSpeed=direction.vertical*speed;
         }
-        speed = (std::clamp)(
-            speed + projectile.acceleration * dt,
-            0.0f,
-            (std::max)(1.0f, projectile.maximumSpeed));
-        velocity = Scale(direction, speed);
-        if (projectile.trajectory == EnemyProjectileTrajectory::Arc) {
-            velocity.vertical -= projectile.arcGravity * dt;
-        }
-        projectile.forwardSpeed = velocity.forward;
-        projectile.lateralSpeed = velocity.lateral;
-        projectile.verticalSpeed = velocity.vertical;
-        projectile.distanceOffset += projectile.forwardSpeed * dt;
-        projectile.lateralOffset += projectile.lateralSpeed * dt;
-        projectile.verticalOffset += projectile.verticalSpeed * dt;
-        projectile.age += dt;
+        AdvanceEnemyProjectileTrajectory(projectile,dt);
         if (projectile.age >= projectile.lifetime) {
             projectile.active = false;
             ++frame_.expiredThisFrame;

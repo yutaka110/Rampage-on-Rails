@@ -619,6 +619,13 @@ void EnemyBehaviorSystem::ApplyMovement(
     float deltaTime,
     float playerDistance,
     float playerForwardSpeed) {
+    if (AdvanceEnemyBehaviorMovement(actor, deltaTime, playerDistance, playerForwardSpeed))
+        ++frame_.engagementBandCorrections;
+}
+
+bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
+        float playerDistance, float playerForwardSpeed) {
+    bool bandCorrection = false;
     EnemyBehaviorRuntimeState& state = actor.behaviorState;
     const EnemyBehaviorDefinition& definition = actor.behaviorDefinition;
     if (definition.maintainForwardEngagementBand) {
@@ -659,7 +666,7 @@ void EnemyBehaviorSystem::ApplyMovement(
             state.integratedForwardOffset += state.engagementBandVelocity * deltaTime;
         }
         if (std::abs(correction) > 0.10f) {
-            ++frame_.engagementBandCorrections;
+            bandCorrection = true;
         }
     } else {
         state.integratedForwardOffset +=
@@ -786,6 +793,7 @@ void EnemyBehaviorSystem::ApplyMovement(
          state.engagementBandForwardDistance <=
                 definition.engagementBandMaximumForwardDistance &&
          !state.engagementBandExitRequested);
+    return bandCorrection;
 }
 
 void EnemyBehaviorSystem::QueueEvent(

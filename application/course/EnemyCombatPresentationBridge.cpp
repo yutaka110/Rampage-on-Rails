@@ -457,6 +457,13 @@ int EventPriority(EnemyCombatEventKind kind) noexcept {
 }
 } // namespace
 
+EnemyCombatActorPresentation ResolveEnemyCombatActorPresentation(
+    const CourseEnemyActor& actor, const EnemyCombatPresentationSettings& settings) {
+    EnemyCombatActorPresentation output{};
+    ApplyProceduralAnimation(output, actor, settings);
+    return output;
+}
+
 void EnemyCombatPresentationBridge::Reset() {
     frame_ = {};
     revision_ = 0;
@@ -675,6 +682,8 @@ void EnemyCombatPresentationBridge::Update(
                         vfx.worldPosition = Add(muzzleSample.position,
                             Add(Scale(muzzleSample.right,muzzle.x),Scale(muzzleSample.up,muzzle.y)));
                     }
+                    if(actor->weaponMount.ready) vfx.worldPosition=ResolveEnemyProjectileWorldPosition(
+                        *input.railPath,ResolveEnemyProjectileMuzzleRailPosition(*actor,0));
                     vfx.cueId = "enemy_combat_muzzle";
                     vfx.effectName = "enemy_muzzle_burst";
                     vfx.color = {1.0f, 0.72f, 0.20f, 0.96f};
@@ -700,6 +709,13 @@ void EnemyCombatPresentationBridge::Update(
                 if (frame_.vfxCommands.size() <
                     input.settings.maximumVfxCommandsPerFrame) {
                     frame_.vfxCommands.push_back(vfx);
+                    if(attackVfx && actor->weaponMount.ready && actor->desc.bulletCount>1) {
+                        vfx.worldPosition=ResolveEnemyProjectileWorldPosition(*input.railPath,
+                            ResolveEnemyProjectileMuzzleRailPosition(*actor,1));
+                        if(frame_.vfxCommands.size()<input.settings.maximumVfxCommandsPerFrame)
+                            frame_.vfxCommands.push_back(vfx);
+                        else ++frame_.droppedVfxCommands;
+                    }
                 } else {
                     ++frame_.droppedVfxCommands;
                 }

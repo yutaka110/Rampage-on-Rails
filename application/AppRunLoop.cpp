@@ -7380,6 +7380,17 @@ void AppRunLoop::UpdateRailShooterFrame() {
 
     const RailCameraDirectorFrame& previousCameraSafetyFrame = railShooterCameraDirector_.LastFrame();
     CourseEnemyFireSafetyFrameInput fireSafetyInput{};
+    RailTravelPredictionInput travelPredictionInput;
+    travelPredictionInput.vehicle = &railShooterVehicleMovement_;
+    travelPredictionInput.speedDirector = &railShooterSpeedDirector_;
+    travelPredictionInput.courseRuntime = &railShooterCourseRuntime_;
+    travelPredictionInput.course = &railShooterCourse_;
+    travelPredictionInput.railPath = &railPath_;
+    travelPredictionInput.simulationStepSeconds = gameplayDeltaTime;
+    if (!coursePreviewOwnsRail && mountedMovementActive && gameplayDeltaTime > 0.0f)
+        fireSafetyInput.travelPredictionInput = &travelPredictionInput;
+    fireSafetyInput.presentationSettings = &railEnemyCombatPresentationSettings_;
+    fireSafetyInput.readability = &railEnemyEncounterReadabilityDirector_;
     fireSafetyInput.cameraAllowsEnemyFire = previousCameraSafetyFrame.allowEnemyFire;
     fireSafetyInput.cameraStableForAiming = previousCameraSafetyFrame.stableForAiming;
     fireSafetyInput.cameraHardTransition = previousCameraSafetyFrame.hardTransition;
@@ -7396,6 +7407,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     fireSafetyInput.terrainSettings = &runtimeState_.terrain.settings;
     fireSafetyInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
     fireSafetyInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    fireSafetyInput.terrainCollision = &terrainCollisionWorld_;
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput);
     railEnemyAttackDefenseValidation_.Update(railShooterSpawnRuntime_);
     editorPatrolRuntimeWorld_.Update(gameplayDeltaTime);

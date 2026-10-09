@@ -452,6 +452,7 @@
     <ClCompile Include="application\course\RailPlayerVehicleMountSystem.cpp" />
     <ClCompile Include="application\course\RailDodgeSystem.cpp" />
     <ClCompile Include="application\course\RailVehicleMovementSystem.cpp" />
+    <ClCompile Include="application\course\RailTravelPrediction.cpp" />
     <ClCompile Include="application\course\RailVehiclePresentationBridge.cpp" />
     <ClCompile Include="application\course\RailVehicleRideDynamicsSystem.cpp" />
     <ClCompile Include="application\course\RailVehicleTrackContactPoseSolver.cpp" />
@@ -1440,6 +1441,7 @@
     <ClInclude Include="application\course\RailPlayerVehicleMountSystem.h" />
     <ClInclude Include="application\course\RailDodgeSystem.h" />
     <ClInclude Include="application\course\RailVehicleMovementSystem.h" />
+    <ClInclude Include="application\course\RailTravelPrediction.h" />
     <ClInclude Include="application\course\RailVehiclePresentationBridge.h" />
     <ClInclude Include="application\course\RailVehicleRideDynamicsSystem.h" />
     <ClInclude Include="application\course\RailVehicleTrackContactPoseSolver.h" />

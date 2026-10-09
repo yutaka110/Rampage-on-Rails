@@ -67,6 +67,24 @@ void UpdateMarker(
     transform.scale = {radius, radius, radius};
     if (runtime.SetInstanceAppearance(id, transform, color, true)) runtime.SetEffectPreviewLoop(id, true);
 }
+
+void AppendSampledPaths(ge3::debug::DebugDrawSystem& draw,
+    const EnemyAttackLaneTelegraphProxy& lane,bool compact) {
+    for(const auto& path:lane.projectilePaths) {
+        if(path.size()<2) continue;
+        const size_t tail=compact && !lane.openingCue?
+            static_cast<size_t>((path.size()-1)*0.78f):0;
+        for(size_t i=tail+1;i<path.size();++i) draw.AddLine(path[i-1].world,path[i].world,lane.color);
+        const auto& end=path.back();
+        const Vector3 direction=NormalizeOr(Subtract(end.world,path[path.size()-2].world),{0,0,-1});
+        const Vector3 base=Subtract(end.world,Scale(direction,lane.targetRadius*0.70f));
+        const Vector3 wing=Scale(end.right,lane.targetRadius*0.35f);
+        draw.AddLine(Add(base,wing),end.world,lane.color);
+        draw.AddLine(Subtract(base,wing),end.world,lane.color);
+        if(lane.openingCue) draw.AddCircle(path.front().world,path.front().right,path.front().up,
+            lane.sourceRadius*1.5f,lane.color,20);
+    }
+}
 } // namespace
 
 size_t EnemyAttackLaneTelegraphRenderer::LaneKeyHash::operator()(
@@ -161,6 +179,40 @@ void EnemyAttackLaneTelegraphRenderer::Update(
         proxy.openingCue = input.openingPresentation &&
             proxy.shape == EnemyAttackLaneShape::Line;
 
+        for(size_t index=0;index<cue.projectileLaunches.size();++index) {
+            const auto& launch=cue.projectileLaunches[index];
+            if(!launch.active) continue;
+            const Vector3 difference{launch.lockedTargetLateralOffset-launch.lateralOffset,
+                launch.lockedTargetVerticalOffset-launch.verticalOffset,
+                launch.lockedTargetDistance-launch.distanceOffset};
+            const float speed=std::sqrt(launch.forwardSpeed*launch.forwardSpeed+
+                launch.lateralSpeed*launch.lateralSpeed+launch.verticalSpeed*launch.verticalSpeed);
+            const float predictedFlight=index<cue.projectileFlightSeconds.size()?
+                cue.projectileFlightSeconds[index]:0.0f;
+            const float flight=(std::clamp)(predictedFlight>0.0f?predictedFlight:
+                std::sqrt(LengthSquared(difference))/(std::max)(0.001f,speed),
+                0.0f,(std::max)(0.0f,launch.lifetime));
+            if(flight<=0.00001f) continue;
+            auto& path=proxy.projectilePaths.emplace_back();
+            // Bounded sampling: at most 128 segments per barrel, three admitted
+            // warnings in production. No terrain/LOS queries are introduced.
+            const int segments=(std::clamp)(static_cast<int>(std::ceil(speed*flight/0.5f)),8,128);
+            path.reserve(segments+1);
+            auto shot=launch;
+            for(int i=0;i<=segments;++i) {
+                if(i>0) AdvanceEnemyProjectileTrajectory(shot,flight/segments);
+                const Vector3 p{shot.lateralOffset,shot.verticalOffset,shot.spawnDistance+shot.distanceOffset};
+                const auto sample=input.railPath->Evaluate(p.z);
+                path.push_back({ResolveEnemyProjectileWorldPosition(sample,p),sample.right,sample.up});
+            }
+        }
+        if(!proxy.projectilePaths.empty()) {
+            proxy.startWorld=proxy.projectilePaths.front().front().world;
+            proxy.targetWorld=proxy.projectilePaths.front().back().world;
+            proxy.railRight=proxy.projectilePaths.front().back().right;
+            proxy.railUp=proxy.projectilePaths.front().back().up;
+        }
+
         const LaneKey key{cue.actorId, cue.attackIntentSequence};
         ManagedMarkers& markers = managedMarkers_[key];
         markers.touchedRevision = revision;
@@ -206,6 +258,12 @@ void EnemyAttackLaneTelegraphRenderer::Update(
 void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
     ge3::debug::DebugDrawSystem& productionDraw) const {
     for (const EnemyAttackLaneTelegraphProxy& lane : frame_.lanes) {
+        if(!lane.projectilePaths.empty()) {
+            AppendSampledPaths(productionDraw,lane,false);
+            if(lane.targetEffectInstanceId==0) productionDraw.AddCircle(lane.targetWorld,lane.railRight,lane.railUp,
+                lane.targetRadius,lane.color,16);
+            continue;
+        }
         Vector4 faint = lane.color;
         faint.w *= 0.32f;
         Vector4 core = lane.color;
@@ -328,6 +386,12 @@ void EnemyAttackLaneTelegraphRenderer::AppendWorldPrimitives(
 void EnemyAttackLaneTelegraphRenderer::AppendProductionWorldPrimitives(
     ge3::debug::DebugDrawSystem& draw) const {
     for (const auto& lane : frame_.lanes) {
+        if(!lane.projectilePaths.empty()) {
+            AppendSampledPaths(draw,lane,true);
+            if(lane.targetEffectInstanceId==0) draw.AddCircle(lane.targetWorld,lane.railRight,lane.railUp,
+                lane.targetRadius,lane.color,16);
+            continue;
+        }
         // The opening shot teaches where a threat originates. Later encounters
         // retain the compact arrival cue so multiple lanes do not fill the view.
         const Vector3 tail = Lerp(lane.startWorld, lane.targetWorld, 0.78f);

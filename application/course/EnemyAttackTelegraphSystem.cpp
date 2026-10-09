@@ -11,6 +11,7 @@
 #include <limits>
 #include <cstdio>
 #include <unordered_set>
+#include <utility>
 
 namespace {
 constexpr float kEpsilon = 0.00001f;
@@ -341,6 +342,9 @@ void EnemyAttackTelegraphSystem::Update(
         const bool warming = IsVisibilityWarmup(enemy);
         const bool behaviorDriven = enemy.behaviorState.initialized &&
             enemy.behaviorDefinition.commercialBehavior;
+        if(behaviorDriven && !firedFlash &&
+            (!enemy.targetingState.forwardInterceptReachable ||
+             !CanEnemyProjectileVolleyReachTarget(enemy))) continue;
         // A choreographed pass owns its full charge interval; the default HUD
         // lead window must not hide the cue and deadlock presentation admission.
         const float actorLeadSeconds = behaviorDriven
@@ -362,6 +366,10 @@ void EnemyAttackTelegraphSystem::Update(
                 input.spawnRuntime->FireSafetySettings().minVisibleBeforeFire -
                     enemy.fireVisibleTime);
             timeToFire = (std::max)(timeToFire, remainingWarmup);
+        }
+        if (behaviorDriven && !firedFlash && !CanEnemyProjectileVolleyReachTarget(enemy,timeToFire)) {
+            input.spawnRuntime->DeferEnemyAttackForUnreachableLaunch(enemy.actorId);
+            continue;
         }
         const bool countdownReadable = behaviorDriven
             ? enemy.behaviorState.attackIntentActive && enemy.fireEnvironmentReady && input.cameraAllowsAttack
@@ -396,6 +404,24 @@ void EnemyAttackTelegraphSystem::Update(
             cue.predictedFlightSeconds =
                 enemy.targetingState.predictedFlightSeconds;
             cue.hasLockedTarget = true;
+            if(enemy.desc.projectileDefinition.trajectory==EnemyProjectileTrajectory::Direct &&
+                enemy.desc.projectileDefinition.acceleration==0.0f) {
+                const int count=(std::clamp)(enemy.desc.bulletCount,1,8);
+                cue.projectileLaunches.reserve(count);
+                cue.projectileFlightSeconds.reserve(count);
+                for(int index=0;index<count;++index) {
+                    auto launch = ResolveEnemyProjectileScheduledLaunch(enemy,index,firedFlash ? 0.0f : timeToFire);
+                    cue.projectileFlightSeconds.push_back(launch.flightSeconds);
+                    cue.projectileLaunches.push_back(std::move(launch.projectile));
+                }
+                if (!cue.projectileLaunches.empty()) {
+                    const auto& first = cue.projectileLaunches.front();
+                    cue.targetRailDistance = first.lockedTargetDistance;
+                    cue.targetLateralOffset = first.lockedTargetLateralOffset;
+                    cue.targetVerticalOffset = first.lockedTargetVerticalOffset;
+                    cue.predictedFlightSeconds = cue.projectileFlightSeconds.front();
+                }
+            }
         }
         cue.attackPattern = enemy.desc.firePattern;
         cue.worldPosition = EnemyWorldPosition(enemy, *input.railPath);

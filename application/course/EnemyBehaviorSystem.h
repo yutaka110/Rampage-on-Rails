@@ -153,6 +153,11 @@ struct EnemyBehaviorFrame final {
     uint64_t revision = 0;
 };
 
+// Advances the same movement and banking used by live actors. Predictions call
+// this on a private actor copy, without events, reservations or world queries.
+bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
+    float playerDistance, float playerForwardSpeed);
+
 class EnemyBehaviorSystem final {
 public:
     void Reset();

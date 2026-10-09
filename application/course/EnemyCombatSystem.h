@@ -114,6 +114,8 @@ public:
     void Reset();
     void InitializeActor(CourseEnemyActor& actor);
     void Update(CourseSpawnRuntime& runtime, const EnemyCombatFrameInput& input);
+    // Ticks phase clocks/gates on a caller-owned prediction copy, with no events.
+    static void AdvancePoseForPrediction(CourseEnemyActor& actor, float deltaTime);
 
     bool SubmitDamageResult(
         CourseSpawnRuntime& runtime,
@@ -130,6 +132,7 @@ private:
     void UpdateActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
         const EnemyCombatFrameInput& input);
+    void UpdateActors(std::span<CourseEnemyActor> actors, float deltaTime);
     bool SubmitDamageResultActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
         const DamageResult& damageResult,
@@ -154,6 +157,7 @@ private:
     std::vector<EnemyCombatEvent> pendingEvents_;
     EnemyCombatFrameStats frameStats_{};
     uint64_t revision_ = 0;
+    bool suppressEvents_ = false;
 };
 
 EnemyCombatDefinition ResolveEnemyCombatDefinition(

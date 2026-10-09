@@ -153,7 +153,16 @@ void EnemyCombatSystem::Update(CourseSpawnRuntime& runtime,
 void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
         const EnemyCombatFrameInput& input) {
-    const float dt = (std::max)(0.0f, input.deltaTime);
+    UpdateActors(actors, (std::max)(0.0f, input.deltaTime));
+}
+
+void EnemyCombatSystem::AdvancePoseForPrediction(CourseEnemyActor& actor, float deltaTime) {
+    EnemyCombatSystem prediction;
+    prediction.suppressEvents_ = true;
+    prediction.UpdateActors(std::span<CourseEnemyActor>(&actor, 1), (std::max)(0.0f, deltaTime));
+}
+
+void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors, float dt) {
     frameStats_ = {};
 
     for (CourseEnemyActor& actor : actors) {
@@ -471,6 +480,7 @@ void EnemyCombatSystem::QueueEvent(
     uint64_t shotId,
     float appliedDamage,
     HitFeedbackKind feedbackKind) {
+    if (suppressEvents_) return;
     constexpr size_t kMaximumPendingEvents = 512;
     if (pendingEvents_.size() >= kMaximumPendingEvents) {
         pendingEvents_.erase(pendingEvents_.begin());

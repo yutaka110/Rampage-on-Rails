@@ -11,6 +11,7 @@
 class CourseSpawnRuntime;
 class RailPath;
 struct CourseEnemyActor;
+struct CourseEnemyFireSafetyFrameInput;
 
 struct EnemyFormationMemberRuntimeState final {
     std::string formationId;
@@ -31,6 +32,16 @@ struct EnemyFormationMemberRuntimeState final {
     float hoverLateralOffset = 0.0f;
     float hoverVerticalOffset = 0.0f;
     bool hoverInitialized = false;
+    // Last crowd/terrain-resolved goal. A prediction reuses it without running
+    // terrain or pair separation again; live spacing refreshes it each frame.
+    float hoverGoalForward = 0.0f;
+    float hoverGoalLateral = 0.0f;
+    float hoverGoalVertical = 0.0f;
+    bool hoverGoalReady = false;
+    // Reservations survive wave changes, neighboring defeats and checkpoints.
+    float hoverHomeLateral = 0.0f;
+    float hoverHomeVertical = 0.0f;
+    bool hoverHomeReserved = false;
     uint64_t revision = 0;
     bool initialized = false;
     bool leader = false;
@@ -44,6 +55,9 @@ struct EnemyFormationFrame final {
     uint64_t revision = 0;
 };
 
+void AdvanceEnemyHoverSpacing(CourseEnemyActor& actor, float deltaTime,
+    bool enteringHome = false);
+
 // Maintains authored or procedural slots without becoming a second base-motion
 // authority. BeginFrame removes the prior additive correction; Update applies
 // exactly one new correction after EnemyBehaviorSystem has written its pose.
@@ -51,7 +65,8 @@ class EnemyFormationSystem final {
 public:
     void Reset();
     void BeginFrame(CourseSpawnRuntime& runtime);
-    void Update(CourseSpawnRuntime& runtime, float deltaTime, const RailPath* railPath = nullptr);
+    void Update(CourseSpawnRuntime& runtime, float deltaTime, const RailPath* railPath = nullptr,
+        const CourseEnemyFireSafetyFrameInput* spatialContext = nullptr);
     bool SetDefinition(
         std::string formationId,
         EnemyFormationDefinition definition,
@@ -69,8 +84,9 @@ private:
         CourseSpawnRuntime& runtime);
     void UpdateActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
-        float deltaTime, const RailPath* railPath);
-    void ApplyHoverSpacing(std::span<CourseEnemyActor> actors, float deltaTime, const RailPath* railPath);
+        float deltaTime, const RailPath* railPath, const CourseEnemyFireSafetyFrameInput* spatialContext);
+    void ApplyHoverSpacing(std::span<CourseEnemyActor> actors, float deltaTime, const RailPath* railPath,
+        const CourseEnemyFireSafetyFrameInput* spatialContext);
 
     EnemyFormationDefinition ResolveDefinition(
         const std::string& formationId) const;

@@ -1187,6 +1187,9 @@
     <ClCompile Include="application\course\RailVehicleMovementSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\RailTravelPrediction.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\RailVehiclePresentationBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -3014,6 +3017,9 @@
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainChunkManager.h">
       <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailTravelPrediction.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainCollisionWorld.h">
       <Filter>ヘッダー ファイル\application\terrain</Filter>

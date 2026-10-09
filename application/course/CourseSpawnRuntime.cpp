@@ -123,7 +123,8 @@ uint32_t CourseSpawnRuntime::CommitEnemyVolley(
             intentSequence == 0 || tokenId == 0 ||
             actor.attackState.intentSequence != intentSequence ||
             actor.attackState.tokenId != tokenId ||
-            actor.bulletsEmittedThisFrame != 0) return 0;
+            actor.bulletsEmittedThisFrame != 0 ||
+            !CanEnemyProjectileVolleyReachTarget(actor)) return 0;
         const uint32_t emitted = EmitEnemyBullets(actor);
         actor.bulletsEmittedThisFrame += emitted;
         if (emitted != 0) ++actor.fireSequence;
@@ -381,7 +382,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     behaviorInput.deltaTime = dt;
     behaviorInput.playerDistance = safetyInput.playerDistance;
     enemyBehaviorSystem_.Update(*this, behaviorInput);
-    enemyFormationSystem_.Update(*this, dt, safetyInput.railPath);
+    enemyFormationSystem_.Update(*this, dt, safetyInput.railPath, &safetyInput);
     enemyEntranceExitDirector_.Update(*this, dt);
     // Check the final staged pose, not just Behavior's pre-formation position.
     EnforceEnemyEngagementClearance(safetyInput);
@@ -416,6 +417,12 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
 
     enemyAttackCoordinator_.Update(*this, enemyBehaviorSystem_.Frame(), dt);
     EnemyTargetingFrameInput targetingInput{};
+    targetingInput.travelPredictionInput = safetyInput.travelPredictionInput;
+    targetingInput.railPath = safetyInput.railPath;
+    targetingInput.cameraPosition = safetyInput.cameraPosition;
+    targetingInput.hasCameraPosition = safetyInput.hasCameraPosition;
+    targetingInput.presentationSettings = safetyInput.presentationSettings;
+    targetingInput.readability = safetyInput.readability;
     targetingInput.deltaTime = dt;
     targetingInput.playerDistance = safetyInput.playerDistance;
     targetingInput.playerLateralOffset = safetyInput.playerLateralOffset;
@@ -624,7 +631,20 @@ bool CourseSpawnRuntime::InvalidateEnemyAttackWarning(uint32_t actorId) {
         state.attackTimeRemaining = (std::max)(0.05f, enemy.behaviorDefinition.attackLeadSeconds);
         enemy.fireTimer = state.attackTimeRemaining;
         enemy.targetingState.solutionLocked = false;
+        enemy.targetingState.waitingForReachableLaunch = false;
+        enemy.targetingState.forwardInterceptReachable = true;
         enemyAttackCoordinator_.CancelActor(enemy, EnemyAttackCancelReason::ActorUnavailable);
+        return true;
+    }
+    return false;
+}
+
+bool CourseSpawnRuntime::DeferEnemyAttackForUnreachableLaunch(uint32_t actorId) {
+    for (CourseEnemyActor& enemy : enemies_) {
+        if (enemy.actorId != actorId || !enemy.behaviorState.attackIntentActive ||
+            !enemy.targetingState.compensatesForwardTravel) continue;
+        enemy.targetingState.forwardInterceptReachable = false;
+        enemyAttackCoordinator_.DeferUnreachableAttack(enemy);
         return true;
     }
     return false;
@@ -1082,8 +1102,8 @@ void CourseSpawnRuntime::BeginEnemyFormationFrame(EnemyFormationSystem& system) 
 }
 
 void CourseSpawnRuntime::UpdateEnemyFormations(EnemyFormationSystem& system,
-        float deltaTime, const RailPath* railPath) {
-    system.UpdateActors(enemies_, *this, deltaTime, railPath);
+        float deltaTime, const RailPath* railPath, const CourseEnemyFireSafetyFrameInput* spatialContext) {
+    system.UpdateActors(enemies_, *this, deltaTime, railPath, spatialContext);
 }
 
 void CourseSpawnRuntime::BeginEnemyEntranceExitFrame(EnemyEntranceExitDirector& system) {

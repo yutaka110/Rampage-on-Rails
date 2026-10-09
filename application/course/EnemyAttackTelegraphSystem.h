@@ -58,6 +58,12 @@ EnemyAttackTelegraphReadabilityStyle ResolveEnemyAttackTelegraphReadabilityStyle
 std::string FormatEnemyAttackCountdown(float seconds);
 
 struct EnemyAttackTelegraphCue {
+    // Launch templates use the remaining warning delay and begin at the
+    // anticipated barrel position. Execution uses the same resolver at delay 0.
+    // Empty for legacy cues or trajectories that require live steering.
+    std::vector<EnemyProjectileRuntimeState> projectileLaunches;
+    // Per-barrel time after launch, excluding the remaining warning delay.
+    std::vector<float> projectileFlightSeconds;
     uint32_t actorId = 0;
     uint64_t fireSequence = 0;
     uint64_t attackIntentSequence = 0;
