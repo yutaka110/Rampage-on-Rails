@@ -343,11 +343,18 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
     }
 
     const bool editorViewportCompositedByImGui =
-        ctx.imguiLayer != nullptr && ctx.imguiLayer->WantsDeveloperDiagnostics();
-    if (editorViewportCompositedByImGui) {
+        ctx.railFilmBurnInEditorViewport ||
+        (ctx.imguiLayer != nullptr && ctx.imguiLayer->WantsDeveloperDiagnostics());
+    const bool filmBurnActive = ctx.railFilmBurnProgress > 0.0f;
+    if (editorViewportCompositedByImGui && !filmBurnActive) {
         return;
     }
 
+    const std::string presentationTarget = filmBurnActive ? "RailFilmBurnScene" : "BackBuffer";
+    if (filmBurnActive) {
+        ctx.renderGraph->DeclareTransientRenderTarget(
+            presentationTarget, 1.0f, DXGI_FORMAT_R8G8B8A8_UNORM);
+    }
     ctx.renderGraph->AddPass({
         "PostProcess.CompositeToBackBuffer",
         ge3::graphics::RenderPassLayer::PostProcess,
@@ -355,10 +362,10 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             {"SceneColor", ge3::graphics::RenderResourceAccessType::ReadSrv},
             {"VfxAccumulation", ge3::graphics::RenderResourceAccessType::ReadSrv},
             {finalOutputResource, ge3::graphics::RenderResourceAccessType::ReadSrv},
-            {"BackBuffer", ge3::graphics::RenderResourceAccessType::WriteRtv},
+            {presentationTarget, ge3::graphics::RenderResourceAccessType::WriteRtv},
         },
         "",
-        [ctx, finalOutputResource](ge3::graphics::RenderPassContext& passContext) {
+        [ctx, finalOutputResource, filmBurnActive, presentationTarget](ge3::graphics::RenderPassContext& passContext) {
             ID3D12DescriptorHeap* descriptorHeaps[] = { ctx.srvDescriptorHeap };
             passContext.commandList->SetDescriptorHeaps(1, descriptorHeaps);
             const float compositeParams[kPostProcessParamCount] = {
@@ -371,6 +378,14 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 0.0f,
                 0.0f
             };
+            if (filmBurnActive) {
+                ctx.vfxRenderTargets->ExecutePostProcessPass(
+                    passContext.commandList, presentationTarget,
+                    ctx.appPipelines->GetCompositeRootSignature(),
+                    ctx.appPipelines->GetCompositePSO(),
+                    "SceneColor", "VfxAccumulation", finalOutputResource, compositeParams);
+                return;
+            }
             ctx.vfxRenderTargets->CompositeToBackBuffer(
                 passContext.commandList,
                 ctx.backBuffer,
@@ -381,4 +396,44 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 compositeParams);
         },
         true});
+}
+
+void AppPostProcessPipeline::RegisterFilmBurnPresentationPass(const AppFrameGraphBuildContext& ctx) const {
+    if (ctx.railFilmBurnProgress <= 0.0f) return;
+    const bool editorViewport = ctx.railFilmBurnInEditorViewport ||
+        (ctx.imguiLayer != nullptr && ctx.imguiLayer->WantsDeveloperDiagnostics());
+    const auto plan = ctx.postProcessStack->BuildExecutionPlan();
+    const std::string output = editorViewport
+        ? (plan.finalOutputResource.empty() ? "SceneColor" : plan.finalOutputResource)
+        : "BackBuffer";
+    std::vector<ge3::graphics::RenderPassResourceAccess> accesses{
+        {"RailFilmBurnScene", ge3::graphics::RenderResourceAccessType::ReadSrv},
+        {output, ge3::graphics::RenderResourceAccessType::WriteRtv},
+    };
+    if (!editorViewport) {
+        accesses.push_back({"SceneColor", ge3::graphics::RenderResourceAccessType::ReadSrv});
+        accesses.push_back({"VfxAccumulation", ge3::graphics::RenderResourceAccessType::ReadSrv});
+    }
+    ctx.renderGraph->AddPass({
+        "UI.RailFilmBurnPresentation",
+        ge3::graphics::RenderPassLayer::Ui,
+        std::move(accesses), "",
+        [ctx, editorViewport, output](ge3::graphics::RenderPassContext& passContext) {
+            const float params[kPostProcessParamCount] = {
+                0, 0, 0, 1, ctx.railFilmBurnProgress, 1
+            };
+            if (editorViewport) {
+                // All SRVs point to the capture, so SceneColor can safely be
+                // the destination when the authored postprocess stack is empty.
+                ctx.vfxRenderTargets->ExecutePostProcessPass(
+                    passContext.commandList, output,
+                    ctx.appPipelines->GetCompositeRootSignature(), ctx.appPipelines->GetCompositePSO(),
+                    "RailFilmBurnScene", "RailFilmBurnScene", "RailFilmBurnScene", params);
+                return;
+            }
+            ctx.vfxRenderTargets->CompositeToBackBuffer(
+                passContext.commandList, ctx.backBuffer, ctx.rtv,
+                ctx.appPipelines->GetCompositeRootSignature(), ctx.appPipelines->GetCompositePSO(),
+                "RailFilmBurnScene", params);
+        }, true});
 }

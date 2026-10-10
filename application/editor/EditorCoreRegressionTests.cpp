@@ -3,6 +3,10 @@
 #include <numbers>
 #include <set>
 #include "../course/RailTitleScene.h"
+#include "../AppFrameGraphBuilder.h"
+#include "../AppImGuiLayer.h"
+#include "../AppPostProcessPipeline.h"
+#include "graphics/RenderGraph.h"
 #include "EditorCoreRegressionTests.h"
 #include "../PostProcessPresetStore.h"
 
@@ -32392,7 +32396,7 @@ void TestRailTitleBodySway(RegressionRunner& runner) {
             paused &= frozen.m[row][col]==title.Vehicle().worldMatrix.m[row][col];
         runner.Expect(paused,"Pausing the title must also freeze its suspension motion");
         title.BeginStart();
-        for(int i=0;i<fps*3;++i) title.Update(1.0f/fps);
+        for(int i=0;i<int(std::ceil(RailTitleScene::StartDuration*fps))+1;++i) title.Update(1.0f/fps);
         runner.Expect(title.ReadyForGameplay() && title.Blackout()==1.0f,
             "Body sway must preserve the existing blackout handoff");
     }
@@ -32802,7 +32806,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         title.BeginStart();
         runner.Expect(title.Starting() && title.StartProgress()==0 && title.Blackout()==0,
             "Starting must not teleport the camera or flash the screen");
-        float previousFade=0,previousMenu=1;
+        float previousFade=0,previousMenu=1,peakReflection=0;
         const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
         const auto defaultLight=RailTitleColors{}.light;
         const float lightLuma=luminance({defaultLight.x,defaultLight.y,defaultLight.z});
@@ -32817,6 +32821,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         Vector3 previous=initial;
         bool continuous=true;
         bool steadyApproach=true;
+        int readableBurnFrames=0;
         int frames=0;
         while(!title.ReadyForGameplay() && frames<int(fps*(RailTitleScene::StartDuration+1.0f))) {
             title.Update(1.0f/fps);
@@ -32835,7 +32840,9 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
                 steadyApproach &= cameraAdvance>=-0.001f && std::abs(gap-8.0f)<0.01f;
             }
             continuous &= title.Blackout()>=previousFade && title.MenuOpacity()<=previousMenu;
-            continuous &= title.TunnelCameraDepth()>2.0f || title.Blackout()==0.0f;
+            if(title.Blackout()>0.15f && title.Blackout()<0.85f) ++readableBurnFrames;
+            continuous &= title.TunnelCameraDepth()>0.0f || title.Blackout()==0.0f;
+            peakReflection=(std::max)(peakReflection,title.RailReflectionOpacity());
             const auto colors=title.Colors(courseSun);
             colorContinuous &= colors.transition>=previousColors.transition &&
                 std::abs(luminance({colors.light.x,colors.light.y,colors.light.z})-lightLuma)<0.0001f &&
@@ -32847,16 +32854,20 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             if(frames==fps/2) {const float progress=title.StartProgress();title.BeginStart();
                 runner.Expect(title.StartProgress()==progress,"Repeated confirm must not restart the camera animation");}
         }
-        runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f,
-            "Cinematic must remain outside the cart and switch worlds only under full blackout with silent title audio");
+        runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f && title.RollingGain()>0.999f,
+            "Cinematic must remain outside the cart and switch worlds under full blackout while continuous rolling survives");
+        runner.Expect(peakReflection>0.25f && title.RailReflectionOpacity()==0,
+            "A brief rail reflection must be visible during closing and extinguished before the world switch");
         runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
             title.Scenery().terrainPlacements.size()==idlePlacementCount+1,
             "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
         runner.Expect(steadyApproach,
             "The cave approach must keep constant speed and FOV, with a fixed close chase distance after the orbit");
+        runner.Expect(readableBurnFrames>=int(fps*0.65f),
+            "The film burn must retain enough intermediate frames to perceive the color and warp before blackout");
         runner.Expect(std::abs(title.CurrentSpeed()-12.0f)<0.001f &&
             std::abs(title.CameraFov()-0.70f)<0.001f &&
-            std::abs(title.TunnelCameraDepth()-4.6f)<0.01f,
+            std::abs(title.TunnelCameraDepth()-13.0f)<0.01f,
             "The steady approach must reach the same inside-cave position at all frame rates");
         runner.Expect(colorContinuous && previousColors.transition==1.0f,
             "Title hue must reach its transition endpoint without dimming the light or background or stepping between frames");
@@ -32892,6 +32903,212 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
     const auto& commands=renderer.Frame().commands;
     runner.Expect(!commands.empty() && commands.back().width==1280 && commands.back().height==720 && commands.back().color.w==1,
         "World handoff blackout must be the final fully opaque title command");
+    runner.Expect(commands.back().kind==RailShooterHudDrawCommandKind::TunnelTransition &&
+        commands.back().transitionProgress==1 && commands.back().color.x>commands.back().color.y &&
+        commands.back().color.y>commands.back().color.z,
+        "The final directional tunnel mask must use a warm charcoal palette and fully closed progress");
+    def.maximumDrawCommands=16;
+    input.titleOpacity=1; input.titleBlackout=0.7f; input.titleTransitionFocus={0.62f,0.31f};
+    renderer.Update(input);
+    runner.Expect(renderer.Frame().commands.size()<=16 &&
+        renderer.Frame().commands.back().kind==RailShooterHudDrawCommandKind::TunnelTransition &&
+        renderer.Frame().commands.back().transitionFocus.x==0.62f &&
+        renderer.Frame().commands.back().transitionFocus.y==0.31f,
+        "Tunnel masking must retain the projected rail focus and survive a restricted HUD draw budget");
+}
+
+void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
+    using namespace ge3::graphics;
+    auto gui = std::make_unique<AppImGuiLayer>();
+    for (bool editorViewport : {false, true}) {
+    for (bool authoredPost : {false, true}) {
+    PostProcessStack stack;
+    if (authoredPost) {
+        PostProcessPass post;
+        post.name = "FilmBurnTestPost";
+        post.outputResource = "FilmBurnTestPostColor";
+        runner.Expect(stack.ReplacePasses({post}), "Film-burn test postprocess must validate");
+    }
+    const std::string finalOutput = stack.BuildExecutionPlan().finalOutputResource;
+    for (float progress : {0.0f, 0.45f, 1.0f}) {
+        RenderGraph graph;
+        graph.DeclareTransientRenderTarget("SceneColor", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
+        graph.DeclareTransientRenderTarget("VfxAccumulation", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
+        graph.AddPass({"World", RenderPassLayer::Geometry,
+            {{"SceneColor", RenderResourceAccessType::WriteRtv},
+             {"VfxAccumulation", RenderResourceAccessType::WriteRtv}}, "", {}});
+        // Match runtime registration order: HUD is registered before the
+        // postprocessing builder, but executes after scene composition.
+        graph.AddPass({"HUD", RenderPassLayer::Ui,
+            {{progress > 0 ? "RailFilmBurnScene" : editorViewport ? finalOutput : "BackBuffer",
+              RenderResourceAccessType::WriteRtv}}, "", {}});
+        AppFrameGraphBuildContext context{};
+        context.renderGraph = &graph;
+        context.imguiLayer = gui.get();
+        context.postProcessStack = &stack;
+        context.railFilmBurnProgress = progress;
+        context.railFilmBurnInEditorViewport = editorViewport;
+        AppPostProcessPipeline pipeline;
+        pipeline.RegisterPasses(context);
+        pipeline.RegisterFilmBurnPresentationPass(context);
+        if (editorViewport) {
+            graph.AddPass({"EditorUI", RenderPassLayer::Ui,
+                {{finalOutput, RenderResourceAccessType::ReadSrv},
+                 {"BackBuffer", RenderResourceAccessType::WriteRtv}}, "", {}});
+        }
+        std::string error;
+        runner.Expect(graph.Validate(&error), "Film burn graph resources must validate: " + error);
+        const auto passes = graph.BuildPassDebugInfo();
+        const auto find = [&](const char* name) {
+            return std::find_if(passes.begin(), passes.end(), [name](const auto& p) { return p.name == name; });
+        };
+        const auto compose = find("PostProcess.CompositeToBackBuffer");
+        const auto hud = find("HUD");
+        const auto burn = find("UI.RailFilmBurnPresentation");
+        if (!editorViewport || progress > 0) {
+            runner.Expect(compose != passes.end() && hud != passes.end() && compose->executed && hud->executed &&
+                compose->executionIndex < hud->executionIndex,
+                "The world must be composed before captured HUD even with pass culling");
+        } else {
+            runner.Expect(compose == passes.end(), "Idle editor retains its normal viewport path");
+        }
+        if (progress > 0) {
+            runner.Expect(burn != passes.end() && burn->executed && hud->executionIndex < burn->executionIndex,
+                "Partial and full blackout must burn HUD after scene capture, preventing HUD/VFX leakage");
+            if (editorViewport) {
+                const auto editorUi = find("EditorUI");
+                runner.Expect(editorUi != passes.end() && editorUi->executed &&
+                    burn->executionIndex < editorUi->executionIndex,
+                    "ImGui must sample the burned viewport after presentation, without burning editor controls");
+            }
+            const auto targets = graph.BuildTransientRenderTargetPlan();
+            const auto capture = std::find_if(targets.begin(), targets.end(), [](const auto& t) {
+                return t.name == "RailFilmBurnScene";
+            });
+            runner.Expect(capture != targets.end() && capture->resolutionScale == 1.0f &&
+                capture->lifetimeEnd >= burn->executionIndex,
+                "The full-resolution capture must stay alive until final presentation");
+        } else {
+            runner.Expect(burn == passes.end(), "Idle gameplay must have no film-burn presentation pass");
+            const auto targets = graph.BuildTransientRenderTargetPlan();
+            runner.Expect(std::none_of(targets.begin(), targets.end(), [](const auto& t) {
+                return t.name == "RailFilmBurnScene";
+            }), "Idle gameplay must not allocate a film-burn render target");
+        }
+    }
+    }
+    }
+}
+
+void TestRailTitleGameplayEntry(RegressionRunner& runner) {
+    for(int fps : {30,60,120}) {
+        RailTitleGameplayEntry entry;
+        runner.Expect(!entry.Frame().blockingGameplay && entry.Frame().informationOpacity==1,
+            "Direct gameplay and editor entry must not inherit a title startup gate");
+        entry.Begin();
+        runner.Expect(entry.Frame().blockingGameplay && entry.Frame().blackout==1 &&
+            entry.Frame().reticleProgress==0 && entry.Frame().gaugeProgress==0 &&
+            entry.Frame().informationOpacity==0 && entry.Frame().rollingHandoff==0,
+            "World handoff must start fully black with HUD hidden and rail audio retained");
+        entry.Update(0.04f);
+        runner.Expect(entry.Frame().blackout==1 && entry.Frame().reticleProgress==0,
+            "The incoming camera must settle under a short opaque hold before the tunnel opens");
+        entry.Reset(); entry.Begin();
+        int reticleCues=0,gaugeCues=0,frames=0,readableRevealFrames=0;
+        bool ordered=true,monotonic=true;
+        auto previous=entry.Frame();
+        while(entry.Frame().blockingGameplay && frames<fps*2) {
+            entry.Update(1.0f/fps);
+            const auto current=entry.Frame();
+            reticleCues+=current.reticleStarted?1:0;
+            gaugeCues+=current.gaugesStarted?1:0;
+            if(current.blackout>0.15f && current.blackout<0.85f) ++readableRevealFrames;
+            monotonic &= current.blackout<=previous.blackout &&
+                current.reticleProgress>=previous.reticleProgress &&
+                current.gaugeProgress>=previous.gaugeProgress &&
+                current.informationOpacity>=previous.informationOpacity &&
+                current.rollingHandoff>=previous.rollingHandoff;
+            ordered &= current.reticleProgress>=current.gaugeProgress &&
+                current.gaugeProgress>=current.informationOpacity;
+            if(frames==fps/3) {
+                entry.Begin();
+                entry.Update(-1.0f);
+                entry.Update((std::numeric_limits<float>::quiet_NaN)());
+                for(int paused=0;paused<20;++paused) entry.Update(0.0f);
+                runner.Expect(entry.Frame().blackout==current.blackout &&
+                    entry.Frame().reticleProgress==current.reticleProgress &&
+                    entry.Frame().rollingHandoff==current.rollingHandoff &&
+                    !entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
+                    "Repeated confirm, focus pause and invalid delta time must not restart or advance startup");
+            }
+            previous=current;
+            ++frames;
+        }
+        runner.Expect(monotonic && ordered && reticleCues==1 && gaugeCues==1 &&
+            entry.Frame().blackout==0 && entry.Frame().reticleProgress==1 &&
+            entry.Frame().gaugeProgress==1 && entry.Frame().informationOpacity==1 &&
+            entry.Frame().rollingHandoff==1 &&
+            std::abs(float(frames)/fps-RailTitleGameplayEntry::Duration)<1.01f/fps,
+            "Camera reveal, reticle, gauges and information must finish in order with one cue each at every frame rate");
+        runner.Expect(readableRevealFrames>=int(fps*0.65f),
+            "The incoming burn must be readable instead of revealing the scene in only a few frames");
+        entry.Update(0.05f);
+        runner.Expect(!entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
+            "Ready gameplay must never replay startup cues");
+        entry.Reset(); entry.Begin(); entry.Update(10.0f);
+        runner.Expect(entry.Frame().blockingGameplay && entry.Frame().reticleProgress==0,
+            "A frame hitch must not skip the HUD boot and input gate");
+    }
+
+    RailShooterHudDefinitionAsset definition;
+    RailShooterHudPresentationFrame hud;
+    hud.visible=true; hud.vehicleText="CART"; hud.healthText="HP";
+    hud.vehicleIntegrityNormalized=0.88f; hud.playerHealthNormalized=0.74f;
+    hud.vehicleIntegrityTrail=0.93f; hud.playerHealthTrail=0.85f;
+    hud.score=123; hud.waveText="WAVE"; hud.weaponText="WEAPON";
+    RailShooterHudRenderInput input{&definition,&hud,1280,720};
+    RailShooterHudRenderer renderer;
+    renderer.Update(input);
+    const auto normal=renderer.Frame().commands;
+    input.startupGaugeProgress=0; input.startupInformationOpacity=0;
+    renderer.Update(input);
+    runner.Expect(!renderer.Frame().visible && renderer.Frame().commands.empty(),
+        "No gameplay panels may flash before their boot stages start");
+    input.startupGaugeProgress=0.5f;
+    renderer.Update(input);
+    const auto containsText=[&](const std::string& value) {
+        return std::any_of(renderer.Frame().commands.begin(),renderer.Frame().commands.end(),
+            [&](const auto& command){return command.text==value;});
+    };
+    runner.Expect(containsText("CART") && containsText("HP") && !containsText("123") &&
+        !containsText("WAVE") && !containsText("WEAPON") && hud.playerHealthNormalized==0.74f &&
+        hud.vehicleIntegrityNormalized==0.88f,
+        "Gauge startup must hide later HUD groups and leave authoritative health unchanged");
+    input.startupGaugeProgress=input.startupInformationOpacity=1;
+    renderer.Update(input);
+    bool restored=normal.size()==renderer.Frame().commands.size();
+    if(restored) for(size_t i=0;i<normal.size();++i) {
+        const auto& actual=renderer.Frame().commands[i]; const auto& expected=normal[i];
+        restored &= actual.kind==expected.kind && actual.text==expected.text &&
+            actual.x==expected.x && actual.y==expected.y && actual.width==expected.width &&
+            actual.height==expected.height && actual.color.w==expected.color.w;
+    }
+    runner.Expect(restored,"Completed startup must restore the exact ordinary HUD layout and gauge values");
+
+    RailLockOnSystem lockOn;
+    RailLockOnFrameInput lockInput;
+    lockInput.viewportWidth=1280; lockInput.viewportHeight=720;
+    lockInput.hasCursorPosition=true; lockInput.cursorPosition={12,27};
+    lockInput.gamepadConnected=true; lockInput.gamepadAim={1,1};
+    lockInput.deltaTime=2.0f;
+    lockOn.PrepareReticleForGameplay(lockInput);
+    lockOn.PrepareReticleForGameplay(lockInput);
+    runner.Expect(lockOn.DebugFrame().reticle.initialized &&
+        lockOn.DebugFrame().reticle.currentScreenPosition.x==640 &&
+        lockOn.DebugFrame().reticle.currentScreenPosition.y==360 &&
+        !lockOn.Reticle().lockHeld && lockOn.Tokens().empty() &&
+        lockOn.DebugFrame().elapsedTime==0 && lockOn.DebugFrame().releasedThisFrame==0,
+        "Startup reticle must remain centered without consuming input, acquiring locks or advancing gameplay");
 }
 
 void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
@@ -33562,6 +33779,8 @@ int RunEditorCoreRegressionTests() {
         {"title imported surface integrity", [&]() { TestTitleImportedSurfaceAudit(runner); }},
         {"title landscape ground and camera clearance", [&]() { TestRailTitleLandscape(runner); }},
         {"title cinematic and ambience lifecycle", [&]() { TestRailTitleCinematic(runner); }},
+        {"title gameplay camera audio and HUD startup", [&]() { TestRailTitleGameplayEntry(runner); }},
+        {"film burn scene HUD capture and presentation ordering", [&]() { TestRailFilmBurnPresentationGraph(runner); }},
         {"title running loop and menu layout", [&]() { TestRailTitleLoop(runner); }},
         {"title body suspension and wheel contact", [&]() { TestRailTitleBodySway(runner); }},
         {"title twin shield pursuit", [&]() { TestRailTitlePursuit(runner); }},

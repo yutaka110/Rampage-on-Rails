@@ -1528,6 +1528,9 @@ AppRunLoop::AppRunLoop(
     railSessionRetrySound_ = audio_.CreateTone(
         "rail-session-retry", 680.0f, 0.160f, 0.50f);
     railTitleAmbience_ = audio_.LoadWave("Resources/audio/title_rail_ambience.wav");
+    railTitleTunnelAmbience_ = audio_.LoadWave("Resources/audio/title_rail_ambience_tunnel.wav");
+    railTitleReticleBootSound_ = audio_.CreateTone("rail-reticle-boot",920.0f,0.045f,0.20f);
+    railTitleGaugesBootSound_ = audio_.CreateTone("rail-gauges-boot",1240.0f,0.065f,0.18f);
     railVehicleRollingSound_ = audio_.CreateTone(
         "rail-vehicle-rolling", 105.0f, 0.055f, 0.16f);
     railVehicleJointSound_ = audio_.CreateTone(
@@ -3893,8 +3896,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
 
     // A small aim point preserves the silhouette behind the reticle.
-    addCentered(reticle.currentScreenPosition, 3.0f*hudScale, uvPip,
+    const auto& titleEntry=railTitleGameplayEntry_.Frame();
+    const Vector2 entryReticle=titleEntry.blockingGameplay?
+        Vector2{float(hudWidth)*0.5f,float(hudHeight)*0.5f}:reticle.currentScreenPosition;
+    const uint32_t entryPipBegin=railLockOnHudAtlasVertexCount_;
+    addCentered(entryReticle, 3.0f*hudScale, uvPip,
         Vector4{1.0f,0.98f,0.91f,opacity});
+    const uint32_t entryPipEnd=railLockOnHudAtlasVertexCount_;
 
     for (int index = 0; index < tokenCount; ++index) {
         const RailLockToken& token = debug.tokens[static_cast<size_t>(index)];
@@ -3926,7 +3934,10 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const float reticleRadius = reticle.lockHeld
         ? (27.0f + pulse * 3.0f + acquirePulse * 5.0f) * hudScale
         : 15.0f * hudScale;
-    addBracket(reticle.currentScreenPosition,reticleRadius,6.0f*hudScale,1.7f*hudScale,reticleLine);
+    const uint32_t entryBracketBegin=railLockOnHudAtlasVertexCount_;
+    addBracket(entryReticle,reticleRadius+(1.0f-titleEntry.reticleProgress)*9.0f*hudScale,
+        6.0f*hudScale,1.7f*hudScale,reticleLine);
+    const uint32_t entryBracketEnd=railLockOnHudAtlasVertexCount_;
     if(reticle.lockHeld) addCircleLine(reticle.currentScreenPosition,reticleRadius,1.1f*hudScale,reticleLine,32);
     const WeaponFeedbackSystem& feedbackSystem = railShooterCollisionSystem_.WeaponFeedback();
     if (feedbackSystem.HitMarkerActive()) {
@@ -4113,6 +4124,14 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
 
     RailShooterHudRenderInput hudRenderInput{};
+    if(titleEntry.blockingGameplay) {
+        for(uint32_t index=0;index<railLockOnHudAtlasVertexCount_;++index) {
+            const bool aiming=(index>=entryPipBegin && index<entryPipEnd) ||
+                (index>=entryBracketBegin && index<entryBracketEnd);
+            railLockOnHudAtlasMappedVertices_[index].color.w*=
+                aiming?titleEntry.reticleProgress:titleEntry.informationOpacity;
+        }
+    }
     hudRenderInput.definition = &railShooterHudDefinition_;
     hudRenderInput.presentation = &railShooterHudPresentation_.Frame();
     hudRenderInput.viewportWidth = hudWidth;
@@ -4123,10 +4142,35 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.titleOpacity = railTitleScene_.MenuOpacity();
     hudRenderInput.titleBlackout = railTitleScene_.Blackout();
     hudRenderInput.titleLogoAvailable = railTitleLogoReady_;
+    hudRenderInput.startupGaugeProgress=titleEntry.gaugeProgress;
+    hudRenderInput.startupInformationOpacity=titleEntry.informationOpacity;
+    const auto projectTransitionPoint=[&](Vector3 world,Vector2& screen) {
+        const auto& m=frameState_.viewProjectionMatrix.m;
+        const float w=world.x*m[0][3]+world.y*m[1][3]+world.z*m[2][3]+m[3][3];
+        if(!std::isfinite(w) || w<=0.1f) return false;
+        const Vector3 point=TransformCoord(world,frameState_.viewProjectionMatrix);
+        if(!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            point.z<0.0f || point.z>1.0f || std::abs(point.x)>2.0f || std::abs(point.y)>2.0f) return false;
+        screen={(point.x*0.5f+0.5f)*hudWidth,(0.5f-point.y*0.5f)*hudHeight};
+        return true;
+    };
+    Vector2 transitionFocus{0.5f,0.4f};
+    if((hudRenderInput.titleBlackout>0.0f && railTitleScreenVisible_) || titleEntry.blackout>0.0f) {
+        const auto& path=railTitleScreenVisible_?railTitleScene_.Path():railPath_;
+        const float distance=railTitleScreenVisible_?railTitleScene_.Distance():railShooterDistance_;
+        Vector2 projected;
+        if(projectTransitionPoint(path.Evaluate(distance+64.0f).position,projected))
+            transitionFocus={(std::clamp)(projected.x/hudWidth,0.25f,0.75f),
+                (std::clamp)(projected.y/hudHeight,0.22f,0.62f)};
+    }
+    hudRenderInput.titleTransitionFocus=transitionFocus;
     railShooterHudRenderer_.Update(hudRenderInput);
     const auto emitHudCommands = [&](const auto& commands) {
         for (const RailShooterHudDrawCommand& command : commands) {
-            if (command.kind == RailShooterHudDrawCommandKind::Rectangle) {
+            if (command.kind == RailShooterHudDrawCommandKind::TunnelTransition) {
+                // The final film-burn pass owns all scene transition masking.
+                continue;
+            } else if (command.kind == RailShooterHudDrawCommandKind::Rectangle) {
                 addQuad(
                     command.x,
                     command.y,
@@ -4165,6 +4209,26 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         // Suppress every gameplay overlay, including the reticle built above.
         railLockOnHudAtlasVertexCount_ = 0;
         emitHudCommands(railShooterHudRenderer_.Frame().commands);
+        const float reflection=railTitleScene_.RailReflectionOpacity();
+        if(reflection>0.0f) {
+            const float sweep=18.0f+railTitleScene_.Blackout()*28.0f;
+            const auto track=CourseRailTrackDefinitionAsset::MineCartDefaults();
+            const auto railPoint=[&](float offset,float side) {
+                const auto sample=railTitleScene_.Path().Evaluate(railTitleScene_.Distance()+offset);
+                return Vector3{sample.position.x+sample.right.x*side*track.trackGauge*0.5f,
+                    sample.position.y+track.railHeadVerticalOffset+track.railHeadHeight*0.5f,
+                    sample.position.z+sample.right.z*side*track.trackGauge*0.5f};
+            };
+            for(float side : {-1.0f,1.0f}) {
+                Vector2 from,to;
+                if(!projectTransitionPoint(railPoint(sweep,side),from) ||
+                    !projectTransitionPoint(railPoint(sweep+9.0f,side),to)) continue;
+                const float scale=float(hudHeight)/900.0f;
+                addLine(from,to,5.0f*scale,{0.82f,0.45f,0.19f,reflection*0.10f});
+                addLine(from,to,2.4f*scale,{1.0f,0.73f,0.39f,reflection*0.30f});
+                addLine(from,to,1.1f*scale,{1.0f,0.91f,0.69f,reflection});
+            }
+        }
         // Append world billboards after the UI range. They retain homogeneous
         // depth and are drawn separately into SceneColor with read-only depth.
         const Vector3 right=Normalize(Vector3{frameState_.viewMatrix.m[0][0],frameState_.viewMatrix.m[1][0],frameState_.viewMatrix.m[2][0]});
@@ -4317,7 +4381,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     emitHudCommands(railShooterHudRenderer_.Frame().commands);
 
     RailShooterDefensePromptRenderInput defensePromptInput{};
-    defensePromptInput.presentation = railDefenseUiProofEnabled_
+    defensePromptInput.presentation = railDefenseUiProofEnabled_ || titleEntry.blockingGameplay
         ? nullptr : &railEnemyAttackDefensePresentationBridge_.Frame();
     defensePromptInput.outcome =
         &railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
@@ -4326,10 +4390,6 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     defensePromptInput.settings = railShooterDefensePromptRendererSettings_;
     railShooterDefensePromptRenderer_.Update(defensePromptInput);
     emitHudCommands(railShooterDefensePromptRenderer_.Frame().commands);
-    if(railTitleGameplayFade_>0.0f) {
-        const float t=(std::clamp)(railTitleGameplayFade_/0.40f,0.0f,1.0f);
-        addQuad(0,0,float(hudWidth),float(hudHeight),uv(3.5f,115.5f,0,0),{0.015f,0.025f,0.035f,t*t*(3-2*t)});
-    }
 
     return railLockOnHudAtlasVertexCount_ > 0;
 }
@@ -6658,9 +6718,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     terrainCollisionWorld_.Update(railPath_, runtimeState_.terrain.settings,
         &railShooterCourse_.terrainEditLayer, &runtimeState_.terrain.previewEditLayer,
         railShooterDistance_);
+    bool titleHandoffThisFrame=false;
     if (railTitleScreenVisible_ && railTitleScene_.ReadyForGameplay()) {
         railTitleScreenVisible_ = false;
-        railTitleGameplayFade_ = 0.40f;
+        railTitleGameplayEntry_.Begin();
+        titleHandoffThisFrame=true;
         runtimeState_.terrain.enabled = railTitleSavedTerrainEnabled_;
         runtimeState_.directionalLightData = railTitleSavedLight_;
         runtimeState_.pointLightData = railTitleSavedPointLight_;
@@ -6671,8 +6733,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         for (const auto& pass : railTitleSavedPostProcess_)
             (void)vfxEngine_.PostProcess().ConfigurePass(pass);
         railTitleSavedPostProcess_.clear();
-        audio_.Stop(railTitleAmbience_);
-        railTitleAmbiencePlaying_ = false;
+        // Keep both rolling voices and their playheads through the blackout.
         for(uint32_t id:railTitleDustIds_) vfxEngine_.Runtime().StopEffect(id);
         railTitleDustIds_.clear();
         railShooterHasLastUpdateTime_ = false;
@@ -6740,15 +6801,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
         runtimeState_.clearColor[1]=titleColors.background.y;
         runtimeState_.clearColor[2]=titleColors.background.z;
         runtimeState_.clearColor[3]=1.0f;
-        const float targetGain = focused ? railTitleScene_.AmbienceGain()*0.34f : 0.0f;
-        railTitleAudioGain_ += (targetGain-railTitleAudioGain_)*(1.0f-std::exp(-8.0f*(std::clamp)(dt,0.0f,0.05f)));
-        if(focused && !railTitleAmbiencePlaying_ && railTitleAmbience_.IsValid())
-            railTitleAmbiencePlaying_ = audio_.PlaySpatial(railTitleAmbience_,0.0f,0.15f,1.0f,true);
-        audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*(1.0f-railTitleScene_.Blackout()),
-            1.0f);
-        if(!focused && railTitleAudioGain_<0.001f && railTitleAmbiencePlaying_) {
-            audio_.Stop(railTitleAmbience_); railTitleAmbiencePlaying_=false;
-        }
+        UpdateRailRollingAudio(dt,focused?railTitleScene_.RollingGain()*0.34f:0.0f,
+            railTitleScene_.TunnelShade());
         railTitleDustTimer_ += titleDt;
         // Creating a new effect resets the shared GPU particle pool. Let impact
         // billows evolve without repeatedly resetting them with wheel puffs.
@@ -6818,8 +6872,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     railShooterLastUpdateTime_ = updateStart;
     railShooterHasLastUpdateTime_ = true;
-    const bool titleEntryBlocked = railTitleGameplayFade_ > 0.0f;
-    railTitleGameplayFade_ = (std::max)(0.0f,railTitleGameplayFade_-realGameplayDeltaTime);
+    const bool titleEntryBlocked = railTitleGameplayEntry_.Frame().blockingGameplay;
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
     const bool coursePreviewOwnsRail = coursePreviewSimulationSystem_.IsActive();
     const bool coursePreviewAdvancing =
@@ -6831,6 +6884,18 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool coursePreviewFrozen =
         runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance ||
         coursePreviewOwnsRail;
+    const bool entryFocused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
+    railTitleGameplayEntry_.Update(!titleHandoffThisFrame && !coursePreviewFrozen && entryFocused?
+        realGameplayDeltaTime:0.0f);
+    const auto& entryFrame=railTitleGameplayEntry_.Frame();
+    if(entryFrame.reticleStarted) (void)audio_.Play(railTitleReticleBootSound_,0.16f);
+    if(entryFrame.gaugesStarted) (void)audio_.Play(railTitleGaugesBootSound_,0.14f);
+    if(titleEntryBlocked) {
+        // Held menu input cannot become a queued shot, pause or retry when the
+        // startup gate opens. Gamepad edges are consumed by the normal poll.
+        for(int key=0;key<256;++key) previousKeyDown_[key]=(GetAsyncKeyState(key)&0x8000)!=0;
+        previousLeftMouseDown_=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+    }
     const float sessionDeltaTime = (coursePreviewFrozen || titleEntryBlocked)
         ? 0.0f : realGameplayDeltaTime;
     float gameplayDeltaTime = sessionDeltaTime;
@@ -7231,7 +7296,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     vehicleRenderInput.actor = &railShooterVehicleActor_.Frame();
     vehicleRenderInput.cameraWorldPosition = frameState_.cameraWorldPosition;
     railShooterVehicleRenderer_.Update(vehicleRenderInput);
-    DispatchRailVehicleAudio(gameplayDeltaTime);
+    DispatchRailVehicleAudio(gameplayDeltaTime,realGameplayDeltaTime);
     if (railShooterVehiclePresentation_.Frame().jointImpactThisFrame) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.055f, 0.0f, 0.0015f);
     }
@@ -7391,7 +7456,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         fireSafetyInput.travelPredictionInput = &travelPredictionInput;
     fireSafetyInput.presentationSettings = &railEnemyCombatPresentationSettings_;
     fireSafetyInput.readability = &railEnemyEncounterReadabilityDirector_;
-    fireSafetyInput.cameraAllowsEnemyFire = previousCameraSafetyFrame.allowEnemyFire;
+    fireSafetyInput.cameraAllowsEnemyFire = !titleEntryBlocked && previousCameraSafetyFrame.allowEnemyFire;
     fireSafetyInput.cameraStableForAiming = previousCameraSafetyFrame.stableForAiming;
     fireSafetyInput.cameraHardTransition = previousCameraSafetyFrame.hardTransition;
     fireSafetyInput.playerDistance = railShooterDistance_;
@@ -7645,7 +7710,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     telegraphInput.viewportWidth = metrics.width;
     telegraphInput.viewportHeight = metrics.height;
     telegraphInput.settings = railEnemyAttackTelegraphSettings_;
-    telegraphInput.cameraAllowsAttack = directedCamera.allowEnemyFire &&
+    telegraphInput.cameraAllowsAttack = !titleEntryBlocked && directedCamera.allowEnemyFire &&
         directedCamera.stableForAiming && !directedCamera.hardTransition;
     railEnemyAttackTelegraphSystem_.Update(telegraphInput);
     EnemyAttackLaneTelegraphRenderInput laneTelegraphInput{};
@@ -7815,7 +7880,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     // gameplay actions in the same context.
     lockOnInput.keyboardDirectionalAimEnabled = false;
     lockOnInput.shiftLockEnabled = false;
-    if (!titleEntryBlocked) railShooterLockOnSystem_.Update(lockOnInput);
+    if (titleEntryBlocked) railShooterLockOnSystem_.PrepareReticleForGameplay(lockOnInput);
+    else railShooterLockOnSystem_.Update(lockOnInput);
     if (railShooterLockOnSystem_.DebugFrame().acceptedThisFrame > 0) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.075f, -0.0012f, 0.0007f);
     }
@@ -9583,7 +9649,26 @@ void AppRunLoop::StopRailEnemyAttackFeedback() {
     railEnemyAttackLaneTelegraphRenderer_.Reset(&vfxEngine_.Runtime());
 }
 
-void AppRunLoop::DispatchRailVehicleAudio(float deltaTime) {
+void AppRunLoop::UpdateRailRollingAudio(float deltaTime,float targetGain,float tunnelBlend) {
+    const float dt=std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,0.05f):0.0f;
+    targetGain=(std::clamp)(targetGain,0.0f,1.0f);
+    railTitleAudioGain_+=(targetGain-railTitleAudioGain_)*(1.0f-std::exp(-8.0f*dt));
+    // Start dry and reverberant copies together at zero gain. Their buffers
+    // have identical lengths, so crossfading never resets the rail rhythm.
+    if(targetGain>0.0f && !railTitleAmbiencePlaying_ && railTitleAmbience_.IsValid())
+        railTitleAmbiencePlaying_=audio_.PlaySpatial(railTitleAmbience_,0.0f,0.0f,1.0f,true);
+    if(targetGain>0.0f && !railTitleTunnelAmbiencePlaying_ && railTitleTunnelAmbience_.IsValid())
+        railTitleTunnelAmbiencePlaying_=audio_.PlaySpatial(railTitleTunnelAmbience_,0.0f,0.0f,1.0f,true);
+    const float wet=railTitleTunnelAmbiencePlaying_?(std::clamp)(tunnelBlend,0.0f,1.0f)*0.72f:0.0f;
+    audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*(1.0f-wet),1.0f);
+    audio_.SetPlayback(railTitleTunnelAmbience_,railTitleAudioGain_*wet,1.0f);
+    if(targetGain==0.0f && railTitleAudioGain_<0.001f) {
+        audio_.Stop(railTitleAmbience_);audio_.Stop(railTitleTunnelAmbience_);
+        railTitleAmbiencePlaying_=railTitleTunnelAmbiencePlaying_=false;
+    }
+}
+
+void AppRunLoop::DispatchRailVehicleAudio(float deltaTime,float realDeltaTime) {
     RailVehicleAudioInput input{};
     input.actor = &railShooterVehicleActor_.Frame();
     input.presentation = &railShooterVehiclePresentation_.Frame();
@@ -9595,11 +9680,21 @@ void AppRunLoop::DispatchRailVehicleAudio(float deltaTime) {
 
     const RailVehicleAudioFrame& audioFrame =
         railShooterVehicleAudioBridge_.Frame();
+    const auto& entry=railTitleGameplayEntry_.Frame();
+    const float movingGain=audioFrame.rolling?input.settings.masterVolume*
+        audioFrame.distanceAttenuation*(0.14f+input.presentation->speedNormalized*0.24f):0.0f;
+    const float targetGain=!input.settings.enabled?0.0f:entry.blockingGameplay?
+        0.34f+((std::max)(0.20f,movingGain)-0.34f)*entry.rollingHandoff:deltaTime>0.0f?movingGain:0.0f;
+    const bool focused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
+    UpdateRailRollingAudio(realDeltaTime,focused?targetGain:0.0f,
+        entry.blockingGameplay?1.0f-entry.rollingHandoff*0.85f:0.15f);
+    if(!focused || deltaTime<=0.0f) return;
     for (size_t index = 0; index < audioFrame.cueCount; ++index) {
         const RailVehicleAudioCue& cue = audioFrame.cues[index];
         audio::SoundHandle sound{};
         switch (cue.kind) {
         case RailVehicleAudioCueKind::RollingPulse:
+            if(railTitleAmbiencePlaying_) continue; // Continuous bed owns rolling.
             sound = railVehicleRollingSound_;
             break;
         case RailVehicleAudioCueKind::RailJointImpact:
@@ -10029,6 +10124,7 @@ void AppRunLoop::DispatchGameSessionPresentation(
         switch (cue.kind) {
         case GameSessionPresentationCueKind::SessionStarted:
         case GameSessionPresentationCueKind::IntroCompleted:
+            if(railTitleGameplayEntry_.Frame().blockingGameplay) continue;
         case GameSessionPresentationCueKind::Resumed:
         case GameSessionPresentationCueKind::Restart:
             sound = railSessionStartSound_;
@@ -10150,6 +10246,10 @@ void AppRunLoop::DispatchPlayerDamagePresentation() {
 }
 
 void AppRunLoop::StopGameSessionPresentation() {
+    railTitleGameplayEntry_.Reset();
+    audio_.Stop(railTitleAmbience_);audio_.Stop(railTitleTunnelAmbience_);
+    railTitleAmbiencePlaying_=railTitleTunnelAmbiencePlaying_=false;
+    railTitleAudioGain_=0.0f;
     if (railSessionVibrationController_ != UINT32_MAX) {
         (void)AppGamepadInput::SetVibration(
             railSessionVibrationController_, 0.0f, 0.0f);
@@ -12515,9 +12615,15 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.productionLightingPipeline = &imguiLayer_.ProductionLightingPipeline();
     graphContext.productionGpuDrivenPipeline = &imguiLayer_.ProductionGpuDrivenPipeline();
     graphContext.worldPartitionPipeline = &imguiLayer_.WorldPartitionPipeline();
+    graphContext.vfxRenderTargets = &vfxEngine_.RenderTargets();
+    graphContext.railFilmBurnProgress = railTitleScreenVisible_
+        ? railTitleScene_.Blackout() : railTitleGameplayEntry_.Frame().blackout;
+    graphContext.railFilmBurnInEditorViewport = imguiLayer_.WantsDeveloperDiagnostics();
     const auto registerPassesStart = RailPerfClock::now();
     const std::string railHudTargetResource =
-        imguiLayer_.WantsDeveloperDiagnostics()
+        graphContext.railFilmBurnProgress > 0.0f
+            ? std::string("RailFilmBurnScene")
+            : imguiLayer_.WantsDeveloperDiagnostics()
             ? (postExecutionPlan.finalOutputResource.empty()
                 ? std::string("SceneColor")
                 : postExecutionPlan.finalOutputResource)

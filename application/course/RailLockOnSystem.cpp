@@ -59,6 +59,24 @@ void RailLockOnSystem::Reset() {
     elapsedTime_ = 0.0f;
 }
 
+void RailLockOnSystem::PrepareReticleForGameplay(const RailLockOnFrameInput& input) {
+    reticle_.Reset();
+    RailReticleFrameInput neutral{};
+    neutral.deltaTime = 0.0f;
+    neutral.viewportWidth = input.viewportWidth;
+    neutral.viewportHeight = input.viewportHeight;
+    neutral.hasCursorPosition = true;
+    neutral.cursorPosition = {float(input.viewportWidth)*0.5f,float(input.viewportHeight)*0.5f};
+    neutral.hasLockHeldOverride = true;
+    neutral.keyboardDirectionalAimEnabled = false;
+    neutral.gameplayViewProjection = input.gameplayViewProjection;
+    neutral.gameplayCameraPosition = input.gameplayCameraPosition;
+    neutral.aimRayMaxDistance = input.aimRayMaxDistance;
+    neutral.settings = settings_;
+    reticle_.Update(neutral);
+    debugFrame_.reticle = reticle_.State();
+}
+
 void RailLockOnSystem::Update(const RailLockOnFrameInput& input) {
     elapsedTime_ += (std::max)(0.0f, input.deltaTime);
 

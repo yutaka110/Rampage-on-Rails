@@ -36,13 +36,42 @@ struct RailTitleSandGrain final {
     float opacity = 0.0f;
 };
 
+// Presentation clock shared by the reveal, HUD startup, sound crossfade and
+// input/simulation gate. It never changes playable distance or combat state.
+struct RailTitleGameplayEntryFrame final {
+    float blackout = 0.0f;
+    float reticleProgress = 1.0f;
+    float gaugeProgress = 1.0f;
+    float informationOpacity = 1.0f;
+    float rollingHandoff = 1.0f;
+    bool blockingGameplay = false;
+    bool reticleStarted = false;
+    bool gaugesStarted = false;
+};
+
+class RailTitleGameplayEntry final {
+public:
+    static constexpr float Duration = 1.42f;
+    static constexpr float RevealBegin = 0.08f;
+    static constexpr float RevealEnd = 1.10f;
+    void Reset();
+    void Begin();
+    void Update(float deltaTime);
+    const RailTitleGameplayEntryFrame& Frame() const { return frame_; }
+private:
+    double elapsed_ = 0.0;
+    bool begun_ = false;
+    RailTitleGameplayEntryFrame frame_{};
+};
+
 class RailTitleScene final {
 public:
     bool Initialize();
     void Update(float deltaTime);
     void BeginStart();
     bool Starting() const { return starting_; }
-    bool ReadyForGameplay() const { return starting_ && startTime_ >= StartDuration; }
+    bool ReadyForGameplay() const { return starting_ && startTime_ >= StartDuration &&
+        StartProgress() >= 1.0f && Blackout() >= 0.999f; }
     float TunnelCameraDepth() const;
     float TunnelShade() const;
     float CurrentSpeed() const { return Speed; }
@@ -51,6 +80,8 @@ public:
     float MenuOpacity() const;
     float Blackout() const;
     float AmbienceGain() const;
+    float RollingGain() const;
+    float RailReflectionOpacity() const;
     RailTitleColors Colors(Vector4 gameplaySunColor) const;
     float Age() const { return age_; }
     const RailPath& Path() const { return path_; }
@@ -74,7 +105,8 @@ public:
     float LapLength() const { return lapLength_; }
     static constexpr float Speed = 12.0f;
     static constexpr float OrbitDuration = 1.0f;
-    static constexpr float StartDuration = 2.55f;
+    static constexpr float StartDuration = 3.25f;
+    static constexpr float FilmBurnDuration = 1.05f;
     static constexpr float TunnelLead = 18.0f;
     // Shared 1600 x 900 layout coordinates, including letterboxing.
     static int HitTest(float x, float y, float width, float height);

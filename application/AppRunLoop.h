@@ -284,7 +284,8 @@ private:
     void DispatchThreatResponse();
     void DispatchEnemyAttackDefenseOutcomeFeedback();
     void StopGameSessionPresentation();
-    void DispatchRailVehicleAudio(float deltaTime);
+    void DispatchRailVehicleAudio(float deltaTime, float realDeltaTime);
+    void UpdateRailRollingAudio(float deltaTime, float targetGain, float tunnelBlend);
     void DispatchRailTrackFeedback();
     void DispatchRailVehicleEvasionFeedback();
     void DispatchRailVehicleCollisionFeedback();
@@ -805,7 +806,7 @@ private:
     bool previousCourseEditorLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
     bool railTitleScreenVisible_ = false;
-    float railTitleGameplayFade_ = 0.0f;
+    RailTitleGameplayEntry railTitleGameplayEntry_{};
     DirectionalLight railTitleSavedLight_{};
     PointLight railTitleSavedPointLight_{};
     SpotLight railTitleSavedSpotLight_{};
@@ -814,7 +815,11 @@ private:
     bool railTitleSavedBackdrop_ = false;
     std::vector<PostProcessPass> railTitleSavedPostProcess_;
     audio::SoundHandle railTitleAmbience_{};
+    audio::SoundHandle railTitleTunnelAmbience_{};
+    audio::SoundHandle railTitleReticleBootSound_{};
+    audio::SoundHandle railTitleGaugesBootSound_{};
     bool railTitleAmbiencePlaying_ = false;
+    bool railTitleTunnelAmbiencePlaying_ = false;
     float railTitleAudioGain_ = 0.0f;
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;

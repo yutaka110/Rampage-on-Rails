@@ -385,8 +385,9 @@ float RailTitleScene::MenuOpacity() const {
 }
 float RailTitleScene::Blackout() const {
     // Wait until the chase camera has crossed the mouth, not just the cart.
-    const float t=(std::clamp)((TunnelCameraDepth()-2.0f)/2.5f,0.0f,1.0f);
-    return t*t*(3.0f-2.0f*t);
+    // Give the burn enough screen time to show its discoloration and warp.
+    // The film shader owns the sinusoidal easing, so this clock is linear.
+    return (std::clamp)(TunnelCameraDepth()/(Speed*FilmBurnDuration),0.0f,1.0f);
 }
 float RailTitleScene::TunnelCameraDepth() const {
     return starting_ ? static_cast<float>(travel_-startTravel_)-TunnelLead-ChaseDistance() : -TunnelLead;
@@ -399,4 +400,52 @@ float RailTitleScene::TunnelShade() const {
 float RailTitleScene::AmbienceGain() const {
     const float t=(std::clamp)(age_/0.8f,0.0f,1.0f);
     return t*t*(3.0f-2.0f*t)*(1.0f-Blackout());
+}
+float RailTitleScene::RollingGain() const {
+    const float t=(std::clamp)(age_/0.8f,0.0f,1.0f);
+    // Mechanical motion survives the blackout; the same voice plays in-game.
+    return t*t*(3.0f-2.0f*t);
+}
+
+float RailTitleScene::RailReflectionOpacity() const {
+    if(!starting_) return 0.0f;
+    const float p=Blackout();
+    const auto smooth=[](float t) {t=(std::clamp)(t,0.0f,1.0f);return t*t*(3.0f-2.0f*t);};
+    // Only a brief metallic glint remains near the end of the closing shadow.
+    return 0.68f*smooth((p-0.52f)/0.16f)*(1.0f-smooth((p-0.76f)/0.22f));
+}
+
+void RailTitleGameplayEntry::Reset() {
+    elapsed_=0.0;
+    begun_=false;
+    frame_={};
+}
+void RailTitleGameplayEntry::Begin() {
+    if(begun_) return;
+    begun_=true;
+    elapsed_=0.0;
+    frame_={};
+    frame_.blackout=1.0f;
+    frame_.reticleProgress=frame_.gaugeProgress=frame_.informationOpacity=frame_.rollingHandoff=0.0f;
+    frame_.blockingGameplay=true;
+}
+void RailTitleGameplayEntry::Update(float deltaTime) {
+    frame_.reticleStarted=frame_.gaugesStarted=false;
+    if(!begun_ || !frame_.blockingGameplay) return;
+    const double previous=elapsed_;
+    if(std::isfinite(deltaTime)) elapsed_=(std::min)(double(Duration),
+        elapsed_+double((std::clamp)(deltaTime,0.0f,0.05f)));
+    const auto ramp=[&](double from,double to) {
+        const float t=static_cast<float>((std::clamp)((elapsed_-from)/(to-from),0.0,1.0));
+        return t*t*(3.0f-2.0f*t);
+    };
+    frame_.blackout=1.0f-static_cast<float>((std::clamp)(
+        (elapsed_-RevealBegin)/double(RevealEnd-RevealBegin),0.0,1.0));
+    frame_.reticleProgress=ramp(0.76,1.10);
+    frame_.gaugeProgress=ramp(0.96,1.26);
+    frame_.informationOpacity=ramp(1.16,double(Duration));
+    frame_.rollingHandoff=ramp(0.12,double(Duration));
+    frame_.reticleStarted=previous<0.76 && elapsed_>=0.76;
+    frame_.gaugesStarted=previous<0.96 && elapsed_>=0.96;
+    frame_.blockingGameplay=elapsed_<double(Duration);
 }
