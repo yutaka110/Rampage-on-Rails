@@ -63,6 +63,8 @@ struct AppFrameGraphBuildContext {
     float beamTime = 0.0f;
     // Presentation-only; zero keeps the normal render path allocation-free.
     float railFilmBurnProgress = 0.0f;
+    // Incoming reveal uses a quieter optical treatment than outgoing blackout.
+    float railFilmBurnTreatmentStrength = 1.0f;
     // Burn the viewport texture, leaving editor controls outside the effect.
     bool railFilmBurnInEditorViewport = false;
     TerrainChunkManager* terrainChunkManager = nullptr;

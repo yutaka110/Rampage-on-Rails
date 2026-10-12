@@ -420,7 +420,8 @@ void AppPostProcessPipeline::RegisterFilmBurnPresentationPass(const AppFrameGrap
         std::move(accesses), "",
         [ctx, editorViewport, output](ge3::graphics::RenderPassContext& passContext) {
             const float params[kPostProcessParamCount] = {
-                0, 0, 0, 1, ctx.railFilmBurnProgress, 1
+                0, 0, 0, 1, ctx.railFilmBurnProgress, 1,
+                ctx.railFilmBurnTreatmentStrength, 0
             };
             if (editorViewport) {
                 // All SRVs point to the capture, so SceneColor can safely be

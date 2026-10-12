@@ -11,13 +11,29 @@ cbuffer Camera : register(b2)
     float4 titleHaze;
     float4 titleWheelContacts[4];
     float4 titleLightSweep; // sheet offset/intensity, rail glint distance/intensity
+    float4 titleRailImpact; // fixed world contact and transient radiance
+}
+
+static float TitleCaveExposure()
+{
+    return titleSubject.w>0.5f ? lerp(1.0f,0.42f,saturate(titleForward.w)) : 1.0f;
+}
+static float3 TitleImpactDirection(float3 worldPosition)
+{
+    float3 delta=titleRailImpact.xyz+float3(0,0.30f,0)-worldPosition;
+    return delta/max(length(delta),0.001f);
+}
+static float3 TitleImpactRadiance(float3 worldPosition)
+{
+    float3 delta=titleRailImpact.xyz-worldPosition;
+    return float3(5.0f,2.4f,0.72f)*titleRailImpact.w/(1.0f+dot(delta,delta)*0.22f);
 }
 
 static float3 TitleSweepDirection()
 {
     float3 forward = normalize(titleForward.xyz);
     float3 right = float3(forward.z,0,-forward.x);
-    return normalize(right*0.65f-forward*0.35f+float3(0,0.8f,0));
+    return normalize(-right*0.65f-forward*0.35f+float3(0,0.8f,0));
 }
 static float TitleSweepAmount(float3 worldPosition)
 {

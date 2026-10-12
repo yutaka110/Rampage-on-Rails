@@ -32505,9 +32505,21 @@ void TestRailTitleGroundFire(RegressionRunner& runner) {
         for(size_t n=0;n<frozen.size();++n) paused &= title.Shots()[n].age==frozen[n].age;
         runner.Expect(paused,"Unfocused title must neither advance shots nor replay attack cues");
         title.BeginStart();
-        for(int i=0;i<fps*3;++i) title.Update(1.0f/fps);
-        runner.Expect(title.ShotSequence()==sequence && title.Shots().empty() && title.AttackCues().empty() && title.DustClouds().empty(),
-            "Start transition must stop new firing and finish/clear all presentation shots before handoff");
+        bool departureClearance=true;
+        for(int i=0;i<fps*3;++i) {
+            title.Update(1.0f/fps);
+            const auto cart=title.Path().Evaluate(title.Distance());
+            for(const auto& shot:title.Shots()) if(shot.railStrike) {
+                const Vector3 delta{shot.position.x-cart.position.x,shot.position.y-cart.position.y,shot.position.z-cart.position.z};
+                const float forward=delta.x*cart.tangent.x+delta.z*cart.tangent.z;
+                const float lateral=std::abs(delta.x*cart.right.x+delta.z*cart.right.z);
+                if(std::abs(forward)<3.55f+RailTitleScene::DepartureShotRadius)
+                    departureClearance &= lateral>2.4f+RailTitleScene::DepartureShotRadius;
+            }
+        }
+        runner.Expect(departureClearance,"Starting later in the title loop must still keep the cinematic shot clear of the cart");
+        runner.Expect(title.ShotSequence()==sequence+1 && title.Shots().empty() && title.AttackCues().empty() && title.DustClouds().empty(),
+            "Start transition must replace idle fire with one rail strike and clear all presentation shots before handoff");
         title.Initialize();
         runner.Expect(title.ShotSequence()==0 && title.Shots().empty() && title.AttackCues().empty(),
             "Title reinitialization must clear the attack loop");
@@ -32797,6 +32809,7 @@ void TestTitleImportedSurfaceAudit(RegressionRunner& runner) {
 }
 
 void TestRailTitleCinematic(RegressionRunner& runner) {
+    Vector3 referenceOrigin{},referenceTarget{};
     for(int fps : {30,60,120}) {
         RailTitleScene title;
         runner.Expect(title.Initialize(),"Cinematic title should initialize");
@@ -32812,6 +32825,11 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         float peakSweep=0,previousSweepOffset=-8.0f;
         int sweepFrames=0,sweepPeakFrame=0,reflectionPeakFrame=0;
         bool orderedSweep=true,localizedSweep=true;
+        int departureMuzzles=0,nearMisses=0,railHits=0;
+        bool fixedRailContact=true,shotClearance=true,impactDriven=true,visibleRailContact=true;
+        bool sawDepartureShot=false;
+        Vector3 fixedTarget{};
+        float closestSide=100.0f;
         const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
         const auto defaultLight=RailTitleColors{}.light;
         const float lightLuma=luminance({defaultLight.x,defaultLight.y,defaultLight.z});
@@ -32839,6 +32857,69 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             continuous &= std::isfinite(step) && step<60.0f/fps && clearance>=7.9f && eye.y-center.y>=4.5f;
             steadyApproach &= std::abs(title.CurrentSpeed()-12.0f)<0.001f && std::abs(title.CameraFov()-0.70f)<0.001f;
             const float elapsed=float(frames+1)/fps;
+            for(const auto& cue:title.AttackCues()) {
+                if(cue.kind==RailTitleAttackCueKind::Muzzle) ++departureMuzzles;
+                if(cue.kind==RailTitleAttackCueKind::NearMiss) {
+                    ++nearMisses;
+                    impactDriven &= elapsed<RailTitleScene::DepartureImpactTime+0.04f;
+                }
+                if(cue.kind==RailTitleAttackCueKind::RailImpact) ++railHits;
+            }
+            for(const auto& shot:title.Shots()) if(shot.railStrike) {
+                if(!sawDepartureShot) {
+                    sawDepartureShot=true; fixedTarget=shot.target;
+                    if(fps==30) {referenceOrigin=shot.origin;referenceTarget=shot.target;}
+                    else runner.Expect(std::abs(shot.origin.x-referenceOrigin.x)<0.001f &&
+                        std::abs(shot.origin.z-referenceOrigin.z)<0.001f &&
+                        std::abs(shot.target.x-referenceTarget.x)<0.001f &&
+                        std::abs(shot.target.z-referenceTarget.z)<0.001f,
+                        "Departure firing pose and rail target must be identical at different frame rates");
+                }
+                fixedRailContact &= shot.target.x==fixedTarget.x && shot.target.z==fixedTarget.z;
+                // Sample the entire straight flight, including between rendered
+                // frames, against the moving cart's expanded body footprint.
+                for(int step=0;step<=240;++step) {
+                    const float t=float(step)/240;
+                    const float when=RailTitleScene::DepartureShotTime+shot.duration*t;
+                    const auto cart=title.Path().Evaluate(title.Distance()+RailTitleScene::Speed*(when-elapsed));
+                    const Vector3 point{shot.origin.x+(shot.target.x-shot.origin.x)*t,
+                        shot.origin.y+(shot.target.y-shot.origin.y)*t,shot.origin.z+(shot.target.z-shot.origin.z)*t};
+                    const Vector3 delta{point.x-cart.position.x,point.y-cart.position.y,point.z-cart.position.z};
+                    const float forward=delta.x*cart.tangent.x+delta.z*cart.tangent.z;
+                    const float side=std::abs(delta.x*cart.right.x+delta.z*cart.right.z);
+                    if(std::abs(forward)<3.55f+RailTitleScene::DepartureShotRadius) {
+                        closestSide=(std::min)(closestSide,side);
+                        shotClearance &= side>2.4f+RailTitleScene::DepartureShotRadius;
+                    }
+                }
+            }
+            const auto& hit=title.RailImpact();
+            if(hit.active) {
+                fixedRailContact &= hit.position.x==fixedTarget.x && hit.position.z==fixedTarget.z &&
+                    std::abs(hit.position.y-0.112f)<0.001f;
+                if(hit.age<0.12f) {
+                    const auto cameraForward=Normalize(Vector3{title.CameraTarget().x-eye.x,
+                        title.CameraTarget().y-eye.y,title.CameraTarget().z-eye.z});
+                    const auto cameraRight=Normalize(Vector3{cameraForward.z,0,-cameraForward.x});
+                    const Vector3 cameraUp{cameraForward.y*cameraRight.z-cameraForward.z*cameraRight.y,
+                        cameraForward.z*cameraRight.x-cameraForward.x*cameraRight.z,
+                        cameraForward.x*cameraRight.y-cameraForward.y*cameraRight.x};
+                    const auto projectedY=[&](Vector3 point) {
+                        const Vector3 delta{point.x-eye.x,point.y-eye.y,point.z-eye.z};
+                        const float depth=delta.x*cameraForward.x+delta.y*cameraForward.y+delta.z*cameraForward.z;
+                        return (delta.x*cameraUp.x+delta.y*cameraUp.y+delta.z*cameraUp.z)/
+                            (depth*std::tan(title.CameraFov()*0.5f));
+                    };
+                    const auto& world=title.Vehicle().worldMatrix.m;
+                    const Vector3 frontLip{1.48f*world[1][0]+3.26f*world[2][0]+world[3][0],
+                        1.48f*world[1][1]+3.26f*world[2][1]+world[3][1],
+                        1.48f*world[1][2]+3.26f*world[2][2]+world[3][2]};
+                    const float hitY=projectedY(hit.position);
+                    visibleRailContact &= hitY>projectedY(frontLip)+0.025f && hitY>-0.8f && hitY<0.8f;
+                }
+            } else if(elapsed<RailTitleScene::DepartureImpactTime) {
+                impactDriven &= title.LightSweep().y==0 && title.RailReflectionOpacity()==0 && title.RailImpactLight()==0;
+            }
             if(elapsed>RailTitleScene::OrbitDuration+1.0f/fps) {
                 const auto forward=title.Path().Evaluate(title.Distance()).tangent;
                 const float cameraAdvance=(eye.x-previous.x)*forward.x+(eye.z-previous.z)*forward.z;
@@ -32885,9 +32966,13 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             "Cinematic must remain outside the cart and switch worlds under full blackout while continuous rolling survives");
         runner.Expect(peakReflection>0.25f && title.RailReflectionOpacity()==0 && reflectionFrames>=int(fps*0.20f),
             "The pre-burn rail glint must remain readable and extinguish before the world switch");
-        runner.Expect(orderedSweep && localizedSweep && peakSweep>0.95f && sweepFrames>=int(fps*0.45f) &&
+        runner.Expect(orderedSweep && localizedSweep && peakSweep>0.95f && sweepFrames>=int(fps*0.32f) &&
             sweepPeakFrame<reflectionPeakFrame && title.LightSweep().y==0,
             "Localized light must cross after the orbit, peak before the rail reflection, pause cleanly and extinguish before blackout");
+        runner.Expect(departureMuzzles==1 && nearMisses==1 && railHits==1 && sawDepartureShot &&
+            fixedRailContact && shotClearance && closestSide<5.2f && impactDriven,
+            "One departure shot must narrowly clear the moving cart, hit a fixed rail head once and then trigger its reflection");
+        runner.Expect(visibleRailContact,"Rail contact must project above the moving cart front lip during the initial spark burst");
         runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
             title.Scenery().terrainPlacements.size()==idlePlacementCount+1,
             "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
@@ -32913,6 +32998,20 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         runner.Expect(title.Colors(courseSun).transition==0.0f,
             "Reinitializing the title must clear the color transition");
     }
+    bool immediateSparks=true,ballisticSparks=true,expiredSparks=true;
+    for(uint32_t index=0;index<22;++index) {
+        RailTitleRailImpact hit{{0,0.112f,0},0,7,true};
+        const auto birth=RailTitleScene::EvaluateRailSpark(hit,index);
+        hit.age=0.10f; const auto rising=RailTitleScene::EvaluateRailSpark(hit,index);
+        hit.age=0.20f; const auto later=RailTitleScene::EvaluateRailSpark(hit,index);
+        immediateSparks &= birth.opacity>0.9f && rising.opacity>0.6f && birth.radius>=0.045f;
+        ballisticSparks &= rising.position.y>hit.position.y+0.35f &&
+            std::abs((later.velocity.y-rising.velocity.y)+0.98f)<0.001f;
+        hit.age=0.50f;
+        expiredSparks &= RailTitleScene::EvaluateRailSpark(hit,index).opacity==0;
+    }
+    runner.Expect(immediateSparks && ballisticSparks && expiredSparks,
+        "Metal sparks must leave the visible rail contact immediately, rise under gravity and fade within half a second");
     EffectAssetLoader loader;
     LoadedEffectAsset dust;
     runner.Expect(loader.LoadFile("Resources/effects/TitleWheelDust.effect",dust) &&

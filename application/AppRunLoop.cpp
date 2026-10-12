@@ -4331,27 +4331,22 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,0},color); dustVertex(b,{uvBase+1,0},color); dustVertex(c,{uvBase,1},color);
             dustVertex(c,{uvBase,1},color); dustVertex(b,{uvBase+1,0},color); dustVertex(d,{uvBase+1,1},color);
         };
-        const auto sweepLight=railTitleScene_.LightSweep();
-        if(sweepLight.y>0.0f) {
-            const auto sample=railTitleScene_.Path().Evaluate(railTitleScene_.Distance());
-            const Vector3 beamAxis=Normalize(Add(Scale(sample.right,0.80f),sample.up));
-            const Vector3 beamCenter=Add(sample.position,Add(Scale(sample.right,sweepLight.x+2.8f),Scale(sample.up,3.5f)));
-            const Vector3 beamSide=NormalizeOr(Cross(beamAxis,Add(railTitleScene_.CameraPosition(),Scale(beamCenter,-1))),right);
-            glowQuad(beamCenter,Scale(beamAxis,4.5f),Scale(beamSide,0.75f),12.0f,
-                {1.0f,0.65f,0.26f,0.12f*sweepLight.y});
-            // Fixed sparse motes reveal the light sheet without spawning or
-            // changing the density of the existing impact dust.
-            for(int i=0;i<18;++i) {
-                const float phase=float(i)*2.399963f;
-                const float lane=4.5f*std::sin(phase)+0.16f*std::sin(railTitleScene_.Age()*0.9f+phase);
-                const float height=0.65f+float((i*7)%13)*0.31f;
-                const float depth=-2.0f+float((i*11)%17)*0.6f;
-                const Vector3 point=Add(sample.position,Add(Scale(sample.tangent,depth),
-                    Add(Scale(sample.right,lane),Scale(sample.up,height))));
-                const float amount=railTitleScene_.LightSweepIllumination(point);
-                if(amount<=0.015f) continue;
-                const float radius=0.025f+0.007f*float(i%3);
-                glowQuad(point,Scale(right,radius),Scale(up,radius),2.0f,{1.5f,1.0f,0.42f,amount*0.75f});
+        const auto& railImpact=railTitleScene_.RailImpact();
+        if(railImpact.active && railImpact.age<0.50f) {
+            const float age=railImpact.age;
+            const float flash=std::exp(-age*12.0f)*(std::max)(0.0f,1.0f-age/0.20f);
+            glowQuad(Add(railImpact.position,{0,0.12f,0}),Scale(right,0.95f),Scale(up,0.70f),2.0f,
+                {2.2f,1.55f,0.70f,flash*1.6f});
+            for(uint32_t spark=0;spark<22;++spark) {
+                const auto grain=RailTitleScene::EvaluateRailSpark(railImpact,spark);
+                if(grain.opacity<=0.001f) continue;
+                const auto direction=NormalizeOr(grain.velocity,up);
+                const auto side=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(grain.position,-1)),right)),right);
+                const float length=0.30f+0.06f*float(spark%5);
+                const float brightness=grain.opacity*std::exp(-age*2.0f)*titleAlpha;
+                glowQuad(Add(grain.position,Scale(direction,-length*0.5f)),Scale(direction,length*0.5f),
+                    Scale(side,grain.radius),8.0f,
+                    {2.0f,1.35f-1.6f*age,0.40f*std::exp(-age*5.0f),brightness*1.8f});
             }
         }
         for(const auto& cloud:railTitleScene_.DustClouds()) {
@@ -4398,7 +4393,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(c,{1,0},trailColor); dustVertex(b,{0,1},trailColor); dustVertex(d,{1,1},trailColor);
             // The 1.8 m circular head provides a clear aiming target even near
             // the distant drone. Keep the shorter, dimmer trail directional.
-            const auto h=Scale(right,0.90f),v=Scale(up,0.90f);
+            const float headRadius=shot.railStrike ? RailTitleScene::DepartureShotRadius : 0.90f;
+            const auto h=Scale(right,headRadius),v=Scale(up,headRadius);
             const auto ha=Add(shot.position,Add(Scale(h,-1),v)),hb=Add(shot.position,Add(h,v));
             const auto hc=Add(shot.position,Add(Scale(h,-1),Scale(v,-1))),hd=Add(shot.position,Add(h,Scale(v,-1)));
             dustVertex(ha,{4,0},color); dustVertex(hb,{5,0},color); dustVertex(hc,{4,1},color);
@@ -6852,6 +6848,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         // Sand clouds and tracers are deterministic, depth-tested world draws.
         // Only the brief muzzle flash uses the shared GPU particle pool.
         for(const auto& cue:railTitleScene_.AttackCues()) {
+            if(focused && cue.kind==RailTitleAttackCueKind::NearMiss)
+                (void)audio_.Play(railEnemyProjectileFlyBySound_,0.16f);
+            if(focused && cue.kind==RailTitleAttackCueKind::RailImpact)
+                (void)audio_.Play(railVehicleCollisionSound_,0.20f);
             if(cue.kind!=RailTitleAttackCueKind::Muzzle) continue;
             const uint32_t id=vfxEngine_.Runtime().PlayEffectWithParams(
                 "title_drone_muzzle",cue.position,{1,1,1,1},{1,1,1});
@@ -6877,6 +6877,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
             camera.titleHaze = {titleColors.background.x,titleColors.background.y,titleColors.background.z,1.0f};
             const auto sweep=railTitleScene_.LightSweep();
             camera.titleLightSweep = {sweep.x,sweep.y,railTitleScene_.RailReflectionDistance(),railTitleScene_.RailReflectionOpacity()};
+            const auto& impact=railTitleScene_.RailImpact();
+            camera.titleRailImpact = {impact.position.x,impact.position.y,impact.position.z,railTitleScene_.RailImpactLight()};
             for (size_t i=0;i<camera.titleWheelContacts.size();++i) {
                 const auto& wheel = railTitleScene_.Wheels().wheels[i];
                 camera.titleWheelContacts[i] = {wheel.railContact.x,wheel.railContact.y,wheel.railContact.z,wheel.visible?1.0f:0.0f};
@@ -12653,6 +12655,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.vfxRenderTargets = &vfxEngine_.RenderTargets();
     graphContext.railFilmBurnProgress = railTitleScreenVisible_
         ? railTitleScene_.Blackout() : railTitleGameplayEntry_.Frame().blackout;
+    graphContext.railFilmBurnTreatmentStrength = railTitleScreenVisible_ ? 1.0f : 0.55f;
     graphContext.railFilmBurnInEditorViewport = imguiLayer_.WantsDeveloperDiagnostics();
     const auto registerPassesStart = RailPerfClock::now();
     const std::string railHudTargetResource =

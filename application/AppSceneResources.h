@@ -160,8 +160,9 @@ struct CameraForGPU {
     Vector4 titleHaze{};
     std::array<Vector4, 4> titleWheelContacts{};
     Vector4 titleLightSweep{};
+    Vector4 titleRailImpact{};
 };
-static_assert(sizeof(CameraForGPU) == 144);
+static_assert(sizeof(CameraForGPU) == 160);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};
