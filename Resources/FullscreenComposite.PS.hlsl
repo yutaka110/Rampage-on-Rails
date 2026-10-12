@@ -22,10 +22,11 @@ float FilmBurnNoise(float2 noisePosition) {
 }
 
 void EvaluateRailFilmBurn(float2 screenUv, float progress,
-                         out float2 sceneUv, out float3 tint, out float visibility) {
+                         out float2 sceneUv, out float3 tint, out float visibility, out float3 burnLight) {
     sceneUv = screenUv;
     tint = 1.0f;
     visibility = 1.0f;
+    burnLight = 0.0f;
     if (progress <= 0.0f) return;
     if (progress >= 1.0f) {
         visibility = 0.0f;
@@ -56,7 +57,21 @@ void EvaluateRailFilmBurn(float2 screenUv, float progress,
     float distortion = smoothstep(threshold - 0.30f, threshold + 0.05f, boundary);
     float originalColor = smoothstep(threshold - 0.20f, threshold + 0.15f, boundary);
     originalColor = originalColor * originalColor * originalColor;
-    tint = lerp(float3(0.8f, 0.4f, 0.2f), 1.0f, originalColor);
+    tint = lerp(float3(0.52f, 0.23f, 0.13f), 1.0f, originalColor);
+    // Broad, uneven red-brown/amber exposure bleeds into the surviving image.
+    // Avoid an equally bright contour along the entire mask: only sparse
+    // hot patches retain a faint pale core. All light shares the blackout mask.
+    float edgeDistance=boundary-threshold;
+    float exposurePatch=FilmBurnNoise(uv*float2(4.3f,3.2f)+float2(7.1f,19.4f));
+    float bleedWidth=lerp(0.075f,0.14f,exposurePatch);
+    float redBleed=exp(-pow((edgeDistance+0.008f)/bleedWidth,2.0f));
+    float amberBleed=exp(-pow((edgeDistance-0.042f)/(bleedWidth*0.72f),2.0f));
+    float unevenExposure=lerp(0.65f,1.0f,exposurePatch);
+    float hotPatch=smoothstep(0.68f,0.88f,exposurePatch);
+    float core=exp(-pow((edgeDistance+0.018f)/0.006f,2.0f))*hotPatch*0.12f;
+    burnLight=(float3(0.42f,0.075f,0.025f)*redBleed+
+        float3(0.46f,0.22f,0.065f)*amberBleed)*unevenExposure+
+        float3(1.0f,0.78f,0.48f)*core;
     float zoom = lerp(0.7f, 1.0f, distortion * distortion);
     float2 warped = uv * zoom;
     sceneUv = float2(warped.x, 1.0f - warped.y);
@@ -90,10 +105,11 @@ float4 main(PSInput input) : SV_TARGET
         float2 sceneUv;
         float3 tint;
         float visibility;
-        EvaluateRailFilmBurn(uv, gAux4, sceneUv, tint, visibility);
+        float3 burnLight;
+        EvaluateRailFilmBurn(uv, gAux4, sceneUv, tint, visibility, burnLight);
         if (visibility <= 0.0f) return float4(0, 0, 0, 1);
         float3 presentation = gPostColor.Sample(gSampler, sceneUv).rgb;
-        return float4(presentation * tint * visibility, 1.0f);
+        return float4((presentation * tint + burnLight) * visibility, 1.0f);
     }
     float4 scene = gSceneColor.Sample(gSampler, uv);
     float4 vfx = gVfxAccumulation.Sample(gSampler, uv);

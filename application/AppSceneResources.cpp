@@ -3760,6 +3760,7 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
 
     mappedCamera->worldPosition = worldPosition;
     mappedCamera->titleSubject.w = 0.0f;
+    mappedCamera->titleLightSweep = {};
 }
 
 SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {

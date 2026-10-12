@@ -40,6 +40,7 @@ struct RailTitleSandGrain final {
 // input/simulation gate. It never changes playable distance or combat state.
 struct RailTitleGameplayEntryFrame final {
     float blackout = 0.0f;
+    float cameraHandoffWeight = 0.0f;
     float reticleProgress = 1.0f;
     float gaugeProgress = 1.0f;
     float informationOpacity = 1.0f;
@@ -82,6 +83,10 @@ public:
     float AmbienceGain() const;
     float RollingGain() const;
     float RailReflectionOpacity() const;
+    float RailReflectionDistance() const;
+    Vector2 LightSweep() const;
+    float LightSweepIllumination(Vector3 worldPosition) const;
+    static CourseCameraKey DepartureCameraRig();
     RailTitleColors Colors(Vector4 gameplaySunColor) const;
     float Age() const { return age_; }
     const RailPath& Path() const { return path_; }
@@ -107,6 +112,9 @@ public:
     static constexpr float OrbitDuration = 1.0f;
     static constexpr float StartDuration = 3.25f;
     static constexpr float FilmBurnDuration = 1.05f;
+    static constexpr float ReflectionDuration = 0.36f;
+    static constexpr float LightSweepLead = 0.86f;
+    static constexpr float LightSweepEndLead = 0.22f;
     static constexpr float TunnelLead = 18.0f;
     // Shared 1600 x 900 layout coordinates, including letterboxing.
     static int HitTest(float x, float y, float width, float height);

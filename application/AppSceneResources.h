@@ -159,8 +159,9 @@ struct CameraForGPU {
     Vector4 titleForward{};
     Vector4 titleHaze{};
     std::array<Vector4, 4> titleWheelContacts{};
+    Vector4 titleLightSweep{};
 };
-static_assert(sizeof(CameraForGPU) == 128);
+static_assert(sizeof(CameraForGPU) == 144);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};

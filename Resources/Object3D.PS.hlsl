@@ -268,7 +268,11 @@ PixelShaderOutput main(VertexShaderOutput input)
         float3 reflected = gEnvironmentTexture.SampleLevel(gSampler,reflect(-V,N),rough*4.0f).rgb;
         paint += surfaceBase*sky*0.42f*(1.0f-metal) + f0*(sky*0.24f+reflected*0.16f);
         if(!wheel) paint *= max(gMaterial.pad_,0.0001f);
-        if (titleSubject.w > 0.5f) paint = TitleAtmosphere(paint,input.worldPosition);
+        if (titleSubject.w > 0.5f) {
+            paint += DroneDirect(surfaceBase,metal,rough,N,V,TitleSweepDirection(),
+                float3(5.0f,3.15f,1.2f)*TitleSweepAmount(input.worldPosition));
+            paint = TitleAtmosphere(paint,input.worldPosition);
+        }
         output.color = float4(paint,baseA);
         return output;
     }
@@ -292,6 +296,10 @@ PixelShaderOutput main(VertexShaderOutput input)
                 gMaterial.specularMode == 12 ? 1 : gMaterial.specularMode);
             lit += gDirectionalLight.color.rgb*(rim*0.10f+specular*0.10f)*(1.0f-contactShadow);
         }
+        float sweep=TitleSweepAmount(input.worldPosition);
+        lit += baseRgb*float3(1.8f,1.15f,0.46f)*sweep*saturate(dot(N,TitleSweepDirection()));
+        if(gMaterial.specularMode==12)
+            lit += float3(2.0f,1.38f,0.50f)*TitleRailGlint(input.worldPosition,N);
         output.color = float4(TitleAtmosphere(lit,input.worldPosition),baseA);
         return output;
     }

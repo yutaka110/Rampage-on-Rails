@@ -10,6 +10,35 @@ cbuffer Camera : register(b2)
     float4 titleForward;
     float4 titleHaze;
     float4 titleWheelContacts[4];
+    float4 titleLightSweep; // sheet offset/intensity, rail glint distance/intensity
+}
+
+static float3 TitleSweepDirection()
+{
+    float3 forward = normalize(titleForward.xyz);
+    float3 right = float3(forward.z,0,-forward.x);
+    return normalize(right*0.65f-forward*0.35f+float3(0,0.8f,0));
+}
+static float TitleSweepAmount(float3 worldPosition)
+{
+    if(titleSubject.w<0.5f || titleLightSweep.y<=0.0f) return 0.0f;
+    float3 forward=normalize(titleForward.xyz);
+    float3 right=float3(forward.z,0,-forward.x);
+    float3 delta=worldPosition-titleSubject.xyz;
+    float along=dot(delta,forward);
+    float sheet=(dot(delta,right)+0.28f*along-0.80f*delta.y-titleLightSweep.x)/1.4f;
+    return titleLightSweep.y*exp(-sheet*sheet)*exp(-along*along/200.0f);
+}
+static float TitleRailGlint(float3 worldPosition,float3 normal)
+{
+    if(titleLightSweep.w<=0.0f) return 0.0f;
+    float3 forward=normalize(titleForward.xyz);
+    float3 right=float3(forward.z,0,-forward.x);
+    float3 delta=worldPosition-titleSubject.xyz;
+    float lane=abs(dot(delta,right));
+    float head=1.0f-smoothstep(0.10f,0.17f,abs(lane-1.9f));
+    float along=(dot(delta,forward)-titleLightSweep.z-2.0f)/2.5f;
+    return head*smoothstep(0.55f,0.95f,normal.y)*exp(-along*along)*titleLightSweep.w;
 }
 
 // Diffuse fill follows the opening course hue without changing its luminance.

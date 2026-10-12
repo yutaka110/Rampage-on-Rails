@@ -32800,6 +32800,8 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
     for(int fps : {30,60,120}) {
         RailTitleScene title;
         runner.Expect(title.Initialize(),"Cinematic title should initialize");
+        runner.Expect(title.LightSweep().y==0 && title.LightSweepIllumination({0,0,0})==0,
+            "The decorative light must remain off while the title menu is idle");
         const size_t idlePlacementCount=title.Scenery().terrainPlacements.size();
         title.Update(0.02f);
         const Vector3 initial=title.CameraPosition();
@@ -32807,6 +32809,9 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         runner.Expect(title.Starting() && title.StartProgress()==0 && title.Blackout()==0,
             "Starting must not teleport the camera or flash the screen");
         float previousFade=0,previousMenu=1,peakReflection=0;
+        float peakSweep=0,previousSweepOffset=-8.0f;
+        int sweepFrames=0,sweepPeakFrame=0,reflectionPeakFrame=0;
+        bool orderedSweep=true,localizedSweep=true;
         const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
         const auto defaultLight=RailTitleColors{}.light;
         const float lightLuma=luminance({defaultLight.x,defaultLight.y,defaultLight.z});
@@ -32821,7 +32826,8 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         Vector3 previous=initial;
         bool continuous=true;
         bool steadyApproach=true;
-        int readableBurnFrames=0;
+        int readableBurnFrames=0,reflectionFrames=0;
+        float previousReflectionDistance=45.0f;
         int frames=0;
         while(!title.ReadyForGameplay() && frames<int(fps*(RailTitleScene::StartDuration+1.0f))) {
             title.Update(1.0f/fps);
@@ -32842,7 +32848,28 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             continuous &= title.Blackout()>=previousFade && title.MenuOpacity()<=previousMenu;
             if(title.Blackout()>0.15f && title.Blackout()<0.85f) ++readableBurnFrames;
             continuous &= title.TunnelCameraDepth()>0.0f || title.Blackout()==0.0f;
+            const auto sweep=title.LightSweep();
+            if(sweep.y>0.01f) {
+                orderedSweep &= elapsed>RailTitleScene::OrbitDuration && title.Blackout()==0 && sweep.x>previousSweepOffset;
+                previousSweepOffset=sweep.x;
+                ++sweepFrames;
+                const auto sample=title.Path().Evaluate(title.Distance());
+                const Vector3 litPoint{center.x+sample.right.x*sweep.x,center.y,center.z+sample.right.z*sweep.x};
+                const Vector3 remotePoint{litPoint.x+sample.tangent.x*80,litPoint.y,litPoint.z+sample.tangent.z*80};
+                localizedSweep &= title.LightSweepIllumination(litPoint)>sweep.y*0.99f &&
+                    title.LightSweepIllumination(remotePoint)<0.001f;
+                title.Update(0);
+                orderedSweep &= title.LightSweep().x==sweep.x && title.LightSweep().y==sweep.y;
+            }
+            if(sweep.y>peakSweep) {peakSweep=sweep.y;sweepPeakFrame=frames;}
+            if(title.RailReflectionOpacity()>peakReflection) reflectionPeakFrame=frames;
             peakReflection=(std::max)(peakReflection,title.RailReflectionOpacity());
+            if(title.RailReflectionOpacity()>0.01f) {
+                runner.Expect(title.Blackout()==0 && title.RailReflectionDistance()<previousReflectionDistance,
+                    "Rail glint must travel toward the cart before the film burn can hide it");
+                previousReflectionDistance=title.RailReflectionDistance();
+                ++reflectionFrames;
+            }
             const auto colors=title.Colors(courseSun);
             colorContinuous &= colors.transition>=previousColors.transition &&
                 std::abs(luminance({colors.light.x,colors.light.y,colors.light.z})-lightLuma)<0.0001f &&
@@ -32856,8 +32883,11 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         }
         runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f && title.RollingGain()>0.999f,
             "Cinematic must remain outside the cart and switch worlds under full blackout while continuous rolling survives");
-        runner.Expect(peakReflection>0.25f && title.RailReflectionOpacity()==0,
-            "A brief rail reflection must be visible during closing and extinguished before the world switch");
+        runner.Expect(peakReflection>0.25f && title.RailReflectionOpacity()==0 && reflectionFrames>=int(fps*0.20f),
+            "The pre-burn rail glint must remain readable and extinguish before the world switch");
+        runner.Expect(orderedSweep && localizedSweep && peakSweep>0.95f && sweepFrames>=int(fps*0.45f) &&
+            sweepPeakFrame<reflectionPeakFrame && title.LightSweep().y==0,
+            "Localized light must cross after the orbit, peak before the rail reflection, pause cleanly and extinguish before blackout");
         runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
             title.Scenery().terrainPlacements.size()==idlePlacementCount+1,
             "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
@@ -32869,6 +32899,14 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             std::abs(title.CameraFov()-0.70f)<0.001f &&
             std::abs(title.TunnelCameraDepth()-13.0f)<0.01f,
             "The steady approach must reach the same inside-cave position at all frame rates");
+        const auto departureRig=RailTitleScene::DepartureCameraRig();
+        const auto departureSample=title.Path().Evaluate(title.Distance());
+        const auto offset=Vector3{title.CameraPosition().x-departureSample.position.x,
+            title.CameraPosition().y-departureSample.position.y,title.CameraPosition().z-departureSample.position.z};
+        const float back=-(offset.x*departureSample.tangent.x+offset.y*departureSample.tangent.y+offset.z*departureSample.tangent.z);
+        runner.Expect(std::abs(back-departureRig.backDistance)<0.001f &&
+            std::abs(offset.y-departureRig.verticalOffset)<0.001f && title.CameraFov()==departureRig.fovY,
+            "Outgoing title geometry must agree with the shared incoming camera rig");
         runner.Expect(colorContinuous && previousColors.transition==1.0f,
             "Title hue must reach its transition endpoint without dimming the light or background or stepping between frames");
         title.Initialize();
@@ -33001,6 +33039,9 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
 }
 
 void TestRailTitleGameplayEntry(RegressionRunner& runner) {
+    const auto separation=[](Vector3 a,Vector3 b) {
+        return std::sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y)+(a.z-b.z)*(a.z-b.z));
+    };
     for(int fps : {30,60,120}) {
         RailTitleGameplayEntry entry;
         runner.Expect(!entry.Frame().blockingGameplay && entry.Frame().informationOpacity==1,
@@ -33016,6 +33057,24 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
         entry.Reset(); entry.Begin();
         int reticleCues=0,gaugeCues=0,frames=0,readableRevealFrames=0;
         bool ordered=true,monotonic=true;
+        CourseAsset course;
+        course.railPoints={{{0,0,0}},{{180,0,240}}}; // Non-axis-aligned rail checks basis transfer.
+        CourseCameraKey authored;
+        authored.backDistance=28; authored.verticalOffset=12; authored.lookAheadDistance=30; authored.fovY=0.94f;
+        course.cameraKeys.push_back(authored);
+        RailPath rail; rail.SetControlPoints(course.railPoints);
+        RailCameraDirector director,normalDirector;
+        RailCameraDirectorFrameInput camera;
+        camera.course=&course; camera.railPath=&rail; camera.distance=100;
+        camera.deltaTime=1.0f/fps; camera.titleHandoffWeight=1;
+        camera.titleHandoffRig=RailTitleScene::DepartureCameraRig();
+        auto previousCamera=director.Evaluate(camera);
+        const auto sample=rail.Evaluate(camera.distance);
+        const Vector3 departingEye{sample.position.x-8*sample.tangent.x+5.2f*sample.up.x,
+            sample.position.y-8*sample.tangent.y+5.2f*sample.up.y,
+            sample.position.z-8*sample.tangent.z+5.2f*sample.up.z};
+        runner.Expect(separation(previousCamera.position,departingEye)<0.001f && std::abs(previousCamera.fovY-0.70f)<0.001f,
+            "Incoming camera must inherit the departing cart distance, height and FOV in the new rail basis");
         auto previous=entry.Frame();
         while(entry.Frame().blockingGameplay && frames<fps*2) {
             entry.Update(1.0f/fps);
@@ -33024,18 +33083,26 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             gaugeCues+=current.gaugesStarted?1:0;
             if(current.blackout>0.15f && current.blackout<0.85f) ++readableRevealFrames;
             monotonic &= current.blackout<=previous.blackout &&
+                current.cameraHandoffWeight<=previous.cameraHandoffWeight &&
                 current.reticleProgress>=previous.reticleProgress &&
                 current.gaugeProgress>=previous.gaugeProgress &&
                 current.informationOpacity>=previous.informationOpacity &&
                 current.rollingHandoff>=previous.rollingHandoff;
             ordered &= current.reticleProgress>=current.gaugeProgress &&
                 current.gaugeProgress>=current.informationOpacity;
+            camera.titleHandoffWeight=current.cameraHandoffWeight;
+            const auto actualCamera=director.Evaluate(camera);
+            runner.Expect(separation(actualCamera.position,previousCamera.position)<65.0f/fps &&
+                std::abs(actualCamera.fovY-previousCamera.fovY)<0.70f/fps,
+                "The reveal camera must pull back smoothly without a position or FOV cut");
+            previousCamera=actualCamera;
             if(frames==fps/3) {
                 entry.Begin();
                 entry.Update(-1.0f);
                 entry.Update((std::numeric_limits<float>::quiet_NaN)());
                 for(int paused=0;paused<20;++paused) entry.Update(0.0f);
                 runner.Expect(entry.Frame().blackout==current.blackout &&
+                    entry.Frame().cameraHandoffWeight==current.cameraHandoffWeight &&
                     entry.Frame().reticleProgress==current.reticleProgress &&
                     entry.Frame().rollingHandoff==current.rollingHandoff &&
                     !entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
@@ -33052,6 +33119,11 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             "Camera reveal, reticle, gauges and information must finish in order with one cue each at every frame rate");
         runner.Expect(readableRevealFrames>=int(fps*0.65f),
             "The incoming burn must be readable instead of revealing the scene in only a few frames");
+        camera.titleHandoffWeight=0;
+        const auto normal=normalDirector.Evaluate(camera);
+        runner.Expect(entry.Frame().cameraHandoffWeight==0 && separation(previousCamera.position,normal.position)<0.001f &&
+            separation(previousCamera.target,normal.target)<0.001f && std::abs(previousCamera.fovY-normal.fovY)<0.001f,
+            "Input unlock must restore the exact authored gameplay composition without a handoff pose lingering");
         entry.Update(0.05f);
         runner.Expect(!entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
             "Ready gameplay must never replay startup cues");

@@ -4209,26 +4209,6 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         // Suppress every gameplay overlay, including the reticle built above.
         railLockOnHudAtlasVertexCount_ = 0;
         emitHudCommands(railShooterHudRenderer_.Frame().commands);
-        const float reflection=railTitleScene_.RailReflectionOpacity();
-        if(reflection>0.0f) {
-            const float sweep=18.0f+railTitleScene_.Blackout()*28.0f;
-            const auto track=CourseRailTrackDefinitionAsset::MineCartDefaults();
-            const auto railPoint=[&](float offset,float side) {
-                const auto sample=railTitleScene_.Path().Evaluate(railTitleScene_.Distance()+offset);
-                return Vector3{sample.position.x+sample.right.x*side*track.trackGauge*0.5f,
-                    sample.position.y+track.railHeadVerticalOffset+track.railHeadHeight*0.5f,
-                    sample.position.z+sample.right.z*side*track.trackGauge*0.5f};
-            };
-            for(float side : {-1.0f,1.0f}) {
-                Vector2 from,to;
-                if(!projectTransitionPoint(railPoint(sweep,side),from) ||
-                    !projectTransitionPoint(railPoint(sweep+9.0f,side),to)) continue;
-                const float scale=float(hudHeight)/900.0f;
-                addLine(from,to,5.0f*scale,{0.82f,0.45f,0.19f,reflection*0.10f});
-                addLine(from,to,2.4f*scale,{1.0f,0.73f,0.39f,reflection*0.30f});
-                addLine(from,to,1.1f*scale,{1.0f,0.91f,0.69f,reflection});
-            }
-        }
         // Append world billboards after the UI range. They retain homogeneous
         // depth and are drawn separately into SceneColor with read-only depth.
         const Vector3 right=Normalize(Vector3{frameState_.viewMatrix.m[0][0],frameState_.viewMatrix.m[1][0],frameState_.viewMatrix.m[2][0]});
@@ -4309,6 +4289,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 const float light=3.2f*puff.impactLight/
                     (1.0f+2.2f*(offset.x*offset.x+offset.z*offset.z)+3.5f*offset.y*offset.y);
                 color.x+=light; color.y+=light*0.30f; color.z+=light*0.045f;
+                const float sweepLight=railTitleScene_.LightSweepIllumination(corner);
+                color.x+=sweepLight*1.4f; color.y+=sweepLight*0.95f; color.z+=sweepLight*0.38f;
                 return color;
             };
             dustVertex(a,{puff.seed,0},litColor(a)); dustVertex(b,{puff.seed+1,0},litColor(b)); dustVertex(c,{puff.seed,1},litColor(c));
@@ -4317,6 +4299,31 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         // Camera-facing world ribbons aligned to flight, with a tip and tapered tail.
         // Keep their suffix separate so the glow uses additive rather than smoke blending.
         const uint32_t dustCount=railTitleDustVertexCount_;
+        const float reflection=railTitleScene_.RailReflectionOpacity();
+        if(reflection>0.0f) {
+            const float sweep=railTitleScene_.RailReflectionDistance();
+            const auto track=CourseRailTrackDefinitionAsset::MineCartDefaults();
+            // Actual rail-head strips: perspective/depth hide them behind the
+            // cart and rock, unlike the old constant-width HUD lines.
+            const auto railPoint=[&](float offset,float lateral) {
+                const auto sample=railTitleScene_.Path().Evaluate(railTitleScene_.Distance()+offset);
+                return Add(sample.position,Add(Scale(sample.right,lateral),
+                    Scale(sample.up,track.railHeadVerticalOffset+track.railHeadHeight*0.5f+0.012f)));
+            };
+            constexpr int segments=12;
+            for(float side : {-1.0f,1.0f}) for(int segment=0;segment<segments;++segment) {
+                const float u0=float(segment)/segments,u1=float(segment+1)/segments;
+                const float lane=side*track.trackGauge*0.5f;
+                const float halfWidth=track.railHeadWidth*0.48f;
+                const auto a=railPoint(sweep+6.0f*u0,lane-halfWidth);
+                const auto b=railPoint(sweep+6.0f*u0,lane+halfWidth);
+                const auto c=railPoint(sweep+6.0f*u1,lane-halfWidth);
+                const auto d=railPoint(sweep+6.0f*u1,lane+halfWidth);
+                const Vector4 color{1.65f,0.92f,0.34f,reflection};
+                dustVertex(a,{10+u0,0},color); dustVertex(b,{10+u0,1},color); dustVertex(c,{10+u1,0},color);
+                dustVertex(c,{10+u1,0},color); dustVertex(b,{10+u0,1},color); dustVertex(d,{10+u1,1},color);
+            }
+        }
         const auto glowQuad=[&](Vector3 center,Vector3 h,Vector3 v,float uvBase,Vector4 color) {
             if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+6>kMaxAtlasVertices) return;
             const auto a=Add(center,Add(Scale(h,-1),v)),b=Add(center,Add(h,v));
@@ -4324,6 +4331,29 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,0},color); dustVertex(b,{uvBase+1,0},color); dustVertex(c,{uvBase,1},color);
             dustVertex(c,{uvBase,1},color); dustVertex(b,{uvBase+1,0},color); dustVertex(d,{uvBase+1,1},color);
         };
+        const auto sweepLight=railTitleScene_.LightSweep();
+        if(sweepLight.y>0.0f) {
+            const auto sample=railTitleScene_.Path().Evaluate(railTitleScene_.Distance());
+            const Vector3 beamAxis=Normalize(Add(Scale(sample.right,0.80f),sample.up));
+            const Vector3 beamCenter=Add(sample.position,Add(Scale(sample.right,sweepLight.x+2.8f),Scale(sample.up,3.5f)));
+            const Vector3 beamSide=NormalizeOr(Cross(beamAxis,Add(railTitleScene_.CameraPosition(),Scale(beamCenter,-1))),right);
+            glowQuad(beamCenter,Scale(beamAxis,4.5f),Scale(beamSide,0.75f),12.0f,
+                {1.0f,0.65f,0.26f,0.12f*sweepLight.y});
+            // Fixed sparse motes reveal the light sheet without spawning or
+            // changing the density of the existing impact dust.
+            for(int i=0;i<18;++i) {
+                const float phase=float(i)*2.399963f;
+                const float lane=4.5f*std::sin(phase)+0.16f*std::sin(railTitleScene_.Age()*0.9f+phase);
+                const float height=0.65f+float((i*7)%13)*0.31f;
+                const float depth=-2.0f+float((i*11)%17)*0.6f;
+                const Vector3 point=Add(sample.position,Add(Scale(sample.tangent,depth),
+                    Add(Scale(sample.right,lane),Scale(sample.up,height))));
+                const float amount=railTitleScene_.LightSweepIllumination(point);
+                if(amount<=0.015f) continue;
+                const float radius=0.025f+0.007f*float(i%3);
+                glowQuad(point,Scale(right,radius),Scale(up,radius),2.0f,{1.5f,1.0f,0.42f,amount*0.75f});
+            }
+        }
         for(const auto& cloud:railTitleScene_.DustClouds()) {
             const float age=cloud.age;
             if(age>=0.36f) continue;
@@ -6845,6 +6875,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
             camera.titleSubject = {titleSample.position.x,titleSample.position.y,titleSample.position.z,1.0f};
             camera.titleForward = {titleSample.tangent.x,titleSample.tangent.y,titleSample.tangent.z,railTitleScene_.TunnelShade()};
             camera.titleHaze = {titleColors.background.x,titleColors.background.y,titleColors.background.z,1.0f};
+            const auto sweep=railTitleScene_.LightSweep();
+            camera.titleLightSweep = {sweep.x,sweep.y,railTitleScene_.RailReflectionDistance(),railTitleScene_.RailReflectionOpacity()};
             for (size_t i=0;i<camera.titleWheelContacts.size();++i) {
                 const auto& wheel = railTitleScene_.Wheels().wheels[i];
                 camera.titleWheelContacts[i] = {wheel.railContact.x,wheel.railContact.y,wheel.railContact.z,wheel.visible?1.0f:0.0f};
@@ -7573,8 +7605,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.railPath = &railPath_;
     cameraInput.section = railShooterCourseRuntime_.CurrentSection();
     cameraInput.distance = railShooterDistance_;
+    cameraInput.titleHandoffWeight = entryFrame.cameraHandoffWeight;
+    cameraInput.titleHandoffRig = RailTitleScene::DepartureCameraRig();
     cameraInput.deltaTime = coursePreviewAdvancing
-        ? kFallbackGameplayDeltaTime : gameplayDeltaTime;
+        ? kFallbackGameplayDeltaTime : entryFrame.blockingGameplay
+            ? (!coursePreviewFrozen && entryFocused ? realGameplayDeltaTime : 0.0f) : gameplayDeltaTime;
     cameraInput.railSpeed = coursePreviewSimulationSystem_.IsActive()
         ? coursePreviewAdvancing
             ? coursePreviewSimulationSystem_.Frame().currentSpeed

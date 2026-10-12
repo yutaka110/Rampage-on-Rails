@@ -148,14 +148,16 @@ void RailTitleScene::Update(float deltaTime) {
         // Orbit outside the cart rather than interpolating through its body.
         const float angle = 0.8567f + (Pi-0.8567f)*blend;
         // Settle into a close, fixed chase shot without a speed-dependent zoom.
-        const float radius = 19.8494f + (ChaseDistance()-19.8494f)*blend;
+        const auto departureRig=DepartureCameraRig();
+        const float radius = 19.8494f + (departureRig.backDistance-19.8494f)*blend;
         cameraPosition_ = Add(sample.position,Add(Scale(sample.tangent,std::cos(angle)*radius),
             Scale(sample.right,std::sin(angle)*radius)));
-        cameraPosition_.y += 8.0f+(5.2f-8.0f)*blend;
+        cameraPosition_.y += 8.0f+(departureRig.verticalOffset-8.0f)*blend;
         // Keep the distant cave centered along the straight departure rail.
         const float remaining=TunnelLead-static_cast<float>(travel_-startTravel_);
-        const float lookAhead=(std::clamp)(remaining,14.0f,38.0f);
-        const Vector3 chaseTarget = Add(path_.Evaluate(state_.distance+lookAhead).position,Vector3{0,2.0f,0});
+        const float lookAhead=(std::clamp)(remaining,departureRig.lookAheadDistance,38.0f);
+        const Vector3 chaseTarget = Add(path_.Evaluate(state_.distance+lookAhead).position,
+            Vector3{0,departureRig.lookUpOffset,0});
         cameraTarget_ = Add(Scale(cameraTarget_,1-blend),Scale(chaseTarget,blend));
     }
     renderer_.Update({&actor_.Frame(),cameraPosition_});
@@ -407,12 +409,50 @@ float RailTitleScene::RollingGain() const {
     return t*t*(3.0f-2.0f*t);
 }
 
+Vector2 RailTitleScene::LightSweep() const {
+    if(!starting_) return {};
+    const float p=(TunnelCameraDepth()/Speed+LightSweepLead)/(LightSweepLead-LightSweepEndLead);
+    if(p<=0.0f || p>=1.0f) return {};
+    const float pulse=std::sin(Pi*p);
+    return {-8.0f+16.0f*p,pulse*pulse};
+}
+float RailTitleScene::LightSweepIllumination(Vector3 worldPosition) const {
+    const auto sweep=LightSweep();
+    if(sweep.y<=0.0f) return 0.0f;
+    const auto sample=path_.Evaluate(state_.distance);
+    const auto delta=Add(worldPosition,Scale(sample.position,-1));
+    const auto dot=[](Vector3 a,Vector3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; };
+    const float along=dot(delta,sample.tangent);
+    const float across=dot(delta,sample.right);
+    const float height=dot(delta,sample.up);
+    const float sheet=(across+0.28f*along-0.80f*height-sweep.x)/1.4f;
+    return sweep.y*std::exp(-sheet*sheet)*std::exp(-along*along/200.0f);
+}
 float RailTitleScene::RailReflectionOpacity() const {
     if(!starting_) return 0.0f;
-    const float p=Blackout();
-    const auto smooth=[](float t) {t=(std::clamp)(t,0.0f,1.0f);return t*t*(3.0f-2.0f*t);};
-    // Only a brief metallic glint remains near the end of the closing shadow.
-    return 0.68f*smooth((p-0.52f)/0.16f)*(1.0f-smooth((p-0.76f)/0.22f));
+    const float p=(TunnelCameraDepth()/Speed+ReflectionDuration)/ReflectionDuration;
+    if(p<=0.0f || p>=1.0f) return 0.0f;
+    // The reflection precedes the burn, so it is not hidden by its mask.
+    const float pulse=std::sin(Pi*p);
+    return 1.15f*pulse*pulse;
+}
+float RailTitleScene::RailReflectionDistance() const {
+    const float p=(std::clamp)((TunnelCameraDepth()/Speed+ReflectionDuration)/ReflectionDuration,0.0f,1.0f);
+    // Keep the glint inside the readable foreground corridor. The older
+    // distant sweep disappeared into the dark end of the title tunnel.
+    return 22.0f-20.0f*p;
+}
+CourseCameraKey RailTitleScene::DepartureCameraRig() {
+    CourseCameraKey rig{};
+    rig.backDistance=8.0f;
+    rig.verticalOffset=5.2f;
+    rig.lateralOffset=0.0f;
+    rig.lookAheadDistance=14.0f;
+    rig.lookUpOffset=2.0f;
+    rig.lookForwardOffset=0.0f;
+    rig.fovY=0.70f;
+    rig.roll=0.0f;
+    return rig;
 }
 
 void RailTitleGameplayEntry::Reset() {
@@ -426,6 +466,7 @@ void RailTitleGameplayEntry::Begin() {
     elapsed_=0.0;
     frame_={};
     frame_.blackout=1.0f;
+    frame_.cameraHandoffWeight=1.0f;
     frame_.reticleProgress=frame_.gaugeProgress=frame_.informationOpacity=frame_.rollingHandoff=0.0f;
     frame_.blockingGameplay=true;
 }
@@ -441,6 +482,9 @@ void RailTitleGameplayEntry::Update(float deltaTime) {
     };
     frame_.blackout=1.0f-static_cast<float>((std::clamp)(
         (elapsed_-RevealBegin)/double(RevealEnd-RevealBegin),0.0,1.0));
+    // Hold the departing composition until the cart begins to emerge, then
+    // pull back to the authored gameplay rig before combat/input unlocks.
+    frame_.cameraHandoffWeight=1.0f-ramp(0.68,double(Duration));
     frame_.reticleProgress=ramp(0.76,1.10);
     frame_.gaugeProgress=ramp(0.96,1.26);
     frame_.informationOpacity=ramp(1.16,double(Duration));

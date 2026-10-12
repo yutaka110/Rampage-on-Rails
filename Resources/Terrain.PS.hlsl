@@ -1189,6 +1189,8 @@ PixelShaderOutput main(VertexShaderOutput input)
             float recess = saturate(input.texcoord.x)*smoothstep(0.0f,38.0f,max(0.0f,1.0f-input.texcoord.y));
             lit *= lerp(1.0f,0.16f,recess);
         } else {
+            lit += rockColor*float3(1.8f,1.15f,0.46f)*TitleSweepAmount(input.worldPosition)*
+                saturate(dot(normal,TitleSweepDirection()));
             lit = TitleAtmosphere(lit,input.worldPosition);
         }
     }
