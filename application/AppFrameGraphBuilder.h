@@ -76,7 +76,12 @@ struct AppFrameGraphBuildContext {
     float railSandTransitionAge = 0.0f;
     bool railFilmBurnIncoming = false;
     bool HasRailFilmBurnPresentation() const {
-        return railFilmBurnProgress > 0.0f || railFilmBurnLensStrength > 0.0f || railCollapseDustStrength > 0.0f;
+        // LateCollapseRocks keeps a short, bounded tail after incoming coverage
+        // reaches zero. Keep its capture/presentation path alive until it exits.
+        const bool rockTail = railSandTransition &&
+            railSandTransitionAge >= 0.85f && railSandTransitionAge < 2.95f;
+        return railFilmBurnProgress > 0.0f || railFilmBurnLensStrength > 0.0f ||
+            railCollapseDustStrength > 0.0f || rockTail;
     }
     // Burn the viewport texture, leaving editor controls outside the effect.
     bool railFilmBurnInEditorViewport = false;

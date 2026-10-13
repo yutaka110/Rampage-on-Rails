@@ -7002,6 +7002,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
         !railShooterGameSession_.AllowsGameplaySimulation()) {
         gameplayDeltaTime = 0.0f;
     }
+    const float railTravelDeltaTime=titleEntryBlocked && !coursePreviewOwnsRail
+        ? entryFrame.travelDeltaTime : gameplayDeltaTime;
     railWeaponHotReloadPollTimer_ += realGameplayDeltaTime;
     if (drone_perf::Enabled()) drone_perf::frame.simulationDeltaTime = gameplayDeltaTime;
     if (railWeaponHotReloadPollTimer_ >= 0.25f &&
@@ -7050,6 +7052,17 @@ void AppRunLoop::UpdateRailShooterFrame() {
 
     if (!railShooterInitialized_) {
         EnterRailShooterScene();
+    }
+    if(titleHandoffThisFrame) {
+        // Scene initialization must finish before carrying the title's speed
+        // into the new rail basis. Preserve health and the course event cursor.
+        auto departingVehicle=railShooterVehicleMovement_.State();
+        departingVehicle.speed=(std::min)(railTitleScene_.CurrentSpeed(),
+            railShooterVehicleMovement_.Definition().maximumSpeed);
+        departingVehicle.requestedSpeed=departingVehicle.speed;
+        departingVehicle.acceleration=0.0f;
+        departingVehicle.stopped=false;
+        (void)railShooterVehicleMovement_.RestoreState(departingVehicle,&railPath_);
     }
     ProcessPostProcessShowcaseShortcuts();
     if (railPath_.Length() <= 0.0f) {
@@ -7150,7 +7163,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     speedInput.section = railShooterCourseRuntime_.CurrentSection();
     speedInput.rideProfile = railShooterCourse_.FindRideProfile(speedInput.distance);
     speedInput.distance = railShooterCourseRuntime_.Distance();
-    speedInput.deltaTime = gameplayDeltaTime;
+    speedInput.deltaTime = railTravelDeltaTime;
     const RailSpeedDirectorFrame speedFrame = railShooterSpeedDirector_.Evaluate(speedInput);
     RailRideDirectorInput rideInput{};
     rideInput.course = &railShooterCourse_;
@@ -7166,9 +7179,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const RailRideMotionEnvelopeFrame& motionEnvelope =
         railShooterRideMotionEnvelope_.Evaluate(envelopeInput);
     RailVehicleMovementInput vehicleInput{};
-    vehicleInput.deltaTime = gameplayDeltaTime;
-    vehicleInput.requestedSpeed = motionEnvelope.requestedSpeed;
-    vehicleInput.movementEnabled = gameplayDeltaTime > 0.0f;
+    vehicleInput.deltaTime = railTravelDeltaTime;
+    vehicleInput.requestedSpeed = titleEntryBlocked
+        ? RailTitleScene::Speed+(motionEnvelope.requestedSpeed-RailTitleScene::Speed)*entryFrame.rollingHandoff
+        : motionEnvelope.requestedSpeed;
+    vehicleInput.movementEnabled = railTravelDeltaTime > 0.0f;
     vehicleInput.motionEnvelopeActive = motionEnvelope.active;
     vehicleInput.accelerationLimit = motionEnvelope.accelerationLimit;
     vehicleInput.brakingLimit = motionEnvelope.brakingLimit;
@@ -7184,9 +7199,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     trackFeedbackInput.speed = vehicleFrame.state.speed;
     trackFeedbackInput.maximumSpeed =
         railShooterVehicleMovement_.Definition().maximumSpeed;
-    trackFeedbackInput.deltaTime = gameplayDeltaTime;
+    trackFeedbackInput.deltaTime = railTravelDeltaTime;
     trackFeedbackInput.gameplayActive =
-        !coursePreviewOwnsRail && gameplayDeltaTime > 0.0f;
+        !coursePreviewOwnsRail && railTravelDeltaTime > 0.0f;
     trackFeedbackInput.settings = railShooterTrackFeedbackSettings_;
     const RailTrackFeedbackFrame& trackFeedbackFrame =
         railShooterTrackFeedbackDirector_.Update(trackFeedbackInput);
@@ -7198,7 +7213,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     trackContactInput.settings = railShooterTrackContactPoseSettings_;
     const RailVehicleTrackContactPoseFrame& trackContactFrame =
         railShooterTrackContactPose_.Solve(trackContactInput);
-    std::vector<CourseEventMarker> triggeredEvents = vehicleFrame.triggeredEvents;
+    std::vector<CourseEventMarker> triggeredEvents = railTitleGameplayEntry_.DispatchCourseEvents(
+        vehicleFrame.triggeredEvents,!titleEntryBlocked && gameplayDeltaTime>0.0f);
     railShooterDistance_ = vehicleFrame.state.distance;
 
     RailVehicleMountedEvasionInput mountedEvasionInput{};
@@ -7317,7 +7333,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     rideDynamicsInput.state = &railShooterVehicleMovement_.State();
     rideDynamicsInput.ride = &rideFrame;
     rideDynamicsInput.trackFeedback = &trackFeedbackFrame;
-    rideDynamicsInput.deltaTime = gameplayDeltaTime;
+    rideDynamicsInput.deltaTime = railTravelDeltaTime;
     rideDynamicsInput.settings = railShooterVehicleRideDynamicsSettings_;
     const RailVehicleRideDynamicsFrame& rideDynamicsFrame =
         railShooterVehicleRideDynamics_.Update(rideDynamicsInput);
@@ -7325,7 +7341,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     RailVehiclePresentationInput vehiclePresentationInput{};
     vehiclePresentationInput.definition = &railShooterVehicleMovement_.Definition();
     vehiclePresentationInput.state = &railShooterVehicleMovement_.State();
-    vehiclePresentationInput.deltaTime = gameplayDeltaTime;
+    vehiclePresentationInput.deltaTime = railTravelDeltaTime;
     vehiclePresentationInput.settings =
         railShooterVehiclePresentationSettings_;
     vehiclePresentationInput.rideProfileActive = rideFrame.active;
@@ -7395,7 +7411,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     vehicleRenderInput.actor = &railShooterVehicleActor_.Frame();
     vehicleRenderInput.cameraWorldPosition = frameState_.cameraWorldPosition;
     railShooterVehicleRenderer_.Update(vehicleRenderInput);
-    DispatchRailVehicleAudio(gameplayDeltaTime,realGameplayDeltaTime);
+    DispatchRailVehicleAudio(railTravelDeltaTime,realGameplayDeltaTime);
     if (railShooterVehiclePresentation_.Frame().jointImpactThisFrame) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.055f, 0.0f, 0.0015f);
     }
@@ -7412,14 +7428,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInertiaInput.trackContact = &trackContactFrame;
     cameraInertiaInput.rideDynamics = &rideDynamicsFrame;
     cameraInertiaInput.ride = &rideFrame;
-    cameraInertiaInput.deltaTime = gameplayDeltaTime;
+    cameraInertiaInput.deltaTime = railTravelDeltaTime;
     cameraInertiaInput.gameplayActive = !coursePreviewOwnsRail;
     cameraInertiaInput.aimFocusActive =
         railShooterLockOnSystem_.Reticle().aimFeelActive;
     cameraInertiaInput.settings = railShooterCameraInertiaSettings_;
     const RailVehicleCameraInertiaFrame& cameraInertiaFrame =
         railShooterCameraInertia_.Update(cameraInertiaInput);
-    if (!coursePreviewOwnsRail && railShooterGameplayWaveBridge_.IsBound()) {
+    if (!coursePreviewOwnsRail && !titleEntryBlocked && railShooterGameplayWaveBridge_.IsBound()) {
         CourseGameplayWaveFrameInput waveInput{};
         waveInput.deltaTime = gameplayDeltaTime;
         waveInput.playerDistance = railShooterDistance_;
@@ -7467,13 +7483,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     encounterInput.spawnRuntime = &railShooterSpawnRuntime_;
     const EncounterDirectorFrameOutput encounterOutput =
-        railShooterEncounterDirector_.Update(std::move(encounterInput));
+        titleEntryBlocked ? EncounterDirectorFrameOutput{} :
+            railShooterEncounterDirector_.Update(std::move(encounterInput));
     LogCourseEvents(encounterOutput.dispatchEvents);
     railShooterCameraDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
     railShooterSpeedDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
-    railShooterCheckpointSystem_.Update(&railShooterCourse_, railShooterDistance_);
+    if(!titleEntryBlocked) railShooterCheckpointSystem_.Update(&railShooterCourse_, railShooterDistance_);
     const SectionCheckpointStats& checkpointStats = railShooterCheckpointSystem_.LastStats();
-    if (!coursePreviewOwnsRail && checkpointStats.enteredSectionThisFrame &&
+    if (!coursePreviewOwnsRail && !titleEntryBlocked && checkpointStats.enteredSectionThisFrame &&
         railShooterRetryCoordinator_.IsBound()) {
         std::string retryCheckpointError;
         if (!railShooterRetryCoordinator_.CaptureCheckpoint(
@@ -7675,8 +7692,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.titleHandoffWeight = entryFrame.cameraHandoffWeight;
     cameraInput.titleHandoffRig = RailTitleScene::DepartureCameraRig();
     cameraInput.deltaTime = coursePreviewAdvancing
-        ? kFallbackGameplayDeltaTime : entryFrame.blockingGameplay
-            ? (!coursePreviewFrozen && entryFocused ? realGameplayDeltaTime : 0.0f) : gameplayDeltaTime;
+        ? kFallbackGameplayDeltaTime : railTravelDeltaTime;
     cameraInput.railSpeed = coursePreviewSimulationSystem_.IsActive()
         ? coursePreviewAdvancing
             ? coursePreviewSimulationSystem_.Frame().currentSpeed
@@ -8435,7 +8451,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 railShooterRuntimeProgram_.waves.end(),
                 [](const CourseRuntimeWaveNode& wave) { return wave.enabled; }));
         }
-        railShooterGameSession_.Update(sessionInput);
+        if(!titleEntryBlocked) railShooterGameSession_.Update(sessionInput);
         bool sessionKeyboardAllowed =
             hwnd_ == nullptr || GetForegroundWindow() == hwnd_;
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI

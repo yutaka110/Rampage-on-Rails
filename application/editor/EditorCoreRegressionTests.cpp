@@ -33230,11 +33230,12 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         runner.Expect(stack.ReplacePasses({post}), "Film-burn test postprocess must validate");
     }
     const std::string finalOutput = stack.BuildExecutionPlan().finalOutputResource;
-    for (float state : {0.0f, 0.45f, 1.0f, -1.0f, -2.0f, -3.0f}) {
+    for (float state : {0.0f, 0.45f, 1.0f, -1.0f, -2.0f, -3.0f, -4.0f, -5.0f}) {
         const float progress=(std::max)(0.0f,state);
         const bool lensOnly=state==-1.0f;
-        const bool sandOnly=state<=-2.0f;
-        const bool active=progress>0.0f || lensOnly || sandOnly;
+        const bool sandOnly=state==-2.0f || state==-3.0f;
+        const bool rockOnly=state==-4.0f, expiredRocks=state==-5.0f;
+        const bool active=progress>0.0f || lensOnly || sandOnly || rockOnly;
         RenderGraph graph;
         graph.DeclareTransientRenderTarget("SceneColor", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
         graph.DeclareTransientRenderTarget("VfxAccumulation", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
@@ -33252,10 +33253,10 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         context.postProcessStack = &stack;
         context.railFilmBurnProgress = progress;
         context.railFilmBurnLensStrength = lensOnly ? 0.35f : 0.0f;
-        context.railSandTransition = sandOnly;
-        context.railSandTransitionAge = sandOnly ? 2.01f : 0.0f;
+        context.railSandTransition = sandOnly || rockOnly || expiredRocks;
+        context.railSandTransitionAge = rockOnly ? 2.70f : expiredRocks ? 3.05f : sandOnly ? 2.01f : 0.0f;
         context.railCollapseDustStrength = sandOnly ? 0.68f : 0.0f;
-        context.railFilmBurnIncoming = state==-3.0f;
+        context.railFilmBurnIncoming = state==-3.0f || rockOnly || expiredRocks;
         context.railFilmBurnInEditorViewport = editorViewport;
         AppPostProcessPipeline pipeline;
         pipeline.RegisterPasses(context);
@@ -33336,7 +33337,16 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
         CourseCameraKey authored;
         authored.backDistance=28; authored.verticalOffset=12; authored.lookAheadDistance=30; authored.fovY=0.94f;
         course.cameraKeys.push_back(authored);
+        course.events={{100.0f,"vfx","entry_start"},{104.0f,"enemy_wave","entry_wave"},
+            {112.0f,"vfx","entry_dust"},{117.2f,"vfx","after_entry"}};
         RailPath rail; rail.SetControlPoints(course.railPoints);
+        CourseRuntime travel; travel.Bind(&course); travel.Reset(100.0f);
+        RailVehicleMovementSystem vehicle;
+        runner.Expect(vehicle.Initialize(RailVehicleDefinition::MineCartDefaults()),"Entry vehicle must initialize");
+        vehicle.Reset(100.0f,RailTitleScene::Speed,&rail);
+        RailVehicleMovementInput travelInput;
+        travelInput.courseRuntime=&travel; travelInput.railPath=&rail;
+        travelInput.requestedSpeed=RailTitleScene::Speed;
         RailCameraDirector director,normalDirector;
         RailCameraDirectorFrameInput camera;
         camera.course=&course; camera.railPath=&rail; camera.distance=100;
@@ -33350,9 +33360,19 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
         runner.Expect(separation(previousCamera.position,departingEye)<0.001f && std::abs(previousCamera.fovY-0.70f)<0.001f,
             "Incoming camera must inherit the departing cart distance, height and FOV in the new rail basis");
         auto previous=entry.Frame();
+        bool continuedTravel=true,earlyCamera=false,eventsHeld=true;
         while(entry.Frame().blockingGameplay && frames<fps*2) {
             entry.Update(1.0f/fps);
             const auto current=entry.Frame();
+            const float oldDistance=vehicle.State().distance;
+            travelInput.deltaTime=current.travelDeltaTime;
+            travelInput.movementEnabled=current.travelDeltaTime>0;
+            const auto& moving=vehicle.Update(travelInput);
+            continuedTravel &= moving.state.distance>oldDistance &&
+                std::abs(moving.state.speed-RailTitleScene::Speed)<0.001f &&
+                moving.state.hitPoints==vehicle.Definition().maximumHitPoints;
+            eventsHeld &= entry.DispatchCourseEvents(moving.triggeredEvents,false).empty();
+            earlyCamera |= current.blackout>0.25f && current.cameraHandoffWeight<0.99f;
             reticleCues+=current.reticleStarted?1:0;
             gaugeCues+=current.gaugesStarted?1:0;
             if(current.blackout>0.15f && current.blackout<0.85f) ++readableRevealFrames;
@@ -33365,20 +33385,27 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             ordered &= current.reticleProgress>=current.gaugeProgress &&
                 current.gaugeProgress>=current.informationOpacity;
             camera.titleHandoffWeight=current.cameraHandoffWeight;
+            camera.distance=moving.state.distance;
+            camera.railSpeed=moving.state.speed;
+            camera.deltaTime=current.travelDeltaTime;
             const auto actualCamera=director.Evaluate(camera);
             runner.Expect(separation(actualCamera.position,previousCamera.position)<65.0f/fps &&
                 std::abs(actualCamera.fovY-previousCamera.fovY)<0.70f/fps,
                 "The reveal camera must pull back smoothly without a position or FOV cut");
             previousCamera=actualCamera;
             if(frames==fps/3) {
+                const float frozenDistance=vehicle.State().distance;
                 entry.Begin();
                 entry.Update(-1.0f);
                 entry.Update((std::numeric_limits<float>::quiet_NaN)());
                 for(int paused=0;paused<20;++paused) entry.Update(0.0f);
+                travelInput.deltaTime=entry.Frame().travelDeltaTime;
+                vehicle.Update(travelInput);
                 runner.Expect(entry.Frame().blackout==current.blackout &&
                     entry.Frame().cameraHandoffWeight==current.cameraHandoffWeight &&
                     entry.Frame().reticleProgress==current.reticleProgress &&
                     entry.Frame().rollingHandoff==current.rollingHandoff &&
+                    entry.Frame().travelDeltaTime==0.0f && vehicle.State().distance==frozenDistance &&
                     !entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
                     "Repeated confirm, focus pause and invalid delta time must not restart or advance startup");
             }
@@ -33393,14 +33420,28 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             "Camera reveal, reticle, gauges and information must finish in order with one cue each at every frame rate");
         runner.Expect(readableRevealFrames>=int(fps*0.35f),
             "The incoming exposure recovery must remain readable while avoiding the outgoing burn's reversal");
+        runner.Expect(continuedTravel && earlyCamera && eventsHeld &&
+            std::abs(vehicle.State().distance-(100.0f+RailTitleScene::Speed*RailTitleGameplayEntry::Duration))<0.003f,
+            "Cinematic rail travel must continue under the reveal with unchanged health, held events and an early camera handoff at every frame rate");
         camera.titleHandoffWeight=0;
         const auto normal=normalDirector.Evaluate(camera);
         runner.Expect(entry.Frame().cameraHandoffWeight==0 && separation(previousCamera.position,normal.position)<0.001f &&
             separation(previousCamera.target,normal.target)<0.001f && std::abs(previousCamera.fovY-normal.fovY)<0.001f,
             "Input unlock must restore the exact authored gameplay composition without a handoff pose lingering");
         entry.Update(0.05f);
-        runner.Expect(!entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
+        runner.Expect(!entry.Frame().reticleStarted && !entry.Frame().gaugesStarted && entry.Frame().travelDeltaTime==0,
             "Ready gameplay must never replay startup cues");
+        travelInput.deltaTime=0.05f; travelInput.movementEnabled=true;
+        const auto& playing=vehicle.Update(travelInput);
+        const auto dispatched=entry.DispatchCourseEvents(playing.triggeredEvents,true);
+        runner.Expect(dispatched.size()==4 && dispatched[0].id=="entry_start" &&
+            dispatched[1].id=="entry_wave" && dispatched[2].id=="entry_dust" &&
+            dispatched[3].id=="after_entry" && entry.DispatchCourseEvents({},true).empty() &&
+            playing.traveledDistance>0 && std::abs(playing.state.speed-RailTitleScene::Speed)<0.001f,
+            "Unlock must deliver held markers before new markers exactly once, continuing the same vehicle speed and distance");
+        entry.DispatchCourseEvents({course.events[0]},false);
+        entry.Reset();
+        runner.Expect(entry.DispatchCourseEvents({},true).empty(),"Reset must discard held events from an abandoned entry");
         entry.Reset(); entry.Begin(); entry.Update(10.0f);
         runner.Expect(entry.Frame().blockingGameplay && entry.Frame().reticleProgress==0,
             "A frame hitch must not skip the HUD boot and input gate");

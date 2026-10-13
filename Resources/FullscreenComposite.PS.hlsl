@@ -301,8 +301,9 @@ bool TraceCollapseRock(float3 ray, float3 center, float3 scale, float seed, floa
 
 bool LateCollapseRocks(float2 uv, float age, out float3 stone, out float mist, out float opacity) {
     stone=0.0f;mist=0.0f;opacity=0.0f;
-    // Late pieces have left the view before the incoming dust pass expires.
-    if(age<0.85f || age>2.55f) return false;
+    // Keep the last falling pieces briefly visible after the dense veil clears.
+    // Matches the bounded rock tail in HasRailFilmBurnPresentation().
+    if(age<0.85f || age>2.95f) return false;
     uint width,height;
     gPostColor.GetDimensions(width,height);
     float aspect=float(width)/max(float(height),1.0f);
@@ -315,7 +316,8 @@ bool LateCollapseRocks(float2 uv, float age, out float3 stone, out float mist, o
         // Stratified lanes guarantee edge-to-edge coverage. Four uneven waves
         // distribute rocks vertically instead of packing them into one row.
         uint laneIndex=(i*5u)%16u;
-        float birth=0.85f+float(i/4u)*0.19f+float(i%4u)*0.035f+seed*0.07f;
+        // Spread emission, keeping gravity and each fragment's fall speed intact.
+        float birth=0.85f+float(i/4u)*0.29f+float(i%4u)*0.035f+seed*0.07f;
         float flight=age-birth;
         if(flight<0.0f) continue;
         float depthSeed=FilmBurnHash(float2(float(i),37.1f));
@@ -425,7 +427,11 @@ float4 PresentSandTransition(float2 uv) {
         float upperVeil=-log(max(rockOpacity,0.001f))*(0.85f+middle*0.30f);
         float rockTransmission=exp(-fogDepth-upperVeil);
         float3 rockColor=lerp(dustColor,stone,rockTransmission);
-        result=lerp(result,rockColor,incoming ? front : 1.0f);
+        // Let solid fragments outlast the screen-covering dust. Their upper
+        // veil dissolves into powder, then exposes the moving gameplay scene.
+        float rockTail=(1.0f-smoothstep(2.70f,2.95f,age))*
+            smoothstep(0.02f,0.28f,rockOpacity);
+        result=lerp(result,rockColor,incoming ? max(front,rockTail) : 1.0f);
     }
     return float4(result,1.0f);
 }

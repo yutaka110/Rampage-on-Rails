@@ -810,6 +810,7 @@ void RailTitleGameplayEntry::Reset() {
     elapsed_=0.0;
     begun_=false;
     frame_={};
+    pendingEvents_.clear();
 }
 void RailTitleGameplayEntry::Begin() {
     if(begun_) return;
@@ -823,19 +824,21 @@ void RailTitleGameplayEntry::Begin() {
 }
 void RailTitleGameplayEntry::Update(float deltaTime) {
     frame_.reticleStarted=frame_.gaugesStarted=false;
+    frame_.travelDeltaTime=0.0f;
     if(!begun_ || !frame_.blockingGameplay) return;
     const double previous=elapsed_;
     if(std::isfinite(deltaTime)) elapsed_=(std::min)(double(Duration),
         elapsed_+double((std::clamp)(deltaTime,0.0f,0.05f)));
+    frame_.travelDeltaTime=static_cast<float>(elapsed_-previous);
     const auto ramp=[&](double from,double to) {
         const float t=static_cast<float>((std::clamp)((elapsed_-from)/(to-from),0.0,1.0));
         return t*t*(3.0f-2.0f*t);
     };
     frame_.blackout=1.0f-static_cast<float>((std::clamp)(
         (elapsed_-RevealBegin)/double(RevealEnd-RevealBegin),0.0,1.0));
-    // Hold the departing composition until the cart begins to emerge, then
-    // pull back to the authored gameplay rig before combat/input unlocks.
-    frame_.cameraHandoffWeight=1.0f-ramp(0.68,double(Duration));
+    // Begin while the falling veil is still dense. Camera recovery and rail
+    // motion overlap the reveal rather than waiting for a clear, frozen scene.
+    frame_.cameraHandoffWeight=1.0f-ramp(double(CameraBegin),double(CameraEnd));
     frame_.reticleProgress=ramp(0.76,1.10);
     frame_.gaugeProgress=ramp(0.96,1.26);
     frame_.informationOpacity=ramp(1.16,double(Duration));
@@ -843,4 +846,12 @@ void RailTitleGameplayEntry::Update(float deltaTime) {
     frame_.reticleStarted=previous<0.76 && elapsed_>=0.76;
     frame_.gaugesStarted=previous<0.96 && elapsed_>=0.96;
     frame_.blockingGameplay=elapsed_<double(Duration);
+}
+std::vector<CourseEventMarker> RailTitleGameplayEntry::DispatchCourseEvents(
+    const std::vector<CourseEventMarker>& crossed, bool gameplayEnabled) {
+    pendingEvents_.insert(pendingEvents_.end(),crossed.begin(),crossed.end());
+    if(!gameplayEnabled) return {};
+    std::vector<CourseEventMarker> dispatched;
+    dispatched.swap(pendingEvents_);
+    return dispatched;
 }

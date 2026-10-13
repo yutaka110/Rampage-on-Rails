@@ -66,7 +66,7 @@ struct RailTitleCollapsePuff final {
 };
 
 // Presentation clock shared by the reveal, HUD startup, sound crossfade and
-// input/simulation gate. It never changes playable distance or combat state.
+// combat/input gate. Rail travel can continue on this clock without ticking combat.
 struct RailTitleGameplayEntryFrame final {
     float blackout = 0.0f;
     float cameraHandoffWeight = 0.0f;
@@ -74,6 +74,7 @@ struct RailTitleGameplayEntryFrame final {
     float gaugeProgress = 1.0f;
     float informationOpacity = 1.0f;
     float rollingHandoff = 1.0f;
+    float travelDeltaTime = 0.0f;
     bool blockingGameplay = false;
     bool reticleStarted = false;
     bool gaugesStarted = false;
@@ -84,15 +85,21 @@ public:
     static constexpr float Duration = 1.42f;
     static constexpr float RevealBegin = 0.01f;
     static constexpr float RevealEnd = 0.54f;
+    static constexpr float CameraBegin = 0.08f;
+    static constexpr float CameraEnd = 1.14f;
     void Reset();
     void Begin();
     void Update(float deltaTime);
+    // Retain markers crossed by cinematic travel until gameplay can dispatch them.
+    std::vector<CourseEventMarker> DispatchCourseEvents(
+        const std::vector<CourseEventMarker>& crossed, bool gameplayEnabled);
     const RailTitleGameplayEntryFrame& Frame() const { return frame_; }
     float Elapsed() const { return static_cast<float>(elapsed_); }
 private:
     double elapsed_ = 0.0;
     bool begun_ = false;
     RailTitleGameplayEntryFrame frame_{};
+    std::vector<CourseEventMarker> pendingEvents_;
 };
 
 class RailTitleScene final {
