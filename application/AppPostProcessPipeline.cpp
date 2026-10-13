@@ -345,7 +345,7 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
     const bool editorViewportCompositedByImGui =
         ctx.railFilmBurnInEditorViewport ||
         (ctx.imguiLayer != nullptr && ctx.imguiLayer->WantsDeveloperDiagnostics());
-    const bool filmBurnActive = ctx.railFilmBurnProgress > 0.0f;
+    const bool filmBurnActive = ctx.HasRailFilmBurnPresentation();
     if (editorViewportCompositedByImGui && !filmBurnActive) {
         return;
     }
@@ -399,7 +399,7 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
 }
 
 void AppPostProcessPipeline::RegisterFilmBurnPresentationPass(const AppFrameGraphBuildContext& ctx) const {
-    if (ctx.railFilmBurnProgress <= 0.0f) return;
+    if (!ctx.HasRailFilmBurnPresentation()) return;
     const bool editorViewport = ctx.railFilmBurnInEditorViewport ||
         (ctx.imguiLayer != nullptr && ctx.imguiLayer->WantsDeveloperDiagnostics());
     const auto plan = ctx.postProcessStack->BuildExecutionPlan();
@@ -421,7 +421,11 @@ void AppPostProcessPipeline::RegisterFilmBurnPresentationPass(const AppFrameGrap
         [ctx, editorViewport, output](ge3::graphics::RenderPassContext& passContext) {
             const float params[kPostProcessParamCount] = {
                 0, 0, 0, 1, ctx.railFilmBurnProgress, 1,
-                ctx.railFilmBurnTreatmentStrength, 0
+                ctx.railFilmBurnTreatmentStrength, ctx.railFilmBurnIncoming ? 1.0f : 0.0f,
+                ctx.railFilmBurnFocus.x, ctx.railFilmBurnFocus.y,
+                ctx.railFilmBurnLightSource.x, ctx.railFilmBurnLightSource.y,
+                ctx.railFilmBurnLensStrength, ctx.railFilmBurnLensAge,
+                ctx.railFilmBurnTunnelShade, 0
             };
             if (editorViewport) {
                 // All SRVs point to the capture, so SceneColor can safely be

@@ -4334,16 +4334,26 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         const auto& railImpact=railTitleScene_.RailImpact();
         if(railImpact.active && railImpact.age<0.50f) {
             const float age=railImpact.age;
-            const float flash=std::exp(-age*12.0f)*(std::max)(0.0f,1.0f-age/0.20f);
-            glowQuad(Add(railImpact.position,{0,0.12f,0}),Scale(right,0.95f),Scale(up,0.70f),2.0f,
-                {2.2f,1.55f,0.70f,flash*1.6f});
-            for(uint32_t spark=0;spark<22;++spark) {
+            const float flash=std::exp(-(std::max)(0.0f,age-0.04f)*14.0f)*
+                (std::max)(0.0f,1.0f-age/0.28f);
+            // Pale contact core and a larger, softer amber halo share the
+            // depth-tested strike point; the core never fills the whole frame.
+            glowQuad(Add(railImpact.position,{0,0.15f,0}),Scale(right,1.50f),Scale(up,1.05f),6.0f,
+                {1.45f,0.72f,0.19f,flash*0.65f});
+            glowQuad(Add(railImpact.position,{0,0.15f,0}),Scale(right,1.15f),Scale(up,0.85f),2.0f,
+                {2.2f,1.55f,0.70f,flash*1.8f});
+            const auto strikeSample=railTitleScene_.Path().Evaluate(
+                railTitleScene_.Distance()+RailTitleScene::DepartureImpactAhead);
+            const float contactGlow=std::exp(-age*10.0f)*(std::max)(0.0f,1.0f-age/0.32f);
+            glowQuad(Add(railImpact.position,{0,0.025f,0}),Scale(strikeSample.tangent,1.30f),
+                Scale(strikeSample.right,0.28f),6.0f,{2.0f,1.05f,0.29f,contactGlow});
+            for(uint32_t spark=0;spark<RailTitleScene::RailImpactSparkCount;++spark) {
                 const auto grain=RailTitleScene::EvaluateRailSpark(railImpact,spark);
                 if(grain.opacity<=0.001f) continue;
                 const auto direction=NormalizeOr(grain.velocity,up);
                 const auto side=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(grain.position,-1)),right)),right);
-                const float length=0.30f+0.06f*float(spark%5);
-                const float brightness=grain.opacity*std::exp(-age*2.0f)*titleAlpha;
+                const float length=0.38f+0.065f*float(spark%5);
+                const float brightness=grain.opacity*std::exp(-age*1.4f)*titleAlpha;
                 glowQuad(Add(grain.position,Scale(direction,-length*0.5f)),Scale(direction,length*0.5f),
                     Scale(side,grain.radius),8.0f,
                     {2.0f,1.35f-1.6f*age,0.40f*std::exp(-age*5.0f),brightness*1.8f});
@@ -12656,10 +12666,44 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.railFilmBurnProgress = railTitleScreenVisible_
         ? railTitleScene_.Blackout() : railTitleGameplayEntry_.Frame().blackout;
     graphContext.railFilmBurnTreatmentStrength = railTitleScreenVisible_ ? 1.0f : 0.55f;
+    graphContext.railFilmBurnIncoming = !railTitleScreenVisible_;
+    const auto projectPresentationPoint=[&](Vector3 world,Vector2& uv) {
+        const auto& m=frameState_.viewProjectionMatrix.m;
+        const float w=world.x*m[0][3]+world.y*m[1][3]+world.z*m[2][3]+m[3][3];
+        if(!std::isfinite(w) || w<=0.1f) return false;
+        const auto point=TransformCoord(world,frameState_.viewProjectionMatrix);
+        if(!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            !std::isfinite(point.z) || point.z<0.0f || point.z>1.0f) return false;
+        uv={(std::clamp)(point.x*0.5f+0.5f,0.04f,0.96f),
+            (std::clamp)(0.5f-point.y*0.5f,0.04f,0.96f)};
+        return true;
+    };
+    if(railTitleScreenVisible_ || graphContext.railFilmBurnProgress>0.0f) {
+        const auto& path=railTitleScreenVisible_?railTitleScene_.Path():railPath_;
+        const float distance=railTitleScreenVisible_?railTitleScene_.Distance():railShooterDistance_;
+        Vector2 focus;
+        if(projectPresentationPoint(path.Evaluate(distance+64.0f).position,focus))
+            graphContext.railFilmBurnFocus={(std::clamp)(focus.x,0.25f,0.75f),
+                (std::clamp)(focus.y,0.22f,0.62f)};
+    }
+    if(railTitleScreenVisible_) {
+        graphContext.railFilmBurnLensStrength=railTitleScene_.LensLeakStrength();
+        graphContext.railFilmBurnLensAge=railTitleScene_.LensLeakAge();
+        graphContext.railFilmBurnTunnelShade=railTitleScene_.TunnelShade();
+        const auto& impact=railTitleScene_.RailImpact();
+        if(!railTitleScene_.Starting() || impact.seed==0) railTitleLensSourceSeed_=0;
+        if(graphContext.railFilmBurnLensStrength>0.0f && impact.seed!=railTitleLensSourceSeed_) {
+            // Capture the real impact once. The lens afterimage stays on the
+            // glass instead of sliding off-screen as the cart overtakes it.
+            if(projectPresentationPoint(impact.position,railTitleLensSourceScreen_))
+                railTitleLensSourceSeed_=impact.seed;
+        }
+        graphContext.railFilmBurnLightSource=railTitleLensSourceScreen_;
+    }
     graphContext.railFilmBurnInEditorViewport = imguiLayer_.WantsDeveloperDiagnostics();
     const auto registerPassesStart = RailPerfClock::now();
     const std::string railHudTargetResource =
-        graphContext.railFilmBurnProgress > 0.0f
+        graphContext.HasRailFilmBurnPresentation()
             ? std::string("RailFilmBurnScene")
             : imguiLayer_.WantsDeveloperDiagnostics()
             ? (postExecutionPlan.finalOutputResource.empty()

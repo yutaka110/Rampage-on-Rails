@@ -824,6 +824,8 @@ private:
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;
     RailTitleScene railTitleScene_;
+    Vector2 railTitleLensSourceScreen_{0.44f,0.54f};
+    uint32_t railTitleLensSourceSeed_ = 0;
     CourseSpawnRuntime railTitleEmptySpawns_;
     int railTitleMenuSelection_ = 0;
     bool railTitleControlsVisible_ = false;

@@ -61,8 +61,8 @@ struct RailTitleGameplayEntryFrame final {
 class RailTitleGameplayEntry final {
 public:
     static constexpr float Duration = 1.42f;
-    static constexpr float RevealBegin = 0.08f;
-    static constexpr float RevealEnd = 1.10f;
+    static constexpr float RevealBegin = 0.06f;
+    static constexpr float RevealEnd = 0.78f;
     void Reset();
     void Begin();
     void Update(float deltaTime);
@@ -111,6 +111,8 @@ public:
     const std::vector<RailTitleDustCloud>& DustClouds() const { return dustClouds_; }
     const RailTitleRailImpact& RailImpact() const { return railImpact_; }
     float RailImpactLight() const;
+    float LensLeakAge() const;
+    float LensLeakStrength() const;
     // Analytic trajectories stay identical at different frame rates and when paused.
     static RailTitleSandGrain EvaluateSandGrain(const RailTitleDustCloud& cloud, uint32_t index);
     static RailTitleSandGrain EvaluateRailSpark(const RailTitleRailImpact& impact, uint32_t index);
@@ -128,9 +130,10 @@ public:
     static constexpr float DepartureImpactTime = 1.62f;
     static constexpr float DepartureImpactAhead = 18.0f;
     static constexpr float DepartureShotRadius = 0.65f;
-    static constexpr float ReflectionDuration = 0.50f;
+    static constexpr uint32_t RailImpactSparkCount = 30;
+    static constexpr float ReflectionDuration = 0.44f;
     static constexpr float ReflectionDelay = 0.035f;
-    static constexpr float LightSweepDuration = 0.42f;
+    static constexpr float LightSweepDuration = 0.36f;
     static constexpr float TunnelLead = 18.0f;
     // Shared 1600 x 900 layout coordinates, including letterboxing.
     static int HitTest(float x, float y, float width, float height);

@@ -372,6 +372,8 @@ FodyWeavers.xsd
 # Project-local capture and Codex working files
 /.codex_video_review/
 /.codex_video_review_*/
+/generated/video_review_*/
+/generated/review_*.py
 capture/
 cache/
 .codex/

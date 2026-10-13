@@ -32813,7 +32813,8 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
     for(int fps : {30,60,120}) {
         RailTitleScene title;
         runner.Expect(title.Initialize(),"Cinematic title should initialize");
-        runner.Expect(title.LightSweep().y==0 && title.LightSweepIllumination({0,0,0})==0,
+        runner.Expect(title.LightSweep().y==0 && title.LightSweepIllumination({0,0,0})==0 &&
+            title.LensLeakStrength()==0,
             "The decorative light must remain off while the title menu is idle");
         const size_t idlePlacementCount=title.Scenery().terrainPlacements.size();
         title.Update(0.02f);
@@ -32828,6 +32829,8 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         int departureMuzzles=0,nearMisses=0,railHits=0;
         bool fixedRailContact=true,shotClearance=true,impactDriven=true,visibleRailContact=true;
         bool sawDepartureShot=false;
+        bool lensOrdered=true,lensOverlapsShadow=false;
+        float peakLens=0.0f;
         Vector3 fixedTarget{};
         float closestSide=100.0f;
         const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
@@ -32918,7 +32921,16 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
                     visibleRailContact &= hitY>projectedY(frontLip)+0.025f && hitY>-0.8f && hitY<0.8f;
                 }
             } else if(elapsed<RailTitleScene::DepartureImpactTime) {
-                impactDriven &= title.LightSweep().y==0 && title.RailReflectionOpacity()==0 && title.RailImpactLight()==0;
+                impactDriven &= title.LightSweep().y==0 && title.RailReflectionOpacity()==0 &&
+                    title.RailImpactLight()==0 && title.LensLeakStrength()==0;
+            }
+            const float lens=title.LensLeakStrength();
+            peakLens=(std::max)(peakLens,lens);
+            if(lens>0.0f) {
+                lensOrdered &= railHits==1 && title.LensLeakAge()>=0.0f;
+                lensOverlapsShadow |= title.Blackout()>0.05f && title.Blackout()<0.8f;
+                title.Update(0);
+                lensOrdered &= title.LensLeakStrength()==lens;
             }
             if(elapsed>RailTitleScene::OrbitDuration+1.0f/fps) {
                 const auto forward=title.Path().Evaluate(title.Distance()).tangent;
@@ -32973,6 +32985,9 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             fixedRailContact && shotClearance && closestSide<5.2f && impactDriven,
             "One departure shot must narrowly clear the moving cart, hit a fixed rail head once and then trigger its reflection");
         runner.Expect(visibleRailContact,"Rail contact must project above the moving cart front lip during the initial spark burst");
+        runner.Expect(lensOrdered && lensOverlapsShadow && peakLens>0.5f &&
+            title.LensLeakStrength()<0.1f && title.LensLeakAge()>1.0f,
+            "Lens exposure must follow one confirmed impact, pause on its clock, overlap cave shadow and decay before handoff");
         runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
             title.Scenery().terrainPlacements.size()==idlePlacementCount+1,
             "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
@@ -32999,7 +33014,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             "Reinitializing the title must clear the color transition");
     }
     bool immediateSparks=true,ballisticSparks=true,expiredSparks=true;
-    for(uint32_t index=0;index<22;++index) {
+    for(uint32_t index=0;index<RailTitleScene::RailImpactSparkCount;++index) {
         RailTitleRailImpact hit{{0,0.112f,0},0,7,true};
         const auto birth=RailTitleScene::EvaluateRailSpark(hit,index);
         hit.age=0.10f; const auto rising=RailTitleScene::EvaluateRailSpark(hit,index);
@@ -33067,7 +33082,10 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         runner.Expect(stack.ReplacePasses({post}), "Film-burn test postprocess must validate");
     }
     const std::string finalOutput = stack.BuildExecutionPlan().finalOutputResource;
-    for (float progress : {0.0f, 0.45f, 1.0f}) {
+    for (float state : {0.0f, 0.45f, 1.0f, -1.0f}) {
+        const float progress=(std::max)(0.0f,state);
+        const bool lensOnly=state<0.0f;
+        const bool active=progress>0.0f || lensOnly;
         RenderGraph graph;
         graph.DeclareTransientRenderTarget("SceneColor", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
         graph.DeclareTransientRenderTarget("VfxAccumulation", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
@@ -33077,13 +33095,14 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         // Match runtime registration order: HUD is registered before the
         // postprocessing builder, but executes after scene composition.
         graph.AddPass({"HUD", RenderPassLayer::Ui,
-            {{progress > 0 ? "RailFilmBurnScene" : editorViewport ? finalOutput : "BackBuffer",
+            {{active ? "RailFilmBurnScene" : editorViewport ? finalOutput : "BackBuffer",
               RenderResourceAccessType::WriteRtv}}, "", {}});
         AppFrameGraphBuildContext context{};
         context.renderGraph = &graph;
         context.imguiLayer = gui.get();
         context.postProcessStack = &stack;
         context.railFilmBurnProgress = progress;
+        context.railFilmBurnLensStrength = lensOnly ? 0.35f : 0.0f;
         context.railFilmBurnInEditorViewport = editorViewport;
         AppPostProcessPipeline pipeline;
         pipeline.RegisterPasses(context);
@@ -33102,16 +33121,16 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         const auto compose = find("PostProcess.CompositeToBackBuffer");
         const auto hud = find("HUD");
         const auto burn = find("UI.RailFilmBurnPresentation");
-        if (!editorViewport || progress > 0) {
+        if (!editorViewport || active) {
             runner.Expect(compose != passes.end() && hud != passes.end() && compose->executed && hud->executed &&
                 compose->executionIndex < hud->executionIndex,
                 "The world must be composed before captured HUD even with pass culling");
         } else {
             runner.Expect(compose == passes.end(), "Idle editor retains its normal viewport path");
         }
-        if (progress > 0) {
+        if (active) {
             runner.Expect(burn != passes.end() && burn->executed && hud->executionIndex < burn->executionIndex,
-                "Partial and full blackout must burn HUD after scene capture, preventing HUD/VFX leakage");
+                "Lens-only exposure and blackout must present HUD after scene capture without leaking VFX");
             if (editorViewport) {
                 const auto editorUi = find("EditorUI");
                 runner.Expect(editorUi != passes.end() && editorUi->executed &&
@@ -33216,8 +33235,8 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             entry.Frame().rollingHandoff==1 &&
             std::abs(float(frames)/fps-RailTitleGameplayEntry::Duration)<1.01f/fps,
             "Camera reveal, reticle, gauges and information must finish in order with one cue each at every frame rate");
-        runner.Expect(readableRevealFrames>=int(fps*0.65f),
-            "The incoming burn must be readable instead of revealing the scene in only a few frames");
+        runner.Expect(readableRevealFrames>=int(fps*0.45f),
+            "The incoming exposure recovery must remain readable while avoiding the outgoing burn's reversal");
         camera.titleHandoffWeight=0;
         const auto normal=normalDirector.Evaluate(camera);
         runner.Expect(entry.Frame().cameraHandoffWeight==0 && separation(previousCamera.position,normal.position)<0.001f &&

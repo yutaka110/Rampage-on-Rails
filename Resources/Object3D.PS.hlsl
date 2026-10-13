@@ -276,7 +276,7 @@ PixelShaderOutput main(VertexShaderOutput input)
             // Reflected impact light emphasizes metal edges without painting
             // a moving yellow diffuse patch across every body panel.
             paint += DroneDirect(surfaceBase,1.0f,glintRoughness,N,V,TitleSweepDirection(),
-                float3(3.0f,2.1f,0.85f)*TitleSweepAmount(input.worldPosition));
+                float3(4.2f,2.8f,1.10f)*TitleSweepAmount(input.worldPosition));
             paint = TitleAtmosphere(paint,input.worldPosition);
         }
         output.color = float4(paint,baseA);

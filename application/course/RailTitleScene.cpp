@@ -321,9 +321,9 @@ RailTitleSandGrain RailTitleScene::EvaluateRailSpark(const RailTitleRailImpact& 
         return float((bits>>22u)^bits)/float(UINT32_MAX);
     };
     const float age=(std::max)(0.0f,impact.age);
-    const float life=0.30f+0.008f*float(index%22);
+    const float life=0.34f+0.005f*float(index%RailImpactSparkCount);
     const float angle=2.0f*Pi*random(0);
-    const float speed=5.0f+6.0f*random(1),lift=4.5f+4.0f*random(2);
+    const float speed=3.8f+4.2f*random(1),lift=7.0f+4.5f*random(2);
     const float drag=std::exp(-1.8f*age),spread=speed*(1-drag)/1.8f;
     const float fade=(std::clamp)((age-0.08f)/(life-0.08f),0.0f,1.0f);
     RailTitleSandGrain spark;
@@ -332,7 +332,7 @@ RailTitleSandGrain RailTitleScene::EvaluateRailSpark(const RailTitleRailImpact& 
     spark.position=Add(impact.position,{std::cos(angle)*spread,
         (std::max)(0.04f+lift*age-4.9f*age*age,0.04f),std::sin(angle)*spread});
     spark.velocity={std::cos(angle)*speed*drag,lift-9.8f*age,std::sin(angle)*speed*drag};
-    spark.radius=0.045f+0.020f*random(3);
+    spark.radius=0.060f+0.024f*random(3);
     spark.opacity=impact.active && age<life ? 0.95f*(1-fade*fade*(3-2*fade)) : 0.0f;
     return spark;
 }
@@ -455,7 +455,7 @@ float RailTitleScene::MenuOpacity() const {
 float RailTitleScene::Blackout() const {
     // Wait until the chase camera has crossed the mouth, not just the cart.
     // Give the burn enough screen time to show its discoloration and warp.
-    // The film shader owns the sinusoidal easing, so this clock is linear.
+    // The presentation shader owns the cave-shadow easing; this clock is linear.
     return (std::clamp)(TunnelCameraDepth()/(Speed*FilmBurnDuration),0.0f,1.0f);
 }
 float RailTitleScene::TunnelCameraDepth() const {
@@ -501,15 +501,30 @@ float RailTitleScene::RailReflectionOpacity() const {
     if(p<=0.0f || p>=1.0f) return 0.0f;
     // The reflection precedes the burn, so it is not hidden by its mask.
     const float pulse=std::sin(Pi*p);
-    return 1.15f*pulse*pulse;
+    return 1.50f*pulse*pulse;
 }
 float RailTitleScene::RailReflectionDistance() const {
     const float p=(std::clamp)((railImpact_.age-ReflectionDelay)/ReflectionDuration,0.0f,1.0f);
     return DepartureImpactAhead-(DepartureImpactAhead-3.0f)*p;
 }
 float RailTitleScene::RailImpactLight() const {
-    return railImpact_.active ? 2.2f*std::exp(-railImpact_.age*14.0f)*
-        (1.0f-(std::clamp)(railImpact_.age/0.30f,0.0f,1.0f)) : 0.0f;
+    if(!railImpact_.active) return 0.0f;
+    const float decayAge=(std::max)(0.0f,railImpact_.age-0.04f);
+    return 2.9f*std::exp(-decayAge*11.0f)*
+        (1.0f-(std::clamp)(railImpact_.age/0.38f,0.0f,1.0f));
+}
+float RailTitleScene::LensLeakAge() const {
+    return starting_ && railImpact_.seed != 0
+        ? (std::max)(0.0f,startTime_-DepartureImpactTime) : 0.0f;
+}
+float RailTitleScene::LensLeakStrength() const {
+    // Only a confirmed scripted impact can expose the lens. Its afterimage
+    // persists beyond the world spark lifetime, on the same presentation clock.
+    if(!starting_ || railImpact_.seed == 0) return 0.0f;
+    const float age=LensLeakAge();
+    const float onset=(std::clamp)(age/0.04f,0.0f,1.0f);
+    return onset*onset*(3.0f-2.0f*onset)*std::exp(-age*1.55f)*
+        (1.0f-0.55f*TunnelShade());
 }
 Vector3 RailTitleScene::DepartureDronePosition(float elapsed) const {
     const float age=departureAge_+elapsed;
