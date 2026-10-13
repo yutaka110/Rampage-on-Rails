@@ -12,9 +12,10 @@ Vector3 Scale(Vector3 a, float s) { return {a.x*s,a.y*s,a.z*s}; }
 bool RailTitleScene::Initialize() {
     travel_ = 0.0;
     startTravel_ = 0.0; startDistance_ = 0.0f;
-    starting_ = false; startTime_ = age_ = 0.0f;
+    starting_ = false; startTime_ = age_ = departureAge_ = 0.0f;
     shots_.clear(); attackCues_.clear();
     dustClouds_.clear();
+    railImpact_ = {}; departureShotFired_ = false;
     attackTime_ = 0.0; nextShotTime_ = 1.2;
     shotSequence_ = 0; burstShot_ = 0; muzzleFlashTime_ = 0.0f;
     constexpr int segments = 24;
@@ -148,14 +149,16 @@ void RailTitleScene::Update(float deltaTime) {
         // Orbit outside the cart rather than interpolating through its body.
         const float angle = 0.8567f + (Pi-0.8567f)*blend;
         // Settle into a close, fixed chase shot without a speed-dependent zoom.
-        const float radius = 19.8494f + (ChaseDistance()-19.8494f)*blend;
+        const auto departureRig=DepartureCameraRig();
+        const float radius = 19.8494f + (departureRig.backDistance-19.8494f)*blend;
         cameraPosition_ = Add(sample.position,Add(Scale(sample.tangent,std::cos(angle)*radius),
             Scale(sample.right,std::sin(angle)*radius)));
-        cameraPosition_.y += 8.0f+(5.2f-8.0f)*blend;
+        cameraPosition_.y += 8.0f+(departureRig.verticalOffset-8.0f)*blend;
         // Keep the distant cave centered along the straight departure rail.
         const float remaining=TunnelLead-static_cast<float>(travel_-startTravel_);
-        const float lookAhead=(std::clamp)(remaining,14.0f,38.0f);
-        const Vector3 chaseTarget = Add(path_.Evaluate(state_.distance+lookAhead).position,Vector3{0,2.0f,0});
+        const float lookAhead=(std::clamp)(remaining,departureRig.lookAheadDistance,38.0f);
+        const Vector3 chaseTarget = Add(path_.Evaluate(state_.distance+lookAhead).position,
+            Vector3{0,departureRig.lookUpOffset,0});
         cameraTarget_ = Add(Scale(cameraTarget_,1-blend),Scale(chaseTarget,blend));
     }
     renderer_.Update({&actor_.Frame(),cameraPosition_});
@@ -189,12 +192,15 @@ void RailTitleScene::Update(float deltaTime) {
     const auto aim = path_.Evaluate(state_.distance+Speed*0.78f-2.0f+burstShot_*1.2f);
     pursuerAimTarget_ = Add(aim.position,Scale(aim.right,lanes[burstShot_]));
     pursuerAimTarget_.y = -0.27f; // Ground top is y=-0.30 in this corridor.
+    if(starting_) {
+        pursuerAimTarget_=DepartureImpactTarget();
+    }
     const Vector3 direction = Add(pursuerAimTarget_,Scale(pursuer_.position,-1.0f));
     const float length = std::sqrt(direction.x*direction.x+direction.y*direction.y+direction.z*direction.z);
     // Imported model points along -Z. Aim at the cart rather than the camera.
     const Vector3 desiredRotation{std::asin((std::clamp)(direction.y/(std::max)(length,0.001f),-1.0f,1.0f)),
-        std::atan2(-direction.x,-direction.z),0.16f*std::sin(age_*0.8f)};
-    if(state_.revision<=1) pursuer_.rotation=desiredRotation;
+        std::atan2(-direction.x,-direction.z),starting_ ? 0.05f*std::sin(startTime_*3.0f) : 0.16f*std::sin(age_*0.8f)};
+    if(state_.revision<=1 || (starting_ && startTime_>=OrbitDuration)) pursuer_.rotation=desiredRotation;
     else {
         const float blend=1.0f-std::exp(-14.0f*dt);
         pursuer_.rotation.x+=(desiredRotation.x-pursuer_.rotation.x)*blend;
@@ -209,22 +215,60 @@ void RailTitleScene::Update(float deltaTime) {
 
 void RailTitleScene::UpdateAttack(float deltaTime) {
     attackCues_.clear();
+    if(railImpact_.active) {
+        railImpact_.age=(std::max)(0.0f,startTime_-DepartureImpactTime);
+        if(railImpact_.age>=0.72f) railImpact_.active=false;
+    }
     for(auto& cloud:dustClouds_) cloud.age+=deltaTime;
     std::erase_if(dustClouds_,[](const auto& cloud){return cloud.age>=RailTitleDustCloud::Lifetime;});
     muzzleFlashTime_ = (std::max)(0.0f,muzzleFlashTime_-deltaTime);
     // Existing shots continue in world space while the cart/camera moves.
     for(auto& shot : shots_) {
-        shot.age += deltaTime;
+        shot.age = shot.railStrike ? (std::max)(0.0f,startTime_-DepartureShotTime) : shot.age+deltaTime;
         const float t = (std::clamp)(shot.age/shot.duration,0.0f,1.0f);
         shot.position = Add(Scale(shot.origin,1-t),Scale(shot.target,t));
+        if(shot.railStrike && !shot.nearMissNotified && startTime_>=DepartureNearMissTime) {
+            shot.nearMissNotified=true;
+            attackCues_.push_back({RailTitleAttackCueKind::NearMiss,shot.position});
+        }
         if(t>=1.0f) {
-            attackCues_.push_back({RailTitleAttackCueKind::GroundImpact,shot.target});
-            dustClouds_.push_back({shot.target,0.0f,shot.id});
+            if(shot.railStrike) {
+                railImpact_={shot.target,(std::max)(0.0f,startTime_-DepartureImpactTime),shot.id,true};
+                attackCues_.push_back({RailTitleAttackCueKind::RailImpact,shot.target});
+            } else {
+                attackCues_.push_back({RailTitleAttackCueKind::GroundImpact,shot.target});
+                dustClouds_.push_back({shot.target,0.0f,shot.id});
+            }
         }
     }
     std::erase_if(shots_,[](const auto& shot){return shot.age>=shot.duration;});
     if(Blackout()>=0.2f) { shots_.clear(); attackCues_.clear(); dustClouds_.clear(); }
     attackTime_ += deltaTime;
+    if(starting_ && !departureShotFired_ && deltaTime>0.0f && startTime_>=DepartureShotTime) {
+        departureShotFired_=true;
+        RailTitleShot shot;
+        shot.id=++shotSequence_; shot.railStrike=true;
+        shot.duration=DepartureImpactTime-DepartureShotTime;
+        shot.target=DepartureImpactTarget();
+        // Evaluate the authored firing pose at its exact clock time. Neither
+        // the muzzle nor the target depends on the frame that crosses it.
+        const Vector3 position=DepartureDronePosition(DepartureShotTime);
+        const Vector3 delta=Add(shot.target,Scale(position,-1));
+        const float length=std::sqrt(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z);
+        const Vector3 rotation{std::asin(delta.y/length),std::atan2(-delta.x,-delta.z),
+            0.05f*std::sin(DepartureShotTime*3.0f)};
+        const auto world=MakeAffineMatrix(pursuer_.scale,rotation,position);
+        const Vector3 local{0.30f,-0.61f,-0.99f};
+        shot.origin={local.x*world.m[0][0]+local.y*world.m[1][0]+local.z*world.m[2][0]+world.m[3][0],
+            local.x*world.m[0][1]+local.y*world.m[1][1]+local.z*world.m[2][1]+world.m[3][1],
+            local.x*world.m[0][2]+local.y*world.m[1][2]+local.z*world.m[2][2]+world.m[3][2]};
+        shot.age=startTime_-DepartureShotTime;
+        const float t=shot.age/shot.duration;
+        shot.position=Add(Scale(shot.origin,1-t),Scale(shot.target,t));
+        shots_.push_back(shot);
+        attackCues_.push_back({RailTitleAttackCueKind::Muzzle,shot.origin});
+        muzzleFlashTime_=0.12f;
+    }
     if(!starting_ && deltaTime>0.0f && attackTime_+0.000001>=nextShotTime_) {
         RailTitleShot shot;
         shot.id = ++shotSequence_;
@@ -268,6 +312,29 @@ RailTitleSandGrain RailTitleScene::EvaluateSandGrain(const RailTitleDustCloud& c
     grain.radius=0.018f+0.025f*random(4);
     grain.opacity=cloud.age>=random(3)*0.055f ? 0.90f*(1.0f-(std::clamp)((age-landing)/0.22f,0.0f,1.0f)) : 0.0f;
     return grain;
+}
+
+RailTitleSandGrain RailTitleScene::EvaluateRailSpark(const RailTitleRailImpact& impact, uint32_t index) {
+    const auto random=[&](uint32_t channel) {
+        uint32_t bits=impact.seed*747796405u+index*2891336453u+channel*277803737u;
+        bits=((bits>>((bits>>28u)+4u))^bits)*277803737u;
+        return float((bits>>22u)^bits)/float(UINT32_MAX);
+    };
+    const float age=(std::max)(0.0f,impact.age);
+    const float life=0.34f+0.005f*float(index%RailImpactSparkCount);
+    const float angle=2.0f*Pi*random(0);
+    const float speed=3.8f+4.2f*random(1),lift=7.0f+4.5f*random(2);
+    const float drag=std::exp(-1.8f*age),spread=speed*(1-drag)/1.8f;
+    const float fade=(std::clamp)((age-0.08f)/(life-0.08f),0.0f,1.0f);
+    RailTitleSandGrain spark;
+    // Metal fragments leave the contact together, then separate ballistically.
+    // Ground dust retains its slower, staggered emission in EvaluateSandGrain.
+    spark.position=Add(impact.position,{std::cos(angle)*spread,
+        (std::max)(0.04f+lift*age-4.9f*age*age,0.04f),std::sin(angle)*spread});
+    spark.velocity={std::cos(angle)*speed*drag,lift-9.8f*age,std::sin(angle)*speed*drag};
+    spark.radius=0.060f+0.024f*random(3);
+    spark.opacity=impact.active && age<life ? 0.95f*(1-fade*fade*(3-2*fade)) : 0.0f;
+    return spark;
 }
 
 int RailTitleScene::HitTest(float x,float y,float width,float height) {
@@ -346,6 +413,8 @@ void RailTitleScene::BeginStart() {
     track_.Bake(trackDefinition,path_);
     state_.distance=state_.previousDistance=path_.SegmentStartDistance(joinIndex);
     starting_ = true;
+    departureAge_=age_;
+    shots_.clear(); railImpact_={}; departureShotFired_=false;
     startTime_ = 0.0f;
     startTravel_=travel_; startDistance_=state_.distance;
     CourseTerrainPlacement tunnel;
@@ -385,8 +454,14 @@ float RailTitleScene::MenuOpacity() const {
 }
 float RailTitleScene::Blackout() const {
     // Wait until the chase camera has crossed the mouth, not just the cart.
-    const float t=(std::clamp)((TunnelCameraDepth()-2.0f)/2.5f,0.0f,1.0f);
-    return t*t*(3.0f-2.0f*t);
+    // Preserve the readable spread at its existing speed. Once the screen is
+    // mostly covered, finish the peripheral pockets without a long black hold.
+    const float elapsed=TunnelCameraDepth()/Speed;
+    const float tailStart=FilmBurnDuration*FilmBurnTailBegin;
+    if(elapsed<=tailStart)
+        return (std::clamp)(elapsed/FilmBurnDuration,0.0f,FilmBurnTailBegin);
+    const float tail=(std::clamp)((elapsed-tailStart)/FilmBurnTailDuration,0.0f,1.0f);
+    return FilmBurnTailBegin+(1.0f-FilmBurnTailBegin)*tail;
 }
 float RailTitleScene::TunnelCameraDepth() const {
     return starting_ ? static_cast<float>(travel_-startTravel_)-TunnelLead-ChaseDistance() : -TunnelLead;
@@ -399,4 +474,125 @@ float RailTitleScene::TunnelShade() const {
 float RailTitleScene::AmbienceGain() const {
     const float t=(std::clamp)(age_/0.8f,0.0f,1.0f);
     return t*t*(3.0f-2.0f*t)*(1.0f-Blackout());
+}
+float RailTitleScene::RollingGain() const {
+    const float t=(std::clamp)(age_/0.8f,0.0f,1.0f);
+    // Mechanical motion survives the blackout; the same voice plays in-game.
+    return t*t*(3.0f-2.0f*t);
+}
+
+Vector2 RailTitleScene::LightSweep() const {
+    if(!railImpact_.active) return {};
+    const float p=railImpact_.age/LightSweepDuration;
+    if(p<=0.0f || p>=1.0f) return {};
+    const float pulse=std::sin(Pi*p);
+    return {-8.0f+16.0f*p,pulse*pulse};
+}
+float RailTitleScene::LightSweepIllumination(Vector3 worldPosition) const {
+    const auto sweep=LightSweep();
+    if(sweep.y<=0.0f) return 0.0f;
+    const auto sample=path_.Evaluate(state_.distance);
+    const auto delta=Add(worldPosition,Scale(sample.position,-1));
+    const auto dot=[](Vector3 a,Vector3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; };
+    const float along=dot(delta,sample.tangent);
+    const float across=dot(delta,sample.right);
+    const float height=dot(delta,sample.up);
+    const float sheet=(across+0.28f*along-0.80f*height-sweep.x)/1.4f;
+    return sweep.y*std::exp(-sheet*sheet)*std::exp(-along*along/200.0f);
+}
+float RailTitleScene::RailReflectionOpacity() const {
+    if(!railImpact_.active) return 0.0f;
+    const float p=(railImpact_.age-ReflectionDelay)/ReflectionDuration;
+    if(p<=0.0f || p>=1.0f) return 0.0f;
+    // The reflection precedes the burn, so it is not hidden by its mask.
+    const float pulse=std::sin(Pi*p);
+    return 1.50f*pulse*pulse;
+}
+float RailTitleScene::RailReflectionDistance() const {
+    const float p=(std::clamp)((railImpact_.age-ReflectionDelay)/ReflectionDuration,0.0f,1.0f);
+    return DepartureImpactAhead-(DepartureImpactAhead-3.0f)*p;
+}
+float RailTitleScene::RailImpactLight() const {
+    if(!railImpact_.active) return 0.0f;
+    const float decayAge=(std::max)(0.0f,railImpact_.age-0.04f);
+    return 2.9f*std::exp(-decayAge*11.0f)*
+        (1.0f-(std::clamp)(railImpact_.age/0.38f,0.0f,1.0f));
+}
+float RailTitleScene::LensLeakAge() const {
+    return starting_ && railImpact_.seed != 0
+        ? (std::max)(0.0f,startTime_-DepartureImpactTime) : 0.0f;
+}
+float RailTitleScene::LensLeakStrength() const {
+    // Only a confirmed scripted impact can expose the lens. Its afterimage
+    // persists beyond the world spark lifetime, on the same presentation clock.
+    if(!starting_ || railImpact_.seed == 0) return 0.0f;
+    const float age=LensLeakAge();
+    const float onset=(std::clamp)(age/0.04f,0.0f,1.0f);
+    return onset*onset*(3.0f-2.0f*onset)*std::exp(-age*1.55f)*
+        (1.0f-0.55f*TunnelShade());
+}
+Vector3 RailTitleScene::DepartureDronePosition(float elapsed) const {
+    const float age=departureAge_+elapsed;
+    const float gap=32.0f+3.0f*std::sin(age*0.55f);
+    const auto behind=path_.Evaluate(startDistance_+Speed*elapsed-gap);
+    Vector3 position=Add(behind.position,Scale(behind.right,-10.0f+2.4f*std::sin(age*0.8f)));
+    position.y+=3.6f+0.65f*std::sin(age*1.7f);
+    return position;
+}
+Vector3 RailTitleScene::DepartureImpactTarget() const {
+    const auto sample=path_.Evaluate(startDistance_+Speed*DepartureImpactTime+DepartureImpactAhead);
+    const auto& track=track_.Result().definition;
+    return Add(sample.position,Add(Scale(sample.right,-track.trackGauge*0.5f),
+        Scale(sample.up,track.railHeadVerticalOffset+track.railHeadHeight*0.5f+0.012f)));
+}
+CourseCameraKey RailTitleScene::DepartureCameraRig() {
+    CourseCameraKey rig{};
+    rig.backDistance=8.0f;
+    rig.verticalOffset=5.2f;
+    rig.lateralOffset=0.0f;
+    rig.lookAheadDistance=14.0f;
+    rig.lookUpOffset=2.0f;
+    rig.lookForwardOffset=0.0f;
+    rig.fovY=0.70f;
+    rig.roll=0.0f;
+    return rig;
+}
+
+void RailTitleGameplayEntry::Reset() {
+    elapsed_=0.0;
+    begun_=false;
+    frame_={};
+}
+void RailTitleGameplayEntry::Begin() {
+    if(begun_) return;
+    begun_=true;
+    elapsed_=0.0;
+    frame_={};
+    frame_.blackout=1.0f;
+    frame_.cameraHandoffWeight=1.0f;
+    frame_.reticleProgress=frame_.gaugeProgress=frame_.informationOpacity=frame_.rollingHandoff=0.0f;
+    frame_.blockingGameplay=true;
+}
+void RailTitleGameplayEntry::Update(float deltaTime) {
+    frame_.reticleStarted=frame_.gaugesStarted=false;
+    if(!begun_ || !frame_.blockingGameplay) return;
+    const double previous=elapsed_;
+    if(std::isfinite(deltaTime)) elapsed_=(std::min)(double(Duration),
+        elapsed_+double((std::clamp)(deltaTime,0.0f,0.05f)));
+    const auto ramp=[&](double from,double to) {
+        const float t=static_cast<float>((std::clamp)((elapsed_-from)/(to-from),0.0,1.0));
+        return t*t*(3.0f-2.0f*t);
+    };
+    frame_.blackout=1.0f-static_cast<float>((std::clamp)(
+        (elapsed_-RevealBegin)/double(RevealEnd-RevealBegin),0.0,1.0));
+    // Hold the departing composition until the cart begins to emerge, then
+    // pull back to the authored gameplay rig before combat/input unlocks.
+    frame_.cameraHandoffWeight=1.0f-ramp(0.68,double(Duration));
+    frame_.reticleProgress=ramp(0.76,1.10);
+    frame_.gaugeProgress=ramp(0.96,1.26);
+    frame_.informationOpacity=ramp(1.16,double(Duration));
+    frame_.rollingHandoff=ramp(0.12,double(Duration));
+    frame_.reticleStarted=previous<0.76 && elapsed_>=0.76;
+    frame_.gaugesStarted=previous<0.96 && elapsed_>=0.96;
+    frame_.blockingGameplay=elapsed_<double(Duration);
 }

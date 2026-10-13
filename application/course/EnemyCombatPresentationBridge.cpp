@@ -104,8 +104,14 @@ void ApplyProceduralAnimation(
         ? Saturate(state.phaseElapsedSeconds / duration)
         : 0.0f;
     const float pulse = std::sin(progress * kPi);
-    const float ambientPhase = actor.age * 3.2f +
-        static_cast<float>(actor.actorId % 11u) * 0.43f;
+    const bool individualHover = actor.desc.meshId == "twin_shield_hull" &&
+        actor.behaviorDefinition.maintainForwardEngagementBand &&
+        !actor.behaviorDefinition.choreographedAttackPass;
+    const float ambientPhase = individualHover
+        ? actor.behaviorState.hoverMotionSeconds * (0.8f +
+            0.22f * std::sin(actor.behaviorState.deterministicPhase)) +
+            actor.behaviorState.deterministicPhase
+        : actor.age * 3.2f + static_cast<float>(actor.actorId % 11u) * 0.43f;
 
     output.actorId = actor.actorId;
     output.animation = ResolveAnimation(state.phase);
@@ -387,6 +393,15 @@ void ApplyProceduralAnimation(
         output.coreColor = {0.08f, 0.30f, 0.42f, output.materialColor.w};
         output.contrastBackdropStrength = 0.22f;
     }
+    if (actor.desc.meshId == "twin_shield_hull" &&
+        state.phase != EnemyCombatPhase::Spawning &&
+        state.phase != EnemyCombatPhase::Dying && state.phase != EnemyCombatPhase::Retired) {
+        // Rigid floating machinery: charge/recoil move the pose and shields,
+        // not the hull's size. Keep banking gentle enough to track and aim.
+        output.scaleMultiplier = 1.0f;
+        output.bodyScale = {1,1,1};
+        output.rotationOffset.z = (std::clamp)(output.rotationOffset.z,-0.16f,0.16f);
+    }
     if (actor.entranceExitState.initialized) {
         output.scaleMultiplier *= actor.entranceExitState.presentationScale;
         output.materialColor.w *= actor.entranceExitState.presentationAlpha;
@@ -441,6 +456,13 @@ int EventPriority(EnemyCombatEventKind kind) noexcept {
     return 7;
 }
 } // namespace
+
+EnemyCombatActorPresentation ResolveEnemyCombatActorPresentation(
+    const CourseEnemyActor& actor, const EnemyCombatPresentationSettings& settings) {
+    EnemyCombatActorPresentation output{};
+    ApplyProceduralAnimation(output, actor, settings);
+    return output;
+}
 
 void EnemyCombatPresentationBridge::Reset() {
     frame_ = {};
@@ -660,6 +682,8 @@ void EnemyCombatPresentationBridge::Update(
                         vfx.worldPosition = Add(muzzleSample.position,
                             Add(Scale(muzzleSample.right,muzzle.x),Scale(muzzleSample.up,muzzle.y)));
                     }
+                    if(actor->weaponMount.ready) vfx.worldPosition=ResolveEnemyProjectileWorldPosition(
+                        *input.railPath,ResolveEnemyProjectileMuzzleRailPosition(*actor,0));
                     vfx.cueId = "enemy_combat_muzzle";
                     vfx.effectName = "enemy_muzzle_burst";
                     vfx.color = {1.0f, 0.72f, 0.20f, 0.96f};
@@ -685,6 +709,13 @@ void EnemyCombatPresentationBridge::Update(
                 if (frame_.vfxCommands.size() <
                     input.settings.maximumVfxCommandsPerFrame) {
                     frame_.vfxCommands.push_back(vfx);
+                    if(attackVfx && actor->weaponMount.ready && actor->desc.bulletCount>1) {
+                        vfx.worldPosition=ResolveEnemyProjectileWorldPosition(*input.railPath,
+                            ResolveEnemyProjectileMuzzleRailPosition(*actor,1));
+                        if(frame_.vfxCommands.size()<input.settings.maximumVfxCommandsPerFrame)
+                            frame_.vfxCommands.push_back(vfx);
+                        else ++frame_.droppedVfxCommands;
+                    }
                 } else {
                     ++frame_.droppedVfxCommands;
                 }

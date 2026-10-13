@@ -1,4 +1,5 @@
 #include "RailCameraDirector.h"
+#include "../diagnostics/DronePerformanceProfile.h"
 #include "GameplaySettingsValidation.h"
 
 #include "CourseSpawnRuntime.h"
@@ -676,6 +677,7 @@ void RailCameraDirector::AddFeedbackImpulse(float shakeAmplitude, float fovKick,
 }
 
 RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFrameInput& input) {
+    const drone_perf::Scope profile(drone_perf::Stage::Camera);
     RailCameraDirectorFrame frame{};
     if (input.course == nullptr || input.railPath == nullptr || input.railPath->Length() <= 0.0f) {
         lastFrame_ = frame;
@@ -771,6 +773,23 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     previousTransitionFrame_ = frame;
     previousTransitionCameraAnchor_ = cameraSample;
     previousTransitionTargetAnchor_ = lookSample;
+    const float handoffWeight = std::isfinite(input.titleHandoffWeight)
+        ? (std::clamp)(input.titleHandoffWeight, 0.0f, 1.0f) : 0.0f;
+    if (handoffWeight > 0.0f) {
+        const auto& rig = input.titleHandoffRig;
+        const Vector3 departingEye = Add(cameraSample.position,
+            Add(Scale(cameraSample.tangent, -rig.backDistance),
+                Add(Scale(cameraSample.up, rig.verticalOffset), Scale(cameraSample.right, rig.lateralOffset))));
+        const Vector3 departingTarget = Add(cameraSample.position,
+            Add(Scale(cameraSample.tangent, rig.lookAheadDistance + rig.lookForwardOffset),
+                Scale(cameraSample.up, rig.lookUpOffset)));
+        frame.position = LerpVector3(frame.position, departingEye, handoffWeight);
+        frame.target = LerpVector3(frame.target, departingTarget, handoffWeight);
+        frame.baseTarget = frame.target;
+        frame.rig.fovY = Lerp(frame.rig.fovY, rig.fovY, handoffWeight);
+        frame.rig.roll = Lerp(frame.rig.roll, rig.roll, handoffWeight);
+        AppendMode(frame.mode, "Title Handoff");
+    }
     ApplyVehicleFraming(frame, input, cameraSample);
     // Collision and sight checks must inspect the corrected/transitioned pose.
     ApplyCameraCollisionProtection(frame, input, cameraSample, frame.mode);
@@ -849,8 +868,10 @@ void RailCameraDirector::MeasureVehicleFraming(
     }
     frame.vehicleScreenWidth = (right - left) * 0.5f;
     // Allow a small presentation-shake margin beyond the correction target.
-    frame.vehicleFramingSafe = frame.vehicleScreenTop >= 0.62f &&
-        frame.vehicleScreenWidth <= 0.36f;
+    const float handoffWeight = std::isfinite(input.titleHandoffWeight)
+        ? (std::clamp)(input.titleHandoffWeight, 0.0f, 1.0f) : 0.0f;
+    frame.vehicleFramingSafe = frame.vehicleScreenTop >= Lerp(0.62f, 0.47f, handoffWeight) &&
+        frame.vehicleScreenWidth <= Lerp(0.36f, 0.62f, handoffWeight);
 }
 
 void RailCameraDirector::ApplyVehicleFraming(
@@ -872,9 +893,12 @@ void RailCameraDirector::ApplyVehicleFraming(
         : 16.0f / 9.0f;
     const float tanY = std::tan((std::max)(0.05f, frame.rig.fovY) * 0.5f);
     const float tanX = tanY * (std::max)(0.25f, aspect);
+    const float handoffWeight = std::isfinite(input.titleHandoffWeight)
+        ? (std::clamp)(input.titleHandoffWeight, 0.0f, 1.0f) : 0.0f;
+    const float widthLimit = Lerp(0.34f, 0.60f, handoffWeight);
     // Move along the view axes without changing aim direction or zooming FOV.
-    // A bounded search keeps the body below 65% of the screen and under 34%
-    // of its width. The authored rig remains responsible for normal framing.
+    // The title reveal permits its close hero shot; the combat lane's ordinary
+    // 34% width and 65% top limits return smoothly before input unlocks.
     const auto fitsWidth = [&](float pullback) {
         float left = 1.0e6f;
         float rightEdge = -1.0e6f;
@@ -888,7 +912,7 @@ void RailCameraDirector::ApplyVehicleFraming(
             left = (std::min)(left, x);
             rightEdge = (std::max)(rightEdge, x);
         }
-        return (rightEdge - left) * 0.5f <= 0.34f;
+        return (rightEdge - left) * 0.5f <= widthLimit;
     };
     float pullback = 0.0f;
     if (!fitsWidth(0.0f)) {
@@ -909,7 +933,7 @@ void RailCameraDirector::ApplyVehicleFraming(
     for (const Vector3& corner : input.vehicleBoundsCorners) {
         const Vector3 delta = Subtract(corner, frame.position);
         const float depth = Dot(delta, forward) + vehicleFramingPullback_;
-        lift = (std::max)(lift, Dot(delta, up) + 0.30f * tanY * depth);
+        lift = (std::max)(lift, Dot(delta, up) + 0.30f * (1.0f-handoffWeight) * tanY * depth);
     }
     vehicleFramingLift_ = (std::max)(
         (std::clamp)(lift, 0.0f, 8.0f), vehicleFramingLift_ * decay);

@@ -37,6 +37,9 @@ struct RailLockOnFrameInput {
 class RailLockOnSystem {
 public:
     void Reset();
+    // Prepare the visible startup reticle without polling input, acquiring
+    // targets, advancing timers or running world visibility queries.
+    void PrepareReticleForGameplay(const RailLockOnFrameInput& input);
     void Update(const RailLockOnFrameInput& input);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw) const;
 

@@ -1,9 +1,9 @@
 actor|drone_scout|Tutorial Scout Drone|twin_shield_hull|1.05|18|16|0.55|0.78|1.0|1.0|assault_magenta_single
 combat|1.40|0.35|25|assault_magenta_single
 movement|1.0
-behavior|assault|0.20|0.15|0.25|0.70|1.40|0.20|0.35|0|0|0|true
-# Keep tutorial threats ahead of the moving cart until their side departure.
+behavior|assault|0.20|0.15|0.25|0.70|2.60|0.65|0.65|3.0|1.3|0.18|true
+# Keep tutorial threats hovering ahead until defeated or their lifetime ends.
 engagement_band|true|36|46|70|14|2.2|34|10
-# One readable aimed shot, then an outward departure.
+# Repeat readable shots with recovery time instead of departing after firing.
 # attack_pass|enabled|startDelay|recoil|nextActorPreparationLead
-attack_pass|true|0.35|0.90|0.30
+attack_pass|false|0.35|0.90|0.30

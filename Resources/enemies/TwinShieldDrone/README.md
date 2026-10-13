@@ -30,6 +30,65 @@ their existing actor definitions. A shield is visual armour, not a new immunity 
 Object material mode 10 adds derivative normal mapping and GGX metallic/roughness
 lighting; mode 11 lights the textured sensor independently of scene illumination.
 
+Gameplay scout/basic/leader actors keep the existing 36–70 m forward engagement
+band, with stable identity-derived preferred distances of 42–63 m, and remain targetable after firing. Their authored lateral
+and vertical hover offsets feed actual actor positions, so aiming/collision follow
+the motion. A nominal 0.14–0.18 Hz drift, 3.0–3.8 m lateral and 1.3–1.8 m vertical amplitude with restrained
+banking convey lift; rigid hull scale stays constant during charge and recovery.
+Readable warning/token admission precedes every repeat shot, with 2.4–2.6 s
+cooldowns. Normal forward-hover drones remain targetable beyond their old
+pass lifetime until defeated. Section/Wave completion and formation exit
+requests never fade or remove a living normal drone. Camera/cart clearance
+repositions it and cancels an unsafe shot, without retiring it; scene reset
+still clears actors. Completed-Wave checkpoints restore surviving drones.
+First attacks get a small admission priority boost so
+surviving repeat attackers do not starve new arrivals. Dedicated spire
+single-pass encounters and rear chaser behavior retain
+their choreography. In cave gameplay, mode 10 uses a cool upper-side GGX key,
+weaker warm lower-side bounce and hemisphere ambient. The stronger key and
+steel-blue edge reflection separate the hull/shields from brown cave rock while
+retaining face shading and mapped roughness. Broad ambient/edge terms use the
+geometric normal to avoid turning texture scratches into a glowing outline.
+An additional soft frontal GGX source and cool metal ambient reveal the sensor
+housing and broad shield faces when the enemy occupies few screen pixels.
+Title shading is unchanged.
+
+`EnemyFormationSystem` adds stable identity-derived hover homes after authored
+formation cohesion. Independent forward-hover drones use only 5 percent of the
+forward cohesion correction and 15 percent of lateral/vertical correction.
+Other formations retain full cohesion and their entrance/attack staging.
+Six deterministic spacing passes consider nearby hovering drones across wave
+boundaries using a screen-oriented ellipsoid. Forward correction is now only
+±3 m for separation; the base movement controller holds each actor's own
+preferred distance. Private lateral homes span ±5 m around authored positions,
+with a 2.5 m outward bias for actors authored left/right of center,
+with up to ±8 m of correction; private heights target 4.5–11.5 m above the rail.
+Correction permits 6 m down/9 m up, with the existing floor clearance guard.
+Rail corridor radius and model clearance additionally bound lateral/height
+goals. Actors enter into their own region while still under entrance staging,
+so they do not all materialize in a central cluster and slowly disperse.
+The body approaches solved positions at at most 2 m/s (0.65 m/s during aiming
+or admitted warning). Offsets are applied to the actual runtime actor pose and
+removed once in BeginFrame, so targeting, collision and rendering agree and
+long sessions cannot accumulate drift. Surviving homes never depend on live
+formation indices; death/exit poses retain their last offset. Retry checkpoints
+copy the smoothed state. Single-pass guards, turrets, rear chasers and the title
+pursuer keep their existing movement paths.
+
+Gameplay screen-presence measurement uses the shield's authored 1.6-unit half
+height and local Y scale rather than treating this mesh as a unit-radius sphere.
+Gameplay models use a stable 1.30 multiplier shared with this measurement, so
+the body is larger without losing distance-dependent perspective. Additional
+readability magnification is capped at 1.25 (1.625 combined), with the same idle/engaged threshold (65 percent
+of the legacy engaged diameter) to retain perspective and avoid a charging-size
+jump. The sphere-only opening scout enlargement is omitted for this mesh.
+Collision radius is unchanged.
+Forward-hover drones follow individual, multi-frequency flight paths in three
+axes, with a checkpointed continuous flight clock. Aiming smoothly slows that
+clock to 24 percent; recovery resumes it rather than repeating a side-hop.
+Bank/yaw/pitch respond to motion velocity, with restrained limits. Other enemy
+archetypes and single-pass choreography retain their existing movement.
+
 The title scene submits the same four parts through a presentation-only
 `TwinShieldDronePose`. It follows 29-35 rail metres behind the cart, weaving and
 banking slightly inside the curve so its silhouette stays clear of the logo.

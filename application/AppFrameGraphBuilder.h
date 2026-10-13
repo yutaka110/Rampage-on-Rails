@@ -61,6 +61,21 @@ struct AppFrameGraphBuildContext {
     const EffectRuntimeFrame* effectRuntime = nullptr;
     ParticleRenderFallback primaryParticleFx{};
     float beamTime = 0.0f;
+    // Presentation-only; zero keeps the normal render path allocation-free.
+    float railFilmBurnProgress = 0.0f;
+    // Incoming reveal uses a quieter optical treatment than outgoing blackout.
+    float railFilmBurnTreatmentStrength = 1.0f;
+    Vector2 railFilmBurnFocus{0.5f,0.4f};
+    Vector2 railFilmBurnLightSource{0.44f,0.54f};
+    float railFilmBurnLensStrength = 0.0f;
+    float railFilmBurnLensAge = 0.0f;
+    float railFilmBurnTunnelShade = 0.0f;
+    bool railFilmBurnIncoming = false;
+    bool HasRailFilmBurnPresentation() const {
+        return railFilmBurnProgress > 0.0f || railFilmBurnLensStrength > 0.0f;
+    }
+    // Burn the viewport texture, leaving editor controls outside the effect.
+    bool railFilmBurnInEditorViewport = false;
     TerrainChunkManager* terrainChunkManager = nullptr;
     const editor::EditorProductionScenePipeline* productionScenePipeline = nullptr;
     const editor::EditorTransientMeshRenderPath* transientMeshRenderPath = nullptr;

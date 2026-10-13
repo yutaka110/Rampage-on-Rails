@@ -90,6 +90,10 @@ struct EnemyBehaviorRuntimeState final {
     float presentationPitchRadians = 0.0f;
     float presentationBankRadians = 0.0f;
     float deterministicPhase = 0.0f;
+    // Individual continuous flight clock; slowing for aim never resets its path.
+    float hoverMotionSeconds = 0.0f;
+    float hoverMotionRate = 1.0f;
+    float hoverPreferredForwardDistance = 0.0f;
     float engagementBandForwardDistance = 0.0f;
     float engagementBandVelocity = 0.0f;
     float attackPassHoldForwardDistance = 0.0f;
@@ -148,6 +152,11 @@ struct EnemyBehaviorFrame final {
     uint32_t engagementBandForcedExits = 0;
     uint64_t revision = 0;
 };
+
+// Advances the same movement and banking used by live actors. Predictions call
+// this on a private actor copy, without events, reservations or world queries.
+bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
+    float playerDistance, float playerForwardSpeed);
 
 class EnemyBehaviorSystem final {
 public:

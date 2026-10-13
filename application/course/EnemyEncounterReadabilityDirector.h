@@ -17,6 +17,10 @@ struct EnemyAttackTelegraphFrame;
 struct EnemyProjectilePresentationFrame;
 struct EnemyAttackDefensePresentationFrame;
 
+// Shared by silhouette measurement and gameplay render submission. This
+// stable model scale preserves perspective and never pulses with charge.
+inline constexpr float kTwinShieldGameplayModelScale = 1.30f;
+
 struct EnemyEncounterReadabilitySettings final {
     CombatTruthGateSettings truth{};
     EnemyScreenPresenceSettings presence{};

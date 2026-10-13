@@ -1,5 +1,12 @@
 #include <cstdlib>
+#include <map>
+#include <numbers>
+#include <set>
 #include "../course/RailTitleScene.h"
+#include "../AppFrameGraphBuilder.h"
+#include "../AppImGuiLayer.h"
+#include "../AppPostProcessPipeline.h"
+#include "graphics/RenderGraph.h"
 #include "EditorCoreRegressionTests.h"
 #include "../PostProcessPresetStore.h"
 
@@ -270,6 +277,7 @@
 #include "../course/RailPlayerMovementSystem.h"
 #include "../course/RailPlayerVehicleMountSystem.h"
 #include "../course/RailVehicleMovementSystem.h"
+#include "../course/RailTravelPrediction.h"
 #include "../course/RailVehiclePresentationBridge.h"
 #include "../course/RailVehicleRideDynamicsSystem.h"
 #include "../course/RailVehicleTrackContactPoseSolver.h"
@@ -350,6 +358,7 @@
 #include "../course/WeaponDefinitionRegistry.h"
 #include "../course/WeaponFireSystem.h"
 #include "../terrain/TerrainChunkManager.h"
+#include "../terrain/TerrainCollisionWorld.h"
 #include "../terrain/TerrainVolumeField.h"
 #include "audio/AudioSystem.h"
 
@@ -22118,6 +22127,472 @@ void TestRailWorldRaycast(RegressionRunner& runner) {
         "world raycast should refine the procedural terrain SDF crossing and return a facing normal");
 }
 
+void TestRailWorldRaycastFrameCache(RegressionRunner& runner) {
+    const auto sameHit = [](const RailAimHit& a, const RailAimHit& b) {
+        const auto closeVector = [](const Vector3& x, const Vector3& y) {
+            return std::abs(x.x-y.x) < 0.00001f && std::abs(x.y-y.y) < 0.00001f &&
+                std::abs(x.z-y.z) < 0.00001f;
+        };
+        return a.hit == b.hit && a.kind == b.kind && a.actorId == b.actorId &&
+            a.sourceIndex == b.sourceIndex && std::abs(a.distance-b.distance) < 0.00001f &&
+            closeVector(a.position,b.position) && closeVector(a.normal,b.normal);
+    };
+    RailPath rail;
+    rail.SetControlPoints({{{0,0,0},18,32}, {{10,4,80},18,32},
+        {{-20,2,160},18,32}, {{30,12,240},18,32}});
+    TerrainGenerationSettings settings{};
+    TerrainEditLayer edits, preview;
+    CourseSpawnRuntime runtime;
+    CourseAsset course;
+    RailAimState aim{};
+    aim.valid = true;
+    aim.maxDistance = 100.0f;
+    RailWorldRaycastInput input{};
+    input.aim = &aim;
+    input.railPath = &rail;
+    input.terrainSettings = &settings;
+    input.terrainEdits = &edits;
+    input.terrainPreview = &preview;
+    input.spawnRuntime = &runtime;
+    input.course = &course;
+    input.playerDistance = 50.0f;
+    std::vector<RailAimState> rays;
+    std::vector<RailAimHit> expected;
+    for (uint32_t i = 0; i < 32; ++i) {
+        const auto sample = rail.Evaluate(25.0f + static_cast<float>(i)*4.0f);
+        aim.worldRayOrigin = sample.position;
+        aim.worldRayDirection = i % 3 == 0 ? sample.right :
+            (i % 3 == 1 ? sample.up : sample.tangent);
+        aim.maxDistance = 24.0f + static_cast<float>(i)*3.0f;
+        rays.push_back(aim);
+        expected.push_back(RailWorldRaycast::Query(input));
+    }
+    {
+        const RailWorldRaycast::FrameCacheScope scope;
+        for (size_t i = 0; i < rays.size(); ++i) {
+            aim = rays[i];
+            runner.Expect(sameHit(RailWorldRaycast::Query(input), expected[i]),
+                "cached curved-rail hits/misses, entry distance and normals must match reference");
+            const auto before = RailWorldRaycast::CacheStats();
+            {
+                const RailWorldRaycast::FrameCacheScope nested;
+                runner.Expect(sameHit(RailWorldRaycast::Query(input), expected[i]),
+                    "nested frame scope should share the identical terrain result");
+            }
+            const auto after = RailWorldRaycast::CacheStats();
+            runner.Expect(after.terrainResultHits == before.terrainResultHits+1 &&
+                after.railEvaluations == before.railEvaluations,
+                "identical terrain query must skip marching and rail evaluation entirely");
+        }
+        const auto stats = RailWorldRaycast::CacheStats();
+        runner.Expect(stats.railEvaluations > 0 && stats.railSampleHits > stats.railEvaluations,
+            "coarse grids and repeated refinement distances should reuse exact rail samples");
+    }
+    const auto compareChanged = [&]() {
+        const auto reference = RailWorldRaycast::Query(input);
+        const RailWorldRaycast::FrameCacheScope scope;
+        RailWorldRaycast::Query(input);
+        const auto before = RailWorldRaycast::CacheStats().terrainResultHits;
+        settings.canyonHalfWidth += 17.0f;
+        const auto changed = RailWorldRaycast::Query(input);
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == before,
+            "same-address terrain settings changes must invalidate result cache");
+        return std::pair<RailAimHit,RailAimHit>{reference,changed};
+    };
+    const auto settingsHits = compareChanged();
+    runner.Expect(sameHit(settingsHits.second, RailWorldRaycast::Query(input)),
+        "changed terrain settings must still match an uncached query");
+    {
+        const RailWorldRaycast::FrameCacheScope scope;
+        RailWorldRaycast::Query(input);
+        const auto before = RailWorldRaycast::CacheStats().terrainResultHits;
+        TerrainBrushStamp stamp{};
+        stamp.strokeGuid = "ray-cache-stroke";
+        stamp.stampGuid = "ray-cache-stamp";
+        stamp.distance = 50.0f;
+        stamp.radius = 30.0f;
+        stamp.strength = 4.0f;
+        runner.Expect(edits.ApplyStroke({stamp}), "ray-cache terrain edit fixture must be valid");
+        RailWorldRaycast::Query(input);
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == before,
+            "same-frame terrain edits must invalidate cached geometry");
+        rail.SetControlPoints({{{0,0,0},18,32}, {{50,20,80},18,32},
+            {{-20,2,160},18,32}, {{30,12,240},18,32}});
+        RailWorldRaycast::Query(input);
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == before,
+            "same-address rebuilt rail must invalidate terrain and rail samples");
+        aim.worldRayOrigin.x += 0.01f;
+        RailWorldRaycast::Query(input);
+        aim.worldRayDirection.y += 0.01f;
+        RailWorldRaycast::Query(input);
+        aim.maxDistance += 0.01f;
+        RailWorldRaycast::Query(input);
+        input.playerDistance += 0.01f;
+        RailWorldRaycast::Query(input);
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == before,
+            "camera origin, direction, range and search window changes must each re-query");
+    }
+    const auto changedReference = RailWorldRaycast::Query(input);
+    {
+        const RailWorldRaycast::FrameCacheScope nextFrame;
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits == 0 &&
+            sameHit(RailWorldRaycast::Query(input), changedReference) &&
+            RailWorldRaycast::CacheStats().terrainResultHits == 0,
+            "next frame must start empty and match edited reference terrain");
+    }
+    // Full ray results are intentionally live: adding/moving collision objects
+    // must not reuse a stale enemy/miss even with identical terrain query inputs.
+    rail.SetControlPoints({{{0,0,0},18,32}, {{0,0,200},18,32}});
+    aim.worldRayOrigin = {};
+    aim.worldRayDirection = {0,0,1};
+    aim.maxDistance = 100.0f;
+    input.playerDistance = 0.0f;
+    {
+        const RailWorldRaycast::FrameCacheScope scope;
+        RailWorldRaycast::Query(input);
+        CourseEnemyActorDesc enemy{};
+        enemy.spawnDistance = 30.0f;
+        enemy.radius = 3.0f;
+        runtime.SpawnEnemyActor(enemy);
+        runner.Expect(RailWorldRaycast::Query(input).kind == RailAimHitKind::Enemy,
+            "new enemy must be tested live while the identical terrain result is reused");
+        CourseTerrainPlacement wall{};
+        wall.distance = 10.0f;
+        wall.layer = CourseTerrainLayer::GameplayCollision;
+        wall.collisionMode = CourseTerrainCollisionMode::Solid;
+        wall.scale = {5,5,2};
+        course.terrainPlacements.push_back(wall);
+        runner.Expect(RailWorldRaycast::Query(input).kind == RailAimHitKind::TerrainPlacement,
+            "new wall must immediately occlude the live enemy during a cached frame");
+        course.terrainPlacements[0].lateralOffset = 100.0f;
+        runner.Expect(RailWorldRaycast::Query(input).kind == RailAimHitKind::Enemy,
+            "moving a wall must restore the enemy hit without stale occlusion");
+        runner.Expect(RailWorldRaycast::CacheStats().terrainResultHits >= 3,
+            "live scene changes should still share the unchanged procedural terrain result");
+    }
+}
+
+// Optional controlled timing: both modes use the exact same production rail,
+// camera and 35 target rays, without GPU work or live-frame timing differences.
+// CG4_DRONE_CACHE_BENCHMARK=1 writes logs/drone_cache_benchmark.csv.
+void BenchmarkRailWorldRaycastFrameCache(RegressionRunner& runner) {
+    size_t enabledSize = 0;
+    getenv_s(&enabledSize, nullptr, 0, "CG4_DRONE_CACHE_BENCHMARK");
+    if (enabledSize == 0) return;
+    CourseAsset course;
+    std::string error;
+    if (!course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course", &error)) {
+        runner.Expect(false, "ray-cache benchmark production course must load");
+        return;
+    }
+    RailPath rail;
+    rail.SetControlPoints(course.railPoints);
+    TerrainGenerationSettings settings{};
+    CourseSpawnRuntime runtime;
+    const float playerDistance = 1100.0f;
+    const auto cameraRail = rail.Evaluate(playerDistance-12.0f);
+    const Vector3 camera{cameraRail.position.x + cameraRail.up.x*4.0f,
+        cameraRail.position.y + cameraRail.up.y*4.0f,
+        cameraRail.position.z + cameraRail.up.z*4.0f};
+    std::vector<RailAimState> rays;
+    for (uint32_t i = 0; i < 35; ++i) {
+        const float forward = 42.0f + static_cast<float>(i)*0.6f;
+        const float lateral = -12.0f + static_cast<float>(i%7)*4.0f;
+        const float vertical = 5.0f + static_cast<float>(i%5)*1.2f;
+        CourseEnemyActorDesc enemy{};
+        enemy.spawnDistance = playerDistance+forward;
+        enemy.lateralOffset = lateral;
+        enemy.verticalOffset = vertical;
+        runtime.SpawnEnemyActor(enemy);
+        const auto targetRail = rail.Evaluate(enemy.spawnDistance);
+        const Vector3 target{targetRail.position.x+targetRail.right.x*lateral+targetRail.up.x*vertical,
+            targetRail.position.y+targetRail.right.y*lateral+targetRail.up.y*vertical,
+            targetRail.position.z+targetRail.right.z*lateral+targetRail.up.z*vertical};
+        RailAimState aim{};
+        aim.valid = true;
+        aim.worldRayOrigin = camera;
+        aim.worldRayDirection = {target.x-camera.x,target.y-camera.y,target.z-camera.z};
+        aim.maxDistance = std::sqrt(aim.worldRayDirection.x*aim.worldRayDirection.x+
+            aim.worldRayDirection.y*aim.worldRayDirection.y+aim.worldRayDirection.z*aim.worldRayDirection.z)+enemy.radius;
+        rays.push_back(aim);
+    }
+    RailWorldRaycastInput input{};
+    input.railPath = &rail;
+    input.course = &course;
+    input.spawnRuntime = &runtime;
+    input.terrainSettings = &settings;
+    input.terrainEdits = &course.terrainEditLayer;
+    input.playerDistance = playerDistance;
+    input.includeVisualColumns = true;
+    std::ofstream output("logs/drone_cache_benchmark.csv");
+    output << "scenario,cached,enemies,frames,meanRaycastMs,meanTerrainResultHits,meanRailEvaluations\n";
+    for (bool moving : {false,true}) {
+        std::array<double,2> timings{};
+        uint64_t resultHits = 0, railEvaluations = 0;
+        constexpr uint32_t frames = 24;
+        for (uint32_t frame = 0; frame < frames; ++frame) {
+            // Alternate order to reduce warm-up/thermal bias.
+            for (uint32_t order = 0; order < 2; ++order) {
+                const uint32_t cached = (order + frame) % 2;
+                const auto begin = std::chrono::steady_clock::now();
+                std::optional<RailWorldRaycast::FrameCacheScope> cache;
+                if (cached) cache.emplace();
+                for (uint32_t pass = 0; pass < 2; ++pass) {
+                    for (const auto& source : rays) {
+                        auto aim = source;
+                        if (moving && pass == 1) aim.worldRayOrigin.x += 0.001f;
+                        input.aim = &aim;
+                        RailWorldRaycast::Query(input);
+                    }
+                }
+                timings[cached] += std::chrono::duration<double,std::milli>(
+                    std::chrono::steady_clock::now()-begin).count();
+                if (cached) {
+                    const auto stats = RailWorldRaycast::CacheStats();
+                    resultHits += stats.terrainResultHits;
+                    railEvaluations += stats.railEvaluations;
+                }
+            }
+        }
+        for (uint32_t cached = 0; cached < 2; ++cached) {
+            output << (moving ? "moving_camera" : "identical_conditions") << ',' << cached
+                << ",35," << frames << ',' << timings[cached]/frames << ','
+                << (cached ? static_cast<double>(resultHits)/frames : 0.0) << ','
+                << (cached ? static_cast<double>(railEvaluations)/frames : 0.0) << '\n';
+        }
+    }
+}
+
+void TestTerrainCollisionBvh(RegressionRunner& runner) {
+    RailPath rail;
+    rail.SetControlPoints({{{0,0,0},18,32},{{0,0,256},18,32}});
+    TerrainGenerationSettings settings{};
+    settings.volumeRoughness=0; settings.volumeArchScale=0; settings.sdfCarveStrength=0;
+    settings.openingSilhouetteStrength=0; settings.openCanyonStrength=0;
+    settings.motherRockErosionStrength=0; settings.largeScaleErosionStrength=0; settings.surfaceBreakupDensity=0;
+    TerrainEditLayer edits,preview;
+    TerrainCollisionWorld world;
+    world.BuildSynchronously(rail,settings,&edits,&preview,0,rail.Length());
+    runner.Expect(world.GetStats().residentChunks==4 && world.GetStats().triangles>0,
+        "collision chunks must use fixed metre rings independently of render LOD");
+    RailAimState aim{}; aim.valid=true; aim.worldRayOrigin=rail.Evaluate(128).position;
+    aim.worldRayDirection={1,0,0}; aim.maxDistance=70;
+    RailWorldRaycastInput input{}; input.aim=&aim; input.railPath=&rail;
+    input.terrainSettings=&settings; input.terrainEdits=&edits; input.terrainPreview=&preview;
+    input.terrainCollision=&world; input.playerDistance=128; input.includeVisualColumns=true;
+    const auto query=[&](TerrainRaycastMode mode) {
+        input.terrainMode=mode;
+        const RailWorldRaycast::FrameCacheScope frame;
+        return RailWorldRaycast::Query(input);
+    };
+    const auto old=query(TerrainRaycastMode::Reference);
+    const auto fast=query(TerrainRaycastMode::Hybrid);
+    runner.Expect(old.hit && fast.hit && std::abs(old.distance-fast.distance)<0.02f && fast.normal.x< -0.99f,
+        "two-sided BVH must hit the cave wall on a shared chunk boundary");
+    runner.Expect(RailWorldRaycast::CacheStats().bvhQueries==1 && RailWorldRaycast::CacheStats().referenceFallbacks==0,
+        "ordinary visibility must use the BVH without a procedural ray march");
+    aim.worldRayDirection={0,-1,0};
+    runner.Expect(std::abs(query(TerrainRaycastMode::Reference).distance-query(TerrainRaycastMode::Hybrid).distance)<0.02f,
+        "BVH must preserve the floor boundary");
+    aim.worldRayDirection={0,0,1}; aim.maxDistance=50;
+    runner.Expect(!query(TerrainRaycastMode::Hybrid).hit,"interior forward ray must remain unobstructed");
+    aim.worldRayOrigin.x=100;
+    runner.Expect(query(TerrainRaycastMode::Hybrid).distance==0 && query(TerrainRaycastMode::Hybrid).hit,
+        "origin inside solid rock must be blocked at zero distance");
+    aim.worldRayOrigin=rail.Evaluate(128).position; aim.worldRayDirection={1,0,0}; aim.maxDistance=70;
+    for (float lateral:{40.0f,44.0f,48.0f}) {
+        CourseSpawnRuntime actors;
+        CourseEnemyActorDesc enemy{}; enemy.spawnDistance=128; enemy.lateralOffset=lateral; enemy.radius=3;
+        actors.SpawnEnemyActor(enemy); input.spawnRuntime=&actors;
+        const auto reference=query(TerrainRaycastMode::Reference);
+        const auto hybrid=query(TerrainRaycastMode::Hybrid);
+        runner.Expect(reference.kind==hybrid.kind && reference.actorId==hybrid.actorId,
+            "wall-edge actor ordering must match the authoritative reference");
+    }
+    input.spawnRuntime=nullptr;
+    input.includeVisualColumns=false;
+    const auto precise=query(TerrainRaycastMode::Hybrid);
+    runner.Expect(std::abs(precise.distance-old.distance)<0.00001f &&
+        RailWorldRaycast::CacheStats().referenceFallbacks==1,
+        "weapon terrain impacts must preserve exact reference distances");
+    input.includeVisualColumns=true;
+    input.terrainMode=TerrainRaycastMode::Compare;
+    {
+        const RailWorldRaycast::FrameCacheScope frame(&world);
+        const auto comparison=RailWorldRaycast::Query(input);
+        runner.Expect(std::abs(comparison.distance-old.distance)<0.00001f &&
+            RailWorldRaycast::CacheStats().comparisonQueries==1 &&
+            RailWorldRaycast::CacheStats().comparisonHitMismatches==0,
+            "comparison mode must return the old result and record agreement");
+    }
+    TerrainCollisionWorld partial;
+    partial.BuildSynchronously(rail,settings,&edits,&preview,128,150);
+    input.terrainCollision=&partial;
+    runner.Expect(std::abs(query(TerrainRaycastMode::Hybrid).distance-old.distance)<0.00001f &&
+        RailWorldRaycast::CacheStats().referenceFallbacks==1,
+        "incomplete search coverage must fall back instead of reporting a clear ray");
+    input.terrainCollision=&world;
+    settings.lodNearDistance+=10;
+    runner.Expect(world.Matches(rail,settings,&edits,&preview),
+        "render LOD changes must retain the same collision geometry");
+    settings.volumeRoughness+=0.05f;
+    runner.Expect(!world.Matches(rail,settings,&edits,&preview) &&
+        std::abs(query(TerrainRaycastMode::Hybrid).distance-query(TerrainRaycastMode::Reference).distance)<0.00001f,
+        "changed settings must never use a stale collision generation");
+    settings.volumeRoughness-=0.05f;
+    settings.lodNearDistance-=10;
+    TerrainBrushStamp stamp{}; stamp.strokeGuid="bvh-sculpt"; stamp.stampGuid="bvh-sculpt-1";
+    stamp.distance=128; stamp.radius=20; stamp.surfaceRadius=24; stamp.strength=-8;
+    runner.Expect(preview.ApplyStroke({stamp}),"collision preview edit fixture must apply");
+    runner.Expect(!world.Matches(rail,settings,&edits,&preview),"preview changes must invalidate the BVH immediately");
+    world.BuildSynchronously(rail,settings,&edits,&preview,0,rail.Length());
+    runner.Expect(std::abs(query(TerrainRaycastMode::Hybrid).distance-query(TerrainRaycastMode::Reference).distance)<0.1f,
+        "rebuilt collision contour must preserve edited-radius semantics");
+    const auto sample=rail.Evaluate(128);
+    TerrainVolumeField field(rail,settings,&edits,&preview);
+    const auto point=field.CollisionSurfacePoint(128,0,sample);
+    runner.Expect(std::abs(field.SampleLocal(128,point.x-sample.position.x,point.y-sample.position.y).sdf)<0.00001f,
+        "collision surface must lie on the analytical SDF zero contour");
+    TerrainCollisionWorld streaming;
+    streaming.Update(rail,settings,&edits,&preview,128);
+    runner.Expect(streaming.GetStats().pendingBuilds<=2,
+        "collision streaming must bound concurrent workers");
+    bool covered=false;
+    for (uint32_t attempt=0;attempt<2000 && !covered;++attempt) {
+        streaming.Update(rail,settings,&edits,&preview,128);
+        covered=streaming.Query(aim.worldRayOrigin,{1,0,0},70,26,230).available;
+        if (!covered) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    runner.Expect(covered,"background builds must publish a complete usable collision window");
+    const uint64_t generation=streaming.GetStats().generation;
+    settings.seed+=1;
+    streaming.Update(rail,settings,&edits,&preview,128);
+    runner.Expect(streaming.GetStats().generation>generation &&
+        !streaming.Query(aim.worldRayOrigin,{1,0,0},70,26,230).available,
+        "terrain generation changes must invalidate resident meshes before publishing new chunks");
+    settings.seed-=1;
+    rail.SetControlPoints({{{0,0,0},18,32},{{12,0,256},18,32}});
+    runner.Expect(!world.Matches(rail,settings,&edits,&preview),"same-address rail rebuild must reject stale collision chunks");
+}
+
+void ValidateProductionTerrainBvh(RegressionRunner& runner) {
+    CourseAsset course; std::string error;
+    if (!course.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course",&error)) {
+        runner.Expect(false,"BVH validation production course must load"); return;
+    }
+    RailPath rail; rail.SetControlPoints(course.railPoints);
+    TerrainGenerationSettings settings{};
+    TerrainCollisionWorld world;
+    const auto buildBegin=std::chrono::steady_clock::now();
+    world.BuildSynchronously(rail,settings,&course.terrainEditLayer,nullptr,0,rail.Length());
+    const double buildMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-buildBegin).count();
+    std::ofstream validation("logs/terrain_bvh_validation.csv");
+    validation << "playerDistance,rays,terrainHits,hitMismatches,distanceMismatches,maxDistanceError,hybridOcclusionMismatches,referenceFallbacks\n";
+    std::ofstream differences("logs/terrain_bvh_differences.csv");
+    differences << "playerDistance,ray,forward,lateral,vertical,referenceHit,referenceDistance,hybridHit,hybridDistance,rawHitMismatches,rawDistanceMismatches\n";
+    uint64_t hybridMismatches=0;
+    for (float player:{120.0f,300.0f,600.0f,900.0f,1100.0f,1240.0f}) {
+        const auto cameraRail=rail.Evaluate(player-12);
+        const Vector3 camera{cameraRail.position.x+cameraRail.up.x*4,
+            cameraRail.position.y+cameraRail.up.y*4,cameraRail.position.z+cameraRail.up.z*4};
+        RailWorldRaycastInput input{}; input.railPath=&rail; input.terrainSettings=&settings;
+        input.terrainEdits=&course.terrainEditLayer; input.terrainCollision=&world;
+        input.playerDistance=player; input.includeVisualColumns=true;
+        uint64_t mismatch=0,fallbacks=0,hitMismatch=0,distanceMismatch=0,terrainHits=0; double maxError=0;
+        for (uint32_t i=0;i<168;++i) {
+            const uint32_t k=i%84;
+            const float forward=24.0f+static_cast<float>(k%6)*9.0f;
+            const float lateral=i<84 ? -24.0f+static_cast<float>((k/6)%7)*8.0f :
+                -120.0f+static_cast<float>((k/6)%7)*40.0f;
+            const float vertical=i<84 ? 2.0f+static_cast<float>(k/42)*12.0f :
+                -40.0f+static_cast<float>(k/42)*130.0f;
+            const auto targetRail=rail.Evaluate(player+forward);
+            const Vector3 target{targetRail.position.x+targetRail.right.x*lateral+targetRail.up.x*vertical,
+                targetRail.position.y+targetRail.right.y*lateral+targetRail.up.y*vertical,
+                targetRail.position.z+targetRail.right.z*lateral+targetRail.up.z*vertical};
+            RailAimState aim{}; aim.valid=true; aim.worldRayOrigin=camera;
+            aim.worldRayDirection={target.x-camera.x,target.y-camera.y,target.z-camera.z};
+            aim.maxDistance=std::sqrt(aim.worldRayDirection.x*aim.worldRayDirection.x+
+                aim.worldRayDirection.y*aim.worldRayDirection.y+aim.worldRayDirection.z*aim.worldRayDirection.z);
+            input.aim=&aim;
+            input.terrainMode=TerrainRaycastMode::Compare;
+            RailAimHit reference{};
+            RailWorldRaycast::FrameCacheStats comparisonStats{};
+            {
+                const RailWorldRaycast::FrameCacheScope frame;
+                reference=RailWorldRaycast::Query(input);
+                const auto stats=RailWorldRaycast::CacheStats();
+                comparisonStats=stats;
+                hitMismatch+=stats.comparisonHitMismatches; distanceMismatch+=stats.comparisonDistanceMismatches;
+                maxError=(std::max)(maxError,stats.comparisonMaximumDistanceError);
+            }
+            input.terrainMode=TerrainRaycastMode::Hybrid;
+            {
+                const RailWorldRaycast::FrameCacheScope frame;
+                const auto hybrid=RailWorldRaycast::Query(input);
+                if (reference.hit) ++terrainHits;
+                fallbacks+=RailWorldRaycast::CacheStats().referenceFallbacks;
+                if (reference.hit!=hybrid.hit) ++mismatch;
+                if (reference.hit!=hybrid.hit || comparisonStats.comparisonHitMismatches || comparisonStats.comparisonDistanceMismatches)
+                    differences << player << ',' << i << ',' << forward << ',' << lateral << ',' << vertical << ','
+                        << reference.hit << ',' << reference.distance << ',' << hybrid.hit << ',' << hybrid.distance << ','
+                        << comparisonStats.comparisonHitMismatches << ',' << comparisonStats.comparisonDistanceMismatches << '\n';
+            }
+        }
+        validation << player << ",168," << terrainHits << ',' << hitMismatch << ',' << distanceMismatch << ',' << maxError << ',' << mismatch << ',' << fallbacks << '\n';
+        hybridMismatches+=mismatch;
+    }
+    runner.Expect(hybridMismatches==0,"hybrid BVH must preserve production cave/canyon visibility across 1008 clear/wall/floor/ceiling rays");
+
+    // Same poses/rays and both cache scopes; query time excludes one-off builds.
+    std::ofstream benchmark("logs/terrain_bvh_benchmark.csv");
+    benchmark << "enemies,mode,frames,meanRaycastMs,bvhQueriesPerFrame,referenceFallbacksPerFrame,buildMs,collisionBytes\n";
+    for (uint32_t count:{35u,50u}) {
+        CourseSpawnRuntime actors;
+        for (uint32_t i=0;i<count;++i) {
+            CourseEnemyActorDesc enemy{}; enemy.spawnDistance=1142.0f+static_cast<float>(i)*0.6f;
+            enemy.lateralOffset=-12.0f+static_cast<float>(i%7)*4.0f;
+            enemy.verticalOffset=5.0f+static_cast<float>(i%5)*1.2f;
+            actors.SpawnEnemyActor(enemy);
+        }
+        std::array<double,2> timings{}; std::array<uint64_t,2> queries{},fallbacks{};
+        constexpr uint32_t frames=12;
+        for (uint32_t frame=0;frame<frames;++frame) {
+            for (uint32_t order=0;order<2;++order) {
+                const uint32_t mode=(frame+order)%2;
+                RailWorldRaycastInput input{}; input.railPath=&rail; input.terrainSettings=&settings;
+                input.terrainEdits=&course.terrainEditLayer; input.terrainCollision=&world;
+                input.spawnRuntime=&actors; input.course=&course;
+                input.playerDistance=1100; input.includeVisualColumns=true;
+                input.terrainMode=mode?TerrainRaycastMode::Hybrid:TerrainRaycastMode::Reference;
+                const auto cameraRail=rail.Evaluate(1088);
+                const auto begin=std::chrono::steady_clock::now();
+                const RailWorldRaycast::FrameCacheScope cache;
+                for (uint32_t pass=0;pass<2;++pass) for (uint32_t i=0;i<count;++i) {
+                    const auto sample=rail.Evaluate(1142.0f+static_cast<float>(i)*0.6f);
+                    const float lateral=-12.0f+static_cast<float>(i%7)*4.0f,vertical=5.0f+static_cast<float>(i%5)*1.2f;
+                    const Vector3 target{sample.position.x+sample.right.x*lateral+sample.up.x*vertical,
+                        sample.position.y+sample.right.y*lateral+sample.up.y*vertical,
+                        sample.position.z+sample.right.z*lateral+sample.up.z*vertical};
+                    RailAimState aim{}; aim.valid=true;
+                    aim.worldRayOrigin={cameraRail.position.x+cameraRail.up.x*4+pass*0.001f+frame*0.001f,
+                        cameraRail.position.y+cameraRail.up.y*4,cameraRail.position.z+cameraRail.up.z*4};
+                    aim.worldRayDirection={target.x-aim.worldRayOrigin.x,target.y-aim.worldRayOrigin.y,target.z-aim.worldRayOrigin.z};
+                    aim.maxDistance=std::sqrt(aim.worldRayDirection.x*aim.worldRayDirection.x+
+                        aim.worldRayDirection.y*aim.worldRayDirection.y+aim.worldRayDirection.z*aim.worldRayDirection.z)+3.0f;
+                    input.aim=&aim; RailWorldRaycast::Query(input);
+                }
+                timings[mode]+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count();
+                queries[mode]+=RailWorldRaycast::CacheStats().bvhQueries;
+                fallbacks[mode]+=RailWorldRaycast::CacheStats().referenceFallbacks;
+            }
+        }
+        for (uint32_t mode=0;mode<2;++mode) benchmark << count << ',' << (mode?"hybrid":"reference") << ',' << frames << ','
+            << timings[mode]/frames << ',' << static_cast<double>(queries[mode])/frames << ','
+            << static_cast<double>(fallbacks[mode])/frames << ',' << buildMs << ',' << world.GetStats().bytes << '\n';
+    }
+}
+
 void TestRailWorldShotRouting(RegressionRunner& runner) {
     RailPath rail;
     rail.SetControlPoints({
@@ -22866,10 +23341,14 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         bool assetsEnabled = count > 0;
         for (const auto& actor : runtime.Enemies()) {
             assetsEnabled = assetsEnabled && actor.behaviorDefinition.maintainForwardEngagementBand &&
-                actor.behaviorDefinition.choreographedAttackPass &&
+                !actor.behaviorDefinition.choreographedAttackPass &&
+                actor.behaviorDefinition.lateralAmplitude>0.0f &&
+                actor.behaviorDefinition.verticalAmplitude>0.0f &&
                 actor.desc.formationDefinition.exitStyle == EnemyExitStyle::SplitSides;
         }
         bool forwardSafe = true, exitsSafe = true, warningsCleared = true;
+        bool lingerAfterShot = true, hoverSeen = false;
+        std::map<uint32_t,float> firstShots;
         uint32_t exits = 0, shots = 0;
         EnemyAttackTelegraphSystem telegraph;
         EnemyCombatPresentationBridge presentation;
@@ -22878,7 +23357,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         safety.playerDistance = event.distance;
         safety.railPath = &rail;
         safety.hasCameraPosition = true;
-        for (uint32_t frame = 0; frame < 1080; ++frame) {
+        for (uint32_t frame = 0; frame < 2400; ++frame) {
             safety.playerDistance += (frame < 120 ? 12.0f : frame < 300 ? 17.0f : 24.0f) * dt;
             safety.cameraPosition = rail.Evaluate(safety.playerDistance - 24.0f).position;
             runtime.Update(dt, safety);
@@ -22891,6 +23370,13 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
                 forwardSafe = forwardSafe && actor.desc.spawnDistance + actor.desc.distanceOffset -
                     safety.playerDistance >= actor.behaviorDefinition.engagementBandMinimumForwardDistance - 0.001f;
                 shots += actor.attackState.committedThisFrame ? 1 : 0;
+                if(actor.attackState.committedThisFrame) firstShots.emplace(actor.actorId,actor.age);
+                const auto first=firstShots.find(actor.actorId);
+                if(first!=firstShots.end() && actor.age-first->second<2.0f)
+                    lingerAfterShot=lingerAfterShot && !actor.entranceExitState.exitRequested &&
+                        actor.entranceExitState.targetable;
+                hoverSeen=hoverSeen || (std::abs(actor.behaviorState.behaviorLateralOffset)>0.3f &&
+                    std::abs(actor.behaviorState.behaviorVerticalOffset)>0.1f);
                 if (actor.entranceExitState.phase == EnemyEntranceExitPhase::Exiting) {
                     const auto* visual = presentation.FindActor(actor.actorId);
                     const float side = actor.behaviorState.authoredLateralOffset < -0.1f ? -1.0f : 1.0f;
@@ -22935,12 +23421,48 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
             }
         }
         runner.Expect(assetsEnabled && forwardSafe && exitsSafe && warningsCleared &&
-            exits == count && shots == count && runtime.Enemies().empty(),
+            lingerAfterShot && hoverSeen && firstShots.size()==count &&
+            exits == 0 && shots > count && runtime.Enemies().size() == count &&
+            std::all_of(runtime.Enemies().begin(), runtime.Enemies().end(), [](const auto& actor) {
+                return actor.age > actor.desc.lifetime && actor.entranceExitState.targetable &&
+                    !actor.entranceExitState.exitRequested;
+            }),
             std::string(waveId) + " must hold its early threats ahead through acceleration, still fire, "
-                "and retire every survivor sideways without attack tokens or warning cues"
+                "hover and remain targetable beyond their old lifetime without an automatic exit"
                 " (count=" + std::to_string(count) + ", exits=" + std::to_string(exits) +
                 ", shots=" + std::to_string(shots) + ", forward=" + std::to_string(forwardSafe) +
                 ", safeExit=" + std::to_string(exitsSafe) + ", warnings=" + std::to_string(warningsCleared) + ")");
+
+        // Neither section/Wave completion nor an authored exit request may
+        // fade a living drone. Defeat and explicit scene reset still remove it.
+        CourseAsset cleanupCourse;
+        cleanupCourse.sections.push_back({0.0f, safety.playerDistance + 0.1f, "Combat", "Test"});
+        safety.course = &cleanupCourse;
+        safety.playerDistance += 1.0f;
+        std::vector<uint32_t> persistentIds;
+        for (const auto& actor : runtime.Enemies()) persistentIds.push_back(actor.actorId);
+        runtime.RetireEnemies(persistentIds);
+        runtime.EnemyEntranceExit().RequestActorExit(persistentIds.front());
+        runtime.EnemyEntranceExit().RequestFormationExit(runtime.Enemies().front().desc.waveId);
+        for (int step = 0; step < 180; ++step) {
+            runtime.Update(dt, safety);
+            for (const auto& actor : runtime.Enemies()) {
+                runner.Expect(actor.entranceExitState.phase == EnemyEntranceExitPhase::Active &&
+                    actor.entranceExitState.presentationAlpha >= 0.99f &&
+                    actor.entranceExitState.targetable && !actor.entranceExitState.exitRequested,
+                    "living drones remain opaque and targetable after section and formation exit requests");
+            }
+        }
+        runner.Expect(runtime.Enemies().size() == count,
+            "section completion must retain every surviving persistent drone");
+        runtime.EnemyCombat().ForceDefeat(runtime, persistentIds.front());
+        for (int step = 0; step < 120; ++step) runtime.Update(dt, safety);
+        runner.Expect(runtime.Enemies().size() == count - 1 &&
+            std::none_of(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& actor) {
+                return actor.actorId == persistentIds.front();
+            }), "only the defeated persistent drone disappears after its death presentation");
+        runtime.ClearEnemies();
+        runner.Expect(runtime.Enemies().empty(), "scene reset still clears persistent enemies");
     }
 
     // Force camera overlap with an admitted threat. Spatial protection must
@@ -22988,7 +23510,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
     warning.settings.requireWorldVisibility = false;
     telegraph.Update(warning);
     runner.Expect(cameraDistance >= 12.0f + actor.desc.radius &&
-        actor.entranceExitState.exitRequested && !actor.behaviorState.attackIntentActive &&
+        !actor.entranceExitState.exitRequested && !actor.behaviorState.attackIntentActive &&
         !actor.attackState.tokenReserved && !actor.targetingState.solutionLocked &&
         std::none_of(telegraph.Frame().cues.begin(), telegraph.Frame().cues.end(),
             [&](const auto& cue) { return cue.actorId == actor.actorId; }),
@@ -23000,8 +23522,8 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         std::pow(nextSafePosition.y - safety.cameraPosition.y, 2.0f) +
         std::pow(nextSafePosition.z - safety.cameraPosition.z, 2.0f));
     runner.Expect(nextCameraDistance >= 12.0f + runtime.Enemies().front().desc.radius &&
-        std::abs(runtime.Enemies().front().behaviorState.safetyLateralOffset) > 0.01f,
-        "an emergency outward correction must persist across Behavior/formation updates instead of snapping back into the camera");
+        !runtime.Enemies().front().entranceExitState.exitRequested,
+        "camera clearance must persist across updates without retiring the living enemy");
 
     // Rail evaluation clamps at the endpoint: a positive arc-distance offset
     // must not trick the guard into placing an enemy inside the cart itself.
@@ -23016,7 +23538,7 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         const float distance = std::sqrt(std::pow(p.x - end.x, 2.0f) +
             std::pow(p.y - end.y - safety.playerVerticalOffset, 2.0f) + std::pow(p.z - end.z, 2.0f));
         endpointSafe = endpointSafe && distance >= 18.0f + enemy.desc.radius &&
-            enemy.entranceExitState.exitRequested && !runtime.EnemyBehavior().CanCommitAttack(enemy);
+            !enemy.entranceExitState.exitRequested && !runtime.EnemyBehavior().CanCommitAttack(enemy);
     }
     runner.Expect(endpointSafe && !runtime.Enemies().empty(),
         "rail endpoint/large seek must preserve physical cart clearance and prevent emergency-corrected threats from firing");
@@ -23304,6 +23826,246 @@ void TestEnemyFormationAndEntranceExit(RegressionRunner& runner) {
         "completed exit presentation should retire all formation actors deterministically");
 }
 
+void TestDroneHoverSpacing(RegressionRunner& runner) {
+    RailPath rail;rail.SetControlPoints({{{0,0,0},18,18},{{0,0,1000},18,18}});
+    const auto simulate=[&](int fps,bool defeat) {
+        CourseSpawnRuntime runtime;
+        auto fire=runtime.FireSafetySettings();fire.enabled=false;
+        runner.Expect(runtime.ConfigureFireSafety(fire),"hover spacing fixture disables fire without changing movement");
+        for(uint32_t i=0;i<4;++i) {
+            CourseEnemyActorDesc actor;
+            actor.meshId="twin_shield_hull";actor.waveId=i<2?"hover-wave-a":"hover-wave-b";
+            actor.formationDefinition=EnemyFormationDefinition::CommercialDefault(actor.waveId);
+            actor.spawnDistance=100;actor.distanceOffset=6;actor.lateralOffset=i%2?-4.5f:4.5f;
+            actor.verticalOffset=6;actor.lifetime=40;actor.suppressFire=true;
+            actor.combatDefinition=EnemyCombatDefinition::CommercialStandard();
+            actor.combatDefinition.spawnDurationSeconds=0;actor.combatDefinition.engageDurationSeconds=0;
+            actor.behaviorDefinition=EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Assault);
+            actor.behaviorDefinition.maintainForwardEngagementBand=true;
+            actor.behaviorDefinition.engagementBandMinimumForwardDistance=36;
+            actor.behaviorDefinition.engagementBandPreferredForwardDistance=46;
+            actor.behaviorDefinition.engagementBandMaximumForwardDistance=70;
+            actor.behaviorDefinition.positioningDurationSeconds=30;
+            actor.behaviorDefinition.lateralAmplitude=0;actor.behaviorDefinition.verticalAmplitude=0;
+            runner.Expect(runtime.SpawnEnemyActor(actor),"overlapping hover wave fixture spawns");
+        }
+        CourseEnemyFireSafetyFrameInput safety; safety.playerDistance=60;safety.railPath=&rail;
+        const float dt=1.0f/fps;
+        float maximumStep=0;
+        std::map<uint32_t,Vector3> previous;
+        for(int frame=0;frame<8*fps;++frame) {
+            safety.playerDistance+=12*dt;runtime.Update(dt,safety);
+            for(const auto& actor:runtime.Enemies()) {
+                const auto& member=actor.formationState;
+                const Vector3 offset{member.hoverForwardOffset,member.hoverLateralOffset,member.hoverVerticalOffset};
+                if(previous.contains(actor.actorId)) {
+                    const auto p=previous[actor.actorId];
+                    const float df=offset.x-p.x,dl=offset.y-p.y,dv=offset.z-p.z;
+                    maximumStep=(std::max)(maximumStep,std::sqrt(df*df+dl*dl+dv*dv));
+                }
+                previous[actor.actorId]=offset;
+                runner.Expect(member.hoverInitialized && std::abs(offset.x)<=3.001f &&
+                    std::abs(offset.y)<=8.001f && std::abs(offset.z)<=9.001f,
+                    "personal hover homes remain bounded without accumulating formation corrections");
+            }
+        }
+        runner.Expect(runtime.Enemies().size()==4 && maximumStep<=2.01f*dt,
+            "cross-wave separation moves continuously at a bounded speed at every frame rate");
+        float minGap=100,minForward=100,maxForward=-100,minHeight=100,maxHeight=-100;
+        float minSide=100,maxSide=-100,minHome=100,maxHome=-100;
+        for(size_t i=0;i<runtime.Enemies().size();++i) {
+            const auto& a=runtime.Enemies()[i];
+            const float forward=a.desc.spawnDistance+a.desc.distanceOffset-safety.playerDistance;
+            minForward=(std::min)(minForward,forward);maxForward=(std::max)(maxForward,forward);
+            minHeight=(std::min)(minHeight,a.desc.verticalOffset);maxHeight=(std::max)(maxHeight,a.desc.verticalOffset);
+            minSide=(std::min)(minSide,a.desc.lateralOffset);maxSide=(std::max)(maxSide,a.desc.lateralOffset);
+            minHome=(std::min)(minHome,a.behaviorState.hoverPreferredForwardDistance);
+            maxHome=(std::max)(maxHome,a.behaviorState.hoverPreferredForwardDistance);
+            runner.Expect(a.desc.verticalOffset>=2.99f &&
+                a.desc.lateralOffset*a.desc.lateralOffset+a.desc.verticalOffset*a.desc.verticalOffset<14.0f*14.0f,
+                "wide private flight regions retain rail corridor clearance");
+            for(size_t j=i+1;j<runtime.Enemies().size();++j) {
+                const auto& b=runtime.Enemies()[j];
+                const float dl=a.desc.lateralOffset-b.desc.lateralOffset,dv=a.desc.verticalOffset-b.desc.verticalOffset;
+                const float screenGap=std::sqrt(dl*dl+dv*dv);
+                minGap=(std::min)(minGap,screenGap);
+            }
+        }
+        runner.Expect(minGap>3.5f && maxForward-minForward>15.0f && maxHeight-minHeight>3.0f &&
+            maxSide-minSide>12.0f && maxHome-minHome>15.0f,
+            "coincident enemies in different waves settle into distinct screen positions, depths and heights: gap="+
+            std::to_string(minGap)+" depth="+std::to_string(maxForward-minForward)+
+            " height="+std::to_string(maxHeight-minHeight)+" side="+std::to_string(maxSide-minSide));
+        if(defeat) {
+            const auto checkpoint=runtime.CaptureCheckpoint();
+            runner.Expect(runtime.RestoreCheckpoint(checkpoint,true),"hover positions survive checkpoint restoration");
+            runner.Expect(runtime.EnemyCombat().ForceDefeat(runtime,1),"neighbor defeat accepted");
+            const auto before=previous[2];
+            safety.playerDistance+=12*dt;runtime.Update(dt,safety);
+            const auto& remaining=runtime.Enemies()[1].formationState;
+            const float df=remaining.hoverForwardOffset-before.x,dl=remaining.hoverLateralOffset-before.y,
+                dv=remaining.hoverVerticalOffset-before.z;
+            const float gap=std::sqrt(df*df+dl*dl+dv*dv);
+            runner.Expect(gap<=2.01f*dt,"defeating a neighbor must not reassign or teleport remaining hover homes");
+        }
+        std::vector<Vector3> result;
+        for(const auto& actor:runtime.Enemies()) result.push_back({actor.formationState.hoverForwardOffset,
+            actor.formationState.hoverLateralOffset,actor.formationState.hoverVerticalOffset});
+        return result;
+    };
+    const auto at30=simulate(30,false),at60=simulate(60,false),at120=simulate(120,false);
+    for(size_t i=0;i<at30.size();++i) runner.Expect(
+        std::abs(at30[i].x-at120[i].x)<0.3f && std::abs(at30[i].y-at120[i].y)<0.3f &&
+        std::abs(at30[i].z-at120[i].z)<0.3f,
+        "stable hover homes and separation converge consistently across 30/60/120 fps");
+    simulate(60,true);
+
+    // Actual authored drones must have different paths, and aiming should slow
+    // a continuous path instead of snapping back to a repeated starting pose.
+    CourseSpawnRuntime flight;
+    for(int i=0;i<2;++i) {
+        CourseEnemyActorDesc actor;
+        actor.meshId="twin_shield_hull";actor.spawnDistance=106;
+        actor.verticalOffset=6;actor.lateralOffset=i?8.0f:-8.0f;
+        actor.lifetime=40;actor.suppressFire=true;
+        actor.combatDefinition=EnemyCombatDefinition::CommercialStandard();
+        actor.combatDefinition.spawnDurationSeconds=0;actor.combatDefinition.engageDurationSeconds=0;
+        actor.behaviorDefinition=EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Assault);
+        actor.behaviorDefinition.maintainForwardEngagementBand=true;
+        actor.behaviorDefinition.positioningDurationSeconds=30;
+        flight.SpawnEnemyActor(actor);
+    }
+    CourseEnemyFireSafetyFrameInput flightSafety;flightSafety.playerDistance=60;flightSafety.railPath=&rail;
+    for(int i=0;i<240;++i) {flightSafety.playerDistance+=0.2f;flight.Update(1.0f/60,flightSafety);}
+    const auto& a=flight.Enemies()[0].behaviorState;
+    const auto& b=flight.Enemies()[1].behaviorState;
+    runner.Expect(std::abs(a.behaviorForwardOffset-b.behaviorForwardOffset)>0.1f &&
+        std::abs(a.behaviorLateralOffset-b.behaviorLateralOffset)>0.1f &&
+        std::abs(a.presentationBankRadians)<=0.101f && std::abs(b.presentationBankRadians)<=0.101f,
+        "individual flight paths differ in depth and lateral motion with restrained velocity-based banking");
+    auto checkpoint=flight.CaptureCheckpoint();
+    checkpoint.enemies[0].behaviorState.state=EnemyBehaviorState::Aiming;
+    checkpoint.enemies[0].behaviorState.stateElapsedSeconds=0;
+    checkpoint.enemies[0].behaviorDefinition.aimingDurationSeconds=3;
+    runner.Expect(flight.RestoreCheckpoint(checkpoint,true),"flight clock restores for warning test");
+    const float before=flight.Enemies()[0].behaviorState.hoverMotionSeconds;
+    for(int i=0;i<60;++i) {flightSafety.playerDistance+=0.2f;flight.Update(1.0f/60,flightSafety);}
+    const auto& aiming=flight.Enemies()[0].behaviorState;
+    runner.Expect(aiming.hoverMotionSeconds>before && aiming.hoverMotionSeconds-before<0.6f &&
+        aiming.hoverMotionRate<0.35f,"aiming slows a persistent flight clock without rewinding or stopping it");
+}
+
+void TestDroneTerrainHoverReservations(RegressionRunner& runner) {
+    RailPath rail;rail.SetControlPoints({{{0,0,0},18,18},{{0,0,400},18,18}});
+    TerrainGenerationSettings terrain{};
+    TerrainCollisionWorld collision;
+    collision.BuildSynchronously(rail,terrain,nullptr,nullptr,0,400);
+    TerrainVolumeField field(rail,terrain);
+    std::ofstream report("logs/drone_hover_reservations.csv");
+    report<<"count,fps,screenWidth,screenHeight,minimumScreenGap,occupiedRegions\n";
+    const auto simulate=[&](uint32_t count,int fps) {
+        CourseSpawnRuntime runtime;
+        auto fire=runtime.FireSafetySettings();fire.enabled=false;runtime.ConfigureFireSafety(fire);
+        for(uint32_t i=0;i<count;++i) {
+            CourseEnemyActorDesc actor;
+            actor.meshId="twin_shield_hull";actor.waveId="reservation-wave-"+std::to_string(i/4);
+            actor.formationDefinition=EnemyFormationDefinition::CommercialDefault(actor.waveId);
+            actor.spawnDistance=106;actor.lateralOffset=i%2?4.5f:-4.5f;
+            actor.verticalOffset=6;actor.radius=1.2f;actor.lifetime=16;actor.suppressFire=true;
+            actor.combatDefinition=EnemyCombatDefinition::CommercialStandard();
+            actor.combatDefinition.spawnDurationSeconds=0;actor.combatDefinition.engageDurationSeconds=0;
+            actor.behaviorDefinition=EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Assault);
+            actor.behaviorDefinition.maintainForwardEngagementBand=true;
+            actor.behaviorDefinition.engagementBandMinimumForwardDistance=36;
+            actor.behaviorDefinition.engagementBandPreferredForwardDistance=46;
+            actor.behaviorDefinition.engagementBandMaximumForwardDistance=70;
+            actor.behaviorDefinition.positioningDurationSeconds=30;
+            actor.behaviorDefinition.lateralAmplitude=0;actor.behaviorDefinition.verticalAmplitude=0;
+            runner.Expect(runtime.SpawnEnemyActor(actor),"terrain flight reservation fixture spawns");
+        }
+        CourseEnemyFireSafetyFrameInput safety;
+        safety.playerDistance=60;safety.railPath=&rail;safety.terrainSettings=&terrain;
+        safety.terrainCollision=&collision;safety.hasCameraPosition=true;
+        const float dt=1.0f/fps;
+        Matrix4x4 vp{};
+        float maximumStep=0;
+        std::map<uint32_t,Vector3> previous;
+        for(int frame=0;frame<8*fps;++frame) {
+            safety.playerDistance+=12*dt;
+            safety.cameraPosition={0,8,safety.playerDistance-12};
+            auto camera=MakeTranslateMatrix(safety.cameraPosition);
+            vp=Multiply(Inverse(camera),MakePerspectiveFovMatrix(1.04719755f,16.0f/9,0.1f,1000));
+            safety.viewProjection=&vp;
+            const RailWorldRaycast::FrameCacheScope rayFrame(&collision);
+            runtime.Update(dt,safety);
+            for(const auto& actor:runtime.Enemies()) {
+                const auto& m=actor.formationState;
+                const Vector3 offset{m.hoverForwardOffset,m.hoverLateralOffset,m.hoverVerticalOffset};
+                if(previous.contains(actor.actorId)) {
+                    const auto p=previous[actor.actorId];
+                    maximumStep=(std::max)(maximumStep,std::sqrt((offset.x-p.x)*(offset.x-p.x)+
+                        (offset.y-p.y)*(offset.y-p.y)+(offset.z-p.z)*(offset.z-p.z)));
+                }
+                previous[actor.actorId]=offset;
+                runner.Expect(m.hoverHomeReserved,"ready collision terrain assigns stable private homes");
+            }
+        }
+        runner.Expect(runtime.Enemies().size()==count && maximumStep<=2.01f*dt,
+            "wide flight reservations preserve living drones and bounded continuous corrections");
+        std::vector<Vector2> positions;
+        std::set<std::pair<int,int>> regions;
+        float minX=100,maxX=-100,minY=100,maxY=-100,minGap=100;
+        for(const auto& actor:runtime.Enemies()) {
+            const float distance=actor.desc.spawnDistance+actor.desc.distanceOffset;
+            const auto sample=rail.Evaluate(distance);
+            const Vector3 p{sample.position.x+actor.desc.lateralOffset,
+                sample.position.y+actor.desc.verticalOffset,sample.position.z};
+            const float w=p.x*vp.m[0][3]+p.y*vp.m[1][3]+p.z*vp.m[2][3]+vp.m[3][3];
+            const Vector2 screen{(p.x*vp.m[0][0]+p.y*vp.m[1][0]+p.z*vp.m[2][0]+vp.m[3][0])/w,
+                (p.x*vp.m[0][1]+p.y*vp.m[1][1]+p.z*vp.m[2][1]+vp.m[3][1])/w};
+            positions.push_back(screen);
+            minX=(std::min)(minX,screen.x);maxX=(std::max)(maxX,screen.x);
+            minY=(std::min)(minY,screen.y);maxY=(std::max)(maxY,screen.y);
+            regions.insert({static_cast<int>(std::floor(screen.x/0.14f)),static_cast<int>(std::floor(screen.y/0.14f))});
+            runner.Expect(std::abs(screen.x)<0.85f && screen.y> -0.35f && screen.y<0.80f,
+                "dispersed drones retain screen margins away from HUD borders");
+            for(int angle=0;angle<8;++angle) {
+                const float a=angle*std::numbers::pi_v<float>/4;
+                runner.Expect(field.SampleLocal(distance,actor.desc.lateralOffset+std::cos(a)*actor.desc.radius*2.15f,
+                    actor.desc.verticalOffset+std::sin(a)*actor.desc.radius*2.15f).sdf<0,
+                    "the complete shield silhouette stays inside the real cave contour");
+            }
+        }
+        for(size_t i=0;i<positions.size();++i) for(size_t j=i+1;j<positions.size();++j) {
+            const float dx=positions[i].x-positions[j].x,dy=positions[i].y-positions[j].y;
+            minGap=(std::min)(minGap,std::sqrt(dx*dx+dy*dy));
+        }
+        report<<count<<','<<fps<<','<<maxX-minX<<','<<maxY-minY<<','<<minGap<<','<<regions.size()<<'\n';
+        runner.Expect(maxX-minX>0.65f && maxY-minY>0.25f &&
+            regions.size()>=(std::min)(count,static_cast<uint32_t>(12)) && minGap>(count<=4?0.15f:count<=12?0.06f:0.025f),
+            "cross-wave drones occupy broad screen regions: count="+std::to_string(count)+
+            " width="+std::to_string(maxX-minX)+" height="+std::to_string(maxY-minY)+
+            " gap="+std::to_string(minGap)+" regions="+std::to_string(regions.size()));
+        const auto checkpoint=runtime.CaptureCheckpoint();
+        runtime.RestoreCheckpoint(checkpoint,true);runtime.EnemyCombat().ForceDefeat(runtime,1);
+        runtime.Update(dt,safety);
+        for(const auto& actor:runtime.Enemies()) if(actor.actorId!=1) {
+            const auto& before=checkpoint.enemies[actor.actorId-1].formationState;
+            runner.Expect(actor.formationState.hoverHomeLateral==before.hoverHomeLateral &&
+                actor.formationState.hoverHomeVertical==before.hoverHomeVertical,
+                "checkpoint restore and neighboring defeat preserve reserved home identity");
+        }
+        return runtime.CaptureCheckpoint();
+    };
+    simulate(4,60);simulate(35,60);
+    const auto at30=simulate(12,30),at120=simulate(12,120);
+    for(size_t i=1;i<at30.enemies.size();++i) {
+        const auto& a=at30.enemies[i].desc;const auto& b=at120.enemies[i].desc;
+        runner.Expect(std::abs(a.lateralOffset-b.lateralOffset)<0.4f && std::abs(a.verticalOffset-b.verticalOffset)<0.4f,
+            "terrain reservations and avoidance converge consistently at different frame rates");
+    }
+}
+
 void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
     constexpr uint32_t kWidth = 1000;
     constexpr uint32_t kHeight = 600;
@@ -23384,6 +24146,25 @@ void TestEnemyEncounterReadabilityAuthority(RegressionRunner& runner) {
         "the opening scout must read larger on screen while later encounters and collision keep their authored size");
     input.runtime = &runtime;
     input.playerDistance = -1.0f;
+
+    CourseSpawnRuntime droneSizeRuntime;
+    CourseEnemyActorDesc sizedDrone=openingScout;
+    sizedDrone.meshId="twin_shield_hull";
+    sizedDrone.spawnDistance=46;
+    droneSizeRuntime.SpawnEnemyActor(sizedDrone);
+    input.runtime=&droneSizeRuntime;
+    openingDirector.Update(input);
+    const auto idleDrone=openingDirector.Frame().actors.front();
+    auto sizeCheckpoint=droneSizeRuntime.CaptureCheckpoint();
+    sizeCheckpoint.enemies.front().behaviorState.attackIntentActive=true;
+    droneSizeRuntime.RestoreCheckpoint(sizeCheckpoint,true);
+    openingDirector.Update(input);
+    const auto chargedDrone=openingDirector.Frame().actors.front();
+    runner.Expect(idleDrone.presentationScale<=1.251f && chargedDrone.presentationScale<=1.251f &&
+        std::abs(idleDrone.presentationScale-chargedDrone.presentationScale)<0.001f &&
+        droneSizeRuntime.Enemies().front().desc.radius==1.05f,
+        "shield silhouette measurement bounds magnification and keeps idle/charging hull size identical");
+    input.runtime=&runtime;
 
     runtime.ClearEnemies();
     EnemyProjectileRuntimeState projectile{};
@@ -24006,6 +24787,804 @@ void TestEnemyTargetingAndProjectileRuntime(RegressionRunner& runner) {
             std::abs(collisionStats.playerDamage - 9.0f) < 0.0001f &&
             collisionRuntime.ActiveBulletCount() == 0,
         "rail-local swept-sphere collision should consume a high-speed projectile that crosses the player between frames");
+}
+
+void TestHoverShotForwardPrediction(RegressionRunner& runner) {
+    CourseActorAsset asset;EnemyProjectileDefinitionAsset shot;std::string error;
+    runner.Expect(asset.LoadFromFile("Resources/courses/actors/drone_basic.actor",&error) &&
+        shot.LoadFromFile("Resources/courses/projectiles/enemy_assault_magenta_slow.projectile",&error),
+        "forward prediction uses the actual ordinary drone and magenta projectile assets");
+    std::ofstream report("logs/enemy_forward_prediction.csv");
+    report<<"fps,speed,gap,side,height,warning,pausedWarning,oldMiss,newMiss,flightSeconds\n";
+    const auto simulate=[&](int fps,float speed,float gap,Vector2 pose,float warning,bool pause,bool dodge) {
+        const float dt=1.0f/fps;
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc desc;
+        desc.meshId=asset.meshId;desc.radius=asset.radius;desc.lifetime=30;
+        desc.spawnDistance=100+gap;desc.lateralOffset=pose.x;desc.verticalOffset=pose.y;
+        desc.behaviorDefinition=asset.behaviorDefinition;desc.projectileDefinition=shot;
+        desc.projectileDefinitionId=shot.id;desc.bulletCount=1;
+        runner.Expect(runtime.SpawnEnemyActor(desc),"ordinary hover prediction fixture spawns");
+        EnemyTargetingSystem targeting;
+        EnemyTargetingFrameInput input;input.deltaTime=dt;input.playerVerticalOffset=4;
+        input.playerDistance=100-speed*dt;targeting.Update(runtime,input);
+        auto actor=runtime.Enemies().front();
+        actor.attackState.tokenReserved=true;actor.attackState.intentSequence=17;actor.attackState.tokenId=41;
+        actor.behaviorState.attackTimeRemaining=warning;actor.behaviorState.engagementBandVelocity=speed;
+        RestoreEnemyFixture(runner,runtime,actor);
+        input.playerDistance=100;targeting.Update(runtime,input);
+        actor=runtime.Enemies().front();
+        const auto locked=actor.targetingState;
+        runner.Expect(locked.compensatesForwardTravel && locked.solutionLocked &&
+            std::abs(locked.targetDistance-100-speed*(warning+locked.predictedFlightSeconds))<0.002f,
+            "warning destination includes the launch delay and three-dimensional intercept time");
+        const int waiting=static_cast<int>(std::ceil(warning*fps));
+        const int paused=pause?fps/2:0;
+        for(int frame=0;frame<waiting+paused;++frame) {
+            input.playerDistance+=speed*dt;
+            if(dodge) input.playerLateralOffset=8;
+            actor.desc.distanceOffset+=speed*dt;
+            // The firing muzzle may drift during the warning. Re-solving at
+            // launch must use this actual pose without moving the enemy itself.
+            actor.desc.lateralOffset=pose.x+0.35f*std::sin((frame+1)*dt);
+            actor.desc.verticalOffset=pose.y+0.2f*std::sin((frame+1)*dt);
+            if(frame<waiting/2 || frame>=waiting/2+paused)
+                actor.behaviorState.attackTimeRemaining=(std::max)(0.0f,actor.behaviorState.attackTimeRemaining-dt);
+            const auto before=actor.desc;
+            RestoreEnemyFixture(runner,runtime,actor);targeting.Update(runtime,input);
+            actor=runtime.Enemies().front();
+            runner.Expect(actor.desc.distanceOffset==before.distanceOffset && actor.desc.lateralOffset==before.lateralOffset &&
+                actor.desc.verticalOffset==before.verticalOffset && actor.targetingState.revision==locked.revision &&
+                actor.targetingState.targetLateralOffset==locked.targetLateralOffset &&
+                actor.targetingState.targetVerticalOffset==locked.targetVerticalOffset,
+                "forward compensation changes no enemy position, attack token or frozen lateral/up aim");
+        }
+        EnemyProjectileSystem projectiles;
+        std::vector<EnemyProjectileRuntimeState> corrected,old;
+        projectiles.SpawnVolley(actor,corrected);
+        auto reference=actor;reference.targetingState.compensatesForwardTravel=false;
+        reference.targetingState.targetDistance=100;projectiles.SpawnVolley(reference,old);
+        runner.Expect(corrected.size()==1 && corrected[0].trajectory==EnemyProjectileTrajectory::Direct &&
+            corrected[0].lockedTargetLateralOffset==locked.targetLateralOffset,
+            "ordinary compensated shots keep fixed-direction Direct projectiles and the original dodge anchor");
+        const Vector3 velocity{corrected[0].forwardSpeed,corrected[0].lateralSpeed,corrected[0].verticalSpeed};
+        PlayerHitboxSystem hitbox;PlayerHitboxFrameInput player;
+        player.distance=input.playerDistance;player.lateralOffset=dodge?8.0f:0.0f;player.verticalOffset=4;
+        hitbox.Update(player);
+        float miss=1000,oldMiss=1000;bool hit=false;
+        const auto distanceToSegment=[](const EnemyProjectileRuntimeState& p,float previousPlayer,float nextPlayer,float lateral) {
+            const Vector3 a{p.previousDistanceOffset-previousPlayer,p.previousLateralOffset-lateral,p.previousVerticalOffset-4};
+            const Vector3 b{p.distanceOffset-nextPlayer-a.x,p.lateralOffset-lateral-a.y,p.verticalOffset-4-a.z};
+            const float length=b.x*b.x+b.y*b.y+b.z*b.z;
+            const float t=length>0.000001f?(std::clamp)(-(a.x*b.x+a.y*b.y+a.z*b.z)/length,0.0f,1.0f):0.0f;
+            return std::sqrt((a.x+t*b.x)*(a.x+t*b.x)+(a.y+t*b.y)*(a.y+t*b.y)+(a.z+t*b.z)*(a.z+t*b.z));
+        };
+        for(int frame=0;frame<static_cast<int>(std::ceil(shot.lifetime*fps));++frame) {
+            const float previous=player.distance;player.distance+=speed*dt;
+            EnemyProjectileFrameInput update;update.deltaTime=dt;update.playerDistance=player.distance;
+            update.playerLateralOffset=player.lateralOffset;update.playerVerticalOffset=4;
+            projectiles.Update(corrected,update);projectiles.Update(old,update);hitbox.Update(player);
+            miss=(std::min)(miss,distanceToSegment(corrected[0],previous,player.distance,player.lateralOffset));
+            oldMiss=(std::min)(oldMiss,distanceToSegment(old[0],previous,player.distance,player.lateralOffset));
+            hit|=hitbox.EvaluateProjectile(corrected[0]).kind==PlayerProjectileContactKind::Hit;
+            runner.Expect(std::abs(corrected[0].forwardSpeed-velocity.x)<0.001f &&
+                std::abs(corrected[0].lateralSpeed-velocity.y)<0.001f &&
+                std::abs(corrected[0].verticalSpeed-velocity.z)<0.001f,
+                "ordinary shots never home toward a later player position");
+        }
+        runner.Expect(dodge?(!hit && miss>5.0f):(hit && miss<0.025f),
+            "moving player interception preserves deliberate post-lock dodging: fps="+std::to_string(fps)+
+            " speed="+std::to_string(speed)+" side="+std::to_string(pose.x)+" miss="+std::to_string(miss));
+        if(!dodge) report<<fps<<','<<speed<<','<<gap<<','<<pose.x<<','<<pose.y<<','<<warning<<','<<pause<<','<<
+            oldMiss<<','<<miss<<','<<actor.targetingState.predictedFlightSeconds<<'\n';
+    };
+    for(int fps:{30,60,120}) for(float speed:{0.0f,15.0f,32.0f}) for(float gap:{36.0f,50.0f,68.0f})
+        for(Vector2 pose:std::vector<Vector2>{{-24,16},{-16,7},{0,4},{16,7},{24,16}})
+            for(float warning:{0.0f,0.7f,1.5f}) simulate(fps,speed,gap,pose,warning,warning>1.0f,false);
+    for(int fps:{30,60,120}) simulate(fps,15,50,{20,12},0.7f,true,true);
+
+    // Imported two-barrel volleys must intercept from each actual barrel,
+    // rather than copying the center-muzzle flight time to both projectiles.
+    CourseEnemyActor twin;twin.desc.meshId=asset.meshId;twin.desc.radius=asset.radius;
+    twin.desc.behaviorDefinition=asset.behaviorDefinition;twin.behaviorDefinition=asset.behaviorDefinition;
+    twin.desc.spawnDistance=150;twin.desc.lateralOffset=24;twin.desc.verticalOffset=16;
+    twin.desc.projectileDefinition=shot;twin.desc.bulletCount=2;
+    twin.attackState.intentSequence=17;twin.attackState.tokenId=41;
+    twin.targetingState.solutionLocked=true;twin.targetingState.compensatesForwardTravel=true;
+    twin.targetingState.attackIntentSequence=17;twin.targetingState.attackTokenId=41;
+    twin.targetingState.forwardTravelReferenceDistance=100;twin.targetingState.playerForwardVelocity=15;
+    twin.targetingState.targetVerticalOffset=4;
+    EnemyProjectileSystem system;std::vector<EnemyProjectileRuntimeState> volley;system.SpawnVolley(twin,volley);
+    for(const auto& p:volley) {
+        const float flight=(p.lockedTargetVerticalOffset-p.verticalOffset)/p.verticalSpeed;
+        runner.Expect(std::abs(p.distanceOffset+p.forwardSpeed*flight-100-15*flight)<0.001f &&
+            std::abs(p.lateralOffset+p.lateralSpeed*flight)<0.001f,
+            "each barrel uses its own exact moving-target intersection");
+    }
+}
+
+
+void TestEnemyWeaponAndWarningTrajectoryAgreement(RegressionRunner& runner) {
+    CourseActorAsset asset; EnemyProjectileDefinitionAsset shot; std::string error;
+    runner.Expect(asset.LoadFromFile("Resources/courses/actors/drone_basic.actor",&error) &&
+        shot.LoadFromFile("Resources/courses/projectiles/enemy_assault_magenta_slow.projectile",&error),
+        "weapon agreement uses production drone/shot assets");
+    const auto length=[](Vector3 p) { return std::sqrt(p.x*p.x+p.y*p.y+p.z*p.z); };
+    const auto subtract=[](Vector3 a,Vector3 b) { return Vector3{a.x-b.x,a.y-b.y,a.z-b.z}; };
+    std::ofstream report("logs/enemy_weapon_warning_agreement.csv");
+    report<<"fps,curve,side,height,barrels,muzzleWorldError,pathWorldError,straightLineDeviation\n";
+    for(int fps:{30,60,120}) for(int curve:{0,1,2})
+        for(Vector2 offset:std::vector<Vector2>{{-20,7},{-8,16},{8,7},{20,16}}) for(int barrels:{1,2}) {
+        RailPath rail;
+        if(curve==0) rail.SetControlPoints({{{0,0,0},40,15},{{0,0,300},40,15}});
+        else if(curve==1) rail.SetControlPoints({{{0,0,0},40,15},{{0,0,90},40,15},
+            {{30,0,145},40,15},{{90,0,180},40,15},{{110,0,300},40,15}});
+        else rail.SetControlPoints({{{0,0,0},40,15},{{0,8,90},40,15},
+            {{-30,16,145},40,15},{{-90,6,180},40,15},{{-110,0,300},40,15}});
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc desc;
+        desc.meshId=asset.meshId;desc.radius=asset.radius;desc.spawnDistance=155;
+        desc.lateralOffset=offset.x;desc.verticalOffset=offset.y;desc.lifetime=30;
+        desc.localScale={1.15f,0.9f,1.1f};desc.behaviorDefinition=asset.behaviorDefinition;
+        desc.projectileDefinition=shot;desc.projectileDefinitionId=shot.id;desc.bulletCount=barrels;
+        runner.Expect(runtime.SpawnEnemyActor(desc),"weapon agreement actor spawns");
+        auto actor=runtime.Enemies().front();
+        actor.combatState.phase=EnemyCombatPhase::Engaging;actor.combatState.presentationScale=1;
+        actor.combatState.presentationAlpha=1;actor.combatState.canTelegraph=true;
+        actor.entranceExitState.phase=EnemyEntranceExitPhase::Active;
+        actor.entranceExitState.presentationScale=1;actor.entranceExitState.presentationAlpha=1;
+        actor.behaviorState.initialized=true;actor.behaviorState.state=EnemyBehaviorState::RequestingAttack;
+        actor.behaviorState.attackIntentActive=true;actor.behaviorState.attackIntentSequence=17;
+        actor.behaviorState.attackTimeRemaining=0.10f;actor.behaviorState.engagementBandVelocity=15;
+        actor.behaviorState.presentationPitchRadians=-0.04f;actor.behaviorState.presentationBankRadians=0.13f;
+        actor.attackState.tokenReserved=true;actor.attackState.intentSequence=17;actor.attackState.tokenId=41;
+        actor.fireEnvironmentReady=true;actor.fireSafetyAllowed=true;
+        RestoreEnemyFixture(runner,runtime,actor);
+        const Vector3 camera=ResolveEnemyProjectileWorldPosition(rail,{0,5,92});
+        const Vector3 actorWorld=ResolveEnemyProjectileWorldPosition(rail,{offset.x,offset.y,155});
+        const Vector3 cameraDelta=subtract(actorWorld,camera);
+        const float cameraLength=length(cameraDelta);
+        auto cameraMatrix=MakeAffineMatrix({1,1,1},Vector3{-std::asin(cameraDelta.y/cameraLength),
+            std::atan2(cameraDelta.x,cameraDelta.z),0},camera);
+        const auto view=Inverse(cameraMatrix);
+        const auto projection=MakePerspectiveFovMatrix(1.2f,16.0f/9.0f,0.1f,1000);
+        const auto vp=Multiply(view,projection);
+        EnemyEncounterReadabilityDirector readability;
+        EnemyEncounterReadabilityInput readable;readable.runtime=&runtime;readable.railPath=&rail;
+        readable.viewProjection=&vp;readable.viewportWidth=1600;readable.viewportHeight=900;
+        readability.Update(readable);
+        EnemyTargetingSystem targeting;
+        EnemyTargetingFrameInput ti;ti.deltaTime=1.0f/fps;ti.railPath=&rail;
+        ti.cameraPosition=camera;ti.hasCameraPosition=true;ti.readability=&readability;
+        ti.playerVerticalOffset=4;ti.playerDistance=100-15*ti.deltaTime;targeting.Update(runtime,ti);
+        ti.playerDistance=100;targeting.Update(runtime,ti);
+        actor=runtime.Enemies().front();
+        runner.Expect(actor.weaponMount.ready && actor.desc.spawnDistance==desc.spawnDistance &&
+            actor.desc.lateralOffset==desc.lateralOffset && actor.desc.verticalOffset==desc.verticalOffset,
+            "weapon mount evaluation preserves dispersed enemy positions");
+        const auto matrix=MakeAffineMatrix(actor.weaponMount.dronePose.scale,
+            actor.weaponMount.dronePose.rotation,actor.weaponMount.dronePose.position);
+        float muzzleError=0,pathError=0,bend=0;
+        for(int index=0;index<barrels;++index) {
+            const Vector3 local{index==0?-0.30f:0.30f,-0.61f,-0.94f};
+            const Vector3 expected{local.x*matrix.m[0][0]+local.y*matrix.m[1][0]+local.z*matrix.m[2][0]+matrix.m[3][0],
+                local.x*matrix.m[0][1]+local.y*matrix.m[1][1]+local.z*matrix.m[2][1]+matrix.m[3][1],
+                local.x*matrix.m[0][2]+local.y*matrix.m[1][2]+local.z*matrix.m[2][2]+matrix.m[3][2]};
+            muzzleError=(std::max)(muzzleError,length(subtract(expected,
+                ResolveEnemyProjectileWorldPosition(rail,ResolveEnemyProjectileMuzzleRailPosition(actor,index)))));
+        }
+        runner.Expect(muzzleError<0.002f,"authored gun lip and projectile world muzzle coincide on bends and slopes");
+        EnemyAttackTelegraphSystem telegraph;
+        EnemyAttackTelegraphFrameInput fi;fi.spawnRuntime=&runtime;fi.railPath=&rail;fi.viewProjection=&vp;
+        fi.cameraPosition=camera;fi.playerDistance=100;fi.viewportWidth=1600;fi.viewportHeight=900;
+        fi.settings.requireWorldVisibility=false;telegraph.Update(fi);
+        runner.Expect(telegraph.Frame().cues.size()==1 &&
+            telegraph.Frame().cues.front().projectileLaunches.size()==static_cast<size_t>(barrels),
+            "real telegraph exports the same per-barrel launch templates as execution");
+        if(telegraph.Frame().cues.empty()) continue;
+        EnemyAttackLaneTelegraphRenderer warnings;
+        EnemyAttackLaneTelegraphRenderInput wi;wi.telegraph=&telegraph.Frame();wi.railPath=&rail;
+        warnings.Update(wi);
+        runner.Expect(warnings.Frame().lanes.size()==1 &&
+            warnings.Frame().lanes.front().projectilePaths.size()==static_cast<size_t>(barrels),
+            "normal warning follows one bounded rail path for every fired barrel");
+        if(warnings.Frame().lanes.empty()) continue;
+        const auto lane=warnings.Frame().lanes.front();
+        auto scheduledActor=actor;
+        const float launchWait=telegraph.Frame().cues.front().timeToFire;
+        scheduledActor.desc.distanceOffset+=15*launchWait;
+        scheduledActor.targetingState.forwardTravelReferenceDistance+=15*launchWait;
+        for(auto& muzzle:scheduledActor.weaponMount.muzzleRail) muzzle.z+=15*launchWait;
+        EnemyProjectileSystem projectileSystem;std::vector<EnemyProjectileRuntimeState> volley;
+        projectileSystem.SpawnVolley(scheduledActor,volley);
+        for(int index=0;index<barrels;++index) {
+            const auto& launch=volley[index];const auto& path=lane.projectilePaths[index];
+            const auto& preview=telegraph.Frame().cues.front().projectileLaunches[index];
+            runner.Expect(launch.distanceOffset==preview.distanceOffset && launch.lateralOffset==preview.lateralOffset &&
+                launch.verticalOffset==preview.verticalOffset && launch.forwardSpeed==preview.forwardSpeed &&
+                launch.lateralSpeed==preview.lateralSpeed && launch.verticalSpeed==preview.verticalSpeed,
+                "production cue and SpawnVolley agree exactly on muzzle, target and velocity");
+            const Vector3 delta{launch.lockedTargetLateralOffset-launch.lateralOffset,
+                launch.lockedTargetVerticalOffset-launch.verticalOffset,launch.lockedTargetDistance-launch.distanceOffset};
+            const float speed=length({launch.lateralSpeed,launch.verticalSpeed,launch.forwardSpeed});
+            const float flight=length(delta)/speed;
+            CourseSpawnRuntime display;runner.Expect(display.SpawnProjectile(launch),"live projectile fixture imports shot");
+            EnemyProjectilePresentationBridge bridge;
+            EnemyProjectilePresentationInput pi;pi.runtime=&display;pi.railPath=&rail;
+            pi.playerDistance=100;pi.playerVerticalOffset=4;
+            const int frames=static_cast<int>(std::ceil(flight*fps));
+            float time=0;
+            for(int frame=0;frame<frames;++frame) {
+                const float dt=(std::min)(1.0f/fps,flight-time);time+=dt;
+                CourseEnemyFireSafetyFrameInput simulation;simulation.playerDistance=100+15*time;
+                simulation.playerVerticalOffset=4;display.Update(dt,simulation);pi.deltaTime=dt;bridge.Update(pi);
+                const auto* drawn=bridge.FindProjectile(launch.projectileId);
+                runner.Expect(drawn!=nullptr,"real projectile presentation remains active until intercept");
+                if(!drawn) break;
+                const float sample=time/flight*(path.size()-1);
+                const size_t segment=(std::min)(path.size()-2,static_cast<size_t>(sample));
+                const float blend=sample-static_cast<float>(segment);
+                const Vector3 line{path[segment].world.x+(path[segment+1].world.x-path[segment].world.x)*blend,
+                    path[segment].world.y+(path[segment+1].world.y-path[segment].world.y)*blend,
+                    path[segment].world.z+(path[segment+1].world.z-path[segment].world.z)*blend};
+                pathError=(std::max)(pathError,length(subtract(drawn->worldPosition,line)));
+            }
+            const auto& middle=path[path.size()/2].world;
+            const float t=static_cast<float>(path.size()/2)/(path.size()-1);
+            const Vector3 chord{path.front().world.x+(path.back().world.x-path.front().world.x)*t,
+                path.front().world.y+(path.back().world.y-path.front().world.y)*t,
+                path.front().world.z+(path.back().world.z-path.front().world.z)*t};
+            bend=(std::max)(bend,length(subtract(middle,chord)));
+        }
+        runner.Expect(pathError<0.08f,"drawn projectile stays on the production warning polyline at 30/60/120 fps: error="+
+            std::to_string(pathError));
+        if(curve!=0) runner.Expect(bend>0.2f,"bend fixture detects the old straight world-line mismatch");
+        report<<fps<<','<<curve<<','<<offset.x<<','<<offset.y<<','<<barrels<<','<<muzzleError<<','<<pathError<<','<<bend<<'\n';
+        auto checkpoint=runtime.CaptureCheckpoint();
+        runner.Expect(runtime.RestoreCheckpoint(checkpoint,true) && runtime.Enemies().front().weaponMount.ready,
+            "weapon mounts survive checkpoint round trips with the targeting token");
+    }
+}
+
+
+void TestUnreachableOrdinaryShotDeferral(RegressionRunner& runner) {
+    using Status=EnemyForwardInterceptStatus;
+    const auto check=[&](Vector3 relative,float v,float speed,float life,Status expected) {
+        const auto result=SolveEnemyForwardIntercept(relative,v,speed,life);
+        runner.Expect(result.status==expected && std::isfinite(result.flightSeconds),
+            "intercept distinguishes a real future hit from an invalid or expired solution");
+        if(result.Reachable()) {
+            const float z=relative.z+v*result.flightSeconds;
+            const float distance=std::sqrt(relative.x*relative.x+relative.y*relative.y+z*z);
+            runner.Expect(std::abs(distance-speed*result.flightSeconds)<0.002f && result.flightSeconds<life,
+                "accepted intercept satisfies the moving-target distance equation before expiry");
+        } else runner.Expect(result.flightSeconds==0,"a rejected intercept never fabricates a lifetime-sized flight");
+    };
+    check({0,0,-50},0,25,2,Status::BeyondLifetime);
+    check({0,0,-50},0,25,2.001f,Status::Reachable);
+    check({0,0,-50},0,25,1.9f,Status::BeyondLifetime);
+    check({24,8,-8},32,25,5.2f,Status::NoFutureIntersection);
+    check({24,8,-8},15,25,5.2f,Status::Reachable);
+    check({0,0,50},32,25,5.2f,Status::NoFutureIntersection);
+    check({0,0,-50},25,25,5.2f,Status::Reachable);
+    check({0,0,50},25,25,5.2f,Status::NoFutureIntersection);
+    check({0,0,0},32,25,5.2f,Status::Reachable);
+    check({0,0,-50},0,0,5.2f,Status::InvalidInput);
+    check({0,0,-50},0,25,0,Status::InvalidInput);
+    check({0,0,-50},std::numeric_limits<float>::quiet_NaN(),25,5.2f,Status::InvalidInput);
+    check({std::numeric_limits<float>::infinity(),0,-50},0,25,5.2f,Status::InvalidInput);
+
+    CourseActorAsset asset;EnemyProjectileDefinitionAsset shot;std::string error;
+    runner.Expect(asset.LoadFromFile("Resources/courses/actors/drone_basic.actor",&error) &&
+        shot.LoadFromFile("Resources/courses/projectiles/enemy_assault_magenta_slow.projectile",&error),
+        "unreachable shot fixtures load production assets");
+    for(int fps:{30,60,120}) {
+        const float dt=1.0f/fps;
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc desc;desc.meshId=asset.meshId;desc.radius=asset.radius;
+        desc.spawnDistance=112;desc.lateralOffset=24;desc.verticalOffset=12;desc.lifetime=30;
+        desc.behaviorDefinition=asset.behaviorDefinition;desc.projectileDefinition=shot;desc.bulletCount=2;
+        runner.Expect(runtime.SpawnEnemyActor(desc),"unreachable ordinary actor spawns");
+        EnemyTargetingSystem targeting;EnemyTargetingFrameInput ti;ti.deltaTime=dt;
+        ti.playerDistance=100-32*dt;ti.playerVerticalOffset=4;targeting.Update(runtime,ti);
+        auto actor=runtime.Enemies().front();
+        actor.combatState.phase=EnemyCombatPhase::Engaging;actor.combatState.canFire=true;actor.combatState.canTelegraph=true;
+        actor.fireEnvironmentReady=true;actor.fireSafetyAllowed=true;actor.entranceExitState.attackSuppressed=false;
+        actor.behaviorState.initialized=true;actor.behaviorState.state=EnemyBehaviorState::RequestingAttack;
+        actor.behaviorState.attackIntentActive=true;actor.behaviorState.attackIntentSequence=17;
+        actor.behaviorState.engagementBandVelocity=32;actor.behaviorState.attackTimeRemaining=0;
+        actor.behaviorState.telegraphPresented=true;
+        actor.attackState.tokenReserved=true;actor.attackState.phase=EnemyAttackRuntimePhase::Ready;
+        actor.attackState.intentSequence=17;actor.attackState.tokenId=41;actor.attackState.telegraphPresented=true;
+        RestoreEnemyFixture(runner,runtime,actor);ti.playerDistance=100;targeting.Update(runtime,ti);
+        actor=runtime.Enemies().front();const auto anchor=actor.targetingState;
+        runner.Expect(anchor.compensatesForwardTravel && !anchor.forwardInterceptReachable &&
+            anchor.waitingForReachableLaunch && actor.attackState.phase==EnemyAttackRuntimePhase::Queued &&
+            !actor.attackState.tokenReserved && !actor.behaviorState.telegraphPresented && actor.fireSequence==0,
+            "impossible shots release their token, clear warnings and keep a checkpoint-safe frozen anchor");
+        EnemyProjectileSystem projectiles;std::vector<EnemyProjectileRuntimeState> bullets;
+        runner.Expect(projectiles.SpawnVolley(actor,bullets)==0 && bullets.empty(),
+            "the real projectile spawn boundary rejects an unreachable entire volley");
+        auto force=actor;force.attackState.tokenReserved=true;force.attackState.tokenId=anchor.attackTokenId;
+        force.attackState.phase=EnemyAttackRuntimePhase::Ready;force.attackState.telegraphPresented=true;
+        force.behaviorState.telegraphPresented=true;force.behaviorState.attackTimeRemaining=0;
+        runner.Expect(!runtime.EnemyAttacks().CanExecute(force) &&
+            !ResolveEnemyProjectileLaunch(force,0).active && projectiles.SpawnVolley(force,bullets)==0,
+            "a stale Ready/warning acknowledgement cannot bypass reachability at launch");
+        RailPath rail;rail.SetControlPoints({{{0,0,0},40,32},{{0,0,600},40,32}});
+        const auto vp=MakePerspectiveFovMatrix(1.2f,16.0f/9,0.1f,1000);
+        EnemyAttackTelegraphFrameInput warning;warning.spawnRuntime=&runtime;warning.railPath=&rail;
+        warning.viewProjection=&vp;warning.viewportWidth=1600;warning.viewportHeight=900;
+        warning.settings.requireWorldVisibility=false;
+        EnemyAttackTelegraphSystem telegraph;telegraph.Update(warning);
+        runner.Expect(telegraph.Frame().cues.empty() && !runtime.MarkEnemyAttackTelegraphPresented(actor.actorId,17),
+            "unreachable attacks emit no misleading production warning and cannot acknowledge one");
+        EnemyBehaviorFrame intents;EnemyAttackIntent intent;intent.actorId=actor.actorId;
+        intent.sequence=17;intent.archetype=actor.behaviorDefinition.archetype;intent.severity=0.5f;
+        intents.attackIntents.push_back(intent);
+        for(int frame=0;frame<fps*4;++frame) {
+            ti.playerDistance+=32*dt;ti.playerLateralOffset=8;
+            actor=runtime.Enemies().front();actor.desc.distanceOffset+=32*dt;
+            RestoreEnemyFixture(runner,runtime,actor);targeting.Update(runtime,ti);
+            runtime.EnemyAttacks().Update(runtime,intents,dt);
+            actor=runtime.Enemies().front();
+            runner.Expect(!actor.attackState.tokenReserved && actor.targetingState.waitingForReachableLaunch &&
+                actor.targetingState.targetLateralOffset==anchor.targetLateralOffset &&
+                actor.targetingState.targetVerticalOffset==anchor.targetVerticalOffset && actor.fireSequence==0,
+                "unreachable waiting does not reserve, re-aim a dodge or consume an attack after reservation timeout");
+        }
+        CourseSpawnRuntime cancelled;
+        runner.Expect(cancelled.RestoreCheckpoint(runtime.CaptureCheckpoint(),true) &&
+            cancelled.InvalidateEnemyAttackWarning(actor.actorId),
+            "a deferred warning can be invalidated by visibility or terrain safety");
+        cancelled.EnemyAttacks().Update(cancelled,intents,dt);
+        runner.Expect(cancelled.Enemies().front().attackState.tokenReserved &&
+            !cancelled.Enemies().front().targetingState.waitingForReachableLaunch &&
+            !cancelled.Enemies().front().targetingState.solutionLocked,
+            "warning invalidation clears deferred admission so a fresh aim can be evaluated");
+        // A blocked drone must not monopolize a one-attacker budget.
+        CourseSpawnRuntime fairness;runner.Expect(fairness.RestoreCheckpoint(runtime.CaptureCheckpoint(),true),
+            "deferred anchor and queue restore without reserving an attacker");
+        auto budgets=fairness.EnemyAttacks().Settings();budgets.maximumConcurrentAttackers=1;
+        runner.Expect(fairness.EnemyAttacks().Configure(budgets),"single-slot attack budget configures");
+        CourseEnemyActorDesc peerDesc;peerDesc.spawnDistance=200;peerDesc.lifetime=30;
+        peerDesc.behaviorDefinition=EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Assault);
+        fairness.SpawnEnemyActor(peerDesc);auto peer=fairness.Enemies().back();
+        peer.fireEnvironmentReady=true;peer.combatState.canFire=true;peer.behaviorState.attackIntentActive=true;
+        peer.behaviorState.attackIntentSequence=19;peer.entranceExitState.attackSuppressed=false;
+        RestoreEnemyFixture(runner,fairness,peer);auto peerIntents=intents;
+        intent.actorId=peer.actorId;intent.sequence=19;peerIntents.attackIntents.push_back(intent);
+        fairness.EnemyAttacks().Update(fairness,peerIntents,dt);
+        runner.Expect(!fairness.Enemies().front().attackState.tokenReserved && fairness.Enemies().back().attackState.tokenReserved,
+            "reachable peers receive the released attack slot while the blocked drone waits");
+        // Checkpoint restoration cannot turn an unknown first-frame velocity
+        // into an accidental zero-speed reachable shot.
+        EnemyTargetingSystem checkpointTargeting;checkpointTargeting.Update(fairness,ti);
+        runner.Expect(!fairness.Enemies().front().targetingState.forwardInterceptReachable,
+            "deferred reachability keeps checkpoint velocity until a new sample is measured");
+        // Slow automatic forward travel makes the original frozen anchor reachable.
+        actor=runtime.Enemies().front();actor.behaviorState.engagementBandVelocity=15;
+        actor.desc.distanceOffset+=15*dt;RestoreEnemyFixture(runner,runtime,actor);
+        ti.playerDistance+=15*dt;targeting.Update(runtime,ti);
+        runner.Expect(runtime.Enemies().front().targetingState.forwardInterceptReachable,
+            "a queued unreachable aim is re-evaluated without needing a reserved token");
+        runtime.EnemyAttacks().Update(runtime,intents,dt);
+        ti.deltaTime=0;targeting.Update(runtime,ti);ti.deltaTime=dt;
+        actor=runtime.Enemies().front();
+        runner.Expect(actor.attackState.tokenReserved && !actor.targetingState.waitingForReachableLaunch &&
+            !actor.behaviorState.telegraphPresented && actor.behaviorState.attackTimeRemaining>=actor.behaviorDefinition.attackLeadSeconds &&
+            actor.targetingState.targetLateralOffset==anchor.targetLateralOffset && actor.targetingState.targetVerticalOffset==anchor.targetVerticalOffset,
+            "reachable re-admission keeps the dodge anchor and starts a complete new warning interval");
+        EnemyAttackExecutionSystem execution;EnemyBehaviorSystem behavior;
+        execution.Update(runtime,runtime.EnemyAttacks(),behavior);
+        runner.Expect(runtime.ActiveBulletCount()==0,"recovered reachability never fires before warning acknowledgement");
+        runner.Expect(runtime.MarkEnemyAttackTelegraphPresented(actor.actorId,17),"fresh reachable warning can be acknowledged");
+        actor=runtime.Enemies().front();actor.behaviorState.attackTimeRemaining=0;
+        RestoreEnemyFixture(runner,runtime,actor);runtime.EnemyAttacks().Update(runtime,intents,0);
+        execution.Update(runtime,runtime.EnemyAttacks(),behavior);
+        runner.Expect(execution.Frame().committedVolleys==1 && runtime.ActiveBulletCount()==2 && runtime.Enemies().front().fireSequence==1,
+            "once its acknowledged warning completes the deferred attack emits exactly one complete volley");
+        runner.Expect(runtime.Bullets().front().projectileId==1,"rejected launches do not consume projectile IDs");
+    }
+    // One barrel may be reachable while its neighbor has no real intercept.
+    CourseEnemyActor twin;twin.desc.projectileDefinition=shot;twin.desc.bulletCount=2;
+    twin.targetingState.compensatesForwardTravel=true;twin.targetingState.solutionLocked=true;
+    twin.targetingState.playerForwardVelocity=32;twin.targetingState.forwardTravelReferenceDistance=100;
+    twin.weaponMount.ready=true;twin.weaponMount.muzzleRail[0]={0,0,110};twin.weaponMount.muzzleRail[1]={24,0,110};
+    runner.Expect(ResolveEnemyProjectileAimSolution(twin,twin.weaponMount.muzzleRail[0]).reachable &&
+        !ResolveEnemyProjectileAimSolution(twin,twin.weaponMount.muzzleRail[1]).reachable,
+        "mixed barrel fixture has a real intersection for only its first barrel");
+    twin.desc.meshId="twin_shield_hull";EnemyProjectileSystem volleySystem;std::vector<EnemyProjectileRuntimeState> volley;
+    runner.Expect(volleySystem.SpawnVolley(twin,volley)==0 && volley.empty(),
+        "mixed reachable/unreachable barrels never emit a partial volley");
+}
+
+void TestAutomaticRailTravelPrediction(RegressionRunner& runner) {
+    float maximumDistanceError = 0.0f;
+    float maximumAimError = 0.0f;
+    for (int fps : {30, 60, 120}) for (int scenario = 0; scenario < 8; ++scenario) {
+        const float dt = 1.0f / fps;
+        CourseAsset course;
+        course.railPoints = {{{0,0,0},40,32},{{0,0,1000},40,32}};
+        if (scenario == 3) course.railPoints = {{{0,0,0},40,64},{{0,0,140},40,64},
+            {{90,0,220},40,64},{{110,0,800},40,64}};
+        CourseRideProfileDefinition profile;
+        profile.editorGuid = "forecast-ride"; profile.startDistance = 0; profile.endDistance = 1000;
+        profile.targetSpeedOverride = scenario == 1 ? 12.0f : (scenario == 3 ? 64.0f : 40.0f);
+        profile.blendInDistance = 0; profile.blendOutDistance = 0; profile.maximumJerk = 30;
+        if (scenario != 0) course.rideProfiles.push_back(profile);
+        if (scenario == 2) {
+            course.rideProfiles.front().endDistance = 150;
+            profile.editorGuid = "forecast-brake"; profile.startDistance = 150; profile.targetSpeedOverride = 12;
+            course.rideProfiles.push_back(profile);
+            RailRideSpeedBeatDefinition beat; beat.editorGuid = "forecast-release";
+            beat.startDistance = 115; beat.endDistance = 145; beat.targetSpeedOverride = 48;
+            course.rideSpeedBeats.push_back(beat);
+        }
+        course.events.push_back({110,"boost","forecast-event",""});
+        course.events.push_back({155,"checkpoint","forecast-slow",""});
+        course.SortForRuntime();
+        RailPath rail; course.ApplyToRailPath(rail);
+        CourseRuntime travel; travel.Bind(&course);
+        const float start = scenario == 5 ? rail.Length() - 18.0f : 100.0f;
+        travel.Reset(start);
+        RailVehicleMovementSystem vehicle;
+        vehicle.Reset(start, scenario == 0 ? 2.0f : (scenario == 1 || scenario == 3 ? 60.0f : 32.0f), &rail);
+        auto state = vehicle.State(); state.movementEnabled = scenario != 7; state.emergencyBraking = scenario == 6;
+        runner.Expect(vehicle.RestoreState(state,&rail),"forecast production vehicle state restores");
+        if (scenario == 4) runner.Expect(vehicle.ApplyImpactSlowdown(0.45f,0.9f,1),"forecast includes an existing impact slowdown");
+        RailSpeedDirector policy; policy.NotifyCourseEvents({{0,"checkpoint","active-slowdown",""}});
+        RailTravelPredictionInput input; input.vehicle = &vehicle; input.speedDirector = &policy;
+        input.courseRuntime = &travel; input.course = &course; input.railPath = &rail; input.simulationStepSeconds = dt;
+        const auto before = vehicle.State(); const auto beforePolicy = policy.LastFrame();
+        const auto prediction = BuildRailTravelPrediction(input,3.0f);
+        runner.Expect(prediction && prediction->samples.size() > 2 && prediction->HorizonSeconds() == 3.0f,
+            "automatic travel forecast covers the requested horizon");
+        runner.Expect(vehicle.State().revision == before.revision && travel.Distance() == start &&
+            policy.LastFrame().distance == beforePolicy.distance,
+            "forecast does not advance the live vehicle, event cursor or speed policy");
+        if (scenario == 0) runner.Expect(prediction->DistanceAt(2) > start + before.speed*2 + 10,
+            "acceleration forecast differs materially from constant-speed extrapolation");
+        if (scenario == 1) runner.Expect(prediction->DistanceAt(2) < start + before.speed*2 - 10,
+            "braking forecast differs materially from constant-speed extrapolation");
+        if (scenario == 5) runner.Expect(prediction->DistanceAt(3) == rail.Length(),"forecast clamps at the course end");
+        if (scenario == 7) runner.Expect(prediction->DistanceAt(3) == start,"disabled movement forecast stays stationary");
+        std::vector<RailTravelPredictionSample> actual{{0,start}};
+        RailRideDirector ride; RailRideMotionEnvelope envelope;
+        // Independently replay the real application policy/movement sequence.
+        // Forecasting must agree without advancing any of these live systems.
+        for (int frame = 1; frame <= 3*fps; ++frame) {
+            RailSpeedDirectorFrameInput speedInput;
+            speedInput.course = &course; speedInput.railPath = &rail; speedInput.section = travel.CurrentSection();
+            speedInput.rideProfile = course.FindRideProfile(travel.Distance()); speedInput.distance = travel.Distance(); speedInput.deltaTime = dt;
+            const auto speed = policy.Evaluate(speedInput);
+            RailRideDirectorInput rideInput; rideInput.course = &course; rideInput.railPath = &rail;
+            rideInput.distance = travel.Distance(); rideInput.baseRequestedSpeed = speed.requestedSpeed;
+            const auto& rideFrame = ride.Evaluate(rideInput);
+            RailRideMotionEnvelopeInput envelopeInput; envelopeInput.vehicleDefinition = &vehicle.Definition();
+            envelopeInput.vehicleState = &vehicle.State(); envelopeInput.ride = &rideFrame; envelopeInput.railPath = &rail;
+            const auto& limits = envelope.Evaluate(envelopeInput);
+            RailVehicleMovementInput movement; movement.courseRuntime = &travel; movement.railPath = &rail;
+            movement.deltaTime = dt; movement.requestedSpeed = limits.requestedSpeed; movement.motionEnvelopeActive = limits.active;
+            movement.accelerationLimit = limits.accelerationLimit; movement.brakingLimit = limits.brakingLimit;
+            movement.jerkLimit = limits.jerkLimit; movement.movementEnabled = before.movementEnabled;
+            movement.emergencyBrake = before.emergencyBraking;
+            const auto& frameResult = vehicle.Update(movement); policy.NotifyCourseEvents(frameResult.triggeredEvents);
+            const float seconds = frame*dt;
+            maximumDistanceError = (std::max)(maximumDistanceError,std::abs(prediction->DistanceAt(seconds) - travel.Distance()));
+            actual.push_back({seconds,travel.Distance()});
+        }
+        runner.Expect(maximumDistanceError < 0.025f,
+            "forecast follows production acceleration, braking, jerk, curves, authored speed beats and event timers at 30/60/120 fps");
+        if (scenario <= 4) {
+            CourseEnemyActor actor; actor.desc.spawnDistance = start + 50; actor.desc.radius = 1;
+            actor.desc.lateralOffset = 18; actor.desc.verticalOffset = 12;
+            actor.desc.projectileDefinition.initialSpeed = 25; actor.desc.projectileDefinition.maximumSpeed = 25;
+            actor.desc.projectileDefinition.lifetime = 3; actor.desc.projectileDefinition.acceleration = 0;
+            actor.targetingState.solutionLocked = true; actor.targetingState.compensatesForwardTravel = true;
+            actor.targetingState.forwardTravelReferenceDistance = start; actor.targetingState.playerForwardVelocity = before.speed;
+            actor.targetingState.targetVerticalOffset = 4; actor.targetingState.forwardTravelPrediction = prediction;
+            actor.behaviorState.initialized = true; actor.behaviorState.engagementBandVelocity = before.speed;
+            const auto muzzle = ResolveEnemyProjectileMuzzleRailPosition(actor,0);
+            const auto aim = ResolveEnemyProjectileAimSolution(actor,muzzle);
+            runner.Expect(aim.reachable,"accelerating and braking ordinary shots find a real intercept");
+            auto projectile = ResolveEnemyProjectileLaunch(actor,0);
+            AdvanceEnemyProjectileTrajectory(projectile,aim.flightSeconds);
+            RailTravelPrediction liveReplay; liveReplay.samples = actual;
+            maximumAimError = (std::max)(maximumAimError,std::abs(projectile.distanceOffset - liveReplay.DistanceAt(aim.flightSeconds)));
+            runner.Expect(std::abs(projectile.lateralOffset) < 0.002f && std::abs(projectile.verticalOffset - 4) < 0.002f &&
+                maximumAimError < 0.025f,"production launch intersects actual future rail travel while preserving frozen side/up aim");
+            const float wait = 0.7f;
+            const auto delayed = ResolveEnemyProjectileAimSolution(actor,muzzle,wait);
+            runner.Expect(delayed.reachable && wait + delayed.flightSeconds < 3,
+                "forecast intercept includes the complete warning delay and projectile flight");
+            const float futureMuzzle = muzzle.z + prediction->DistanceAt(wait) - start;
+            const float z = delayed.targetRail.z - futureMuzzle;
+            runner.Expect(std::abs(std::sqrt(18*18 + 8*8 + z*z) - 25*delayed.flightSeconds) < 0.003f,
+                "warning-delay solution uses the following enemy's future muzzle and future player distance");
+        }
+    }
+    RailTravelPrediction tangent; tangent.samples = {{0,0},{3,150}};
+    const auto hit = SolveEnemyPredictedForwardIntercept(tangent,0,{30,0,-40},30,3);
+    runner.Expect(hit.Reachable() && std::abs(hit.flightSeconds - 1.25f) < 0.001f,
+        "piecewise forecast solver detects a tangent crossing between samples");
+    RailTravelPrediction stop; stop.samples = {{0,0},{0.5f,16},{1,24},{5,24}};
+    runner.Expect(!SolveEnemyForwardIntercept({24,8,-8},32,25,5).Reachable() &&
+        SolveEnemyPredictedForwardIntercept(stop,0,{24,8,-8},25,5).Reachable(),
+        "scheduled braking can make a currently impossible constant-speed shot reachable");
+    RailTravelPrediction stationary; stationary.samples = {{0,0},{3,0}};
+    runner.Expect(SolveEnemyPredictedForwardIntercept(stationary,0,{0,0,-50},25,2).status == EnemyForwardInterceptStatus::BeyondLifetime,
+        "forecast intersection at exact expiry remains unusable");
+    runner.Expect(!BuildRailTravelPrediction({},3),"missing movement context preserves the legacy fallback without a fake forecast");
+    std::ofstream report("logs/rail_travel_prediction_validation.csv",std::ios::trunc);
+    report << "scenarios,fps,max_distance_error_m,max_launch_error_m\n24,30/60/120," << maximumDistanceError << ',' << maximumAimError << '\n';
+}
+
+void TestSharedTravelForecastAndWarningRestart(RegressionRunner& runner) {
+    CourseAsset course; course.railPoints = {{{0,0,0},40,32},{{0,0,1000},40,32}};
+    RailPath rail; course.ApplyToRailPath(rail); CourseRuntime travel; travel.Bind(&course); travel.Reset(100);
+    RailVehicleMovementSystem vehicle; vehicle.Reset(100,10,&rail);
+    auto vehicleState = vehicle.State(); vehicleState.movementEnabled = true;
+    runner.Expect(vehicle.RestoreState(vehicleState,&rail),"shared forecast movement state restores");
+    RailSpeedDirector speed; RailTravelPredictionInput forecast;
+    forecast.vehicle = &vehicle; forecast.speedDirector = &speed; forecast.courseRuntime = &travel;
+    forecast.course = &course; forecast.railPath = &rail;
+    CourseActorAsset asset; EnemyProjectileDefinitionAsset shot; std::string error;
+    runner.Expect(asset.LoadFromFile("Resources/courses/actors/drone_basic.actor",&error) &&
+        shot.LoadFromFile("Resources/courses/projectiles/enemy_assault_magenta_slow.projectile",&error),"shared prediction fixture assets load");
+    CourseSpawnRuntime runtime;
+    for (int index = 0; index < 32; ++index) {
+        CourseEnemyActorDesc desc; desc.meshId = asset.meshId; desc.radius = 1;
+        desc.spawnDistance = 150; desc.lateralOffset = 18; desc.verticalOffset = 12;
+        desc.behaviorDefinition = asset.behaviorDefinition; desc.projectileDefinition = shot; desc.lifetime = 30;
+        runner.Expect(runtime.SpawnEnemyActor(desc),"shared prediction enemy spawns");
+        auto actor = runtime.Enemies().back(); actor.behaviorState.initialized = true;
+        actor.behaviorState.attackIntentActive = true; actor.behaviorState.attackIntentSequence = index + 1;
+        actor.behaviorState.engagementBandVelocity = 10; actor.behaviorState.attackTimeRemaining = 0.3f;
+        actor.attackState.tokenReserved = true; actor.attackState.tokenId = index + 101;
+        actor.attackState.intentSequence = index + 1; actor.attackState.phase = EnemyAttackRuntimePhase::Reserved;
+        RestoreEnemyFixture(runner,runtime,actor);
+    }
+    EnemyTargetingSystem targeting; EnemyTargetingFrameInput input; input.deltaTime = 1.0f/60;
+    input.playerDistance = 100; input.playerVerticalOffset = 4; input.travelPredictionInput = &forecast;
+    const auto started = std::chrono::steady_clock::now(); targeting.Update(runtime,input);
+    const double milliseconds = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+    const auto shared = runtime.Enemies().front().targetingState.forwardTravelPrediction;
+    runner.Expect(targeting.Frame().travelForecastsBuilt == 1 && shared && targeting.Frame().travelForecastSamples < 1802,
+        "one bounded forecast is built for all 32 ordinary enemies");
+    for (const auto& actor : runtime.Enemies()) runner.Expect(actor.targetingState.forwardTravelPrediction == shared,
+        "enemies share immutable future distances without duplicating forecast storage");
+    auto checkpoint = runtime.CaptureCheckpoint(); CourseSpawnRuntime restored;
+    runner.Expect(restored.RestoreCheckpoint(checkpoint,true) && restored.Enemies().front().targetingState.forwardTravelPrediction == shared,
+        "checkpoint retains forecast ownership and launch can safely read it after restoration");
+    input.deltaTime = 0; targeting.Update(runtime,input);
+    runner.Expect(targeting.Frame().travelForecastsBuilt == 0 && runtime.Enemies().front().targetingState.forwardTravelPrediction == shared,
+        "paused frames do not simulate future travel or discard the current warning forecast");
+    // Simulate a nearly complete warning whose previous aim would point in a
+    // substantially different direction after a known forward-motion change.
+    auto actor = runtime.Enemies().front(); const auto frozen = actor.targetingState;
+    actor.attackState.telegraphPresented = true; actor.behaviorState.telegraphPresented = true;
+    actor.behaviorState.attackTimeRemaining = 0.01f; actor.attackState.phase = EnemyAttackRuntimePhase::Ready;
+    actor.targetingState.targetDistance = actor.targetingState.originDistance + 50;
+    RestoreEnemyFixture(runner,runtime,actor); input.deltaTime = 1.0f/60; input.playerLateralOffset = 8;
+    targeting.Update(runtime,input); actor = runtime.Enemies().front();
+    runner.Expect(actor.attackState.tokenReserved && !actor.attackState.telegraphPresented && !actor.behaviorState.telegraphPresented &&
+        actor.behaviorState.attackTimeRemaining >= actor.behaviorDefinition.attackLeadSeconds &&
+        actor.targetingState.targetLateralOffset == frozen.targetLateralOffset && actor.targetingState.targetVerticalOffset == frozen.targetVerticalOffset,
+        "a large forward aim correction restarts a complete warning without changing enemy placement or tracking a lateral dodge");
+    std::ofstream report("logs/rail_travel_forecast_shared_cost.csv",std::ios::trunc);
+    report << "enemies,forecasts,samples,targeting_ms\n32,1," << shared->samples.size() << ',' << milliseconds << '\n';
+}
+
+void TestScheduledWarningAndAcceleratedLaunchAgreement(RegressionRunner& runner, bool movingMuzzle = false) {
+    CourseActorAsset asset; EnemyProjectileDefinitionAsset shot; std::string error;
+    runner.Expect(asset.LoadFromFile("Resources/courses/actors/drone_basic.actor",&error) &&
+        shot.LoadFromFile("Resources/courses/projectiles/enemy_assault_magenta_slow.projectile",&error),
+        "scheduled warning uses production drone and projectile assets");
+    const auto length=[](Vector3 p) { return std::sqrt(p.x*p.x+p.y*p.y+p.z*p.z); };
+    const auto difference=[](Vector3 a,Vector3 b) { return Vector3{a.x-b.x,a.y-b.y,a.z-b.z}; };
+    std::ofstream report(movingMuzzle ? "logs/enemy_hover_muzzle_agreement.csv" :
+        "logs/enemy_scheduled_warning_agreement.csv",std::ios::trunc);
+    report << "fps,curve,accelerating,wait,barrels,muzzle_error,path_error,instant_warning_error,own_motion_correction\n";
+    float largestCorrection=0;
+    float largestOwnMotionCorrection=0;
+    for(int fps:{30,60,120}) for(int curve:{0,1,2}) for(bool accelerating:{false,true})
+        for(float wait:{1.0f/fps,0.2f,0.7f}) for(int barrels:{1,2}) {
+        const float dt=1.0f/fps;
+        CourseAsset course;
+        if(curve==0) course.railPoints={{{0,0,0},40,32},{{0,0,600},40,32}};
+        else if(curve==1) course.railPoints={{{0,0,0},40,32},{{0,0,90},40,32},
+            {{30,0,145},40,32},{{90,0,180},40,32},{{110,0,600},40,32}};
+        else course.railPoints={{{0,0,0},40,32},{{0,8,90},40,32},
+            {{-30,16,145},40,32},{{-90,6,180},40,32},{{-110,0,600},40,32}};
+        CourseRideProfileDefinition rideProfile;
+        rideProfile.startDistance=0;rideProfile.endDistance=1000;
+        rideProfile.targetSpeedOverride=accelerating?40.0f:12.0f;
+        rideProfile.blendInDistance=0;rideProfile.blendOutDistance=0;rideProfile.maximumJerk=40;
+        course.rideProfiles.push_back(rideProfile);course.SortForRuntime();
+        RailPath rail;course.ApplyToRailPath(rail);
+        CourseRuntime liveTravel;liveTravel.Bind(&course);liveTravel.Reset(100);
+        RailVehicleMovementSystem liveVehicle;liveVehicle.Reset(100,accelerating?2.0f:60.0f,&rail);
+        auto vehicleState=liveVehicle.State();vehicleState.movementEnabled=true;
+        runner.Expect(liveVehicle.RestoreState(vehicleState,&rail),"scheduled warning movement state restores");
+        RailSpeedDirector liveSpeed;
+        RailTravelPredictionInput forecastInput;
+        forecastInput.vehicle=&liveVehicle;forecastInput.speedDirector=&liveSpeed;forecastInput.courseRuntime=&liveTravel;
+        forecastInput.course=&course;forecastInput.railPath=&rail;forecastInput.simulationStepSeconds=dt;
+        const auto forecast=BuildRailTravelPrediction(forecastInput,wait+shot.lifetime+0.1f);
+        runner.Expect(forecast!=nullptr,"scheduled warning gets a shared future-distance forecast");
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc desc;desc.meshId=asset.meshId;desc.radius=1;desc.spawnDistance=155;
+        desc.lateralOffset=18;desc.verticalOffset=12;desc.lifetime=30;desc.bulletCount=barrels;
+        desc.behaviorDefinition=asset.behaviorDefinition;desc.projectileDefinition=shot;
+        if(movingMuzzle) {
+            desc.behaviorDefinition.lateralAmplitude=12;
+            desc.behaviorDefinition.verticalAmplitude=6;
+            desc.behaviorDefinition.movementFrequency=0.55f;
+            desc.combatDefinition=EnemyCombatDefinition::CommercialStandard();
+        }
+        runner.Expect(runtime.SpawnEnemyActor(desc),"scheduled warning actor spawns");
+        auto actor=runtime.Enemies().front();
+        actor.combatState.phase=EnemyCombatPhase::Engaging;actor.combatState.canTelegraph=true;actor.combatState.canFire=true;
+        actor.entranceExitState.phase=EnemyEntranceExitPhase::Active;actor.entranceExitState.attackSuppressed=false;
+        actor.behaviorState.initialized=true;actor.behaviorState.state=EnemyBehaviorState::RequestingAttack;
+        actor.behaviorState.attackIntentActive=true;actor.behaviorState.attackIntentSequence=17;
+        actor.behaviorState.attackTimeRemaining=wait;actor.behaviorState.engagementBandVelocity=liveVehicle.State().speed;
+        actor.attackState.tokenReserved=true;actor.attackState.tokenId=41;actor.attackState.intentSequence=17;
+        actor.attackState.phase=EnemyAttackRuntimePhase::Reserved;
+        actor.fireEnvironmentReady=true;actor.fireSafetyAllowed=true;actor.fireVisibleTime=1;
+        if(movingMuzzle) {
+            actor.age=4;actor.behaviorState.hoverMotionSeconds=1.7f;
+            actor.behaviorState.deterministicPhase=1.1f;
+            actor.behaviorState.hoverPreferredForwardDistance=55;
+            actor.behaviorState.engagementBandVelocity+=4;
+            actor.combatState.phase=EnemyCombatPhase::Telegraphing;actor.combatState.phaseElapsedSeconds=0.1f;
+        }
+        auto& aim=actor.targetingState;
+        aim.initialized=true;aim.solutionLocked=true;aim.attackIntentSequence=17;aim.attackTokenId=41;
+        aim.compensatesForwardTravel=true;aim.forwardTravelPrediction=forecast;
+        aim.forwardTravelReferenceDistance=100;aim.playerForwardVelocity=liveVehicle.State().speed;
+        aim.targetVerticalOffset=4;aim.predictedLaunchDelaySeconds=wait;
+        const auto firstAim=ResolveEnemyProjectileAimSolution(actor,ResolveEnemyProjectileMuzzleRailPosition(actor,0),wait);
+        runner.Expect(firstAim.reachable && CanEnemyProjectileVolleyReachTarget(actor,wait),
+            "scheduled accelerating/braking volley has a real future intersection");
+        aim.targetDistance=firstAim.targetRail.z;aim.predictedFlightSeconds=firstAim.flightSeconds;
+        RestoreEnemyFixture(runner,runtime,actor);
+        const Vector3 camera=ResolveEnemyProjectileWorldPosition(rail,{0,5,92});
+        EnemyBehaviorSystem liveBehavior;EnemyCombatSystem liveCombat;EnemyTargetingSystem mountedTargeting;
+        EnemyTargetingFrameInput mountInput;
+        mountInput.deltaTime=dt;mountInput.playerDistance=100;mountInput.playerVerticalOffset=4;
+        mountInput.railPath=&rail;mountInput.cameraPosition=camera;mountInput.hasCameraPosition=true;
+        mountInput.travelPrediction=forecast;
+        if(movingMuzzle) {
+            liveBehavior.Update(runtime,{0,100});
+            const auto before=runtime.Enemies().front();
+            mountedTargeting.Update(runtime,mountInput);
+            actor=runtime.Enemies().front();
+            runner.Expect(actor.weaponMount.scheduledPredictionReady &&
+                mountedTargeting.Frame().muzzleForecastsBuilt==1 &&
+                mountedTargeting.Frame().muzzleForecastSteps<=240,
+                "hover and banking prediction is built once for both barrels with bounded work");
+            runner.Expect(actor.age==before.age && actor.desc.lateralOffset==before.desc.lateralOffset &&
+                actor.desc.verticalOffset==before.desc.verticalOffset &&
+                actor.behaviorState.hoverMotionSeconds==before.behaviorState.hoverMotionSeconds &&
+                actor.combatState.phaseElapsedSeconds==before.combatState.phaseElapsedSeconds,
+                "forecasting does not advance the real hover clock, combat clock or dispersed pose");
+            // Acknowledge the new warning only after its first pose/aim is
+            // established, just as production presentation admission does.
+            actor.behaviorState.telegraphPresented=true;actor.attackState.telegraphPresented=true;
+            RestoreEnemyFixture(runner,runtime,actor);
+        }
+        const Vector3 center=ResolveEnemyProjectileWorldPosition(rail,{18,12,155});
+        const Vector3 cameraDirection=difference(center,camera);const float cameraLength=length(cameraDirection);
+        auto cameraMatrix=MakeAffineMatrix({1,1,1},Vector3{-std::asin(cameraDirection.y/cameraLength),
+            std::atan2(cameraDirection.x,cameraDirection.z),0},camera);
+        const auto vp=Multiply(Inverse(cameraMatrix),MakePerspectiveFovMatrix(1.2f,16.0f/9,0.1f,1000));
+        EnemyAttackTelegraphSystem telegraph;EnemyAttackTelegraphFrameInput fi;
+        fi.spawnRuntime=&runtime;fi.railPath=&rail;fi.viewProjection=&vp;fi.cameraPosition=camera;
+        fi.viewportWidth=1600;fi.viewportHeight=900;fi.playerDistance=100;fi.deltaTime=dt;
+        fi.settings.requireWorldVisibility=false;fi.settings.leadSeconds=2;
+        telegraph.Update(fi);
+        runner.Expect(telegraph.Frame().cues.size()==1,"production warning admits the scheduled attack");
+        const auto& cue=telegraph.Frame().cues.front();
+        runner.Expect(cue.projectileLaunches.size()==static_cast<size_t>(barrels) &&
+            cue.projectileFlightSeconds.size()==static_cast<size_t>(barrels),
+            "scheduled warning preserves each barrel's future muzzle and flight time");
+        EnemyAttackLaneTelegraphRenderer renderer;EnemyAttackLaneTelegraphRenderInput wi;
+        wi.telegraph=&telegraph.Frame();wi.railPath=&rail;renderer.Update(wi);
+        runner.Expect(renderer.Frame().lanes.size()==1 && renderer.Frame().lanes.front().projectilePaths.size()==static_cast<size_t>(barrels),
+            "scheduled warning renders one bounded future trajectory for each barrel");
+        const auto& lane=renderer.Frame().lanes.front();
+        // Advance the actual vehicle using the application's live policy pipeline,
+        // then launch at that real future state with a newly generated forecast.
+        RailRideDirector liveRide;RailRideMotionEnvelope liveEnvelope;
+        for(int frame=0;frame<static_cast<int>(std::lround(wait*fps));++frame) {
+            RailSpeedDirectorFrameInput speedInput;speedInput.course=&course;speedInput.railPath=&rail;
+            speedInput.section=liveTravel.CurrentSection();speedInput.rideProfile=course.FindRideProfile(liveTravel.Distance());
+            speedInput.distance=liveTravel.Distance();speedInput.deltaTime=dt;
+            const auto speedFrame=liveSpeed.Evaluate(speedInput);
+            RailRideDirectorInput rideInput;rideInput.course=&course;rideInput.railPath=&rail;
+            rideInput.distance=liveTravel.Distance();rideInput.baseRequestedSpeed=speedFrame.requestedSpeed;
+            const auto& rideFrame=liveRide.Evaluate(rideInput);
+            RailRideMotionEnvelopeInput envelopeInput;envelopeInput.vehicleDefinition=&liveVehicle.Definition();
+            envelopeInput.vehicleState=&liveVehicle.State();envelopeInput.ride=&rideFrame;envelopeInput.railPath=&rail;
+            const auto& envelope=liveEnvelope.Evaluate(envelopeInput);
+            RailVehicleMovementInput movement;movement.deltaTime=dt;movement.courseRuntime=&liveTravel;movement.railPath=&rail;
+            movement.requestedSpeed=envelope.requestedSpeed;movement.motionEnvelopeActive=envelope.active;
+            movement.accelerationLimit=envelope.accelerationLimit;movement.brakingLimit=envelope.brakingLimit;movement.jerkLimit=envelope.jerkLimit;
+            const auto& frameResult=liveVehicle.Update(movement);liveSpeed.NotifyCourseEvents(frameResult.triggeredEvents);
+            if(movingMuzzle) {
+                liveCombat.Update(runtime,{dt,liveTravel.Distance()});
+                liveBehavior.Update(runtime,{dt,liveTravel.Distance()});
+                auto advanced=runtime.Enemies().front();advanced.age+=dt;
+                RestoreEnemyFixture(runner,runtime,advanced);
+            }
+        }
+        auto futureActor=movingMuzzle?runtime.Enemies().front():actor;
+        if(!movingMuzzle) futureActor.desc.distanceOffset+=liveTravel.Distance()-100;
+        futureActor.targetingState.forwardTravelReferenceDistance=liveTravel.Distance();
+        futureActor.targetingState.playerForwardVelocity=liveVehicle.State().speed;
+        futureActor.targetingState.forwardTravelPrediction=BuildRailTravelPrediction(forecastInput,shot.lifetime+0.1f);
+        futureActor.behaviorState.engagementBandVelocity=liveVehicle.State().speed;futureActor.behaviorState.attackTimeRemaining=0;
+        if(movingMuzzle) {
+            RestoreEnemyFixture(runner,runtime,futureActor);
+            mountInput.deltaTime=0;mountInput.playerDistance=liveTravel.Distance();
+            mountInput.cameraPosition=ResolveEnemyProjectileWorldPosition(rail,{0,5,92+liveTravel.Distance()-100});
+            mountInput.travelPrediction=futureActor.targetingState.forwardTravelPrediction;
+            mountedTargeting.Update(runtime,mountInput);
+            futureActor=runtime.Enemies().front();
+            runner.Expect(!futureActor.weaponMount.scheduledPredictionRequested,
+                "zero-delay launch uses the actual mounted pose rather than a stale future cache");
+        }
+        EnemyProjectileSystem projectiles;std::vector<EnemyProjectileRuntimeState> actual;
+        runner.Expect(projectiles.SpawnVolley(futureActor,actual)==static_cast<uint32_t>(barrels),
+            "actual future launch emits the complete warned volley");
+        float muzzleError=0,pathError=0,instantError=0,ownMotionCorrection=0;
+        for(int index=0;index<barrels;++index) {
+            const auto& planned=cue.projectileLaunches[index];const auto& fired=actual[index];
+            const auto& path=lane.projectilePaths[index];const float flight=cue.projectileFlightSeconds[index];
+            const auto startWorld=ResolveEnemyProjectileWorldPosition(rail,{fired.lateralOffset,fired.verticalOffset,fired.distanceOffset});
+            muzzleError=(std::max)(muzzleError,length(difference(path.front().world,startWorld)));
+            if(movingMuzzle) {
+                auto oldMuzzle=ResolveEnemyProjectileMuzzleRailPosition(actor,index);
+                oldMuzzle.z+=liveTravel.Distance()-100+
+                    (actor.behaviorState.engagementBandVelocity-actor.targetingState.playerForwardVelocity)*wait;
+                ownMotionCorrection=(std::max)(ownMotionCorrection,length(difference(startWorld,
+                    ResolveEnemyProjectileWorldPosition(rail,oldMuzzle))));
+            }
+            auto liveShot=fired;auto oldShot=ResolveEnemyProjectileLaunch(actor,index);
+            AdvanceEnemyProjectileTrajectory(oldShot,flight);
+            instantError=(std::max)(instantError,length(difference(path.back().world,
+                ResolveEnemyProjectileWorldPosition(rail,{oldShot.lateralOffset,oldShot.verticalOffset,oldShot.distanceOffset}))));
+            for(size_t sample=0;sample<path.size();++sample) {
+                if(sample>0) AdvanceEnemyProjectileTrajectory(liveShot,flight/(path.size()-1));
+                const auto world=ResolveEnemyProjectileWorldPosition(rail,{liveShot.lateralOffset,liveShot.verticalOffset,liveShot.distanceOffset});
+                pathError=(std::max)(pathError,length(difference(path[sample].world,world)));
+            }
+            runner.Expect(planned.previousDistanceOffset==planned.distanceOffset && planned.age==0 && planned.projectileId==0,
+                "scheduled preview starts at launch time without aging a projectile during the warning");
+            auto arrived=planned;AdvanceEnemyProjectileTrajectory(arrived,flight);
+            runner.Expect(std::abs(arrived.distanceOffset-planned.lockedTargetDistance)<0.003f &&
+                std::abs(arrived.lateralOffset-planned.lockedTargetLateralOffset)<0.003f &&
+                std::abs(arrived.verticalOffset-planned.lockedTargetVerticalOffset)<0.003f,
+                "scheduled ray points from the future muzzle to the future impact rather than applying lead twice");
+        }
+        largestCorrection=(std::max)(largestCorrection,instantError);
+        largestOwnMotionCorrection=(std::max)(largestOwnMotionCorrection,ownMotionCorrection);
+        runner.Expect(muzzleError<0.02f && pathError<0.06f,
+            "accelerating/braking production warning agrees with the real scheduled launch on bends and slopes: "+std::to_string(pathError));
+        runner.Expect(runtime.ActiveBulletCount()==0 && runtime.Enemies().front().fireSequence==0 &&
+            (movingMuzzle || runtime.Enemies().front().desc.distanceOffset==0) &&
+            runtime.Enemies().front().targetingState.targetLateralOffset==0,
+            "future warning sampling neither fires, moves the enemy nor changes the frozen lateral aim");
+        runner.Expect(std::abs(cue.targetRailDistance-cue.projectileLaunches.front().lockedTargetDistance)<0.001f,
+            "warning marker and per-barrel trajectory share the same impact time basis");
+        report<<fps<<','<<curve<<','<<accelerating<<','<<wait<<','<<barrels<<','<<muzzleError<<','<<pathError<<','
+            <<instantError<<','<<ownMotionCorrection<<'\n';
+    }
+    runner.Expect(largestCorrection>1.0f,"accelerated warning fixture detects the previous launch-now time-basis mismatch");
+    if(movingMuzzle) runner.Expect(largestOwnMotionCorrection>0.5f,
+        "moving muzzle fixture catches the old frozen lateral/vertical pose and constant band velocity");
 }
 
 void TestPlayerHitboxAndNearMissAuthority(RegressionRunner& runner) {
@@ -27383,6 +28962,40 @@ void TestCourseRuntimeCookAndGameplayWaveBridge(RegressionRunner& runner) {
     runner.Expect(
         runtime.ActiveEnemyCount() == 0 && !gameplay.IsBound(),
         "unbinding gameplay Wave runtime should remove only Program-owned Actors");
+
+    // A completed timer-driven Wave is not a defeated drone. Preserve its
+    // actor state across completion/checkpoints until combat actually kills it.
+    CourseRuntimeProgramAsset persistentProgram = loaded;
+    for (auto& record : persistentProgram.actors) {
+        record.actor.meshId = "twin_shield_hull";
+        record.actor.lifetime = 0.5f;
+        record.actor.behaviorDefinition.maintainForwardEngagementBand = true;
+        record.actor.behaviorDefinition.choreographedAttackPass = false;
+    }
+    for (auto& wave : persistentProgram.waves) {
+        wave.completionCondition = CourseWaveCompletionCondition::Timeout;
+        wave.timeoutSeconds = 0.1f;
+    }
+    runner.Expect(gameplay.Bind(&persistentProgram, &runtime, 0.0f, &error),
+        "persistent-drone cooked Wave fixture binds");
+    gameplay.Update({0.0f, first.triggerRailDistance + 0.01f, {}});
+    gameplay.Update({0.11f, first.triggerRailDistance + 0.01f, {}});
+    gameplay.Update({0.11f, first.triggerRailDistance + 0.01f, {}});
+    runner.Expect(gameplay.Stats().completedWaves == 2 && runtime.ActiveEnemyCount() == 2 &&
+        gameplay.Stats().activeActors == 2,
+        "completed Waves must retain living drone actors and accurate actor state");
+    const auto persistentCheckpoint = gameplay.CaptureCheckpoint();
+    runner.Expect(persistentCheckpoint.defeatedPlacementGuids.empty() &&
+        gameplay.RestoreCheckpoint(persistentCheckpoint, &error) && runtime.ActiveEnemyCount() == 2,
+        "checkpoint restores both surviving drones even though their Waves completed");
+    runtime.EnemyCombat().ForceDefeat(runtime, runtime.Enemies().front().actorId);
+    gameplay.Update({0.0f, first.triggerRailDistance + 0.01f, {}});
+    const auto defeatedCheckpoint = gameplay.CaptureCheckpoint();
+    runner.Expect(defeatedCheckpoint.defeatedPlacementGuids.size() == 1 &&
+        gameplay.RestoreCheckpoint(defeatedCheckpoint, &error) && runtime.ActiveEnemyCount() == 1,
+        "completed-Wave checkpoint restores survivors without resurrecting a defeated drone");
+    gameplay.Unbind();
+    runner.Expect(runtime.Enemies().empty(), "scene unload clears persistent cooked drones");
 }
 
 void TestCourseEnemyEditorViewportFoundation(RegressionRunner& runner) {
@@ -30783,7 +32396,7 @@ void TestRailTitleBodySway(RegressionRunner& runner) {
             paused &= frozen.m[row][col]==title.Vehicle().worldMatrix.m[row][col];
         runner.Expect(paused,"Pausing the title must also freeze its suspension motion");
         title.BeginStart();
-        for(int i=0;i<fps*3;++i) title.Update(1.0f/fps);
+        for(int i=0;i<int(std::ceil(RailTitleScene::StartDuration*fps))+1;++i) title.Update(1.0f/fps);
         runner.Expect(title.ReadyForGameplay() && title.Blackout()==1.0f,
             "Body sway must preserve the existing blackout handoff");
     }
@@ -30892,9 +32505,21 @@ void TestRailTitleGroundFire(RegressionRunner& runner) {
         for(size_t n=0;n<frozen.size();++n) paused &= title.Shots()[n].age==frozen[n].age;
         runner.Expect(paused,"Unfocused title must neither advance shots nor replay attack cues");
         title.BeginStart();
-        for(int i=0;i<fps*3;++i) title.Update(1.0f/fps);
-        runner.Expect(title.ShotSequence()==sequence && title.Shots().empty() && title.AttackCues().empty() && title.DustClouds().empty(),
-            "Start transition must stop new firing and finish/clear all presentation shots before handoff");
+        bool departureClearance=true;
+        for(int i=0;i<fps*3;++i) {
+            title.Update(1.0f/fps);
+            const auto cart=title.Path().Evaluate(title.Distance());
+            for(const auto& shot:title.Shots()) if(shot.railStrike) {
+                const Vector3 delta{shot.position.x-cart.position.x,shot.position.y-cart.position.y,shot.position.z-cart.position.z};
+                const float forward=delta.x*cart.tangent.x+delta.z*cart.tangent.z;
+                const float lateral=std::abs(delta.x*cart.right.x+delta.z*cart.right.z);
+                if(std::abs(forward)<3.55f+RailTitleScene::DepartureShotRadius)
+                    departureClearance &= lateral>2.4f+RailTitleScene::DepartureShotRadius;
+            }
+        }
+        runner.Expect(departureClearance,"Starting later in the title loop must still keep the cinematic shot clear of the cart");
+        runner.Expect(title.ShotSequence()==sequence+1 && title.Shots().empty() && title.AttackCues().empty() && title.DustClouds().empty(),
+            "Start transition must replace idle fire with one rail strike and clear all presentation shots before handoff");
         title.Initialize();
         runner.Expect(title.ShotSequence()==0 && title.Shots().empty() && title.AttackCues().empty(),
             "Title reinitialization must clear the attack loop");
@@ -31184,16 +32809,30 @@ void TestTitleImportedSurfaceAudit(RegressionRunner& runner) {
 }
 
 void TestRailTitleCinematic(RegressionRunner& runner) {
+    Vector3 referenceOrigin{},referenceTarget{};
     for(int fps : {30,60,120}) {
         RailTitleScene title;
         runner.Expect(title.Initialize(),"Cinematic title should initialize");
+        runner.Expect(title.LightSweep().y==0 && title.LightSweepIllumination({0,0,0})==0 &&
+            title.LensLeakStrength()==0,
+            "The decorative light must remain off while the title menu is idle");
         const size_t idlePlacementCount=title.Scenery().terrainPlacements.size();
         title.Update(0.02f);
         const Vector3 initial=title.CameraPosition();
         title.BeginStart();
         runner.Expect(title.Starting() && title.StartProgress()==0 && title.Blackout()==0,
             "Starting must not teleport the camera or flash the screen");
-        float previousFade=0,previousMenu=1;
+        float previousFade=0,previousMenu=1,peakReflection=0;
+        float peakSweep=0,previousSweepOffset=-8.0f;
+        int sweepFrames=0,sweepPeakFrame=0,reflectionPeakFrame=0;
+        bool orderedSweep=true,localizedSweep=true;
+        int departureMuzzles=0,nearMisses=0,railHits=0;
+        bool fixedRailContact=true,shotClearance=true,impactDriven=true,visibleRailContact=true;
+        bool sawDepartureShot=false;
+        bool lensOrdered=true,lensOverlapsShadow=false;
+        float peakLens=0.0f;
+        Vector3 fixedTarget{};
+        float closestSide=100.0f;
         const auto luminance=[](Vector3 c) {return c.x*0.2126f+c.y*0.7152f+c.z*0.0722f;};
         const auto defaultLight=RailTitleColors{}.light;
         const float lightLuma=luminance({defaultLight.x,defaultLight.y,defaultLight.z});
@@ -31208,6 +32847,8 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         Vector3 previous=initial;
         bool continuous=true;
         bool steadyApproach=true;
+        int readableBurnFrames=0,reflectionFrames=0;
+        float previousReflectionDistance=45.0f;
         int frames=0;
         while(!title.ReadyForGameplay() && frames<int(fps*(RailTitleScene::StartDuration+1.0f))) {
             title.Update(1.0f/fps);
@@ -31219,6 +32860,78 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             continuous &= std::isfinite(step) && step<60.0f/fps && clearance>=7.9f && eye.y-center.y>=4.5f;
             steadyApproach &= std::abs(title.CurrentSpeed()-12.0f)<0.001f && std::abs(title.CameraFov()-0.70f)<0.001f;
             const float elapsed=float(frames+1)/fps;
+            for(const auto& cue:title.AttackCues()) {
+                if(cue.kind==RailTitleAttackCueKind::Muzzle) ++departureMuzzles;
+                if(cue.kind==RailTitleAttackCueKind::NearMiss) {
+                    ++nearMisses;
+                    impactDriven &= elapsed<RailTitleScene::DepartureImpactTime+0.04f;
+                }
+                if(cue.kind==RailTitleAttackCueKind::RailImpact) ++railHits;
+            }
+            for(const auto& shot:title.Shots()) if(shot.railStrike) {
+                if(!sawDepartureShot) {
+                    sawDepartureShot=true; fixedTarget=shot.target;
+                    if(fps==30) {referenceOrigin=shot.origin;referenceTarget=shot.target;}
+                    else runner.Expect(std::abs(shot.origin.x-referenceOrigin.x)<0.001f &&
+                        std::abs(shot.origin.z-referenceOrigin.z)<0.001f &&
+                        std::abs(shot.target.x-referenceTarget.x)<0.001f &&
+                        std::abs(shot.target.z-referenceTarget.z)<0.001f,
+                        "Departure firing pose and rail target must be identical at different frame rates");
+                }
+                fixedRailContact &= shot.target.x==fixedTarget.x && shot.target.z==fixedTarget.z;
+                // Sample the entire straight flight, including between rendered
+                // frames, against the moving cart's expanded body footprint.
+                for(int step=0;step<=240;++step) {
+                    const float t=float(step)/240;
+                    const float when=RailTitleScene::DepartureShotTime+shot.duration*t;
+                    const auto cart=title.Path().Evaluate(title.Distance()+RailTitleScene::Speed*(when-elapsed));
+                    const Vector3 point{shot.origin.x+(shot.target.x-shot.origin.x)*t,
+                        shot.origin.y+(shot.target.y-shot.origin.y)*t,shot.origin.z+(shot.target.z-shot.origin.z)*t};
+                    const Vector3 delta{point.x-cart.position.x,point.y-cart.position.y,point.z-cart.position.z};
+                    const float forward=delta.x*cart.tangent.x+delta.z*cart.tangent.z;
+                    const float side=std::abs(delta.x*cart.right.x+delta.z*cart.right.z);
+                    if(std::abs(forward)<3.55f+RailTitleScene::DepartureShotRadius) {
+                        closestSide=(std::min)(closestSide,side);
+                        shotClearance &= side>2.4f+RailTitleScene::DepartureShotRadius;
+                    }
+                }
+            }
+            const auto& hit=title.RailImpact();
+            if(hit.active) {
+                fixedRailContact &= hit.position.x==fixedTarget.x && hit.position.z==fixedTarget.z &&
+                    std::abs(hit.position.y-0.112f)<0.001f;
+                if(hit.age<0.12f) {
+                    const auto cameraForward=Normalize(Vector3{title.CameraTarget().x-eye.x,
+                        title.CameraTarget().y-eye.y,title.CameraTarget().z-eye.z});
+                    const auto cameraRight=Normalize(Vector3{cameraForward.z,0,-cameraForward.x});
+                    const Vector3 cameraUp{cameraForward.y*cameraRight.z-cameraForward.z*cameraRight.y,
+                        cameraForward.z*cameraRight.x-cameraForward.x*cameraRight.z,
+                        cameraForward.x*cameraRight.y-cameraForward.y*cameraRight.x};
+                    const auto projectedY=[&](Vector3 point) {
+                        const Vector3 delta{point.x-eye.x,point.y-eye.y,point.z-eye.z};
+                        const float depth=delta.x*cameraForward.x+delta.y*cameraForward.y+delta.z*cameraForward.z;
+                        return (delta.x*cameraUp.x+delta.y*cameraUp.y+delta.z*cameraUp.z)/
+                            (depth*std::tan(title.CameraFov()*0.5f));
+                    };
+                    const auto& world=title.Vehicle().worldMatrix.m;
+                    const Vector3 frontLip{1.48f*world[1][0]+3.26f*world[2][0]+world[3][0],
+                        1.48f*world[1][1]+3.26f*world[2][1]+world[3][1],
+                        1.48f*world[1][2]+3.26f*world[2][2]+world[3][2]};
+                    const float hitY=projectedY(hit.position);
+                    visibleRailContact &= hitY>projectedY(frontLip)+0.025f && hitY>-0.8f && hitY<0.8f;
+                }
+            } else if(elapsed<RailTitleScene::DepartureImpactTime) {
+                impactDriven &= title.LightSweep().y==0 && title.RailReflectionOpacity()==0 &&
+                    title.RailImpactLight()==0 && title.LensLeakStrength()==0;
+            }
+            const float lens=title.LensLeakStrength();
+            peakLens=(std::max)(peakLens,lens);
+            if(lens>0.0f) {
+                lensOrdered &= railHits==1 && title.LensLeakAge()>=0.0f;
+                lensOverlapsShadow |= title.Blackout()>0.05f && title.Blackout()<0.8f;
+                title.Update(0);
+                lensOrdered &= title.LensLeakStrength()==lens;
+            }
             if(elapsed>RailTitleScene::OrbitDuration+1.0f/fps) {
                 const auto forward=title.Path().Evaluate(title.Distance()).tangent;
                 const float cameraAdvance=(eye.x-previous.x)*forward.x+(eye.z-previous.z)*forward.z;
@@ -31226,7 +32939,30 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
                 steadyApproach &= cameraAdvance>=-0.001f && std::abs(gap-8.0f)<0.01f;
             }
             continuous &= title.Blackout()>=previousFade && title.MenuOpacity()<=previousMenu;
-            continuous &= title.TunnelCameraDepth()>2.0f || title.Blackout()==0.0f;
+            if(title.Blackout()>0.15f && title.Blackout()<0.85f) ++readableBurnFrames;
+            continuous &= title.TunnelCameraDepth()>0.0f || title.Blackout()==0.0f;
+            const auto sweep=title.LightSweep();
+            if(sweep.y>0.01f) {
+                orderedSweep &= elapsed>RailTitleScene::OrbitDuration && title.Blackout()==0 && sweep.x>previousSweepOffset;
+                previousSweepOffset=sweep.x;
+                ++sweepFrames;
+                const auto sample=title.Path().Evaluate(title.Distance());
+                const Vector3 litPoint{center.x+sample.right.x*sweep.x,center.y,center.z+sample.right.z*sweep.x};
+                const Vector3 remotePoint{litPoint.x+sample.tangent.x*80,litPoint.y,litPoint.z+sample.tangent.z*80};
+                localizedSweep &= title.LightSweepIllumination(litPoint)>sweep.y*0.99f &&
+                    title.LightSweepIllumination(remotePoint)<0.001f;
+                title.Update(0);
+                orderedSweep &= title.LightSweep().x==sweep.x && title.LightSweep().y==sweep.y;
+            }
+            if(sweep.y>peakSweep) {peakSweep=sweep.y;sweepPeakFrame=frames;}
+            if(title.RailReflectionOpacity()>peakReflection) reflectionPeakFrame=frames;
+            peakReflection=(std::max)(peakReflection,title.RailReflectionOpacity());
+            if(title.RailReflectionOpacity()>0.01f) {
+                runner.Expect(title.Blackout()==0 && title.RailReflectionDistance()<previousReflectionDistance,
+                    "Rail glint must travel toward the cart before the film burn can hide it");
+                previousReflectionDistance=title.RailReflectionDistance();
+                ++reflectionFrames;
+            }
             const auto colors=title.Colors(courseSun);
             colorContinuous &= colors.transition>=previousColors.transition &&
                 std::abs(luminance({colors.light.x,colors.light.y,colors.light.z})-lightLuma)<0.0001f &&
@@ -31238,23 +32974,60 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             if(frames==fps/2) {const float progress=title.StartProgress();title.BeginStart();
                 runner.Expect(title.StartProgress()==progress,"Repeated confirm must not restart the camera animation");}
         }
-        runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f,
-            "Cinematic must remain outside the cart and switch worlds only under full blackout with silent title audio");
+        runner.Expect(continuous && title.ReadyForGameplay() && title.Blackout()>0.999f && title.MenuOpacity()==0 && title.AmbienceGain()<0.001f && title.RollingGain()>0.999f,
+            "Cinematic must remain outside the cart and switch worlds under full blackout while continuous rolling survives");
+        runner.Expect(peakReflection>0.25f && title.RailReflectionOpacity()==0 && reflectionFrames>=int(fps*0.20f),
+            "The pre-burn rail glint must remain readable and extinguish before the world switch");
+        runner.Expect(orderedSweep && localizedSweep && peakSweep>0.95f && sweepFrames>=int(fps*0.32f) &&
+            sweepPeakFrame<reflectionPeakFrame && title.LightSweep().y==0,
+            "Localized light must cross after the orbit, peak before the rail reflection, pause cleanly and extinguish before blackout");
+        runner.Expect(departureMuzzles==1 && nearMisses==1 && railHits==1 && sawDepartureShot &&
+            fixedRailContact && shotClearance && closestSide<5.2f && impactDriven,
+            "One departure shot must narrowly clear the moving cart, hit a fixed rail head once and then trigger its reflection");
+        runner.Expect(visibleRailContact,"Rail contact must project above the moving cart front lip during the initial spark burst");
+        runner.Expect(lensOrdered && lensOverlapsShadow && peakLens>0.5f &&
+            title.LensLeakStrength()<0.1f && title.LensLeakAge()>1.0f,
+            "Lens exposure must follow one confirmed impact, pause on its clock, overlap cave shadow and decay before handoff");
         runner.Expect(std::abs(float(frames)/fps-RailTitleScene::StartDuration)<0.04f &&
             title.Scenery().terrainPlacements.size()==idlePlacementCount+1,
             "Tunnel cinematic timing must be frame-rate independent and repeated confirm must not duplicate the portal");
         runner.Expect(steadyApproach,
             "The cave approach must keep constant speed and FOV, with a fixed close chase distance after the orbit");
+        runner.Expect(readableBurnFrames>=int(fps*0.65f),
+            "The film burn must retain enough intermediate frames to perceive the color and warp before blackout");
         runner.Expect(std::abs(title.CurrentSpeed()-12.0f)<0.001f &&
             std::abs(title.CameraFov()-0.70f)<0.001f &&
-            std::abs(title.TunnelCameraDepth()-4.6f)<0.01f,
+            std::abs(title.TunnelCameraDepth()-(RailTitleScene::Speed*RailTitleScene::StartDuration-
+                RailTitleScene::TunnelLead-RailTitleScene::DepartureCameraRig().backDistance))<0.01f,
             "The steady approach must reach the same inside-cave position at all frame rates");
+        const auto departureRig=RailTitleScene::DepartureCameraRig();
+        const auto departureSample=title.Path().Evaluate(title.Distance());
+        const auto offset=Vector3{title.CameraPosition().x-departureSample.position.x,
+            title.CameraPosition().y-departureSample.position.y,title.CameraPosition().z-departureSample.position.z};
+        const float back=-(offset.x*departureSample.tangent.x+offset.y*departureSample.tangent.y+offset.z*departureSample.tangent.z);
+        runner.Expect(std::abs(back-departureRig.backDistance)<0.001f &&
+            std::abs(offset.y-departureRig.verticalOffset)<0.001f && title.CameraFov()==departureRig.fovY,
+            "Outgoing title geometry must agree with the shared incoming camera rig");
         runner.Expect(colorContinuous && previousColors.transition==1.0f,
             "Title hue must reach its transition endpoint without dimming the light or background or stepping between frames");
         title.Initialize();
         runner.Expect(title.Colors(courseSun).transition==0.0f,
             "Reinitializing the title must clear the color transition");
     }
+    bool immediateSparks=true,ballisticSparks=true,expiredSparks=true;
+    for(uint32_t index=0;index<RailTitleScene::RailImpactSparkCount;++index) {
+        RailTitleRailImpact hit{{0,0.112f,0},0,7,true};
+        const auto birth=RailTitleScene::EvaluateRailSpark(hit,index);
+        hit.age=0.10f; const auto rising=RailTitleScene::EvaluateRailSpark(hit,index);
+        hit.age=0.20f; const auto later=RailTitleScene::EvaluateRailSpark(hit,index);
+        immediateSparks &= birth.opacity>0.9f && rising.opacity>0.6f && birth.radius>=0.045f;
+        ballisticSparks &= rising.position.y>hit.position.y+0.35f &&
+            std::abs((later.velocity.y-rising.velocity.y)+0.98f)<0.001f;
+        hit.age=0.50f;
+        expiredSparks &= RailTitleScene::EvaluateRailSpark(hit,index).opacity==0;
+    }
+    runner.Expect(immediateSparks && ballisticSparks && expiredSparks,
+        "Metal sparks must leave the visible rail contact immediately, rise under gravity and fade within half a second");
     EffectAssetLoader loader;
     LoadedEffectAsset dust;
     runner.Expect(loader.LoadFile("Resources/effects/TitleWheelDust.effect",dust) &&
@@ -31283,6 +33056,253 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
     const auto& commands=renderer.Frame().commands;
     runner.Expect(!commands.empty() && commands.back().width==1280 && commands.back().height==720 && commands.back().color.w==1,
         "World handoff blackout must be the final fully opaque title command");
+    runner.Expect(commands.back().kind==RailShooterHudDrawCommandKind::TunnelTransition &&
+        commands.back().transitionProgress==1 && commands.back().color.x>commands.back().color.y &&
+        commands.back().color.y>commands.back().color.z,
+        "The final directional tunnel mask must use a warm charcoal palette and fully closed progress");
+    def.maximumDrawCommands=16;
+    input.titleOpacity=1; input.titleBlackout=0.7f; input.titleTransitionFocus={0.62f,0.31f};
+    renderer.Update(input);
+    runner.Expect(renderer.Frame().commands.size()<=16 &&
+        renderer.Frame().commands.back().kind==RailShooterHudDrawCommandKind::TunnelTransition &&
+        renderer.Frame().commands.back().transitionFocus.x==0.62f &&
+        renderer.Frame().commands.back().transitionFocus.y==0.31f,
+        "Tunnel masking must retain the projected rail focus and survive a restricted HUD draw budget");
+}
+
+void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
+    using namespace ge3::graphics;
+    auto gui = std::make_unique<AppImGuiLayer>();
+    for (bool editorViewport : {false, true}) {
+    for (bool authoredPost : {false, true}) {
+    PostProcessStack stack;
+    if (authoredPost) {
+        PostProcessPass post;
+        post.name = "FilmBurnTestPost";
+        post.outputResource = "FilmBurnTestPostColor";
+        runner.Expect(stack.ReplacePasses({post}), "Film-burn test postprocess must validate");
+    }
+    const std::string finalOutput = stack.BuildExecutionPlan().finalOutputResource;
+    for (float state : {0.0f, 0.45f, 1.0f, -1.0f}) {
+        const float progress=(std::max)(0.0f,state);
+        const bool lensOnly=state<0.0f;
+        const bool active=progress>0.0f || lensOnly;
+        RenderGraph graph;
+        graph.DeclareTransientRenderTarget("SceneColor", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
+        graph.DeclareTransientRenderTarget("VfxAccumulation", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
+        graph.AddPass({"World", RenderPassLayer::Geometry,
+            {{"SceneColor", RenderResourceAccessType::WriteRtv},
+             {"VfxAccumulation", RenderResourceAccessType::WriteRtv}}, "", {}});
+        // Match runtime registration order: HUD is registered before the
+        // postprocessing builder, but executes after scene composition.
+        graph.AddPass({"HUD", RenderPassLayer::Ui,
+            {{active ? "RailFilmBurnScene" : editorViewport ? finalOutput : "BackBuffer",
+              RenderResourceAccessType::WriteRtv}}, "", {}});
+        AppFrameGraphBuildContext context{};
+        context.renderGraph = &graph;
+        context.imguiLayer = gui.get();
+        context.postProcessStack = &stack;
+        context.railFilmBurnProgress = progress;
+        context.railFilmBurnLensStrength = lensOnly ? 0.35f : 0.0f;
+        context.railFilmBurnInEditorViewport = editorViewport;
+        AppPostProcessPipeline pipeline;
+        pipeline.RegisterPasses(context);
+        pipeline.RegisterFilmBurnPresentationPass(context);
+        if (editorViewport) {
+            graph.AddPass({"EditorUI", RenderPassLayer::Ui,
+                {{finalOutput, RenderResourceAccessType::ReadSrv},
+                 {"BackBuffer", RenderResourceAccessType::WriteRtv}}, "", {}});
+        }
+        std::string error;
+        runner.Expect(graph.Validate(&error), "Film burn graph resources must validate: " + error);
+        const auto passes = graph.BuildPassDebugInfo();
+        const auto find = [&](const char* name) {
+            return std::find_if(passes.begin(), passes.end(), [name](const auto& p) { return p.name == name; });
+        };
+        const auto compose = find("PostProcess.CompositeToBackBuffer");
+        const auto hud = find("HUD");
+        const auto burn = find("UI.RailFilmBurnPresentation");
+        if (!editorViewport || active) {
+            runner.Expect(compose != passes.end() && hud != passes.end() && compose->executed && hud->executed &&
+                compose->executionIndex < hud->executionIndex,
+                "The world must be composed before captured HUD even with pass culling");
+        } else {
+            runner.Expect(compose == passes.end(), "Idle editor retains its normal viewport path");
+        }
+        if (active) {
+            runner.Expect(burn != passes.end() && burn->executed && hud->executionIndex < burn->executionIndex,
+                "Lens-only exposure and blackout must present HUD after scene capture without leaking VFX");
+            if (editorViewport) {
+                const auto editorUi = find("EditorUI");
+                runner.Expect(editorUi != passes.end() && editorUi->executed &&
+                    burn->executionIndex < editorUi->executionIndex,
+                    "ImGui must sample the burned viewport after presentation, without burning editor controls");
+            }
+            const auto targets = graph.BuildTransientRenderTargetPlan();
+            const auto capture = std::find_if(targets.begin(), targets.end(), [](const auto& t) {
+                return t.name == "RailFilmBurnScene";
+            });
+            runner.Expect(capture != targets.end() && capture->resolutionScale == 1.0f &&
+                capture->lifetimeEnd >= burn->executionIndex,
+                "The full-resolution capture must stay alive until final presentation");
+        } else {
+            runner.Expect(burn == passes.end(), "Idle gameplay must have no film-burn presentation pass");
+            const auto targets = graph.BuildTransientRenderTargetPlan();
+            runner.Expect(std::none_of(targets.begin(), targets.end(), [](const auto& t) {
+                return t.name == "RailFilmBurnScene";
+            }), "Idle gameplay must not allocate a film-burn render target");
+        }
+    }
+    }
+    }
+}
+
+void TestRailTitleGameplayEntry(RegressionRunner& runner) {
+    const auto separation=[](Vector3 a,Vector3 b) {
+        return std::sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y)+(a.z-b.z)*(a.z-b.z));
+    };
+    for(int fps : {30,60,120}) {
+        RailTitleGameplayEntry entry;
+        runner.Expect(!entry.Frame().blockingGameplay && entry.Frame().informationOpacity==1,
+            "Direct gameplay and editor entry must not inherit a title startup gate");
+        entry.Begin();
+        runner.Expect(entry.Frame().blockingGameplay && entry.Frame().blackout==1 &&
+            entry.Frame().reticleProgress==0 && entry.Frame().gaugeProgress==0 &&
+            entry.Frame().informationOpacity==0 && entry.Frame().rollingHandoff==0,
+            "World handoff must start fully black with HUD hidden and rail audio retained");
+        entry.Update(0.005f);
+        runner.Expect(entry.Frame().blackout==1 && entry.Frame().reticleProgress==0,
+            "The incoming camera must settle under a short opaque hold before the tunnel opens");
+        entry.Update(0.03f);
+        runner.Expect(entry.Frame().blackout<1 && entry.Frame().reticleProgress==0 && entry.Frame().blockingGameplay,
+            "Incoming exposure must begin promptly after world handoff while HUD and combat remain gated");
+        entry.Reset(); entry.Begin();
+        int reticleCues=0,gaugeCues=0,frames=0,readableRevealFrames=0;
+        bool ordered=true,monotonic=true;
+        CourseAsset course;
+        course.railPoints={{{0,0,0}},{{180,0,240}}}; // Non-axis-aligned rail checks basis transfer.
+        CourseCameraKey authored;
+        authored.backDistance=28; authored.verticalOffset=12; authored.lookAheadDistance=30; authored.fovY=0.94f;
+        course.cameraKeys.push_back(authored);
+        RailPath rail; rail.SetControlPoints(course.railPoints);
+        RailCameraDirector director,normalDirector;
+        RailCameraDirectorFrameInput camera;
+        camera.course=&course; camera.railPath=&rail; camera.distance=100;
+        camera.deltaTime=1.0f/fps; camera.titleHandoffWeight=1;
+        camera.titleHandoffRig=RailTitleScene::DepartureCameraRig();
+        auto previousCamera=director.Evaluate(camera);
+        const auto sample=rail.Evaluate(camera.distance);
+        const Vector3 departingEye{sample.position.x-8*sample.tangent.x+5.2f*sample.up.x,
+            sample.position.y-8*sample.tangent.y+5.2f*sample.up.y,
+            sample.position.z-8*sample.tangent.z+5.2f*sample.up.z};
+        runner.Expect(separation(previousCamera.position,departingEye)<0.001f && std::abs(previousCamera.fovY-0.70f)<0.001f,
+            "Incoming camera must inherit the departing cart distance, height and FOV in the new rail basis");
+        auto previous=entry.Frame();
+        while(entry.Frame().blockingGameplay && frames<fps*2) {
+            entry.Update(1.0f/fps);
+            const auto current=entry.Frame();
+            reticleCues+=current.reticleStarted?1:0;
+            gaugeCues+=current.gaugesStarted?1:0;
+            if(current.blackout>0.15f && current.blackout<0.85f) ++readableRevealFrames;
+            monotonic &= current.blackout<=previous.blackout &&
+                current.cameraHandoffWeight<=previous.cameraHandoffWeight &&
+                current.reticleProgress>=previous.reticleProgress &&
+                current.gaugeProgress>=previous.gaugeProgress &&
+                current.informationOpacity>=previous.informationOpacity &&
+                current.rollingHandoff>=previous.rollingHandoff;
+            ordered &= current.reticleProgress>=current.gaugeProgress &&
+                current.gaugeProgress>=current.informationOpacity;
+            camera.titleHandoffWeight=current.cameraHandoffWeight;
+            const auto actualCamera=director.Evaluate(camera);
+            runner.Expect(separation(actualCamera.position,previousCamera.position)<65.0f/fps &&
+                std::abs(actualCamera.fovY-previousCamera.fovY)<0.70f/fps,
+                "The reveal camera must pull back smoothly without a position or FOV cut");
+            previousCamera=actualCamera;
+            if(frames==fps/3) {
+                entry.Begin();
+                entry.Update(-1.0f);
+                entry.Update((std::numeric_limits<float>::quiet_NaN)());
+                for(int paused=0;paused<20;++paused) entry.Update(0.0f);
+                runner.Expect(entry.Frame().blackout==current.blackout &&
+                    entry.Frame().cameraHandoffWeight==current.cameraHandoffWeight &&
+                    entry.Frame().reticleProgress==current.reticleProgress &&
+                    entry.Frame().rollingHandoff==current.rollingHandoff &&
+                    !entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
+                    "Repeated confirm, focus pause and invalid delta time must not restart or advance startup");
+            }
+            previous=current;
+            ++frames;
+        }
+        runner.Expect(monotonic && ordered && reticleCues==1 && gaugeCues==1 &&
+            entry.Frame().blackout==0 && entry.Frame().reticleProgress==1 &&
+            entry.Frame().gaugeProgress==1 && entry.Frame().informationOpacity==1 &&
+            entry.Frame().rollingHandoff==1 &&
+            std::abs(float(frames)/fps-RailTitleGameplayEntry::Duration)<1.01f/fps,
+            "Camera reveal, reticle, gauges and information must finish in order with one cue each at every frame rate");
+        runner.Expect(readableRevealFrames>=int(fps*0.35f),
+            "The incoming exposure recovery must remain readable while avoiding the outgoing burn's reversal");
+        camera.titleHandoffWeight=0;
+        const auto normal=normalDirector.Evaluate(camera);
+        runner.Expect(entry.Frame().cameraHandoffWeight==0 && separation(previousCamera.position,normal.position)<0.001f &&
+            separation(previousCamera.target,normal.target)<0.001f && std::abs(previousCamera.fovY-normal.fovY)<0.001f,
+            "Input unlock must restore the exact authored gameplay composition without a handoff pose lingering");
+        entry.Update(0.05f);
+        runner.Expect(!entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
+            "Ready gameplay must never replay startup cues");
+        entry.Reset(); entry.Begin(); entry.Update(10.0f);
+        runner.Expect(entry.Frame().blockingGameplay && entry.Frame().reticleProgress==0,
+            "A frame hitch must not skip the HUD boot and input gate");
+    }
+
+    RailShooterHudDefinitionAsset definition;
+    RailShooterHudPresentationFrame hud;
+    hud.visible=true; hud.vehicleText="CART"; hud.healthText="HP";
+    hud.vehicleIntegrityNormalized=0.88f; hud.playerHealthNormalized=0.74f;
+    hud.vehicleIntegrityTrail=0.93f; hud.playerHealthTrail=0.85f;
+    hud.score=123; hud.waveText="WAVE"; hud.weaponText="WEAPON";
+    RailShooterHudRenderInput input{&definition,&hud,1280,720};
+    RailShooterHudRenderer renderer;
+    renderer.Update(input);
+    const auto normal=renderer.Frame().commands;
+    input.startupGaugeProgress=0; input.startupInformationOpacity=0;
+    renderer.Update(input);
+    runner.Expect(!renderer.Frame().visible && renderer.Frame().commands.empty(),
+        "No gameplay panels may flash before their boot stages start");
+    input.startupGaugeProgress=0.5f;
+    renderer.Update(input);
+    const auto containsText=[&](const std::string& value) {
+        return std::any_of(renderer.Frame().commands.begin(),renderer.Frame().commands.end(),
+            [&](const auto& command){return command.text==value;});
+    };
+    runner.Expect(containsText("CART") && containsText("HP") && !containsText("123") &&
+        !containsText("WAVE") && !containsText("WEAPON") && hud.playerHealthNormalized==0.74f &&
+        hud.vehicleIntegrityNormalized==0.88f,
+        "Gauge startup must hide later HUD groups and leave authoritative health unchanged");
+    input.startupGaugeProgress=input.startupInformationOpacity=1;
+    renderer.Update(input);
+    bool restored=normal.size()==renderer.Frame().commands.size();
+    if(restored) for(size_t i=0;i<normal.size();++i) {
+        const auto& actual=renderer.Frame().commands[i]; const auto& expected=normal[i];
+        restored &= actual.kind==expected.kind && actual.text==expected.text &&
+            actual.x==expected.x && actual.y==expected.y && actual.width==expected.width &&
+            actual.height==expected.height && actual.color.w==expected.color.w;
+    }
+    runner.Expect(restored,"Completed startup must restore the exact ordinary HUD layout and gauge values");
+
+    RailLockOnSystem lockOn;
+    RailLockOnFrameInput lockInput;
+    lockInput.viewportWidth=1280; lockInput.viewportHeight=720;
+    lockInput.hasCursorPosition=true; lockInput.cursorPosition={12,27};
+    lockInput.gamepadConnected=true; lockInput.gamepadAim={1,1};
+    lockInput.deltaTime=2.0f;
+    lockOn.PrepareReticleForGameplay(lockInput);
+    lockOn.PrepareReticleForGameplay(lockInput);
+    runner.Expect(lockOn.DebugFrame().reticle.initialized &&
+        lockOn.DebugFrame().reticle.currentScreenPosition.x==640 &&
+        lockOn.DebugFrame().reticle.currentScreenPosition.y==360 &&
+        !lockOn.Reticle().lockHeld && lockOn.Tokens().empty() &&
+        lockOn.DebugFrame().elapsedTime==0 && lockOn.DebugFrame().releasedThisFrame==0,
+        "Startup reticle must remain centered without consuming input, acquiring locks or advancing gameplay");
 }
 
 void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
@@ -31352,6 +33372,7 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
         EnemyAttackTelegraphSystem telegraph;EnemyAttackLaneTelegraphRenderer lanes;
         EnemyEncounterReadabilityDirector readability;
         std::unordered_map<uint32_t,float> firstVisible,firstShot,firstWarning,firstArrival;
+        std::unordered_map<uint32_t,bool> individualFlight;
         std::unordered_map<uint32_t,std::string> lastReason;
         const float dt=1.0f/fps;
         for(int step=0;step<((audit || mode==3)?100:(mode>=2?30:16))*fps;++step) {
@@ -31426,7 +33447,10 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
                 identities[a.actorId]=a.desc.waveId+"/"+a.desc.role;
                 shotCounts[a.actorId]=a.fireSequence; lastSeen[a.actorId]=time;
                 blocked[a.actorId][a.fireSafetyReason]+=dt;
-                if(a.bulletsEmittedThisFrame) firstShot.try_emplace(a.actorId,time);
+                if(a.bulletsEmittedThisFrame) {
+                    firstShot.try_emplace(a.actorId,time);
+                    individualFlight[a.actorId]=a.behaviorState.hoverPreferredForwardDistance>0.0f;
+                }
                 if(a.fireSafetyReason!=lastReason[a.actorId] || a.bulletsEmittedThisFrame || step%fps==0) {
                     log<<"mode="<<mode<<" fps="<<fps<<" t="<<time<<" id="<<a.actorId<<" state="<<ToString(a.behaviorState.state)
                         <<" wave="<<a.desc.waveId<<" actor="<<a.desc.role<<" age="<<a.age<<" life="<<a.desc.lifetime
@@ -31434,6 +33458,15 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
                         <<" remain="<<a.behaviorState.attackTimeRemaining<<" distance="<<a.desc.spawnDistance+a.desc.distanceOffset-distance<<" shots="<<a.fireSequence
                         <<" reason="<<a.fireSafetyReason<<'\n';
                     lastReason[a.actorId]=a.fireSafetyReason;
+                }
+            }
+            // The course traversal fixture represents a player clearing
+            // earlier threats. Survivors no longer time out on their own;
+            // indefinite no-input survival is covered by the 40-second test.
+            if (mode >= 2) for (const auto& actor : runtime.Enemies()) {
+                if (actor.HoldsCombatPositionUntilResolved() && actor.age >= 16.0f &&
+                    actor.fireSequence > 0 && actor.desc.hitPoints > 0.0f) {
+                    runtime.EnemyCombat().ForceDefeat(runtime, actor.actorId);
                 }
             }
         }
@@ -31462,12 +33495,29 @@ void TestAuthoredDroneAttackTiming(RegressionRunner& runner) {
         }
         runner.Expect(mode>=2 ? firstShot.size()>=16 : firstShot.size()==3,
             "authored and continuous opening encounters must not strand visible drones without a shot");
-        runner.Expect(firstShot.at(1)-firstVisible.at(1)<=1.85f &&
-            firstShot.at(2)-firstVisible.at(2)<=2.6f,
+        if (mode == 2) for (const auto& [id, visibleTime] : firstVisible) {
+            if (visibleTime > 24.0f) continue;
+            runner.Expect(firstShot.contains(id),
+                "persistent opening enemies must give every readable arrival a first attack within the observation window");
+        }
+        // Individual flight paths can admit another visible actor first. The
+        // opening still needs two prompt attacks, without prescribing actor IDs.
+        std::vector<std::pair<float,uint32_t>> openingShots;
+        for(const auto& [id,time]:firstShot) openingShots.emplace_back(time,id);
+        std::sort(openingShots.begin(),openingShots.end());
+        runner.Expect(openingShots.size()>=2 &&
+            openingShots[0].first-firstVisible.at(openingShots[0].second)<=1.85f &&
+            openingShots[1].first-firstVisible.at(openingShots[1].second)<=2.6f,
             "the opening attacker and its successor must act promptly after becoming visible");
         for(const auto& [id,t]:firstShot) {
+            const float observationEnd=(audit || mode==3)?100.0f:(mode>=2?30.0f:16.0f);
+            if(!firstArrival.contains(id)) {
+                runner.Expect(t>observationEnd-1.5f,
+                    "only shots fired at the end of the observation window may still be in flight");
+                continue;
+            }
             const float flight=firstArrival.at(id)-t;
-            runner.Expect(flight>=.85f && flight<=1.4f,
+            runner.Expect(flight>=.85f && flight<=(individualFlight[id]?1.75f:1.4f),
                 "slower aimed shots must preserve a readable approach time at cart speed 15");
             runner.Expect(t-firstVisible.at(id)<=5.5f,
                 "camera holds and wave queuing must not recreate the long idle opening");
@@ -31497,8 +33547,8 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
         const size_t count=std::count_if(runtime.Enemies().begin(),runtime.Enemies().end(),normal);
         EnemyEncounterReadabilityDirector readability;
         std::unordered_map<uint32_t,uint64_t> shots, warnedTokens;
-        std::unordered_map<uint32_t,float> warningTimes, poseDistances, shotTimes;
-        std::unordered_set<uint32_t> charged, posed, departed, visualBullets, visiblePeel;
+        std::unordered_map<uint32_t,float> warningTimes, poseDistances, shotTimes, firstShotTimes;
+        std::unordered_set<uint32_t> charged, posed, visualBullets;
         uint32_t defeated=0;
         float blockedAt=-1;
         EnemyProjectilePresentationBridge projectilePresentation;
@@ -31581,9 +33631,11 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
                 const auto* pose=presentation.FindActor(actor.actorId);
                 if(behavior.state==EnemyBehaviorState::Aiming || behavior.state==EnemyBehaviorState::RequestingAttack) {
                     if(posed.insert(actor.actorId).second) poseDistances[actor.actorId]=behavior.engagementBandForwardDistance;
-                    runner.Expect(std::abs(behavior.engagementBandForwardDistance-poseDistances[actor.actorId])<0.9f &&
-                        std::abs(behavior.behaviorLateralOffset)<0.001f && std::abs(behavior.behaviorVerticalOffset)<0.001f,
-                        "drone must hold its aim pose while the cart moves");
+                    runner.Expect(behavior.engagementBandForwardDistance>=actor.behaviorDefinition.engagementBandMinimumForwardDistance &&
+                        behavior.engagementBandForwardDistance<=actor.behaviorDefinition.engagementBandMaximumForwardDistance &&
+                        std::abs(behavior.behaviorLateralOffset)<=actor.behaviorDefinition.lateralAmplitude+0.01f &&
+                        std::abs(behavior.behaviorVerticalOffset)<=actor.behaviorDefinition.verticalAmplitude+0.01f,
+                        "a hovering drone must remain inside its forward engagement band and authored drift amplitudes while aiming");
                 }
                 if(pose && pose->weaponCharge>0.65f && behavior.attackIntentActive) {
                     charged.insert(actor.actorId);
@@ -31602,29 +33654,18 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
                 }
                 if(actor.bulletsEmittedThisFrame) {
                     shotTimes[actor.actorId]=time;
-                    runner.Expect(actor.bulletsEmittedThisFrame==1 && actor.fireSequence==1 && charged.contains(actor.actorId) &&
+                    firstShotTimes.try_emplace(actor.actorId,time);
+                    runner.Expect(actor.bulletsEmittedThisFrame==1 && charged.contains(actor.actorId) &&
+                        warnedTokens[actor.actorId]==actor.attackState.tokenId &&
                         warningTimes.contains(actor.actorId) && time-warningTimes[actor.actorId]>=actor.behaviorDefinition.attackLeadSeconds-dt*1.5f,
-                        "exactly one visible shot must follow a complete, uninterrupted warning");
+                        "each visible shot must follow its own complete uninterrupted warning");
                     if(mode==2 && blockedAt>=0) runner.Expect(time>=blockedAt+0.30f+actor.behaviorDefinition.attackLeadSeconds-dt*1.5f,
                         "camera safety interruption must restart the full warning before firing");
                 }
-                if(actor.entranceExitState.phase==EnemyEntranceExitPhase::Exiting) {
-                    const bool firstExitFrame=departed.insert(actor.actorId).second;
-                    const float side=behavior.authoredLateralOffset< -0.1f ? -1.0f : 1.0f;
-                    runner.Expect(actor.fireSequence==1 && actor.entranceExitState.appliedLateralOffset*side>0 &&
-                        !behavior.attackIntentActive && !actor.attackState.tokenReserved && pose && pose->weaponCharge==0,
-                        "a fired drone must depart outward without another warning or shot");
-                    if (std::string(wave)=="intro_scout_pair" || std::string(wave)=="intro_lockon_line") {
-                        if (firstExitFrame) runner.Expect(shotTimes.contains(actor.actorId) &&
-                            time-shotTimes[actor.actorId]>=0.80f,
-                            "opening scouts remain shootable briefly after their first shot");
-                        if (actor.entranceExitState.phaseElapsedSeconds>=0.75f &&
-                            actor.entranceExitState.phaseElapsedSeconds<=0.85f &&
-                            actor.entranceExitState.presentationAlpha>=0.98f) {
-                            visiblePeel.insert(actor.actorId);
-                        }
-                    }
-                }
+                runner.Expect(!actor.entranceExitState.exitRequested &&
+                    actor.entranceExitState.phase != EnemyEntranceExitPhase::Exiting &&
+                    actor.entranceExitState.phase != EnemyEntranceExitPhase::Exited,
+                    "an undefeated normal drone never enters a disappearing exit");
                 if (step%fps==0 || actor.bulletsEmittedThisFrame) {
                     metrics<<"fps="<<fps<<" mode="<<mode<<" "<<wave<<" t="<<time<<" id="<<actor.actorId<<" state="<<ToString(actor.behaviorState.state)
                         <<" remaining="<<actor.behaviorState.attackTimeRemaining<<" shots="<<actor.fireSequence
@@ -31634,17 +33675,20 @@ void TestNormalDroneAttackPass(RegressionRunner& runner) {
             }
         }
         size_t fired=0;for(const auto& [id,n]:shots) if(n>0)++fired;
-        for(const auto& [id,n]:shots) runner.Expect(n<=1 && (n==0 || visualBullets.contains(id)),
-            "normal shots must reach the visible projectile renderer, with no second volley");
-        if (std::string(wave)=="intro_scout_pair" || std::string(wave)=="intro_lockon_line") {
-            runner.Expect(visiblePeel.size()==fired,
-                "opening scouts stay visibly opaque through the first half of their slower exit");
+        bool repeatedAttack=false;
+        for(const auto& [id,n]:shots) {
+            repeatedAttack=repeatedAttack || n>1;
+            runner.Expect(n==0 || visualBullets.contains(id),
+                "hovering drone shots must reach the visible projectile renderer");
         }
         metrics<<"RESULT fps="<<fps<<" mode="<<mode<<" "<<wave<<" fired="<<fired<<"/"<<count<<'\n';metrics.flush();
         runner.Expect((mode!=1 || (defeated!=0 && shots[defeated]==0 && !visualBullets.contains(defeated))) &&
-            fired==count-(mode==1 ? 1:0) && departed.size()==fired &&
+            fired==count-(mode==1 ? 1:0) && repeatedAttack &&
             (mode!=2 || blockedAt>=0) &&
-            std::none_of(runtime.Enemies().begin(),runtime.Enemies().end(),normal),"each untouched normal drone must fire: "+std::string(wave)+" "+std::to_string(fired)+"/"+std::to_string(count));
+            std::count_if(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& actor) {
+                return normal(actor) && !actor.entranceExitState.exitRequested;
+            })==fired,
+            "each untouched drone fires and remains until defeated: "+std::string(wave)+" "+std::to_string(fired)+"/"+std::to_string(count));
     }
 }
 
@@ -31929,13 +33973,15 @@ int RunEditorCoreRegressionTests() {
         {"title imported surface integrity", [&]() { TestTitleImportedSurfaceAudit(runner); }},
         {"title landscape ground and camera clearance", [&]() { TestRailTitleLandscape(runner); }},
         {"title cinematic and ambience lifecycle", [&]() { TestRailTitleCinematic(runner); }},
+        {"title gameplay camera audio and HUD startup", [&]() { TestRailTitleGameplayEntry(runner); }},
+        {"film burn scene HUD capture and presentation ordering", [&]() { TestRailFilmBurnPresentationGraph(runner); }},
         {"title running loop and menu layout", [&]() { TestRailTitleLoop(runner); }},
         {"title body suspension and wheel contact", [&]() { TestRailTitleBodySway(runner); }},
         {"title twin shield pursuit", [&]() { TestRailTitlePursuit(runner); }},
         {"title repeating ground fire", [&]() { TestRailTitleGroundFire(runner); }},
         {"authored drone attack timing", [&]() { TestAuthoredDroneAttackTiming(runner); }},
         {"vehicle impact audiovisual and damage HUD", [&]() { TestVehicleImpactAudiovisualAndHud(runner); }},
-        {"normal drone approach pose warn fire and depart", [&]() { TestNormalDroneAttackPass(runner); }},
+        {"normal drone hover repeat fire and persist until defeated", [&]() { TestNormalDroneAttackPass(runner); }},
         {"turret discover aim warn fire and interrupt", [&]() { TestTurretInterceptFlow(runner); }},
         {"camera motion continuity", [&]() { TestCameraMotionContinuity(runner); }},
         {"transaction stack undo/redo", [&]() { TestTransactionStack(runner); }},
@@ -32176,6 +34222,14 @@ int RunEditorCoreRegressionTests() {
               TestRailVehicleBodyCollisionAndDamage(runner);
           }},
          {"rail world raycast", [&]() { TestRailWorldRaycast(runner); }},
+         {"rail world raycast frame cache", [&]() {
+              TestRailWorldRaycastFrameCache(runner);
+              BenchmarkRailWorldRaycastFrameCache(runner);
+          }},
+         {"terrain collision BVH and hybrid visibility", [&]() {
+              TestTerrainCollisionBvh(runner);
+              ValidateProductionTerrainBvh(runner);
+          }},
          {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},
          {"weapon damage reception", [&]() { TestWeaponDamageReception(runner); }},
          {"enemy combat state machine", [&]() { TestEnemyCombatStateMachine(runner); }},
@@ -32186,6 +34240,8 @@ int RunEditorCoreRegressionTests() {
          {"enemy formation and entrance exit", [&]() {
               TestEnemyFormationAndEntranceExit(runner);
           }},
+         {"drone individual hover homes and cross-wave separation", [&]() { TestDroneHoverSpacing(runner); }},
+         {"drone terrain bounds and persistent screen reservations", [&]() { TestDroneTerrainHoverReservations(runner); }},
          {"enemy encounter readability and combat truth", [&]() {
               TestEnemyEncounterReadabilityAuthority(runner);
           }},
@@ -32195,6 +34251,13 @@ int RunEditorCoreRegressionTests() {
          {"enemy targeting and projectile runtime", [&]() {
               TestEnemyTargetingAndProjectileRuntime(runner);
           }},
+         {"ordinary hover shot forward and warning prediction", [&]() { TestHoverShotForwardPrediction(runner); }},
+         {"enemy authored muzzle and curved warning agreement", [&]() { TestEnemyWeaponAndWarningTrajectoryAgreement(runner); }},
+         {"unreachable ordinary shot deferral and re-admission", [&]() { TestUnreachableOrdinaryShotDeferral(runner); }},
+         {"automatic rail travel forecast and accelerated interception", [&]() { TestAutomaticRailTravelPrediction(runner); }},
+         {"shared rail travel forecast and warning restart", [&]() { TestSharedTravelForecastAndWarningRestart(runner); }},
+         {"scheduled warning and accelerated launch agreement", [&]() { TestScheduledWarningAndAcceleratedLaunchAgreement(runner); }},
+         {"hover and banking scheduled muzzle prediction", [&]() { TestScheduledWarningAndAcceleratedLaunchAgreement(runner, true); }},
          {"player hitbox and near miss authority", [&]() {
               TestPlayerHitboxAndNearMissAuthority(runner);
           }},

@@ -12,6 +12,7 @@ enum class RailShooterHudDrawCommandKind : uint8_t {
     Text,
     TitleLogo,
     Plate,
+    TunnelTransition,
 };
 
 enum class RailShooterHudTextAlignment : uint8_t {
@@ -31,6 +32,8 @@ struct RailShooterHudDrawCommand final {
     float fontScale = 1.0f;
     Vector4 color{1.0f, 1.0f, 1.0f, 1.0f};
     std::string text;
+    float transitionProgress = 0.0f;
+    Vector2 transitionFocus{0.5f,0.4f};
 };
 
 struct RailShooterHudRenderInput final {
@@ -44,6 +47,9 @@ struct RailShooterHudRenderInput final {
     float titleOpacity = 1.0f;
     float titleBlackout = 0.0f;
     bool titleLogoAvailable = true;
+    float startupGaugeProgress = 1.0f;
+    float startupInformationOpacity = 1.0f;
+    Vector2 titleTransitionFocus{0.5f,0.4f};
 };
 
 struct RailShooterHudRenderFrame final {

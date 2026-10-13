@@ -9,6 +9,7 @@
 #include "utils/math/Vector.h"
 
 class CourseSpawnRuntime;
+struct CourseEnemyActor;
 namespace ge3::debug { class DebugDrawSystem; }
 
 enum class EnemyCombatAnimationState : uint8_t {
@@ -78,6 +79,11 @@ struct EnemyCombatActorPresentation final {
     bool turretMuzzleActive = false;
     Vector3 turretWorldRotation{};
 };
+
+// Pure pose evaluation also used before attack execution to bind the weapon
+// mounts to the same banking/hover/recoil pose submitted by the renderer.
+EnemyCombatActorPresentation ResolveEnemyCombatActorPresentation(
+    const CourseEnemyActor& actor, const EnemyCombatPresentationSettings& settings);
 
 struct EnemyCombatPresentationAudioCue final {
     EnemyCombatPresentationAudioCueKind kind =

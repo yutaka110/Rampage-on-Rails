@@ -38,6 +38,12 @@ float ArchetypePriority(EnemyBehaviorArchetype archetype) noexcept {
     return 0.0f;
 }
 
+float FirstHoverAttackPriority(const CourseEnemyActor& actor) noexcept {
+    // Persistent survivors may repeat indefinitely. Let newly arrived drones
+    // take their first turn before those survivors request another volley.
+    return actor.HoldsCombatPositionUntilResolved() && actor.fireSequence == 0 ? 1.0f : 0.0f;
+}
+
 float ThreatCost(float severity, EnemyBehaviorArchetype archetype) noexcept {
     const float base = 0.55f + (std::clamp)(severity, 0.0f, 1.0f) * 0.65f;
     return archetype == EnemyBehaviorArchetype::Boss
@@ -185,6 +191,7 @@ void EnemyAttackCoordinator::UpdateActors(std::span<CourseEnemyActor> actors,
             state.queuedSeconds += dt;
             state.priority = intent->severity +
                 ArchetypePriority(intent->archetype) +
+                FirstHoverAttackPriority(actor) +
                 state.queuedSeconds * settings_.waitingPriorityPerSecond;
             state.revision = ++revision_;
         } else if (OccupiesToken(state) &&
@@ -236,6 +243,9 @@ void EnemyAttackCoordinator::UpdateActors(std::span<CourseEnemyActor> actors,
     if (settings_.enabled) {
         for (CourseEnemyActor* actor : candidates) {
             EnemyAttackRuntimeState& state = actor->attackState;
+            if(actor->targetingState.waitingForReachableLaunch && actor->targetingState.solutionLocked &&
+                actor->targetingState.attackIntentSequence==state.intentSequence &&
+                !actor->targetingState.forwardInterceptReachable) continue;
             const int sectorIndex = SectorFor(*actor) + 1;
             const bool countBlocked =
                 occupiedCount >= settings_.maximumConcurrentAttackers;
@@ -256,7 +266,12 @@ void EnemyAttackCoordinator::UpdateActors(std::span<CourseEnemyActor> actors,
             ++sectorCounts[sectorIndex];
         }
     } else {
-        for (CourseEnemyActor* actor : candidates) GrantToken(*actor);
+        for (CourseEnemyActor* actor : candidates) {
+            if(actor->targetingState.waitingForReachableLaunch && actor->targetingState.solutionLocked &&
+                actor->targetingState.attackIntentSequence==actor->attackState.intentSequence &&
+                !actor->targetingState.forwardInterceptReachable) continue;
+            GrantToken(*actor);
+        }
     }
 
     for (const CourseEnemyActor& actor : runtime.Enemies()) {
@@ -282,7 +297,9 @@ bool EnemyAttackCoordinator::MarkTelegraphPresentedActors(std::span<CourseEnemyA
     for (CourseEnemyActor& actor : actors) {
         EnemyAttackRuntimeState& state = actor.attackState;
         if (actor.actorId != actorId || !state.tokenReserved ||
-            state.intentSequence != intentSequence) {
+            state.intentSequence != intentSequence ||
+            !actor.targetingState.forwardInterceptReachable ||
+            !CanEnemyProjectileVolleyReachTarget(actor)) {
             continue;
         }
         state.telegraphPresented = true;
@@ -306,7 +323,39 @@ bool EnemyAttackCoordinator::CanExecute(
         actor.targetingState.solutionLocked &&
         actor.targetingState.attackIntentSequence == state.intentSequence &&
         actor.targetingState.attackTokenId == state.tokenId &&
+        actor.targetingState.forwardInterceptReachable &&
+        CanEnemyProjectileVolleyReachTarget(actor) &&
         actor.behaviorState.attackTimeRemaining <= 0.0f;
+}
+
+void EnemyAttackCoordinator::DeferUnreachableAttack(CourseEnemyActor& actor) {
+    auto& state=actor.attackState;
+    if(!actor.behaviorState.attackIntentActive ||
+        state.phase==EnemyAttackRuntimePhase::Recovery || state.phase==EnemyAttackRuntimePhase::Executing) return;
+    if(state.tokenReserved) ++frame_.releasedThisFrame;
+    state.phase=EnemyAttackRuntimePhase::Queued;
+    state.tokenId=0;
+    state.tokenReserved=false;
+    state.telegraphPresented=false;
+    state.reservedSeconds=0;
+    actor.behaviorState.telegraphPresented=false;
+    actor.behaviorState.attackTimeRemaining=(std::max)(0.05f,actor.behaviorDefinition.attackLeadSeconds);
+    actor.fireTimer=actor.behaviorState.attackTimeRemaining;
+    actor.targetingState.waitingForReachableLaunch=true;
+    state.revision=++revision_;
+}
+
+void EnemyAttackCoordinator::RestartTelegraphForAimChange(CourseEnemyActor& actor) {
+    auto& state = actor.attackState;
+    if (!state.tokenReserved || state.phase == EnemyAttackRuntimePhase::Executing ||
+        state.phase == EnemyAttackRuntimePhase::Recovery) return;
+    state.phase = EnemyAttackRuntimePhase::Reserved;
+    state.telegraphPresented = false;
+    state.reservedSeconds = 0.0f;
+    actor.behaviorState.telegraphPresented = false;
+    actor.behaviorState.attackTimeRemaining = (std::max)(0.05f, actor.behaviorDefinition.attackLeadSeconds);
+    actor.fireTimer = actor.behaviorState.attackTimeRemaining;
+    state.revision = ++revision_;
 }
 
 bool EnemyAttackCoordinator::NotifyExecutionStarted(CourseEnemyActor& actor) {
@@ -374,7 +423,8 @@ void EnemyAttackCoordinator::QueueIntent(
     state.queuedSeconds = 0.0f;
     state.reservedSeconds = 0.0f;
     state.recoveryRemaining = 0.0f;
-    state.priority = intent.severity + ArchetypePriority(intent.archetype);
+    state.priority = intent.severity + ArchetypePriority(intent.archetype) +
+        FirstHoverAttackPriority(actor);
     state.threatCost = ThreatCost(intent.severity, intent.archetype);
     state.tokenReserved = false;
     state.telegraphPresented = false;

@@ -13,6 +13,21 @@ float ImpactNoise(float2 p) {
     return lerp(lerp(n.x,n.y,f.x),lerp(n.z,n.w,f.x),f.y);
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>11.5f) {
+        float along=input.texcoord.x-12.0f;
+        float across=input.texcoord.y*2.0f-1.0f;
+        float ends=smoothstep(0.0f,0.18f,along)*(1.0f-smoothstep(0.70f,1.0f,along));
+        return float4(input.color.rgb,exp(-across*across*5.0f)*ends*input.color.a);
+    }
+    if(input.texcoord.x>9.5f) {
+        float along=input.texcoord.x-10.0f;
+        float across=abs(input.texcoord.y*2.0f-1.0f);
+        float pulse=smoothstep(0.0f,0.12f,along)*(1.0f-smoothstep(0.55f,1.0f,along));
+        float core=exp(-across*across*12.0f);
+        float edge=1.0f-smoothstep(0.75f,1.0f,across);
+        return float4(lerp(input.color.rgb,float3(2.2f,1.7f,0.90f),core),
+            pulse*(0.35f+0.65f*core)*edge*input.color.a);
+    }
     if(input.texcoord.x>7.5f) {
         float2 p=float2(input.texcoord.x-8.5f,input.texcoord.y-0.5f)*2.0f;
         float edge=1.0f-smoothstep(0.65f,1.0f,abs(p.x));

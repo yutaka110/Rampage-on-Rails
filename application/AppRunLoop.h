@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "course/RailTitleScene.h"
+#include "terrain/TerrainCollisionWorld.h"
 
 #include <Windows.h>
 #include <array>
@@ -283,7 +284,8 @@ private:
     void DispatchThreatResponse();
     void DispatchEnemyAttackDefenseOutcomeFeedback();
     void StopGameSessionPresentation();
-    void DispatchRailVehicleAudio(float deltaTime);
+    void DispatchRailVehicleAudio(float deltaTime, float realDeltaTime);
+    void UpdateRailRollingAudio(float deltaTime, float targetGain, float tunnelBlend);
     void DispatchRailTrackFeedback();
     void DispatchRailVehicleEvasionFeedback();
     void DispatchRailVehicleCollisionFeedback();
@@ -563,6 +565,7 @@ private:
     editor::CourseRailPickingService courseRailPickingService_{};
     editor::CourseRailViewportRenderer courseRailViewportRenderer_{&courseRailEditorController_};
     TerrainChunkManager terrainChunkManager_;
+    TerrainCollisionWorld terrainCollisionWorld_;
     TerrainPresetStore terrainPresetStore_;
     ge3::graphics::RenderGraph renderGraph_;
     ge3::resources::ResourceRegistry resourceRegistry_;
@@ -803,7 +806,7 @@ private:
     bool previousCourseEditorLeftMouseDown_ = false;
     bool releaseShowcaseInitialized_ = false;
     bool railTitleScreenVisible_ = false;
-    float railTitleGameplayFade_ = 0.0f;
+    RailTitleGameplayEntry railTitleGameplayEntry_{};
     DirectionalLight railTitleSavedLight_{};
     PointLight railTitleSavedPointLight_{};
     SpotLight railTitleSavedSpotLight_{};
@@ -812,11 +815,17 @@ private:
     bool railTitleSavedBackdrop_ = false;
     std::vector<PostProcessPass> railTitleSavedPostProcess_;
     audio::SoundHandle railTitleAmbience_{};
+    audio::SoundHandle railTitleTunnelAmbience_{};
+    audio::SoundHandle railTitleReticleBootSound_{};
+    audio::SoundHandle railTitleGaugesBootSound_{};
     bool railTitleAmbiencePlaying_ = false;
+    bool railTitleTunnelAmbiencePlaying_ = false;
     float railTitleAudioGain_ = 0.0f;
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;
     RailTitleScene railTitleScene_;
+    Vector2 railTitleLensSourceScreen_{0.44f,0.54f};
+    uint32_t railTitleLensSourceSeed_ = 0;
     CourseSpawnRuntime railTitleEmptySpawns_;
     int railTitleMenuSelection_ = 0;
     bool railTitleControlsVisible_ = false;

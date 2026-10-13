@@ -93,6 +93,8 @@ public:
         uint32_t actorId,
         uint64_t intentSequence);
     bool CanExecute(const CourseEnemyActor& actor) const noexcept;
+    void DeferUnreachableAttack(CourseEnemyActor& actor);
+    void RestartTelegraphForAimChange(CourseEnemyActor& actor);
     bool NotifyExecutionStarted(CourseEnemyActor& actor);
     bool NotifyExecutionCommitted(
         CourseEnemyActor& actor,

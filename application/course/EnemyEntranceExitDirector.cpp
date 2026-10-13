@@ -82,6 +82,12 @@ void ExitOffset(const EnemyFormationDefinition& definition,
         ? (actor.behaviorState.authoredLateralOffset < -0.1f ? -1.0f : 1.0f)
         : ((actor.formationState.slotIndex & 1u) != 0u ? -1.0f : 1.0f);
     forward = 0.0f; lateral = 0.0f; vertical = 0.0f;
+    if (actor.HoldsCombatPositionUntilResolved()) {
+        // Encounter cleanup flies ahead; independent hover homes never peel
+        // sideways together merely because a formation uses SplitSides.
+        forward = definition.exitForwardDistance * progress;
+        return;
+    }
     switch (definition.exitStyle) {
     case EnemyExitStyle::ForwardBreak:
         forward = definition.exitForwardDistance * progress;
@@ -129,6 +135,22 @@ void EnemyEntranceExitDirector::BeginFrameActors(std::span<CourseEnemyActor> act
         state.appliedForwardOffset = 0.0f;
         state.appliedLateralOffset = 0.0f;
         state.appliedVerticalOffset = 0.0f;
+        if (actor.HoldsCombatPositionUntilResolved() && actor.desc.hitPoints > 0.0f) {
+            state.exitRequested = false;
+            state.exitComplete = false;
+            if (state.phase == EnemyEntranceExitPhase::Exiting || state.phase == EnemyEntranceExitPhase::Exited) {
+                state.phase = EnemyEntranceExitPhase::Active;
+                state.phaseElapsedSeconds = 0.0f;
+                state.presentationAlpha = state.presentationScale = 1.0f;
+                state.targetable = true;
+                state.attackSuppressed = false;
+            }
+            actor.behaviorState.engagementBandExitRequested = false;
+            if (actor.behaviorState.state == EnemyBehaviorState::Retreating) {
+                actor.behaviorState.state = EnemyBehaviorState::Positioning;
+                actor.behaviorState.stateElapsedSeconds = 0.0f;
+            }
+        }
     }
 }
 
@@ -185,8 +207,9 @@ void EnemyEntranceExitDirector::UpdateActors(std::span<CourseEnemyActor> actors,
             state.targetable = false;
             state.revision = ++revision_;
         }
-        const bool requested = explicitlyRequested;
-        const bool lifetimeExit = actor.desc.lifetime > definition.exitDurationSeconds &&
+        const bool requested = explicitlyRequested && !actor.HoldsCombatPositionUntilResolved();
+        const bool lifetimeExit = !actor.HoldsCombatPositionUntilResolved() &&
+            actor.desc.lifetime > definition.exitDurationSeconds &&
             actor.age >= actor.desc.lifetime - definition.exitDurationSeconds;
         if ((requested || lifetimeExit) &&
             state.phase != EnemyEntranceExitPhase::Exiting &&
@@ -250,9 +273,10 @@ void EnemyEntranceExitDirector::UpdateActors(std::span<CourseEnemyActor> actors,
             ExitOffset(definition, actor, progress,
                 state.appliedForwardOffset, state.appliedLateralOffset,
                 state.appliedVerticalOffset);
-            // Keep a splitting wing visible while it actually peels away.
-            // The final fade hides its removal after it reaches the edge.
-            state.presentationAlpha = definition.exitStyle == EnemyExitStyle::SplitSides
+            // Keep a departing body visible during its initial movement,
+            // then fade near the end of encounter cleanup.
+            state.presentationAlpha = (actor.HoldsCombatPositionUntilResolved() ||
+                definition.exitStyle == EnemyExitStyle::SplitSides)
                 ? 1.0f - SmoothStep((progress - 0.60f) / 0.40f)
                 : 1.0f - progress;
             state.presentationScale = 1.0f - progress * 0.18f;

@@ -181,6 +181,9 @@ struct RailCameraEncounterFramingSettings {
 };
 
 struct RailCameraDirectorFrameInput {
+    // Title-to-game match cut, resolved in rail space before vehicle/terrain safety.
+    float titleHandoffWeight = 0.0f;
+    CourseCameraKey titleHandoffRig{};
     // Conservative rendered vehicle bounds, including bank and suspension.
     bool vehicleFramingActive = false;
     std::array<Vector3, 8> vehicleBoundsCorners{};

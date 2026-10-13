@@ -157,7 +157,17 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
             text(Utf8(u8"ENTER / ESC / CLICK : 戻る"),x,top+809*s,0.77f*s,accent);
         }
         for(auto& command:next.commands) command.color.w *= (std::clamp)(input.titleOpacity,0.0f,1.0f);
-        rect(0,0,width,height,{0.015f,0.025f,0.035f,(std::clamp)(input.titleBlackout,0.0f,1.0f)});
+        if(input.titleBlackout>0.0f) {
+            RailShooterHudDrawCommand transition;
+            transition.kind=RailShooterHudDrawCommandKind::TunnelTransition;
+            transition.width=width; transition.height=height;
+            transition.color={0.022f,0.017f,0.012f,1.0f};
+            transition.transitionProgress=(std::clamp)(input.titleBlackout,0.0f,1.0f);
+            transition.transitionFocus=input.titleTransitionFocus;
+            // The world switch must be concealed even with a small UI budget.
+            if(budget>0 && next.commands.size()>=budget) next.commands.pop_back();
+            push(std::move(transition));
+        }
         next.visible = !next.commands.empty();
         frame_ = std::move(next);
         return;
@@ -202,6 +212,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     };
     const auto center=RailShooterHudTextAlignment::Center;
     const float gaugeWidth=definition.leftPanelWidth*scale;
+    const float startupGauge=(std::clamp)(input.startupGaugeProgress,0.0f,1.0f);
+    const size_t gaugeBegin=next.commands.size();
     float healthBottom=safe;
     // Vehicle survival leads. Player HP is a distinct, secondary gauge.
     if(definition.showVehicleIntegrity) {
@@ -212,8 +224,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         rect(safe+6*scale,y+29*scale,6*scale,6*scale,textColor);
         rect(safe+23*scale,y+29*scale,6*scale,6*scale,textColor);
         ink(hud.vehicleText,safe+45*scale,y+28*scale,0.95f*scale,textColor);
-        bar(safe,y+42*scale,gaugeWidth,18*scale,hud.vehicleIntegrityNormalized,
-            color,barBackground,hud.vehicleIntegrityTrail);
+        bar(safe,y+42*scale,gaugeWidth,18*scale,hud.vehicleIntegrityNormalized*startupGauge,
+            color,barBackground,hud.vehicleIntegrityTrail*startupGauge);
         // Tick marks aid estimating remaining durability without reading digits.
         for(int i=1;i<5;++i) rect(safe+gaugeWidth*i/5.0f,y+42*scale,2*scale,18*scale,panel);
         healthBottom=y+60*scale;
@@ -221,10 +233,11 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     if(definition.showPlayerHealth) {
         const float y=healthBottom+(definition.showVehicleIntegrity?24:0)*scale;
         ink(hud.healthText,safe,y+19*scale,0.68f*scale,textColor);
-        bar(safe,y+29*scale,gaugeWidth*0.72f,8*scale,hud.playerHealthNormalized,
-            hud.playerHealthCritical?critical:healthy,barBackground,hud.playerHealthTrail);
+        bar(safe,y+29*scale,gaugeWidth*0.72f,8*scale,hud.playerHealthNormalized*startupGauge,
+            hud.playerHealthCritical?critical:healthy,barBackground,hud.playerHealthTrail*startupGauge);
         healthBottom=y+37*scale;
     }
+    const size_t gaugeEnd=next.commands.size();
     if(definition.showPlayerHealth || definition.showVehicleIntegrity) {
         text(Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
             healthBottom+23*scale,0.54f*scale,muted);
@@ -317,6 +330,14 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   P : 一時停止"),
             width*0.5f,height-10*responsive,0.50f*responsive,muted,center);
     }
+    for(size_t index=0;index<next.commands.size();++index) {
+        auto& command=next.commands[index];
+        if(index>=gaugeBegin && index<gaugeEnd) {
+            command.color.w*=startupGauge;
+            command.x-=(1.0f-startupGauge)*8.0f*scale;
+        } else command.color.w*=(std::clamp)(input.startupInformationOpacity,0.0f,1.0f);
+    }
+    std::erase_if(next.commands,[](const auto& command){return command.color.w<=0.0f;});
     next.visible = !next.commands.empty();
     frame_ = std::move(next);
 }

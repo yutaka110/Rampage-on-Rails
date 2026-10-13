@@ -472,8 +472,10 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             bridgeScale *= (std::max)(
                 1.0f, readability->presentationScale);
         }
+        const float modelScale = enemy.desc.meshId == "twin_shield_hull"
+            ? kTwinShieldGameplayModelScale : 1.0f;
         const float baseScale = (std::max)(0.01f,
-            enemy.desc.radius * presentationScale * bridgeScale);
+            enemy.desc.radius * presentationScale * bridgeScale * modelScale);
         Vector3 rotation = Add(
             RotationFromRailTangent(sample.tangent),
             enemy.desc.localRotation);
@@ -499,6 +501,13 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 (readability ? readability->presentationAlpha : 1.0f);
             TwinShieldDronePose pose;
             pose.visible = true; pose.position = center; pose.rotation = rotation; pose.scale = scale;
+            if(enemy.weaponMount.ready && enemy.combatState.phase!=EnemyCombatPhase::Dying &&
+                enemy.combatState.phase!=EnemyCombatPhase::Retired) {
+                // The launch boundary owns this frame's rigid transform.
+                // Charge colour/shields remain procedural; banking and barrel
+                // anchors are exactly those used by the real projectile.
+                pose=enemy.weaponMount.dronePose;
+            }
             pose.alpha = alpha;
             pose.charge = presentation ? presentation->weaponCharge : 0.0f;
             pose.flash = presentation ? presentation->flashStrength : 0.0f;

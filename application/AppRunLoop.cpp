@@ -1,5 +1,7 @@
 #include "AppRunLoop.h"
 #include "AppLogFile.h"
+#include "diagnostics/DronePerformanceProfile.h"
+#include "course/RailWorldRaycast.h"
 
 #include <DirectXMath.h>
 #include <algorithm>
@@ -156,6 +158,7 @@ double ElapsedMs(RailPerfClock::time_point begin, RailPerfClock::time_point end)
 }
 
 void ResetRailPerfFrame(uint32_t frameIndex, float distance) {
+    drone_perf::ResetFrame();
     gRailPerfFrame = {};
     gRailPerfFrame.frame = frameIndex;
     gRailPerfFrame.distance = distance;
@@ -1525,6 +1528,9 @@ AppRunLoop::AppRunLoop(
     railSessionRetrySound_ = audio_.CreateTone(
         "rail-session-retry", 680.0f, 0.160f, 0.50f);
     railTitleAmbience_ = audio_.LoadWave("Resources/audio/title_rail_ambience.wav");
+    railTitleTunnelAmbience_ = audio_.LoadWave("Resources/audio/title_rail_ambience_tunnel.wav");
+    railTitleReticleBootSound_ = audio_.CreateTone("rail-reticle-boot",920.0f,0.045f,0.20f);
+    railTitleGaugesBootSound_ = audio_.CreateTone("rail-gauges-boot",1240.0f,0.065f,0.18f);
     railVehicleRollingSound_ = audio_.CreateTone(
         "rail-vehicle-rolling", 105.0f, 0.055f, 0.16f);
     railVehicleJointSound_ = audio_.CreateTone(
@@ -3890,8 +3896,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
 
     // A small aim point preserves the silhouette behind the reticle.
-    addCentered(reticle.currentScreenPosition, 3.0f*hudScale, uvPip,
+    const auto& titleEntry=railTitleGameplayEntry_.Frame();
+    const Vector2 entryReticle=titleEntry.blockingGameplay?
+        Vector2{float(hudWidth)*0.5f,float(hudHeight)*0.5f}:reticle.currentScreenPosition;
+    const uint32_t entryPipBegin=railLockOnHudAtlasVertexCount_;
+    addCentered(entryReticle, 3.0f*hudScale, uvPip,
         Vector4{1.0f,0.98f,0.91f,opacity});
+    const uint32_t entryPipEnd=railLockOnHudAtlasVertexCount_;
 
     for (int index = 0; index < tokenCount; ++index) {
         const RailLockToken& token = debug.tokens[static_cast<size_t>(index)];
@@ -3923,7 +3934,10 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const float reticleRadius = reticle.lockHeld
         ? (27.0f + pulse * 3.0f + acquirePulse * 5.0f) * hudScale
         : 15.0f * hudScale;
-    addBracket(reticle.currentScreenPosition,reticleRadius,6.0f*hudScale,1.7f*hudScale,reticleLine);
+    const uint32_t entryBracketBegin=railLockOnHudAtlasVertexCount_;
+    addBracket(entryReticle,reticleRadius+(1.0f-titleEntry.reticleProgress)*9.0f*hudScale,
+        6.0f*hudScale,1.7f*hudScale,reticleLine);
+    const uint32_t entryBracketEnd=railLockOnHudAtlasVertexCount_;
     if(reticle.lockHeld) addCircleLine(reticle.currentScreenPosition,reticleRadius,1.1f*hudScale,reticleLine,32);
     const WeaponFeedbackSystem& feedbackSystem = railShooterCollisionSystem_.WeaponFeedback();
     if (feedbackSystem.HitMarkerActive()) {
@@ -4110,6 +4124,14 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
 
     RailShooterHudRenderInput hudRenderInput{};
+    if(titleEntry.blockingGameplay) {
+        for(uint32_t index=0;index<railLockOnHudAtlasVertexCount_;++index) {
+            const bool aiming=(index>=entryPipBegin && index<entryPipEnd) ||
+                (index>=entryBracketBegin && index<entryBracketEnd);
+            railLockOnHudAtlasMappedVertices_[index].color.w*=
+                aiming?titleEntry.reticleProgress:titleEntry.informationOpacity;
+        }
+    }
     hudRenderInput.definition = &railShooterHudDefinition_;
     hudRenderInput.presentation = &railShooterHudPresentation_.Frame();
     hudRenderInput.viewportWidth = hudWidth;
@@ -4120,10 +4142,35 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.titleOpacity = railTitleScene_.MenuOpacity();
     hudRenderInput.titleBlackout = railTitleScene_.Blackout();
     hudRenderInput.titleLogoAvailable = railTitleLogoReady_;
+    hudRenderInput.startupGaugeProgress=titleEntry.gaugeProgress;
+    hudRenderInput.startupInformationOpacity=titleEntry.informationOpacity;
+    const auto projectTransitionPoint=[&](Vector3 world,Vector2& screen) {
+        const auto& m=frameState_.viewProjectionMatrix.m;
+        const float w=world.x*m[0][3]+world.y*m[1][3]+world.z*m[2][3]+m[3][3];
+        if(!std::isfinite(w) || w<=0.1f) return false;
+        const Vector3 point=TransformCoord(world,frameState_.viewProjectionMatrix);
+        if(!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            point.z<0.0f || point.z>1.0f || std::abs(point.x)>2.0f || std::abs(point.y)>2.0f) return false;
+        screen={(point.x*0.5f+0.5f)*hudWidth,(0.5f-point.y*0.5f)*hudHeight};
+        return true;
+    };
+    Vector2 transitionFocus{0.5f,0.4f};
+    if((hudRenderInput.titleBlackout>0.0f && railTitleScreenVisible_) || titleEntry.blackout>0.0f) {
+        const auto& path=railTitleScreenVisible_?railTitleScene_.Path():railPath_;
+        const float distance=railTitleScreenVisible_?railTitleScene_.Distance():railShooterDistance_;
+        Vector2 projected;
+        if(projectTransitionPoint(path.Evaluate(distance+64.0f).position,projected))
+            transitionFocus={(std::clamp)(projected.x/hudWidth,0.25f,0.75f),
+                (std::clamp)(projected.y/hudHeight,0.22f,0.62f)};
+    }
+    hudRenderInput.titleTransitionFocus=transitionFocus;
     railShooterHudRenderer_.Update(hudRenderInput);
     const auto emitHudCommands = [&](const auto& commands) {
         for (const RailShooterHudDrawCommand& command : commands) {
-            if (command.kind == RailShooterHudDrawCommandKind::Rectangle) {
+            if (command.kind == RailShooterHudDrawCommandKind::TunnelTransition) {
+                // The final film-burn pass owns all scene transition masking.
+                continue;
+            } else if (command.kind == RailShooterHudDrawCommandKind::Rectangle) {
                 addQuad(
                     command.x,
                     command.y,
@@ -4242,6 +4289,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 const float light=3.2f*puff.impactLight/
                     (1.0f+2.2f*(offset.x*offset.x+offset.z*offset.z)+3.5f*offset.y*offset.y);
                 color.x+=light; color.y+=light*0.30f; color.z+=light*0.045f;
+                const float sweepLight=railTitleScene_.LightSweepIllumination(corner);
+                color.x+=sweepLight*1.4f; color.y+=sweepLight*0.95f; color.z+=sweepLight*0.38f;
                 return color;
             };
             dustVertex(a,{puff.seed,0},litColor(a)); dustVertex(b,{puff.seed+1,0},litColor(b)); dustVertex(c,{puff.seed,1},litColor(c));
@@ -4250,6 +4299,31 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         // Camera-facing world ribbons aligned to flight, with a tip and tapered tail.
         // Keep their suffix separate so the glow uses additive rather than smoke blending.
         const uint32_t dustCount=railTitleDustVertexCount_;
+        const float reflection=railTitleScene_.RailReflectionOpacity();
+        if(reflection>0.0f) {
+            const float sweep=railTitleScene_.RailReflectionDistance();
+            const auto track=CourseRailTrackDefinitionAsset::MineCartDefaults();
+            // Actual rail-head strips: perspective/depth hide them behind the
+            // cart and rock, unlike the old constant-width HUD lines.
+            const auto railPoint=[&](float offset,float lateral) {
+                const auto sample=railTitleScene_.Path().Evaluate(railTitleScene_.Distance()+offset);
+                return Add(sample.position,Add(Scale(sample.right,lateral),
+                    Scale(sample.up,track.railHeadVerticalOffset+track.railHeadHeight*0.5f+0.012f)));
+            };
+            constexpr int segments=12;
+            for(float side : {-1.0f,1.0f}) for(int segment=0;segment<segments;++segment) {
+                const float u0=float(segment)/segments,u1=float(segment+1)/segments;
+                const float lane=side*track.trackGauge*0.5f;
+                const float halfWidth=track.railHeadWidth*0.48f;
+                const auto a=railPoint(sweep+6.0f*u0,lane-halfWidth);
+                const auto b=railPoint(sweep+6.0f*u0,lane+halfWidth);
+                const auto c=railPoint(sweep+6.0f*u1,lane-halfWidth);
+                const auto d=railPoint(sweep+6.0f*u1,lane+halfWidth);
+                const Vector4 color{1.65f,0.92f,0.34f,reflection};
+                dustVertex(a,{10+u0,0},color); dustVertex(b,{10+u0,1},color); dustVertex(c,{10+u1,0},color);
+                dustVertex(c,{10+u1,0},color); dustVertex(b,{10+u0,1},color); dustVertex(d,{10+u1,1},color);
+            }
+        }
         const auto glowQuad=[&](Vector3 center,Vector3 h,Vector3 v,float uvBase,Vector4 color) {
             if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+6>kMaxAtlasVertices) return;
             const auto a=Add(center,Add(Scale(h,-1),v)),b=Add(center,Add(h,v));
@@ -4257,6 +4331,34 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,0},color); dustVertex(b,{uvBase+1,0},color); dustVertex(c,{uvBase,1},color);
             dustVertex(c,{uvBase,1},color); dustVertex(b,{uvBase+1,0},color); dustVertex(d,{uvBase+1,1},color);
         };
+        const auto& railImpact=railTitleScene_.RailImpact();
+        if(railImpact.active && railImpact.age<0.50f) {
+            const float age=railImpact.age;
+            const float flash=std::exp(-(std::max)(0.0f,age-0.04f)*14.0f)*
+                (std::max)(0.0f,1.0f-age/0.28f);
+            // Pale contact core and a larger, softer amber halo share the
+            // depth-tested strike point; the core never fills the whole frame.
+            glowQuad(Add(railImpact.position,{0,0.15f,0}),Scale(right,1.50f),Scale(up,1.05f),6.0f,
+                {1.45f,0.72f,0.19f,flash*0.65f});
+            glowQuad(Add(railImpact.position,{0,0.15f,0}),Scale(right,1.15f),Scale(up,0.85f),2.0f,
+                {2.2f,1.55f,0.70f,flash*1.8f});
+            const auto strikeSample=railTitleScene_.Path().Evaluate(
+                railTitleScene_.Distance()+RailTitleScene::DepartureImpactAhead);
+            const float contactGlow=std::exp(-age*10.0f)*(std::max)(0.0f,1.0f-age/0.32f);
+            glowQuad(Add(railImpact.position,{0,0.025f,0}),Scale(strikeSample.tangent,1.30f),
+                Scale(strikeSample.right,0.28f),6.0f,{2.0f,1.05f,0.29f,contactGlow});
+            for(uint32_t spark=0;spark<RailTitleScene::RailImpactSparkCount;++spark) {
+                const auto grain=RailTitleScene::EvaluateRailSpark(railImpact,spark);
+                if(grain.opacity<=0.001f) continue;
+                const auto direction=NormalizeOr(grain.velocity,up);
+                const auto side=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(grain.position,-1)),right)),right);
+                const float length=0.38f+0.065f*float(spark%5);
+                const float brightness=grain.opacity*std::exp(-age*1.4f)*titleAlpha;
+                glowQuad(Add(grain.position,Scale(direction,-length*0.5f)),Scale(direction,length*0.5f),
+                    Scale(side,grain.radius),8.0f,
+                    {2.0f,1.35f-1.6f*age,0.40f*std::exp(-age*5.0f),brightness*1.8f});
+            }
+        }
         for(const auto& cloud:railTitleScene_.DustClouds()) {
             const float age=cloud.age;
             if(age>=0.36f) continue;
@@ -4301,7 +4403,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(c,{1,0},trailColor); dustVertex(b,{0,1},trailColor); dustVertex(d,{1,1},trailColor);
             // The 1.8 m circular head provides a clear aiming target even near
             // the distant drone. Keep the shorter, dimmer trail directional.
-            const auto h=Scale(right,0.90f),v=Scale(up,0.90f);
+            const float headRadius=shot.railStrike ? RailTitleScene::DepartureShotRadius : 0.90f;
+            const auto h=Scale(right,headRadius),v=Scale(up,headRadius);
             const auto ha=Add(shot.position,Add(Scale(h,-1),v)),hb=Add(shot.position,Add(h,v));
             const auto hc=Add(shot.position,Add(Scale(h,-1),Scale(v,-1))),hd=Add(shot.position,Add(h,Scale(v,-1)));
             dustVertex(ha,{4,0},color); dustVertex(hb,{5,0},color); dustVertex(hc,{4,1},color);
@@ -4314,7 +4417,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     emitHudCommands(railShooterHudRenderer_.Frame().commands);
 
     RailShooterDefensePromptRenderInput defensePromptInput{};
-    defensePromptInput.presentation = railDefenseUiProofEnabled_
+    defensePromptInput.presentation = railDefenseUiProofEnabled_ || titleEntry.blockingGameplay
         ? nullptr : &railEnemyAttackDefensePresentationBridge_.Frame();
     defensePromptInput.outcome =
         &railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
@@ -4323,10 +4426,6 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     defensePromptInput.settings = railShooterDefensePromptRendererSettings_;
     railShooterDefensePromptRenderer_.Update(defensePromptInput);
     emitHudCommands(railShooterDefensePromptRenderer_.Frame().commands);
-    if(railTitleGameplayFade_>0.0f) {
-        const float t=(std::clamp)(railTitleGameplayFade_/0.40f,0.0f,1.0f);
-        addQuad(0,0,float(hudWidth),float(hudHeight),uv(3.5f,115.5f,0,0),{0.015f,0.025f,0.035f,t*t*(3-2*t)});
-    }
 
     return railLockOnHudAtlasVertexCount_ > 0;
 }
@@ -6198,6 +6297,7 @@ void AppRunLoop::LogRailShooterPerfSpike() {
         gRailPerfFrame.updateMs +
         (std::max)(0.0, gRailPerfFrame.renderMs - gRailPerfFrame.presentMs);
     const bool shouldLog =
+        (drone_perf::Enabled() && gRailPerfFrame.frame % 30 == 0) ||
         cpuNoPresentMs >= 18.0 ||
         gRailPerfFrame.updateMs >= 8.0 ||
         gRailPerfFrame.terrainUpdateMs >= 4.0 ||
@@ -6263,8 +6363,16 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " courseMeshVisible=" << scene_.CourseMeshes().VisibleCount()
          << " terrainChunks=" << terrainChunkManager_.RenderChunks().size()
          << " terrainDebris=" << debrisStats.debrisInstanceCount
-         << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount
-         << "\n";
+         << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount;
+    drone_perf::AppendToLog(line);
+    if (drone_perf::Enabled()) {
+        const auto collisionStats = terrainCollisionWorld_.GetStats();
+        line << " collisionBvhChunks=" << collisionStats.residentChunks
+             << " collisionBvhPending=" << collisionStats.pendingBuilds
+             << " collisionBvhBytes=" << collisionStats.bytes
+             << " collisionBvhGeneration=" << collisionStats.generation;
+    }
+    line << "\n";
     OutputDebugStringA(line.str().c_str());
     std::ofstream log = app::OpenRotatingLog("logs/rail_perf_spikes.log");
     if (log) {
@@ -6640,9 +6748,17 @@ void AppRunLoop::UpdateRailShooterFrame() {
             windowWidth_,
             windowHeight_);
     ConfigureViewportAndScissor(runtimeState_, metrics.width, metrics.height);
+    // Prewarm during the title and stream a bounded CPU-only collision window
+    // during gameplay. Update never waits for a worker; unavailable generations
+    // keep the authoritative reference raycast until their BVHs are resident.
+    terrainCollisionWorld_.Update(railPath_, runtimeState_.terrain.settings,
+        &railShooterCourse_.terrainEditLayer, &runtimeState_.terrain.previewEditLayer,
+        railShooterDistance_);
+    bool titleHandoffThisFrame=false;
     if (railTitleScreenVisible_ && railTitleScene_.ReadyForGameplay()) {
         railTitleScreenVisible_ = false;
-        railTitleGameplayFade_ = 0.40f;
+        railTitleGameplayEntry_.Begin();
+        titleHandoffThisFrame=true;
         runtimeState_.terrain.enabled = railTitleSavedTerrainEnabled_;
         runtimeState_.directionalLightData = railTitleSavedLight_;
         runtimeState_.pointLightData = railTitleSavedPointLight_;
@@ -6653,8 +6769,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         for (const auto& pass : railTitleSavedPostProcess_)
             (void)vfxEngine_.PostProcess().ConfigurePass(pass);
         railTitleSavedPostProcess_.clear();
-        audio_.Stop(railTitleAmbience_);
-        railTitleAmbiencePlaying_ = false;
+        // Keep both rolling voices and their playheads through the blackout.
         for(uint32_t id:railTitleDustIds_) vfxEngine_.Runtime().StopEffect(id);
         railTitleDustIds_.clear();
         railShooterHasLastUpdateTime_ = false;
@@ -6722,15 +6837,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
         runtimeState_.clearColor[1]=titleColors.background.y;
         runtimeState_.clearColor[2]=titleColors.background.z;
         runtimeState_.clearColor[3]=1.0f;
-        const float targetGain = focused ? railTitleScene_.AmbienceGain()*0.34f : 0.0f;
-        railTitleAudioGain_ += (targetGain-railTitleAudioGain_)*(1.0f-std::exp(-8.0f*(std::clamp)(dt,0.0f,0.05f)));
-        if(focused && !railTitleAmbiencePlaying_ && railTitleAmbience_.IsValid())
-            railTitleAmbiencePlaying_ = audio_.PlaySpatial(railTitleAmbience_,0.0f,0.15f,1.0f,true);
-        audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*(1.0f-railTitleScene_.Blackout()),
-            1.0f);
-        if(!focused && railTitleAudioGain_<0.001f && railTitleAmbiencePlaying_) {
-            audio_.Stop(railTitleAmbience_); railTitleAmbiencePlaying_=false;
-        }
+        UpdateRailRollingAudio(dt,focused?railTitleScene_.RollingGain()*0.34f:0.0f,
+            railTitleScene_.TunnelShade());
         railTitleDustTimer_ += titleDt;
         // Creating a new effect resets the shared GPU particle pool. Let impact
         // billows evolve without repeatedly resetting them with wheel puffs.
@@ -6750,6 +6858,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         // Sand clouds and tracers are deterministic, depth-tested world draws.
         // Only the brief muzzle flash uses the shared GPU particle pool.
         for(const auto& cue:railTitleScene_.AttackCues()) {
+            if(focused && cue.kind==RailTitleAttackCueKind::NearMiss)
+                (void)audio_.Play(railEnemyProjectileFlyBySound_,0.16f);
+            if(focused && cue.kind==RailTitleAttackCueKind::RailImpact)
+                (void)audio_.Play(railVehicleCollisionSound_,0.20f);
             if(cue.kind!=RailTitleAttackCueKind::Muzzle) continue;
             const uint32_t id=vfxEngine_.Runtime().PlayEffectWithParams(
                 "title_drone_muzzle",cue.position,{1,1,1,1},{1,1,1});
@@ -6773,6 +6885,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
             camera.titleSubject = {titleSample.position.x,titleSample.position.y,titleSample.position.z,1.0f};
             camera.titleForward = {titleSample.tangent.x,titleSample.tangent.y,titleSample.tangent.z,railTitleScene_.TunnelShade()};
             camera.titleHaze = {titleColors.background.x,titleColors.background.y,titleColors.background.z,1.0f};
+            const auto sweep=railTitleScene_.LightSweep();
+            camera.titleLightSweep = {sweep.x,sweep.y,railTitleScene_.RailReflectionDistance(),railTitleScene_.RailReflectionOpacity()};
+            const auto& impact=railTitleScene_.RailImpact();
+            camera.titleRailImpact = {impact.position.x,impact.position.y,impact.position.z,railTitleScene_.RailImpactLight()};
             for (size_t i=0;i<camera.titleWheelContacts.size();++i) {
                 const auto& wheel = railTitleScene_.Wheels().wheels[i];
                 camera.titleWheelContacts[i] = {wheel.railContact.x,wheel.railContact.y,wheel.railContact.z,wheel.visible?1.0f:0.0f};
@@ -6783,6 +6899,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     ++railShooterFrameIndex_;
     ResetRailPerfFrame(railShooterFrameIndex_, railShooterDistance_);
+    const RailWorldRaycast::FrameCacheScope raycastFrameCache(&terrainCollisionWorld_);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
 
     // The review capture ran at 30 fps, so advancing a fixed 16 ms only once
@@ -6799,8 +6916,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     railShooterLastUpdateTime_ = updateStart;
     railShooterHasLastUpdateTime_ = true;
-    const bool titleEntryBlocked = railTitleGameplayFade_ > 0.0f;
-    railTitleGameplayFade_ = (std::max)(0.0f,railTitleGameplayFade_-realGameplayDeltaTime);
+    const bool titleEntryBlocked = railTitleGameplayEntry_.Frame().blockingGameplay;
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
     const bool coursePreviewOwnsRail = coursePreviewSimulationSystem_.IsActive();
     const bool coursePreviewAdvancing =
@@ -6812,6 +6928,18 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool coursePreviewFrozen =
         runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance ||
         coursePreviewOwnsRail;
+    const bool entryFocused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
+    railTitleGameplayEntry_.Update(!titleHandoffThisFrame && !coursePreviewFrozen && entryFocused?
+        realGameplayDeltaTime:0.0f);
+    const auto& entryFrame=railTitleGameplayEntry_.Frame();
+    if(entryFrame.reticleStarted) (void)audio_.Play(railTitleReticleBootSound_,0.16f);
+    if(entryFrame.gaugesStarted) (void)audio_.Play(railTitleGaugesBootSound_,0.14f);
+    if(titleEntryBlocked) {
+        // Held menu input cannot become a queued shot, pause or retry when the
+        // startup gate opens. Gamepad edges are consumed by the normal poll.
+        for(int key=0;key<256;++key) previousKeyDown_[key]=(GetAsyncKeyState(key)&0x8000)!=0;
+        previousLeftMouseDown_=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+    }
     const float sessionDeltaTime = (coursePreviewFrozen || titleEntryBlocked)
         ? 0.0f : realGameplayDeltaTime;
     float gameplayDeltaTime = sessionDeltaTime;
@@ -6820,6 +6948,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         gameplayDeltaTime = 0.0f;
     }
     railWeaponHotReloadPollTimer_ += realGameplayDeltaTime;
+    if (drone_perf::Enabled()) drone_perf::frame.simulationDeltaTime = gameplayDeltaTime;
     if (railWeaponHotReloadPollTimer_ >= 0.25f &&
         (!railShooterCollisionSystem_.WeaponDefinitions().Directory().empty() ||
          !railAimAssistPresetRegistry_.Directory().empty() ||
@@ -7211,7 +7340,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     vehicleRenderInput.actor = &railShooterVehicleActor_.Frame();
     vehicleRenderInput.cameraWorldPosition = frameState_.cameraWorldPosition;
     railShooterVehicleRenderer_.Update(vehicleRenderInput);
-    DispatchRailVehicleAudio(gameplayDeltaTime);
+    DispatchRailVehicleAudio(gameplayDeltaTime,realGameplayDeltaTime);
     if (railShooterVehiclePresentation_.Frame().jointImpactThisFrame) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.055f, 0.0f, 0.0015f);
     }
@@ -7360,7 +7489,18 @@ void AppRunLoop::UpdateRailShooterFrame() {
 
     const RailCameraDirectorFrame& previousCameraSafetyFrame = railShooterCameraDirector_.LastFrame();
     CourseEnemyFireSafetyFrameInput fireSafetyInput{};
-    fireSafetyInput.cameraAllowsEnemyFire = previousCameraSafetyFrame.allowEnemyFire;
+    RailTravelPredictionInput travelPredictionInput;
+    travelPredictionInput.vehicle = &railShooterVehicleMovement_;
+    travelPredictionInput.speedDirector = &railShooterSpeedDirector_;
+    travelPredictionInput.courseRuntime = &railShooterCourseRuntime_;
+    travelPredictionInput.course = &railShooterCourse_;
+    travelPredictionInput.railPath = &railPath_;
+    travelPredictionInput.simulationStepSeconds = gameplayDeltaTime;
+    if (!coursePreviewOwnsRail && mountedMovementActive && gameplayDeltaTime > 0.0f)
+        fireSafetyInput.travelPredictionInput = &travelPredictionInput;
+    fireSafetyInput.presentationSettings = &railEnemyCombatPresentationSettings_;
+    fireSafetyInput.readability = &railEnemyEncounterReadabilityDirector_;
+    fireSafetyInput.cameraAllowsEnemyFire = !titleEntryBlocked && previousCameraSafetyFrame.allowEnemyFire;
     fireSafetyInput.cameraStableForAiming = previousCameraSafetyFrame.stableForAiming;
     fireSafetyInput.cameraHardTransition = previousCameraSafetyFrame.hardTransition;
     fireSafetyInput.playerDistance = railShooterDistance_;
@@ -7376,6 +7516,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     fireSafetyInput.terrainSettings = &runtimeState_.terrain.settings;
     fireSafetyInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
     fireSafetyInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    fireSafetyInput.terrainCollision = &terrainCollisionWorld_;
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput);
     railEnemyAttackDefenseValidation_.Update(railShooterSpawnRuntime_);
     editorPatrolRuntimeWorld_.Update(gameplayDeltaTime);
@@ -7476,8 +7617,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.railPath = &railPath_;
     cameraInput.section = railShooterCourseRuntime_.CurrentSection();
     cameraInput.distance = railShooterDistance_;
+    cameraInput.titleHandoffWeight = entryFrame.cameraHandoffWeight;
+    cameraInput.titleHandoffRig = RailTitleScene::DepartureCameraRig();
     cameraInput.deltaTime = coursePreviewAdvancing
-        ? kFallbackGameplayDeltaTime : gameplayDeltaTime;
+        ? kFallbackGameplayDeltaTime : entryFrame.blockingGameplay
+            ? (!coursePreviewFrozen && entryFocused ? realGameplayDeltaTime : 0.0f) : gameplayDeltaTime;
     cameraInput.railSpeed = coursePreviewSimulationSystem_.IsActive()
         ? coursePreviewAdvancing
             ? coursePreviewSimulationSystem_.Frame().currentSpeed
@@ -7613,7 +7757,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     telegraphInput.viewportWidth = metrics.width;
     telegraphInput.viewportHeight = metrics.height;
     telegraphInput.settings = railEnemyAttackTelegraphSettings_;
-    telegraphInput.cameraAllowsAttack = directedCamera.allowEnemyFire &&
+    telegraphInput.cameraAllowsAttack = !titleEntryBlocked && directedCamera.allowEnemyFire &&
         directedCamera.stableForAiming && !directedCamera.hardTransition;
     railEnemyAttackTelegraphSystem_.Update(telegraphInput);
     EnemyAttackLaneTelegraphRenderInput laneTelegraphInput{};
@@ -7783,7 +7927,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     // gameplay actions in the same context.
     lockOnInput.keyboardDirectionalAimEnabled = false;
     lockOnInput.shiftLockEnabled = false;
-    if (!titleEntryBlocked) railShooterLockOnSystem_.Update(lockOnInput);
+    if (titleEntryBlocked) railShooterLockOnSystem_.PrepareReticleForGameplay(lockOnInput);
+    else railShooterLockOnSystem_.Update(lockOnInput);
     if (railShooterLockOnSystem_.DebugFrame().acceptedThisFrame > 0) {
         railShooterCameraDirector_.AddFeedbackImpulse(0.075f, -0.0012f, 0.0007f);
     }
@@ -9551,7 +9696,26 @@ void AppRunLoop::StopRailEnemyAttackFeedback() {
     railEnemyAttackLaneTelegraphRenderer_.Reset(&vfxEngine_.Runtime());
 }
 
-void AppRunLoop::DispatchRailVehicleAudio(float deltaTime) {
+void AppRunLoop::UpdateRailRollingAudio(float deltaTime,float targetGain,float tunnelBlend) {
+    const float dt=std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,0.05f):0.0f;
+    targetGain=(std::clamp)(targetGain,0.0f,1.0f);
+    railTitleAudioGain_+=(targetGain-railTitleAudioGain_)*(1.0f-std::exp(-8.0f*dt));
+    // Start dry and reverberant copies together at zero gain. Their buffers
+    // have identical lengths, so crossfading never resets the rail rhythm.
+    if(targetGain>0.0f && !railTitleAmbiencePlaying_ && railTitleAmbience_.IsValid())
+        railTitleAmbiencePlaying_=audio_.PlaySpatial(railTitleAmbience_,0.0f,0.0f,1.0f,true);
+    if(targetGain>0.0f && !railTitleTunnelAmbiencePlaying_ && railTitleTunnelAmbience_.IsValid())
+        railTitleTunnelAmbiencePlaying_=audio_.PlaySpatial(railTitleTunnelAmbience_,0.0f,0.0f,1.0f,true);
+    const float wet=railTitleTunnelAmbiencePlaying_?(std::clamp)(tunnelBlend,0.0f,1.0f)*0.72f:0.0f;
+    audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*(1.0f-wet),1.0f);
+    audio_.SetPlayback(railTitleTunnelAmbience_,railTitleAudioGain_*wet,1.0f);
+    if(targetGain==0.0f && railTitleAudioGain_<0.001f) {
+        audio_.Stop(railTitleAmbience_);audio_.Stop(railTitleTunnelAmbience_);
+        railTitleAmbiencePlaying_=railTitleTunnelAmbiencePlaying_=false;
+    }
+}
+
+void AppRunLoop::DispatchRailVehicleAudio(float deltaTime,float realDeltaTime) {
     RailVehicleAudioInput input{};
     input.actor = &railShooterVehicleActor_.Frame();
     input.presentation = &railShooterVehiclePresentation_.Frame();
@@ -9563,11 +9727,21 @@ void AppRunLoop::DispatchRailVehicleAudio(float deltaTime) {
 
     const RailVehicleAudioFrame& audioFrame =
         railShooterVehicleAudioBridge_.Frame();
+    const auto& entry=railTitleGameplayEntry_.Frame();
+    const float movingGain=audioFrame.rolling?input.settings.masterVolume*
+        audioFrame.distanceAttenuation*(0.14f+input.presentation->speedNormalized*0.24f):0.0f;
+    const float targetGain=!input.settings.enabled?0.0f:entry.blockingGameplay?
+        0.34f+((std::max)(0.20f,movingGain)-0.34f)*entry.rollingHandoff:deltaTime>0.0f?movingGain:0.0f;
+    const bool focused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
+    UpdateRailRollingAudio(realDeltaTime,focused?targetGain:0.0f,
+        entry.blockingGameplay?1.0f-entry.rollingHandoff*0.85f:0.15f);
+    if(!focused || deltaTime<=0.0f) return;
     for (size_t index = 0; index < audioFrame.cueCount; ++index) {
         const RailVehicleAudioCue& cue = audioFrame.cues[index];
         audio::SoundHandle sound{};
         switch (cue.kind) {
         case RailVehicleAudioCueKind::RollingPulse:
+            if(railTitleAmbiencePlaying_) continue; // Continuous bed owns rolling.
             sound = railVehicleRollingSound_;
             break;
         case RailVehicleAudioCueKind::RailJointImpact:
@@ -9997,6 +10171,7 @@ void AppRunLoop::DispatchGameSessionPresentation(
         switch (cue.kind) {
         case GameSessionPresentationCueKind::SessionStarted:
         case GameSessionPresentationCueKind::IntroCompleted:
+            if(railTitleGameplayEntry_.Frame().blockingGameplay) continue;
         case GameSessionPresentationCueKind::Resumed:
         case GameSessionPresentationCueKind::Restart:
             sound = railSessionStartSound_;
@@ -10118,6 +10293,10 @@ void AppRunLoop::DispatchPlayerDamagePresentation() {
 }
 
 void AppRunLoop::StopGameSessionPresentation() {
+    railTitleGameplayEntry_.Reset();
+    audio_.Stop(railTitleAmbience_);audio_.Stop(railTitleTunnelAmbience_);
+    railTitleAmbiencePlaying_=railTitleTunnelAmbiencePlaying_=false;
+    railTitleAudioGain_=0.0f;
     if (railSessionVibrationController_ != UINT32_MAX) {
         (void)AppGamepadInput::SetVibration(
             railSessionVibrationController_, 0.0f, 0.0f);
@@ -12483,9 +12662,50 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.productionLightingPipeline = &imguiLayer_.ProductionLightingPipeline();
     graphContext.productionGpuDrivenPipeline = &imguiLayer_.ProductionGpuDrivenPipeline();
     graphContext.worldPartitionPipeline = &imguiLayer_.WorldPartitionPipeline();
+    graphContext.vfxRenderTargets = &vfxEngine_.RenderTargets();
+    graphContext.railFilmBurnProgress = railTitleScreenVisible_
+        ? railTitleScene_.Blackout() : railTitleGameplayEntry_.Frame().blackout;
+    graphContext.railFilmBurnTreatmentStrength = railTitleScreenVisible_ ? 1.0f : 0.55f;
+    graphContext.railFilmBurnIncoming = !railTitleScreenVisible_;
+    const auto projectPresentationPoint=[&](Vector3 world,Vector2& uv) {
+        const auto& m=frameState_.viewProjectionMatrix.m;
+        const float w=world.x*m[0][3]+world.y*m[1][3]+world.z*m[2][3]+m[3][3];
+        if(!std::isfinite(w) || w<=0.1f) return false;
+        const auto point=TransformCoord(world,frameState_.viewProjectionMatrix);
+        if(!std::isfinite(point.x) || !std::isfinite(point.y) ||
+            !std::isfinite(point.z) || point.z<0.0f || point.z>1.0f) return false;
+        uv={(std::clamp)(point.x*0.5f+0.5f,0.04f,0.96f),
+            (std::clamp)(0.5f-point.y*0.5f,0.04f,0.96f)};
+        return true;
+    };
+    if(railTitleScreenVisible_ || graphContext.railFilmBurnProgress>0.0f) {
+        const auto& path=railTitleScreenVisible_?railTitleScene_.Path():railPath_;
+        const float distance=railTitleScreenVisible_?railTitleScene_.Distance():railShooterDistance_;
+        Vector2 focus;
+        if(projectPresentationPoint(path.Evaluate(distance+64.0f).position,focus))
+            graphContext.railFilmBurnFocus={(std::clamp)(focus.x,0.25f,0.75f),
+                (std::clamp)(focus.y,0.22f,0.62f)};
+    }
+    if(railTitleScreenVisible_) {
+        graphContext.railFilmBurnLensStrength=railTitleScene_.LensLeakStrength();
+        graphContext.railFilmBurnLensAge=railTitleScene_.LensLeakAge();
+        graphContext.railFilmBurnTunnelShade=railTitleScene_.TunnelShade();
+        const auto& impact=railTitleScene_.RailImpact();
+        if(!railTitleScene_.Starting() || impact.seed==0) railTitleLensSourceSeed_=0;
+        if(graphContext.railFilmBurnLensStrength>0.0f && impact.seed!=railTitleLensSourceSeed_) {
+            // Capture the real impact once. The lens afterimage stays on the
+            // glass instead of sliding off-screen as the cart overtakes it.
+            if(projectPresentationPoint(impact.position,railTitleLensSourceScreen_))
+                railTitleLensSourceSeed_=impact.seed;
+        }
+        graphContext.railFilmBurnLightSource=railTitleLensSourceScreen_;
+    }
+    graphContext.railFilmBurnInEditorViewport = imguiLayer_.WantsDeveloperDiagnostics();
     const auto registerPassesStart = RailPerfClock::now();
     const std::string railHudTargetResource =
-        imguiLayer_.WantsDeveloperDiagnostics()
+        graphContext.HasRailFilmBurnPresentation()
+            ? std::string("RailFilmBurnScene")
+            : imguiLayer_.WantsDeveloperDiagnostics()
             ? (postExecutionPlan.finalOutputResource.empty()
                 ? std::string("SceneColor")
                 : postExecutionPlan.finalOutputResource)

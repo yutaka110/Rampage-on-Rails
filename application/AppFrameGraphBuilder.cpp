@@ -49,6 +49,9 @@ void AppFrameGraphBuilder::Build(
         registerVfxPasses(ctx);
     }
     AppPostProcessPipeline{}.RegisterPasses(ctx);
+    // Gameplay HUD is registered by the caller before Build(). Present its
+    // captured image before ImGui samples the editor viewport texture.
+    AppPostProcessPipeline{}.RegisterFilmBurnPresentationPass(ctx);
 
     const bool developerDiagnosticsVisible = ctx.imguiLayer->WantsDeveloperDiagnostics();
     if (developerDiagnosticsVisible) {

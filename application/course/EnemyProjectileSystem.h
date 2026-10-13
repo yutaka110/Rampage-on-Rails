@@ -60,6 +60,20 @@ struct EnemyProjectileRuntimeState final {
 
 using CourseBulletActor = EnemyProjectileRuntimeState;
 
+// Side-effect-free launch template consumed by both warnings and SpawnVolley.
+EnemyProjectileRuntimeState ResolveEnemyProjectileLaunch(const CourseEnemyActor& actor, int index);
+struct EnemyProjectileLaunchSolution final {
+    EnemyProjectileRuntimeState projectile;
+    float flightSeconds = 0.0f;
+};
+// A preview at the scheduled launch time. The execution template above calls
+// this same resolver with delay zero; neither resolver consumes projectile IDs.
+EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
+    const CourseEnemyActor& actor, int index, float launchDelaySeconds);
+// Shared fixed-trajectory sampling/integration. Homing still uses its live
+// target in Update; ordinary Direct/Predictive shots never reacquire a target.
+void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile, float deltaTime);
+
 struct EnemyProjectileFrameInput final {
     float deltaTime = 0.0f;
     float playerDistance = 0.0f;

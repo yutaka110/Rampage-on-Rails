@@ -432,6 +432,24 @@ Vector3 TerrainVolumeField::SurfacePoint(
             Scale(radialDirection, radialOffset)));
 }
 
+Vector3 TerrainVolumeField::CollisionSurfacePoint(
+    float distance, float angle, const RailPathSample& pathSample) const {
+    const float blend = OpenCanyonBlend(distance);
+    const float lateralRadius = (std::max)(settings_.canyonHalfWidth,
+        settings_.corridorRadius + 4.0f) * std::lerp(1.0f, 1.38f, blend);
+    const float verticalRadius = std::sin(angle) >= 0.0f
+        ? (std::max)(settings_.wallHeight, settings_.corridorRadius + 4.0f) * std::lerp(1.0f, 1.58f, blend)
+        : (std::max)(settings_.corridorRadius * 0.92f, 4.0f) * std::lerp(1.0f, 1.08f, blend);
+    float offset = 0.0f;
+    if (edits_) offset += edits_->Evaluate(distance, angle).radialOffset;
+    if (preview_) offset += preview_->Evaluate(distance, angle).radialOffset;
+    const float meanRadius = std::sqrt(lateralRadius*lateralRadius + verticalRadius*verticalRadius) * 0.70710678f;
+    const float scale = (std::max)(0.20f, RadiusScale(distance, angle) + offset/meanRadius);
+    return Add(pathSample.position, Add(
+        Scale(pathSample.right, std::cos(angle)*lateralRadius*scale),
+        Scale(pathSample.up, std::sin(angle)*verticalRadius*scale)));
+}
+
 float TerrainVolumeField::PaintVariation(float distance, float angle) const {
     TerrainEditEvaluation evaluation{};
     if (edits_ != nullptr) {
