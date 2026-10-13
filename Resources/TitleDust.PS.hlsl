@@ -20,11 +20,30 @@ float4 main(PixelInput input) : SV_TARGET0 {
     float2 p=uv*2.0f-1.0f;
     // Negative offsets mark angular grains using the same depth-tested pass.
     if(seed<0.0f) {
+        if(seed<-3.0f) {
+            float edge=length(p*float2(1.12f,0.92f));
+            float coverage=1.0f-smoothstep(0.25f,0.95f,edge);
+            return float4(input.color.rgb*(0.76f+0.24f*(1.0f-uv.y)),input.color.a*coverage);
+        }
         float edge=max(abs(p.x),abs(p.y))+0.18f*(p.x+p.y);
         float coverage=1.0f-smoothstep(0.65f,1.0f,edge);
         return float4(input.color.rgb*(0.72f+0.30f*(1.0f-uv.y)),input.color.a*coverage);
     }
     float2 offset=float2(seed*1.37f,seed*0.73f);
+    if(seed>=1000.0f) {
+        // Original layered dust shading: irregular rolling lobes, granular
+        // edges and self-shadowed centres, instead of an expanding flat disc.
+        float2 flow=p+float2(0.23f*Noise(p*3.7f+offset),0.18f*Noise(p*4.1f+offset+13.0f))-0.10f;
+        float coarse=Fbm(flow*3.1f+offset);
+        float fine=Noise(flow*16.0f+offset*0.7f);
+        float edge=length(flow)+0.34f*(coarse-0.5f)+0.06f*(fine-0.5f);
+        float coverage=1.0f-smoothstep(0.38f,1.04f,edge);
+        float density=coverage*(0.55f+1.85f*coarse);
+        float alpha=1.0f-exp(-density*input.color.a*2.0f);
+        float lighting=0.52f+0.28f*(1.0f-uv.y)+0.25f*coarse;
+        lighting*=1.0f-0.16f*coverage*coarse;
+        return float4(input.color.rgb*lighting,alpha);
+    }
     float2 warped=p+0.38f*float2(Noise(p*3.0f+offset),Noise(p*3.0f+offset+19.0f))-0.19f;
     float density=Fbm(warped*3.2f+offset);
     float edge=length(warped)+0.40f*(density-0.5f);

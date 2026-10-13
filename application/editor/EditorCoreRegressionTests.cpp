@@ -32463,6 +32463,181 @@ void TestRailTitlePursuit(RegressionRunner& runner) {
     }
 }
 
+void TestRailTitleSandCollapse(RegressionRunner& runner) {
+    const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape","TitleSandClod.obj");
+    runner.Expect(!mesh.vertices.empty() && !mesh.indices.empty() && ValidateModelGeometryOrientation(mesh) &&
+        AuditModelClosedSurface(mesh).IsValid() && mesh.indices.size()/3<500,
+        "Sand clods must import as closed, oriented, bounded real-time solids");
+    const auto material=BuildTitleLandscapePbrMaterial("title_sand_clod");
+    runner.Expect(IsTitleLandscapeMesh("title_sand_clod") && material.specularMode==9 &&
+        material.enableLighting && material.padding2[8]==0,
+        "Sand clods must use the supplied Ground054 material through the actual terrain PBR pass");
+    RailTitleSandCollapse collapse{{0,-0.3f,0},{1,0,0},{0,0,1},0,19,true};
+    bool gravity=true,ordered=true,bounded=true,contact=true,scattered=false;
+    for(uint32_t i=0;i<RailTitleScene::CollapseClodCount;++i) {
+        collapse.age=0.0f; const auto initial=RailTitleScene::EvaluateSandClod(collapse,i);
+        const float birth=-initial.emissionAge;
+        collapse.age=birth+0.12f; const auto early=RailTitleScene::EvaluateSandClod(collapse,i);
+        collapse.age=birth+0.22f; const auto later=RailTitleScene::EvaluateSandClod(collapse,i);
+        gravity &= early.visible && later.visible && later.position.y<early.position.y &&
+            std::abs(later.velocity.y-early.velocity.y+0.98f)<0.001f;
+        const float touchdown=-initial.impactAge;
+        collapse.age=touchdown+0.06f;
+        const auto settling=RailTitleScene::EvaluateSandClod(collapse,i);
+        const auto beforeSmoke=RailTitleScene::EvaluateCollapsePuff(collapse,i*RailTitleScene::CollapsePuffsPerClod);
+        const auto grains=RailTitleScene::EvaluateCollapseGrain(collapse,i*RailTitleScene::CollapseGrainsPerClod+6);
+        ordered &= settling.visible && beforeSmoke.opacity==0 && grains.opacity>0;
+        scattered |= std::abs(grains.velocity.x)>0.5f && std::abs(grains.velocity.z)>0.5f;
+        const auto world=MakeAffineMatrix(settling.scale,settling.rotation,settling.position);
+        for(const auto& vertex:mesh.vertices) {
+            const float worldY=vertex.position.x*world.m[0][1]+vertex.position.y*world.m[1][1]+
+                vertex.position.z*world.m[2][1]+world.m[3][1];
+            contact &= worldY>=collapse.origin.y-0.025f;
+        }
+        collapse.age=touchdown+0.25f; const auto earlyPuff=RailTitleScene::EvaluateCollapsePuff(collapse,i*RailTitleScene::CollapsePuffsPerClod);
+        collapse.age=touchdown+0.55f; const auto big=RailTitleScene::EvaluateCollapsePuff(collapse,i*RailTitleScene::CollapsePuffsPerClod);
+        ordered &= earlyPuff.opacity>0 && big.radius>earlyPuff.radius && big.position.y>earlyPuff.position.y;
+        collapse.age=4.5f;
+        bounded &= !RailTitleScene::EvaluateSandClod(collapse,i).visible &&
+            RailTitleScene::EvaluateCollapsePuff(collapse,i*RailTitleScene::CollapsePuffsPerClod).opacity==0 &&
+            RailTitleScene::EvaluateCollapseGrain(collapse,i*RailTitleScene::CollapseGrainsPerClod+6).opacity==0;
+    }
+    runner.Expect(gravity && ordered && scattered && contact && bounded,
+        "Heavy clods must accelerate downward, break into scattered grains at contact, then produce delayed growing smoke without ground penetration or persistent particles");
+    Vector3 reference{};
+    for(int fps:{30,60,120}) {
+        RailTitleScene title; title.Initialize();
+        runner.Expect(!title.SandCollapse().active && title.CollapseDustStrength()==0,
+            "Collapse must remain absent from the idle title");
+        title.Update(0.02f); title.BeginStart();
+        const auto placementCount=title.Scenery().terrainPlacements.size();
+        bool clear=true,limited=true,early=false,sawClods=false,sawDust=false;
+        bool leftDust=false,rightDust=false,upperDust=false;
+        float peakUnmaskedDust=0.0f;
+        for(int frame=0;frame<fps*3;++frame) {
+            title.Update(1.0f/fps);
+            if(frame==fps-1) early=!title.SandCollapse().active;
+            limited &= title.RenderScenery().terrainPlacements.size()<=placementCount+RailTitleScene::CollapseClodCount &&
+                title.Scenery().terrainPlacements.size()==placementCount;
+            const auto& state=title.SandCollapse();
+            const auto basis=title.SceneryPath().Evaluate(400);
+            for(uint32_t i=0;i<RailTitleScene::CollapseClodCount;++i) {
+                const auto clod=RailTitleScene::EvaluateSandClod(state,i);
+                if(!clod.visible) continue;
+                sawClods=true;
+                const Vector3 delta{clod.position.x-basis.position.x,clod.position.y-basis.position.y,clod.position.z-basis.position.z};
+                clear &= std::abs(delta.x*basis.right.x+delta.z*basis.right.z)>3.0f;
+            }
+            sawDust |= title.CollapseDustStrength()>0.001f;
+            if(title.Blackout()==0) {
+                peakUnmaskedDust=(std::max)(peakUnmaskedDust,title.CollapseDustStrength());
+                const auto eye=title.CameraPosition(),target=title.CameraTarget();
+                const auto forward=Normalize(Vector3{target.x-eye.x,target.y-eye.y,target.z-eye.z});
+                const auto cameraRight=Normalize(Vector3{forward.z,0,-forward.x});
+                const Vector3 cameraUp{forward.y*cameraRight.z-forward.z*cameraRight.y,
+                    forward.z*cameraRight.x-forward.x*cameraRight.z,forward.x*cameraRight.y-forward.y*cameraRight.x};
+                const auto dot=[](Vector3 a,Vector3 b){return a.x*b.x+a.y*b.y+a.z*b.z;};
+                for(uint32_t i=0;i<RailTitleScene::CollapsePuffCount;++i) {
+                    const auto puff=RailTitleScene::EvaluateCollapsePuff(state,i);
+                    if(puff.opacity<0.02f) continue;
+                    const Vector3 delta{puff.position.x-eye.x,puff.position.y-eye.y,puff.position.z-eye.z};
+                    const float depth=dot(delta,forward);
+                    if(depth<=0.5f) continue;
+                    const float x=dot(delta,cameraRight)/(depth*std::tan(title.CameraFov()*0.5f));
+                    const float y=dot(delta,cameraUp)/(depth*std::tan(title.CameraFov()*0.5f));
+                    if(std::abs(x)<1.7778f && std::abs(y)<1) {
+                        leftDust |= x<-0.20f; rightDust |= x>0.20f; upperDust |= y>0;
+                    }
+                }
+            }
+            if(frame==fps*2-1) {
+                const auto clod=RailTitleScene::EvaluateSandClod(state,5);
+                if(fps==30) reference=clod.position;
+                else runner.Expect(std::abs(reference.y-clod.position.y)<0.002f &&
+                    std::abs(reference.x-clod.position.x)<0.002f && std::abs(reference.z-clod.position.z)<0.002f,
+                    "Collapse trajectories must match at 30, 60 and 120 fps");
+                const auto frozen=state;
+                title.Update(0);
+                runner.Expect(title.SandCollapse().age==frozen.age &&
+                    RailTitleScene::EvaluateSandClod(title.SandCollapse(),5).position.y==clod.position.y,
+                    "Paused titles must freeze sand and smoke without replaying emission");
+            }
+        }
+        runner.Expect(early && sawClods && sawDust && clear && limited,
+            "The real title departure must show clods before lens dust, keep the cart corridor clear and cap render allocations");
+        runner.Expect(leftDust && rightDust && upperDust && peakUnmaskedDust>0.35f,
+            "Sandstorm dust must visibly span both sides and upper view and build a broad airborne veil before the burn hides it: left="+
+            std::to_string(leftDust)+" right="+std::to_string(rightDust)+" upper="+std::to_string(upperDust)+" haze="+std::to_string(peakUnmaskedDust));
+        title.Initialize();
+        runner.Expect(!title.SandCollapse().active && title.RenderScenery().terrainPlacements.size()==placementCount-1,
+            "Restarting the title must remove every collapse placement and reset its clock");
+    }
+    AppFrameGraphBuildContext context{};
+    context.railCollapseDustStrength=0.1f;
+    runner.Expect(context.HasRailFilmBurnPresentation(),
+        "Near-camera collapse haze must route through the normal presentation composite even before the burn begins");
+}
+
+void TestRailSandTransitionAudio(RegressionRunner& runner) {
+    for(int fps:{30,60,120}) {
+        RailSandTransitionAudioClock clock;
+        int starts=0;
+        for(int cycle=0;cycle<2;++cycle) {
+            clock.Update(false,0,true);
+            for(int i=0;i<=fps*3;++i) {
+                const float age=float(i)/fps;
+                starts+=clock.Update(true,age,true).start ? 1 : 0;
+                runner.Expect(!clock.Update(true,age,true).start,
+                    "Repeated rendering at the same sand age must not stack sound voices");
+                if(i==fps) {
+                    const auto pause=clock.Update(true,age,false);
+                    const auto resume=clock.Update(true,age,true);
+                    runner.Expect(pause.pauseChanged && pause.paused && !pause.start &&
+                        resume.pauseChanged && !resume.paused && !resume.start,
+                        "Focus loss must pause and resume the existing collapse buffer without replaying it");
+                }
+            }
+            runner.Expect(starts==cycle+1,
+                "Both directions must start once and keep one sound across the covered world swap");
+        }
+        runner.Expect(clock.Update(true,0,true).start,
+            "A new sand timeline must replace the old sound even without an inactive render frame");
+        clock.Reset();
+        runner.Expect(!clock.Update(true,0,false).start && clock.Update(true,0,true).start,
+            "An unfocused transition must defer playback until its clock can advance");
+        clock.Reset();
+        runner.Expect(!clock.Update(true,-1,true).start &&
+            !clock.Update(true,(std::numeric_limits<float>::quiet_NaN)(),true).start,
+            "Invalid presentation ages must not trigger collapse audio");
+    }
+    audio::AudioSystem audio;
+    const auto sound=audio.LoadWave("Resources/audio/rail_sand_transition.wav");
+    const auto* resource=audio.GetSound(sound);
+    runner.Expect(resource && resource->IsValid(),"The shipped collapse WAV must load through the native audio reader");
+    if(!resource || !resource->IsValid()) return;
+    const auto* format=resource->Format();
+    runner.Expect(format->wFormatTag==WAVE_FORMAT_PCM && format->nChannels==2 &&
+        format->nSamplesPerSec==48000 && format->wBitsPerSample==16 && format->nBlockAlign==4 &&
+        resource->pcmData.size()==48000u*4u*36u/10u,
+        "The sound must provide a 3.60-second stereo PCM buffer spanning the falling-rock tail");
+    const auto sample=[&](size_t index) {
+        const int value=int(resource->pcmData[index*2]) | (int(resource->pcmData[index*2+1])<<8);
+        return value>=32768 ? value-65536 : value;
+    };
+    int peak=0;
+    const size_t samples=resource->pcmData.size()/2;
+    double bodyEnergy=0,tailEnergy=0;
+    for(size_t i=0;i<samples;++i) {
+        const int value=sample(i);
+        peak=(std::max)(peak,std::abs(value));
+        if(i>=48000u*2u && i<48000u*4u) bodyEnergy+=double(value)*value;
+        if(i>=samples-4800u*2u) tailEnergy+=double(value)*value;
+    }
+    runner.Expect(peak>10000 && peak<30000 && sample(0)==0 && sample(samples-1)==0 &&
+        tailEnergy/(4800.0*2.0)<bodyEnergy/(48000.0*2.0)*0.05,
+        "The sound must retain headroom and end in a quiet tail without an abrupt final sample");
+}
+
 void TestRailTitleGroundFire(RegressionRunner& runner) {
     uint32_t referenceShots=0,referenceImpacts=0;
     for(int fps : {30,60,120}) {
@@ -32514,7 +32689,8 @@ void TestRailTitleGroundFire(RegressionRunner& runner) {
                 const float forward=delta.x*cart.tangent.x+delta.z*cart.tangent.z;
                 const float lateral=std::abs(delta.x*cart.right.x+delta.z*cart.right.z);
                 if(std::abs(forward)<3.55f+RailTitleScene::DepartureShotRadius)
-                    departureClearance &= lateral>2.4f+RailTitleScene::DepartureShotRadius;
+                    departureClearance &= lateral>2.4f+RailTitleScene::DepartureShotRadius ||
+                        delta.y>3.0f+RailTitleScene::DepartureShotRadius;
             }
         }
         runner.Expect(departureClearance,"Starting later in the title loop must still keep the cinematic shot clear of the cart");
@@ -32708,6 +32884,8 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
     const auto tunnelMesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape","TitleTunnel.obj");
     bool tunnelClear=!tunnelMesh.indices.empty(), entranceVisible=true, caveEnclosesView=true;
     bool departureStraight=true, departureSupported=true, rearCurvePreserved=true;
+    bool wallShotContact=true,wallShotVisible=true,wallEjecta=true;
+    int wallShotCount=0;
     for(int phase=0;phase<12;++phase) {
         RailTitleScene entry;entry.Initialize();
         const int idleFrames=int((phase/12.0f)*entry.LapLength()/RailTitleScene::Speed/0.05f);
@@ -32747,6 +32925,29 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
         for(int frame=0;frame<int(RailTitleScene::StartDuration/0.05f)+3 && !entry.ReadyForGameplay();++frame) {
             entry.Update(0.05f);
             const Vector3 eye=entry.CameraPosition();
+            for(const auto& shot:entry.Shots()) if(shot.railStrike) {
+                const float contact=nearest(tunnel,shot.origin,sub(shot.target,shot.origin));
+                wallShotContact &= std::abs(contact-1.0f)<0.001f && shot.target.y>4.0f;
+            }
+            for(const auto& cue:entry.AttackCues()) if(cue.kind==RailTitleAttackCueKind::WallImpact) {
+                ++wallShotCount;
+                const auto& hit=entry.RailImpact();
+                wallShotVisible &= std::abs(nearest(tunnel,eye,sub(hit.position,eye))-1.0f)<0.001f;
+                const auto viewForward=Normalize(sub(entry.CameraTarget(),eye));
+                const auto viewRight=Normalize(cross(Vector3{0,1,0},viewForward));
+                const auto viewUp=cross(viewForward,viewRight);
+                const auto toHit=sub(hit.position,eye);
+                const float projectedDepth=dot(toHit,viewForward)*std::tan(entry.CameraFov()*0.5f);
+                wallShotVisible &= projectedDepth>0 &&
+                    dot(toHit,viewRight)<-1.0f &&
+                    std::abs(dot(toHit,viewRight)/(projectedDepth*16.0f/9.0f))<0.88f &&
+                    std::abs(dot(toHit,viewUp)/projectedDepth)<0.80f;
+                auto sampled=hit; sampled.age=0.10f;
+                for(uint32_t i=0;i<RailTitleScene::RailImpactSparkCount;++i) {
+                    const auto fragment=RailTitleScene::EvaluateRailSpark(sampled,i);
+                    wallEjecta &= dot(sub(fragment.position,hit.position),hit.normal)>0.05f;
+                }
+            }
             auto cart=entry.Path().Evaluate(entry.Distance()).position;cart.y+=1.5f;
             const auto pose=entry.Path().Evaluate(entry.Distance());
             const auto delta=sub(pose.position,departure.position);
@@ -32782,6 +32983,10 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
         "All twelve departure phases must preserve the cart position and follow grounded straight rails toward the cave");
     runner.Expect(rearCurvePreserved,
         "Starting must preserve the travelled curve behind the cart, including a join inside a Bezier segment");
+    runner.Expect(wallShotContact && wallShotCount==12,
+        "At twelve departure phases, the shot must end at the first actual cave mesh intersection above the floor");
+    runner.Expect(wallShotVisible && wallEjecta,
+        "The left cave wall contact must remain visible to the camera and eject fragments into the air instead of behind the rock");
 
 }
 
@@ -32866,7 +33071,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
                     ++nearMisses;
                     impactDriven &= elapsed<RailTitleScene::DepartureImpactTime+0.04f;
                 }
-                if(cue.kind==RailTitleAttackCueKind::RailImpact) ++railHits;
+                if(cue.kind==RailTitleAttackCueKind::WallImpact) ++railHits;
             }
             for(const auto& shot:title.Shots()) if(shot.railStrike) {
                 if(!sawDepartureShot) {
@@ -32892,14 +33097,16 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
                     const float side=std::abs(delta.x*cart.right.x+delta.z*cart.right.z);
                     if(std::abs(forward)<3.55f+RailTitleScene::DepartureShotRadius) {
                         closestSide=(std::min)(closestSide,side);
-                        shotClearance &= side>2.4f+RailTitleScene::DepartureShotRadius;
+                        shotClearance &= side>2.4f+RailTitleScene::DepartureShotRadius ||
+                            delta.y>3.0f+RailTitleScene::DepartureShotRadius;
                     }
                 }
             }
             const auto& hit=title.RailImpact();
             if(hit.active) {
                 fixedRailContact &= hit.position.x==fixedTarget.x && hit.position.z==fixedTarget.z &&
-                    std::abs(hit.position.y-0.112f)<0.001f;
+                    hit.wall && hit.position.y>4.0f && std::abs(hit.normal.x*hit.normal.x+
+                        hit.normal.y*hit.normal.y+hit.normal.z*hit.normal.z-1.0f)<0.001f;
                 if(hit.age<0.12f) {
                     const auto cameraForward=Normalize(Vector3{title.CameraTarget().x-eye.x,
                         title.CameraTarget().y-eye.y,title.CameraTarget().z-eye.z});
@@ -32982,9 +33189,9 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             sweepPeakFrame<reflectionPeakFrame && title.LightSweep().y==0,
             "Localized light must cross after the orbit, peak before the rail reflection, pause cleanly and extinguish before blackout");
         runner.Expect(departureMuzzles==1 && nearMisses==1 && railHits==1 && sawDepartureShot &&
-            fixedRailContact && shotClearance && closestSide<5.2f && impactDriven,
-            "One departure shot must narrowly clear the moving cart, hit a fixed rail head once and then trigger its reflection");
-        runner.Expect(visibleRailContact,"Rail contact must project above the moving cart front lip during the initial spark burst");
+            fixedRailContact && shotClearance && impactDriven,
+            "One departure shot must clear the moving cart, hit a fixed cave wall once and then trigger its reflection");
+        runner.Expect(visibleRailContact,"Wall contact must project above the moving cart front lip during the initial spark burst");
         runner.Expect(lensOrdered && lensOverlapsShadow && peakLens>0.5f &&
             title.LensLeakStrength()<0.1f && title.LensLeakAge()>1.0f,
             "Lens exposure must follow one confirmed impact, pause on its clock, overlap cave shadow and decay before handoff");
@@ -33083,10 +33290,12 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         runner.Expect(stack.ReplacePasses({post}), "Film-burn test postprocess must validate");
     }
     const std::string finalOutput = stack.BuildExecutionPlan().finalOutputResource;
-    for (float state : {0.0f, 0.45f, 1.0f, -1.0f}) {
+    for (float state : {0.0f, 0.45f, 1.0f, -1.0f, -2.0f, -3.0f, -4.0f, -5.0f}) {
         const float progress=(std::max)(0.0f,state);
-        const bool lensOnly=state<0.0f;
-        const bool active=progress>0.0f || lensOnly;
+        const bool lensOnly=state==-1.0f;
+        const bool sandOnly=state==-2.0f || state==-3.0f;
+        const bool rockOnly=state==-4.0f, expiredRocks=state==-5.0f;
+        const bool active=progress>0.0f || lensOnly || sandOnly || rockOnly;
         RenderGraph graph;
         graph.DeclareTransientRenderTarget("SceneColor", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
         graph.DeclareTransientRenderTarget("VfxAccumulation", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
@@ -33104,6 +33313,10 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         context.postProcessStack = &stack;
         context.railFilmBurnProgress = progress;
         context.railFilmBurnLensStrength = lensOnly ? 0.35f : 0.0f;
+        context.railSandTransition = sandOnly || rockOnly || expiredRocks;
+        context.railSandTransitionAge = rockOnly ? 3.15f : expiredRocks ? 3.45f : sandOnly ? 2.01f : 0.0f;
+        context.railCollapseDustStrength = sandOnly ? 0.68f : 0.0f;
+        context.railFilmBurnIncoming = state==-3.0f || rockOnly || expiredRocks;
         context.railFilmBurnInEditorViewport = editorViewport;
         AppPostProcessPipeline pipeline;
         pipeline.RegisterPasses(context);
@@ -33131,7 +33344,7 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         }
         if (active) {
             runner.Expect(burn != passes.end() && burn->executed && hud->executionIndex < burn->executionIndex,
-                "Lens-only exposure and blackout must present HUD after scene capture without leaking VFX");
+                "Lens exposure, opaque coverage and outgoing/incoming sand must present HUD after scene capture without leaking VFX");
             if (editorViewport) {
                 const auto editorUi = find("EditorUI");
                 runner.Expect(editorUi != passes.end() && editorUi->executed &&
@@ -33155,6 +33368,61 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
     }
     }
     }
+}
+
+void TestRailTransitionDemo(RegressionRunner& runner) {
+    for(int fps:{30,60,120}) {
+        RailTransitionDemo demo;
+        runner.Expect(!demo.ButtonVisible() && !demo.RequestReturn(),"Title must not accept a demo return request");
+        for(int cycle=0;cycle<2;++cycle) {
+            demo.BeginGameplay();
+            for(int i=0;i<fps*2;++i) demo.Update(1.0f/fps,false);
+            runner.Expect(!demo.ButtonVisible(),"The return delay must begin after the gameplay entry gate opens");
+            int frames=0;
+            while(!demo.ButtonVisible() && frames<fps*4) {demo.Update(1.0f/fps,true);++frames;}
+            runner.Expect(std::abs(float(frames)/fps-RailTransitionDemo::ButtonDelay)<1.01f/fps,
+                "The central return button must appear after the configured playable delay at every frame rate");
+            demo.Update(-1,true);demo.Update((std::numeric_limits<float>::quiet_NaN)(),true);
+            runner.Expect(demo.RequestReturn() && !demo.RequestReturn() && !demo.ButtonVisible() && !demo.NeedsTitleSwap(),
+                "One return activation must hide the button and reject duplicate/early world switches");
+            float previousAge=0,previousCover=0;
+            bool monotonic=true;
+            frames=0;
+            while(!demo.NeedsTitleSwap() && frames<fps*3) {
+                demo.Update(1.0f/fps,false);++frames;
+                monotonic &= demo.Coverage()>=previousCover && demo.SandAge()>=previousAge;
+                previousCover=demo.Coverage();previousAge=demo.SandAge();
+                const float frozenAge=demo.SandAge();
+                demo.Update(0,false);
+                monotonic &= demo.SandAge()==frozenAge && demo.TravelDeltaTime()==0;
+            }
+            runner.Expect(monotonic && demo.Coverage()==1.0f &&
+                std::abs(float(frames)/fps-RailTransitionDemo::CoverDuration)<1.01f/fps &&
+                std::abs(demo.SandAge()-(RailTitleScene::StartDuration-RailTitleScene::CollapseBegin))<0.0001f,
+                "Return must cover the entire frame on the existing sand timeline before permitting a title reset");
+            const float swapAge=demo.SandAge();demo.CommitTitleSwap();demo.CommitTitleSwap();
+            runner.Expect(demo.RevealingTitle() && demo.Coverage()==1 && demo.SandAge()==swapAge,
+                "The title reveal must preserve the sand/rock clock through one fully hidden world swap");
+            previousCover=1;
+            frames=0;
+            while(demo.Returning() && frames<fps*2) {
+                demo.Update(1.0f/fps,false);++frames;
+                monotonic &= demo.Coverage()<=previousCover && demo.SandAge()>=previousAge;
+                previousCover=demo.Coverage();previousAge=demo.SandAge();
+            }
+            runner.Expect(monotonic && !demo.Returning() && !demo.ButtonVisible() && demo.Coverage()==0 &&
+                std::abs(float(frames)/fps-RailTransitionDemo::RevealDuration)<1.01f/fps,
+                "The falling-rock tail must clear fully before the title accepts a fresh replay");
+        }
+    }
+    for(Vector2 size:std::initializer_list<Vector2>{{1600,900},{1920,1080},{1280,1024},{900,1600}}) {
+        const float scale=(std::min)(size.x/1600,size.y/900);
+        runner.Expect(RailTransitionDemo::HitTest(size.x*0.5f,size.y*0.5f,size.x,size.y) &&
+            !RailTransitionDemo::HitTest(size.x*0.5f+181*scale,size.y*0.5f,size.x,size.y) &&
+            !RailTransitionDemo::HitTest(size.x*0.5f,size.y*0.5f+47*scale,size.x,size.y),
+            "Demo click bounds must match the centered button across widescreen and letterboxed layouts");
+    }
+    runner.Expect(!RailTransitionDemo::HitTest(0,0,0,0),"An empty viewport must not activate the demo button");
 }
 
 void TestRailTitleGameplayEntry(RegressionRunner& runner) {
@@ -33184,7 +33452,16 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
         CourseCameraKey authored;
         authored.backDistance=28; authored.verticalOffset=12; authored.lookAheadDistance=30; authored.fovY=0.94f;
         course.cameraKeys.push_back(authored);
+        course.events={{100.0f,"vfx","entry_start"},{104.0f,"enemy_wave","entry_wave"},
+            {112.0f,"vfx","entry_dust"},{117.2f,"vfx","after_entry"}};
         RailPath rail; rail.SetControlPoints(course.railPoints);
+        CourseRuntime travel; travel.Bind(&course); travel.Reset(100.0f);
+        RailVehicleMovementSystem vehicle;
+        runner.Expect(vehicle.Initialize(RailVehicleDefinition::MineCartDefaults()),"Entry vehicle must initialize");
+        vehicle.Reset(100.0f,RailTitleScene::Speed,&rail);
+        RailVehicleMovementInput travelInput;
+        travelInput.courseRuntime=&travel; travelInput.railPath=&rail;
+        travelInput.requestedSpeed=RailTitleScene::Speed;
         RailCameraDirector director,normalDirector;
         RailCameraDirectorFrameInput camera;
         camera.course=&course; camera.railPath=&rail; camera.distance=100;
@@ -33198,9 +33475,19 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
         runner.Expect(separation(previousCamera.position,departingEye)<0.001f && std::abs(previousCamera.fovY-0.70f)<0.001f,
             "Incoming camera must inherit the departing cart distance, height and FOV in the new rail basis");
         auto previous=entry.Frame();
+        bool continuedTravel=true,earlyCamera=false,eventsHeld=true;
         while(entry.Frame().blockingGameplay && frames<fps*2) {
             entry.Update(1.0f/fps);
             const auto current=entry.Frame();
+            const float oldDistance=vehicle.State().distance;
+            travelInput.deltaTime=current.travelDeltaTime;
+            travelInput.movementEnabled=current.travelDeltaTime>0;
+            const auto& moving=vehicle.Update(travelInput);
+            continuedTravel &= moving.state.distance>oldDistance &&
+                std::abs(moving.state.speed-RailTitleScene::Speed)<0.001f &&
+                moving.state.hitPoints==vehicle.Definition().maximumHitPoints;
+            eventsHeld &= entry.DispatchCourseEvents(moving.triggeredEvents,false).empty();
+            earlyCamera |= current.blackout>0.25f && current.cameraHandoffWeight<0.99f;
             reticleCues+=current.reticleStarted?1:0;
             gaugeCues+=current.gaugesStarted?1:0;
             if(current.blackout>0.15f && current.blackout<0.85f) ++readableRevealFrames;
@@ -33213,20 +33500,27 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             ordered &= current.reticleProgress>=current.gaugeProgress &&
                 current.gaugeProgress>=current.informationOpacity;
             camera.titleHandoffWeight=current.cameraHandoffWeight;
+            camera.distance=moving.state.distance;
+            camera.railSpeed=moving.state.speed;
+            camera.deltaTime=current.travelDeltaTime;
             const auto actualCamera=director.Evaluate(camera);
             runner.Expect(separation(actualCamera.position,previousCamera.position)<65.0f/fps &&
                 std::abs(actualCamera.fovY-previousCamera.fovY)<0.70f/fps,
                 "The reveal camera must pull back smoothly without a position or FOV cut");
             previousCamera=actualCamera;
             if(frames==fps/3) {
+                const float frozenDistance=vehicle.State().distance;
                 entry.Begin();
                 entry.Update(-1.0f);
                 entry.Update((std::numeric_limits<float>::quiet_NaN)());
                 for(int paused=0;paused<20;++paused) entry.Update(0.0f);
+                travelInput.deltaTime=entry.Frame().travelDeltaTime;
+                vehicle.Update(travelInput);
                 runner.Expect(entry.Frame().blackout==current.blackout &&
                     entry.Frame().cameraHandoffWeight==current.cameraHandoffWeight &&
                     entry.Frame().reticleProgress==current.reticleProgress &&
                     entry.Frame().rollingHandoff==current.rollingHandoff &&
+                    entry.Frame().travelDeltaTime==0.0f && vehicle.State().distance==frozenDistance &&
                     !entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
                     "Repeated confirm, focus pause and invalid delta time must not restart or advance startup");
             }
@@ -33241,14 +33535,28 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             "Camera reveal, reticle, gauges and information must finish in order with one cue each at every frame rate");
         runner.Expect(readableRevealFrames>=int(fps*0.35f),
             "The incoming exposure recovery must remain readable while avoiding the outgoing burn's reversal");
+        runner.Expect(continuedTravel && earlyCamera && eventsHeld &&
+            std::abs(vehicle.State().distance-(100.0f+RailTitleScene::Speed*RailTitleGameplayEntry::Duration))<0.003f,
+            "Cinematic rail travel must continue under the reveal with unchanged health, held events and an early camera handoff at every frame rate");
         camera.titleHandoffWeight=0;
         const auto normal=normalDirector.Evaluate(camera);
         runner.Expect(entry.Frame().cameraHandoffWeight==0 && separation(previousCamera.position,normal.position)<0.001f &&
             separation(previousCamera.target,normal.target)<0.001f && std::abs(previousCamera.fovY-normal.fovY)<0.001f,
             "Input unlock must restore the exact authored gameplay composition without a handoff pose lingering");
         entry.Update(0.05f);
-        runner.Expect(!entry.Frame().reticleStarted && !entry.Frame().gaugesStarted,
+        runner.Expect(!entry.Frame().reticleStarted && !entry.Frame().gaugesStarted && entry.Frame().travelDeltaTime==0,
             "Ready gameplay must never replay startup cues");
+        travelInput.deltaTime=0.05f; travelInput.movementEnabled=true;
+        const auto& playing=vehicle.Update(travelInput);
+        const auto dispatched=entry.DispatchCourseEvents(playing.triggeredEvents,true);
+        runner.Expect(dispatched.size()==4 && dispatched[0].id=="entry_start" &&
+            dispatched[1].id=="entry_wave" && dispatched[2].id=="entry_dust" &&
+            dispatched[3].id=="after_entry" && entry.DispatchCourseEvents({},true).empty() &&
+            playing.traveledDistance>0 && std::abs(playing.state.speed-RailTitleScene::Speed)<0.001f,
+            "Unlock must deliver held markers before new markers exactly once, continuing the same vehicle speed and distance");
+        entry.DispatchCourseEvents({course.events[0]},false);
+        entry.Reset();
+        runner.Expect(entry.DispatchCourseEvents({},true).empty(),"Reset must discard held events from an abandoned entry");
         entry.Reset(); entry.Begin(); entry.Update(10.0f);
         runner.Expect(entry.Frame().blockingGameplay && entry.Frame().reticleProgress==0,
             "A frame hitch must not skip the HUD boot and input gate");
@@ -33974,10 +34282,13 @@ int RunEditorCoreRegressionTests() {
         {"title landscape ground and camera clearance", [&]() { TestRailTitleLandscape(runner); }},
         {"title cinematic and ambience lifecycle", [&]() { TestRailTitleCinematic(runner); }},
         {"title gameplay camera audio and HUD startup", [&]() { TestRailTitleGameplayEntry(runner); }},
+        {"transition demo return and replay", [&]() { TestRailTransitionDemo(runner); }},
         {"film burn scene HUD capture and presentation ordering", [&]() { TestRailFilmBurnPresentationGraph(runner); }},
         {"title running loop and menu layout", [&]() { TestRailTitleLoop(runner); }},
         {"title body suspension and wheel contact", [&]() { TestRailTitleBodySway(runner); }},
         {"title twin shield pursuit", [&]() { TestRailTitlePursuit(runner); }},
+        {"title sand collapse gravity breakup and delayed dust", [&]() { TestRailTitleSandCollapse(runner); }},
+        {"sand transition audio clock and native asset", [&]() { TestRailSandTransitionAudio(runner); }},
         {"title repeating ground fire", [&]() { TestRailTitleGroundFire(runner); }},
         {"authored drone attack timing", [&]() { TestAuthoredDroneAttackTiming(runner); }},
         {"vehicle impact audiovisual and damage HUD", [&]() { TestVehicleImpactAudiovisualAndHud(runner); }},

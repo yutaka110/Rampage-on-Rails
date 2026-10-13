@@ -20,7 +20,7 @@ struct RailTitleShot final {
     bool railStrike = false;
     bool nearMissNotified = false;
 };
-enum class RailTitleAttackCueKind { Muzzle, GroundImpact, NearMiss, RailImpact };
+enum class RailTitleAttackCueKind { Muzzle, GroundImpact, NearMiss, RailImpact, WallImpact };
 struct RailTitleAttackCue final {
     RailTitleAttackCueKind kind = RailTitleAttackCueKind::Muzzle;
     Vector3 position{};
@@ -42,10 +42,31 @@ struct RailTitleRailImpact final {
     float age = 0.0f;
     uint32_t seed = 0;
     bool active = false;
+    Vector3 normal{0,1,0};
+    bool wall = false;
+};
+
+// A bounded, presentation-only collapse. Positions are fixed in world space;
+// the cinematic clock owns gravity, breakup and the delayed smoke together.
+struct RailTitleSandCollapse final {
+    Vector3 origin{}, right{}, forward{};
+    float age = 0.0f;
+    uint32_t seed = 0;
+    bool active = false;
+};
+struct RailTitleSandClod final {
+    Vector3 position{}, velocity{}, rotation{}, scale{}, impactPosition{};
+    float emissionAge = -1.0f;
+    float impactAge = -1.0f;
+    bool visible = false;
+};
+struct RailTitleCollapsePuff final {
+    Vector3 position{};
+    float radius = 0.0f, aspect = 1.0f, rotation = 0.0f, opacity = 0.0f;
 };
 
 // Presentation clock shared by the reveal, HUD startup, sound crossfade and
-// input/simulation gate. It never changes playable distance or combat state.
+// combat/input gate. Rail travel can continue on this clock without ticking combat.
 struct RailTitleGameplayEntryFrame final {
     float blackout = 0.0f;
     float cameraHandoffWeight = 0.0f;
@@ -53,6 +74,7 @@ struct RailTitleGameplayEntryFrame final {
     float gaugeProgress = 1.0f;
     float informationOpacity = 1.0f;
     float rollingHandoff = 1.0f;
+    float travelDeltaTime = 0.0f;
     bool blockingGameplay = false;
     bool reticleStarted = false;
     bool gaugesStarted = false;
@@ -63,14 +85,61 @@ public:
     static constexpr float Duration = 1.42f;
     static constexpr float RevealBegin = 0.01f;
     static constexpr float RevealEnd = 0.54f;
+    static constexpr float CameraBegin = 0.08f;
+    static constexpr float CameraEnd = 1.14f;
     void Reset();
     void Begin();
     void Update(float deltaTime);
+    // Retain markers crossed by cinematic travel until gameplay can dispatch them.
+    std::vector<CourseEventMarker> DispatchCourseEvents(
+        const std::vector<CourseEventMarker>& crossed, bool gameplayEnabled);
     const RailTitleGameplayEntryFrame& Frame() const { return frame_; }
+    float Elapsed() const { return static_cast<float>(elapsed_); }
 private:
     double elapsed_ = 0.0;
     bool begun_ = false;
     RailTitleGameplayEntryFrame frame_{};
+    std::vector<CourseEventMarker> pendingEvents_;
+};
+
+// Submission replay loop. The same sand clock crosses the game/title swap;
+// only a fully opaque cover permits resetting the playable world.
+class RailTransitionDemo final {
+public:
+    static constexpr float ButtonDelay = 2.0f;
+    static constexpr float CoverDuration = 2.01f;
+    static constexpr float RevealDuration = 1.29f;
+    void BeginGameplay();
+    void Update(float deltaTime, bool gameplayStarted);
+    bool RequestReturn();
+    bool NeedsTitleSwap() const;
+    void CommitTitleSwap();
+    bool Returning() const;
+    bool RevealingTitle() const;
+    bool ButtonVisible() const;
+    float ButtonOpacity() const;
+    float Coverage() const;
+    float SandAge() const;
+    float DustStrength() const;
+    float TravelDeltaTime() const { return travelDeltaTime_; }
+    static bool HitTest(float x, float y, float width, float height);
+private:
+    enum class Phase { Title, Playing, Covering, Revealing };
+    Phase phase_ = Phase::Title;
+    double playTime_ = 0.0, transitionTime_ = 0.0;
+    float travelDeltaTime_ = 0.0f;
+};
+
+struct RailSandTransitionAudioFrame final {
+    bool start=false, pauseChanged=false, paused=false;
+};
+class RailSandTransitionAudioClock final {
+public:
+    RailSandTransitionAudioFrame Update(bool active,float age,bool focused);
+    void Reset() { *this=RailSandTransitionAudioClock{}; }
+private:
+    bool wasActive_=false, started_=false, paused_=false;
+    float previousAge_=0.0f;
 };
 
 class RailTitleScene final {
@@ -88,6 +157,7 @@ public:
     float StartProgress() const;
     float MenuOpacity() const;
     float Blackout() const;
+    static float SandCoverageAtAge(float age);
     float AmbienceGain() const;
     float RollingGain() const;
     float RailReflectionOpacity() const;
@@ -101,6 +171,7 @@ public:
     const RailPath& SceneryPath() const { return starting_ ? sceneryPath_ : path_; }
     float SceneryDistance() const { return starting_ ? 400.0f+static_cast<float>(travel_-startTravel_) : state_.distance; }
     const CourseAsset& Scenery() const { return scenery_; }
+    const CourseAsset& RenderScenery() const { return starting_ ? renderScenery_ : scenery_; }
     const CourseRailTrackMeshBakeResult& Track() const { return track_.Result(); }
     const RailVehicleRenderFrame& Vehicle() const { return vehicleFrame_; }
     const TwinShieldDronePose& Pursuer() const { return pursuer_; }
@@ -116,6 +187,11 @@ public:
     // Analytic trajectories stay identical at different frame rates and when paused.
     static RailTitleSandGrain EvaluateSandGrain(const RailTitleDustCloud& cloud, uint32_t index);
     static RailTitleSandGrain EvaluateRailSpark(const RailTitleRailImpact& impact, uint32_t index);
+    const RailTitleSandCollapse& SandCollapse() const { return sandCollapse_; }
+    static RailTitleSandClod EvaluateSandClod(const RailTitleSandCollapse& collapse, uint32_t index);
+    static RailTitleSandGrain EvaluateCollapseGrain(const RailTitleSandCollapse& collapse, uint32_t index);
+    static RailTitleCollapsePuff EvaluateCollapsePuff(const RailTitleSandCollapse& collapse, uint32_t index);
+    float CollapseDustStrength() const;
     const RailVehicleWheelContactPresentationFrame& Wheels() const { return wheels_.Frame(); }
     Vector3 CameraPosition() const { return cameraPosition_; }
     Vector3 CameraTarget() const { return cameraTarget_; }
@@ -123,7 +199,8 @@ public:
     float LapLength() const { return lapLength_; }
     static constexpr float Speed = 12.0f;
     static constexpr float OrbitDuration = 1.0f;
-    static constexpr float StartDuration = 3.14f;
+    static constexpr float StartDuration = 3.69f;
+    static constexpr float FilmBurnDelay = 0.55f;
     static constexpr float FilmBurnDuration = 1.20f;
     static constexpr float FilmBurnTailBegin = 0.72f;
     static constexpr float FilmBurnTailDuration = 0.08f;
@@ -137,16 +214,26 @@ public:
     static constexpr float ReflectionDelay = 0.035f;
     static constexpr float LightSweepDuration = 0.36f;
     static constexpr float TunnelLead = 18.0f;
+    static constexpr float CollapseBegin = DepartureImpactTime + 0.06f;
+    static constexpr uint32_t CollapseClodCount = 40;
+    static constexpr uint32_t CollapseGrainsPerClod = 12;
+    static constexpr uint32_t CollapsePuffsPerClod = 4;
+    static constexpr uint32_t CollapseGrainCount = CollapseClodCount * CollapseGrainsPerClod;
+    static constexpr uint32_t CollapsePuffCount = CollapseClodCount * CollapsePuffsPerClod;
     // Shared 1600 x 900 layout coordinates, including letterboxing.
     static int HitTest(float x, float y, float width, float height);
 private:
     void UpdateAttack(float deltaTime);
+    void UpdateSandCollapse();
     Vector3 DepartureDronePosition(float elapsed) const;
     Vector3 DepartureImpactTarget() const;
+    void PrepareDepartureWallShot();
     float ChaseDistance() const { return 8.0f; }
     RailPath path_;
     RailPath sceneryPath_;
     CourseAsset scenery_;
+    CourseAsset renderScenery_;
+    RailTitleSandCollapse sandCollapse_{};
     CourseRailTrackMeshBakePipeline track_;
     RailVehicleDefinition definition_ = RailVehicleDefinition::MineCartDefaults();
     RailVehicleRuntimeState state_;
@@ -173,6 +260,8 @@ private:
     std::vector<RailTitleDustCloud> dustClouds_;
     RailTitleRailImpact railImpact_{};
     bool departureShotFired_ = false;
+    Vector3 departureShotOrigin_{}, departureWallTarget_{}, departureWallNormal_{0,1,0};
+    bool departureWallHit_ = false;
     double attackTime_ = 0.0;
     double nextShotTime_ = 1.2;
     uint32_t shotSequence_ = 0;

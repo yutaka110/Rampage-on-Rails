@@ -555,6 +555,17 @@ void AudioSystem::SetPlayback(SoundHandle handle, float volume, float pitch) {
     }
 }
 
+void AudioSystem::SetPaused(SoundHandle handle, bool paused) {
+    if(!IsHandleAlive(handle)) return;
+    for(auto& active : activeVoices_) {
+        if(active.sound.index!=handle.index || active.sound.generation!=handle.generation) continue;
+        // Stop without flushing the submitted buffer: Start resumes its exact
+        // sample position when the presentation clock resumes after focus loss.
+        if(paused) active.voice->Stop();
+        else active.voice->Start();
+    }
+}
+
 void AudioSystem::Stop(SoundHandle handle) {
     for (size_t i = 0; i < activeVoices_.size();) {
         if (activeVoices_[i].sound.index == handle.index &&

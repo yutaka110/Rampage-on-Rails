@@ -64,6 +64,7 @@ public:
         float pitch = 1.0f,
         bool loop = false);
     void SetPlayback(SoundHandle handle, float volume, float pitch = 1.0f);
+    void SetPaused(SoundHandle handle, bool paused);
     void Stop(SoundHandle handle);
     void StopAll();
 

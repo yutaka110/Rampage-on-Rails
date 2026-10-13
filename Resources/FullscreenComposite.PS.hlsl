@@ -3,6 +3,10 @@ Texture2D<float4> gVfxAccumulation : register(t1);
 Texture2D<float4> gPostColor : register(t2);
 SamplerState gSampler : register(s0);
 
+// Temporary sand-collapse preview. Restore true to bring back the outgoing
+// burn, including its irregular edge, warm light and optical distortion.
+static const bool kRailFilmBurnEnabled = false;
+
 // Title-to-game presentation: directional film burn and rail-impact light leak.
 // Visual research: Materia's CONTROL title textures and Codrops' WebGL transitions.
 // No reference code, footage or textures are bundled.
@@ -58,6 +62,12 @@ void EvaluateRailFilmBurn(float2 screenUv, float progress, float treatmentStreng
         // Lift the first visible exposure promptly, keeping soft endpoints.
         visibility = lerp(smoothstep(revealStart, revealEnd, reveal), firstLight, 0.25f);
         tint = lerp(float3(0.88f, 0.80f, 0.74f), 1.0f, smoothstep(0.12f, 0.75f, reveal));
+        return;
+    }
+    if (!kRailFilmBurnEnabled) {
+        // Keep sand and smoke readable until the final short world handoff.
+        // Fully opaque progress still conceals the scene swap as before.
+        visibility = 1.0f - smoothstep(0.65f, 1.0f, progress);
         return;
     }
     float2 texel = rcp(float2(max(width, 1u), max(height, 1u)));
@@ -186,20 +196,20 @@ float3 EvaluateRailLensLeak(float2 uv, float2 source, float2 tunnelFocus,
 
 cbuffer CompositeParams : register(b0)
 {
-    float gBloomIntensity;
+    float gBloomIntensity; // Presentation mode: continuous sand-cloud age.
     float gDistortionIntensity;
     float gGlowIntensity;
     float gPostIntensity;
     float gAux4;
     float gAux5;
     float gAux6;
-    float gAux7;
+    float gAux7; // 0 outgoing fallback, 1 incoming fallback, 2/3 sand cover/clear.
     float2 gTunnelFocus;
     float2 gImpactScreen;
     float gLensLeak;
     float gLensAge;
     float gTunnelShade;
-    float gAux15;
+    float gCollapseDust;
 };
 
 struct PSInput
@@ -208,12 +218,236 @@ struct PSInput
     float2 uv : TEXCOORD0;
 };
 
+float SandSpecks(float2 uv, float age, float2 scale, float2 wind) {
+    float2 grid=uv*scale+wind*age;
+    float2 cell=floor(grid);
+    float2 jitter=float2(FilmBurnHash(cell),FilmBurnHash(cell+17.0f))*0.50f+0.25f;
+    float2 delta=(frac(grid)-jitter)*float2(1.0f,1.4f);
+    float grain=1.0f-smoothstep(0.04f,0.14f,length(delta));
+    return grain*step(0.76f,FilmBurnHash(cell+43.0f));
+}
+
+float3 RotateCollapseRock(float3 p, float3 axis, float sine, float cosine) {
+    return p*cosine+cross(axis,p)*sine+axis*dot(axis,p)*(1.0f-cosine);
+}
+
+// Actual convex solid intersections in camera space, not textured flat quads.
+// A sphere rejection bounds the work before testing the fourteen rock faces.
+bool TraceCollapseRock(float3 ray, float3 center, float3 scale, float seed, float tumble,
+                       float fadeProgress, inout float nearest, out float3 stone, out float opacity) {
+    stone=0.0f;opacity=0.0f;
+    float radius=length(scale);
+    float along=dot(ray,center);
+    if(along<=0.0f || along*along-dot(center,center)+radius*radius<0.0f) return false;
+    float3 axis=normalize(float3(0.35f+seed,0.8f,0.55f-seed*0.3f));
+    float sine,cosine;
+    sincos(tumble,sine,cosine);
+    float3 origin=RotateCollapseRock(-center,axis,-sine,cosine)/scale;
+    float3 direction=RotateCollapseRock(ray,axis,-sine,cosine)/scale;
+    float nearHit=0.0f,farHit=10000.0f;
+    float3 faceNormal=0.0f;
+    [loop] for(uint face=0;face<14;++face) {
+        float3 normal;
+        float plane;
+        if(face<6) {
+            normal=0.0f;
+            normal[face/2]=face%2==0 ? 1.0f : -1.0f;
+            plane=0.88f+0.12f*frac(seed*11.7f+float(face)*0.371f);
+        } else {
+            uint corner=face-6;
+            normal=float3((corner&1u)!=0 ? 1.0f : -1.0f,
+                (corner&2u)!=0 ? 1.0f : -1.0f,(corner&4u)!=0 ? 1.0f : -1.0f)*0.57735027f;
+            // Unequal fracture cuts break the repeated bevelled-block shape.
+            normal=normalize(normal+0.12f*float3(
+                frac(seed*13.7f+float(face)*0.41f)-0.5f,
+                frac(seed*19.3f+float(face)*0.37f)-0.5f,
+                frac(seed*23.1f+float(face)*0.29f)-0.5f));
+            plane=1.08f+0.32f*frac(seed*17.3f+float(face)*0.293f);
+        }
+        float denominator=dot(normal,direction);
+        float planeDistance=plane-dot(normal,origin);
+        if(abs(denominator)<0.00001f) {
+            if(planeDistance<0.0f) return false;
+        } else {
+            float hit=planeDistance/denominator;
+            if(denominator<0.0f) {
+                if(hit>nearHit) {nearHit=hit;faceNormal=normal;}
+            } else farHit=min(farHit,hit);
+        }
+        if(nearHit>farHit) return false;
+    }
+    if(nearHit<=0.0f || nearHit>=nearest) return false;
+    // Camera-up defines a descending veil of dust. Keep the solid surface
+    // present; this value controls smoke absorption, not see-through geometry.
+    float3 localUp=RotateCollapseRock(float3(0,1,0),axis,-sine,cosine);
+    float halfHeight=max(dot(abs(localUp),scale),0.001f);
+    float down=saturate((center.y+halfHeight-ray.y*nearHit)/(2.0f*halfHeight));
+    float fadeEdge=lerp(-0.18f,1.18f,saturate(fadeProgress));
+    opacity=smoothstep(fadeEdge-0.16f,fadeEdge+0.16f,down);
+    nearest=nearHit;
+    float3 normal=normalize(RotateCollapseRock(faceNormal/scale,axis,sine,cosine));
+    float3 localHit=origin+direction*nearHit;
+    float relief=FilmBurnNoise(localHit.xy*9.3f+seed*23.0f)*0.34f+
+        FilmBurnNoise(localHit.yz*13.7f+19.0f)*0.33f+
+        FilmBurnNoise(localHit.zx*18.1f+seed*31.0f)*0.33f;
+    float diffuse=saturate(dot(normal,normalize(float3(-0.45f,0.80f,-0.65f))));
+    float3 fill=float3(0.27f,0.23f,0.18f)+saturate(normal.y)*float3(0.09f,0.075f,0.055f);
+    float rim=pow(1.0f-saturate(dot(normal,-ray)),3.0f)*0.025f;
+    float3 albedo=lerp(float3(0.39f,0.29f,0.19f),float3(0.53f,0.41f,0.28f),seed);
+    float3 key=diffuse*float3(0.76f,0.63f,0.47f);
+    stone=albedo*(fill+key)*(0.82f+0.26f*relief)+rim*float3(0.8f,0.65f,0.44f);
+    return true;
+}
+
+bool LateCollapseRocks(float2 uv, float age, out float3 stone, out float mist, out float opacity) {
+    stone=0.0f;mist=0.0f;opacity=0.0f;
+    // Keep the last falling pieces briefly visible after the dense veil clears.
+    // Matches the bounded rock tail in HasRailFilmBurnPresentation().
+    if(age<0.85f || age>3.30f) return false;
+    uint width,height;
+    gPostColor.GetDimensions(width,height);
+    float aspect=float(width)/max(float(height),1.0f);
+    float3 ray=normalize(float3((uv.x-0.5f)*2.0f*aspect*0.3650285f,
+        (0.5f-uv.y)*2.0f*0.3650285f,1.0f));
+    float nearest=10000.0f;
+    bool hit=false;
+    [loop] for(uint i=0;i<16;++i) {
+        float seed=FilmBurnHash(float2(float(i)+7.0f,91.4f));
+        // Stratified lanes guarantee edge-to-edge coverage. Four uneven waves
+        // distribute rocks vertically instead of packing them into one row.
+        uint laneIndex=(i*5u)%16u;
+        // Spread emission, keeping gravity and each fragment's fall speed intact.
+        float birth=0.85f+float(i/4u)*0.36f+float(i%4u)*0.035f+seed*0.07f;
+        float flight=age-birth;
+        if(flight<0.0f) continue;
+        float depthSeed=FilmBurnHash(float2(float(i),37.1f));
+        uint depthLayer=i%4u;
+        float depth=depthLayer==0u ? 3.5f+1.3f*depthSeed :
+            depthLayer==3u ? 9.0f+3.0f*depthSeed : 6.0f+2.0f*depthSeed;
+        float lane=(float(laneIndex)+0.18f+0.64f*FilmBurnHash(float2(float(i),15.7f)))/16.0f;
+        float size=depthLayer==0u ? 0.34f+seed*0.16f : 0.23f+seed*0.18f;
+        float height=depth*0.3650285f+1.25f+seed*0.75f;
+        float speed=depthLayer==3u ? 7.6f+seed*1.3f : 9.0f+seed*1.6f;
+        float exitTime=(sqrt(speed*speed+19.6f*(height+depth*0.3650285f+size*1.8f))-speed)/9.8f;
+        if(flight>exitTime+0.12f) continue;
+        float3 center=float3((lane-0.5f)*2.0f*aspect*0.3650285f*depth+(seed-0.5f)*flight*0.45f,
+            height-speed*flight-4.9f*flight*flight,depth-flight*0.35f);
+        float3 scale=size*float3(0.72f+0.45f*FilmBurnHash(float2(float(i),21.3f)),
+            0.58f+0.60f*FilmBurnHash(float2(float(i),48.7f)),
+            0.65f+0.50f*FilmBurnHash(float2(float(i),62.1f)));
+        float tumble=seed*6.2831853f+flight*(3.5f+seed*3.0f);
+        float3 candidate;
+        float candidateOpacity;
+        float fade=smoothstep(exitTime*0.52f,exitTime*0.95f,flight);
+        if(TraceCollapseRock(ray,center,scale,seed,tumble,fade,nearest,candidate,candidateOpacity)) {
+            stone=candidate;mist=nearest;opacity=candidateOpacity;hit=true;
+        }
+        // Irregularly shed zero, one or two chips, with independent release
+        // times and directions. Avoid identical paired satellites on every rock.
+        uint chipCount=(uint)(FilmBurnHash(float2(float(i),73.9f))*3.0f);
+        [unroll] for(uint chip=0;chip<2;++chip) {
+            if(chip>=chipCount) continue;
+            float chipSeed=FilmBurnHash(float2(float(i)*3.0f+float(chip),107.3f));
+            float chipAge=flight-(0.12f+chipSeed*0.20f);
+            if(chipAge<=0.0f) continue;
+            float angle=chipSeed*6.2831853f;
+            float3 offset=float3(cos(angle)*scale.x*0.8f,sin(angle)*scale.y*0.7f,(chipSeed-0.5f)*scale.z);
+            float3 velocity=float3(cos(angle)*(0.65f+chipSeed),-0.3f-chipSeed*0.7f,sin(angle)*0.35f);
+            float3 chipCenter=center+offset+velocity*chipAge+float3(0,-2.2f*chipAge*chipAge,0);
+            float3 chipScale=scale*(0.10f+chipSeed*0.15f)*float3(0.80f,1.0f,0.85f);
+            if(TraceCollapseRock(ray,chipCenter,chipScale,chipSeed,
+                tumble+(chipSeed-0.5f)*chipAge*10.0f,fade,nearest,candidate,candidateOpacity)) {
+                stone=candidate;mist=nearest;opacity=candidateOpacity;hit=true;
+            }
+        }
+    }
+    return hit;
+}
+
+float4 PresentSandTransition(float2 uv) {
+    float progress=saturate(gAux4);
+    float age=max(gBloomIntensity,0.0f);
+    bool incoming=gAux7>2.5f;
+    // Advect downward continuously rather than mostly enlarging a fixed veil.
+    float2 drift=float2(age*0.32f,-age*0.70f);
+    float2 flow=uv*float2(5.0f,3.5f)+drift;
+    float2 warp=float2(FilmBurnNoise(flow+17.0f),FilmBurnNoise(flow+43.0f))-0.5f;
+    float coarse=FilmBurnNoise(flow+warp*0.85f);
+    float middle=FilmBurnNoise(flow*2.13f+19.0f+warp*0.4f+float2(age*0.05f,age*0.15f));
+    float fine=FilmBurnNoise(flow*4.27f+53.0f+float2(-age*0.06f,-age*0.15f));
+    float cloud=coarse*0.58f+middle*0.29f+fine*0.13f;
+    // Overhead powder and the two ground shoulders merge into unequal
+    // rolling fronts. No oval hole, burning edge or separate black fade.
+    float shoulders=min(uv.x,1.0f-uv.x)*2.0f;
+    float arrival=0.10f+uv.y*0.21f+shoulders*0.15f+(coarse-0.5f)*0.17f;
+    float front=smoothstep(arrival,arrival+0.30f,progress);
+    if(incoming) {
+        // Dust keeps falling after the swap: clear from ceiling to floor,
+        // instead of reversing the outgoing front back toward the ceiling.
+        float clearArrival=0.04f+uv.y*0.49f+shoulders*0.07f+(coarse-0.5f)*0.075f;
+        front=1.0f-smoothstep(clearArrival,clearArrival+0.30f,1.0f-progress);
+    }
+    float airborne=saturate(gCollapseDust)*(0.68f+0.32f*cloud)*(incoming ? front : 1.0f);
+    // Keep the moving cart visible through the building cloud until the last
+    // dense surge. A long, almost opaque brown hold breaks the collapse flow.
+    float opticalDepth=-log(max(1.0f-airborne,0.001f))+front*front*(1.25f+1.0f*cloud);
+    // Leave a thin moving powder field while the last fragments fall through
+    // the incoming scene. Its extinction reaches zero with the rock tail.
+    float settlingMist=incoming ? 0.10f*(0.30f+0.70f*cloud)*
+        (1.0f-smoothstep(2.50f,3.30f,age)) : 0.0f;
+    opticalDepth+=settlingMist;
+    float transmittance=exp(-opticalDepth);
+    // This exact endpoint conceals the swap even in thin peripheral pockets.
+    // The fog pattern uses one continuous clock across both scenes.
+    transmittance*=incoming ? 1.0f-smoothstep(0.80f,0.98f,front) :
+        1.0f-smoothstep(0.80f,0.90f,progress);
+    float selfShadow=saturate(coarse*0.7f+middle*0.3f);
+    float illumination=saturate(0.16f+0.72f*selfShadow+0.14f*(1.0f-uv.y));
+    float3 dustColor=lerp(float3(0.15f,0.10f,0.064f),float3(0.45f,0.325f,0.205f),illumination);
+    dustColor*=0.92f+0.16f*fine;
+    // Sampling drift is the inverse of on-screen motion. Negative grid Y
+    // makes specks fall, agreeing with the world grains and powder flow.
+    float specks=SandSpecks(uv,age,float2(180.0f,110.0f),float2(8.0f,-30.0f))*0.025f+
+        SandSpecks(uv,age,float2(310.0f,190.0f),float2(13.0f,-48.0f))*0.015f;
+    dustColor+=float3(1.0f,0.73f,0.42f)*specks;
+    float3 scene=0.0f;
+    if(transmittance>0.0001f) {
+        float2 scatterOffset=float2(0.0016f,0.0009f)*saturate(1.0f-transmittance);
+        scene=(gPostColor.Sample(gSampler,uv).rgb*2.0f+
+            gPostColor.Sample(gSampler,saturate(uv+scatterOffset)).rgb+
+            gPostColor.Sample(gSampler,saturate(uv-scatterOffset)).rgb)*0.25f;
+        scene+=EvaluateRailLensLeak(uv,gImpactScreen,gTunnelFocus,gLensLeak,gLensAge,gTunnelShade);
+    }
+    float3 result=scene*transmittance+dustColor*(1.0f-transmittance);
+    float3 stone;
+    float rockMist;
+    float rockOpacity;
+    if(LateCollapseRocks(uv,age,stone,rockMist,rockOpacity)) {
+        // One dust field scatters light from the cave and the falling solids.
+        // Distance softens far silhouettes and facet contrast; a descending
+        // local veil hides the top without making the stone transparent.
+        float storm=saturate(gCollapseDust+front*0.55f);
+        float pathDepth=max(rockMist-1.4f,0.0f);
+        float fogDepth=(0.045f+0.19f*storm*(0.60f+0.40f*cloud))*pathDepth;
+        float upperVeil=-log(max(rockOpacity,0.001f))*(0.85f+middle*0.30f);
+        float rockTransmission=exp(-fogDepth-upperVeil);
+        float3 rockColor=lerp(dustColor,stone,rockTransmission);
+        // Let solid fragments outlast the screen-covering dust. Their upper
+        // veil dissolves into powder, then exposes the moving gameplay scene.
+        float rockTail=(1.0f-smoothstep(3.00f,3.30f,age))*
+            smoothstep(0.02f,0.28f,rockOpacity);
+        result=lerp(result,rockColor,incoming ? max(front,rockTail) : 1.0f);
+    }
+    return float4(result,1.0f);
+}
+
 float4 main(PSInput input) : SV_TARGET
 {
     float2 uv = saturate(input.uv);
     // Mode 1 presents the already composed scene + HUD exactly once. Do not
     // apply the normal luminance fallback or add VFX again during blackout.
     if (gAux5 > 0.5f) {
+        if(gAux7>1.5f) return PresentSandTransition(uv);
         float2 sceneUv;
         float2 chromaticOffset;
         float3 tint;
@@ -225,6 +459,22 @@ float4 main(PSInput input) : SV_TARGET
         float3 presentation = gPostColor.Sample(gSampler, sceneUv).rgb;
         presentation.r = gPostColor.Sample(gSampler, saturate(sceneUv + chromaticOffset)).r;
         presentation.b = gPostColor.Sample(gSampler, saturate(sceneUv - chromaticOffset)).b;
+        // Near-camera airborne sand scatters warm light into a moving
+        // veil. It adds no second wipe; visibility remains owned by the burn.
+        if(gCollapseDust>0.0f) {
+            float2 drift=float2(gLensAge*0.26f,-gLensAge*0.38f);
+            float2 flow=uv*float2(5.0f,3.5f)+drift;
+            float2 warp=float2(FilmBurnNoise(flow+17.0f),FilmBurnNoise(flow+43.0f))-0.5f;
+            float cloud=FilmBurnNoise(flow+warp*0.7f)*0.65f+FilmBurnNoise(flow*2.13f+19.0f)*0.35f;
+            float grit=FilmBurnNoise(uv*float2(140.0f,90.0f)+gLensAge*0.65f);
+            float haze=saturate(gCollapseDust)*(0.68f+0.32f*cloud);
+            float2 scatterOffset=float2(0.0016f,0.0009f)*gCollapseDust;
+            float3 scattered=(presentation*2.0f+gPostColor.Sample(gSampler,saturate(sceneUv+scatterOffset)).rgb+
+                gPostColor.Sample(gSampler,saturate(sceneUv-scatterOffset)).rgb)*0.25f;
+            float3 dustColor=lerp(float3(0.27f,0.18f,0.10f),float3(0.50f,0.36f,0.22f),cloud);
+            presentation=lerp(scattered,dustColor,haze);
+            presentation+=gCollapseDust*(grit-0.5f)*0.022f;
+        }
         float3 lensLight = EvaluateRailLensLeak(uv, gImpactScreen, gTunnelFocus,
                                                gLensLeak, gLensAge, gTunnelShade);
         return float4((presentation * tint + burnLight + lensLight) * visibility, 1.0f);

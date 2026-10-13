@@ -286,6 +286,8 @@ private:
     void StopGameSessionPresentation();
     void DispatchRailVehicleAudio(float deltaTime, float realDeltaTime);
     void UpdateRailRollingAudio(float deltaTime, float targetGain, float tunnelBlend);
+    void UpdateRailSandTransitionAudio(bool active,float age,bool focused,float dust,float coverage);
+    void StopRailSandTransitionAudio();
     void DispatchRailTrackFeedback();
     void DispatchRailVehicleEvasionFeedback();
     void DispatchRailVehicleCollisionFeedback();
@@ -807,6 +809,12 @@ private:
     bool releaseShowcaseInitialized_ = false;
     bool railTitleScreenVisible_ = false;
     RailTitleGameplayEntry railTitleGameplayEntry_{};
+    RailTransitionDemo railTransitionDemo_{};
+    bool railTransitionDemoEnabled_ = false;
+    bool railTransitionDemoHover_ = false, railTransitionDemoPressed_ = false;
+    bool railTransitionDemoHasLastUpdate_ = false;
+    std::chrono::steady_clock::time_point railTransitionDemoLastUpdate_{};
+    void ReturnToDemoTitle();
     DirectionalLight railTitleSavedLight_{};
     PointLight railTitleSavedPointLight_{};
     SpotLight railTitleSavedSpotLight_{};
@@ -815,6 +823,8 @@ private:
     bool railTitleSavedBackdrop_ = false;
     std::vector<PostProcessPass> railTitleSavedPostProcess_;
     audio::SoundHandle railTitleAmbience_{};
+    audio::SoundHandle railSandTransitionSound_{};
+    RailSandTransitionAudioClock railSandTransitionAudioClock_{};
     audio::SoundHandle railTitleTunnelAmbience_{};
     audio::SoundHandle railTitleReticleBootSound_{};
     audio::SoundHandle railTitleGaugesBootSound_{};
