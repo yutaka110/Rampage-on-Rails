@@ -32463,6 +32463,121 @@ void TestRailTitlePursuit(RegressionRunner& runner) {
     }
 }
 
+void TestRailTitleSandCollapse(RegressionRunner& runner) {
+    const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape","TitleSandClod.obj");
+    runner.Expect(!mesh.vertices.empty() && !mesh.indices.empty() && ValidateModelGeometryOrientation(mesh) &&
+        AuditModelClosedSurface(mesh).IsValid() && mesh.indices.size()/3<500,
+        "Sand clods must import as closed, oriented, bounded real-time solids");
+    const auto material=BuildTitleLandscapePbrMaterial("title_sand_clod");
+    runner.Expect(IsTitleLandscapeMesh("title_sand_clod") && material.specularMode==9 &&
+        material.enableLighting && material.padding2[8]==0,
+        "Sand clods must use the supplied Ground054 material through the actual terrain PBR pass");
+    RailTitleSandCollapse collapse{{0,-0.3f,0},{1,0,0},{0,0,1},0,19,true};
+    bool gravity=true,ordered=true,bounded=true,contact=true,scattered=false;
+    for(uint32_t i=0;i<RailTitleScene::CollapseClodCount;++i) {
+        collapse.age=0.0f; const auto initial=RailTitleScene::EvaluateSandClod(collapse,i);
+        const float birth=-initial.emissionAge;
+        collapse.age=birth+0.12f; const auto early=RailTitleScene::EvaluateSandClod(collapse,i);
+        collapse.age=birth+0.22f; const auto later=RailTitleScene::EvaluateSandClod(collapse,i);
+        gravity &= early.visible && later.visible && later.position.y<early.position.y &&
+            std::abs(later.velocity.y-early.velocity.y+0.98f)<0.001f;
+        const float touchdown=-initial.impactAge;
+        collapse.age=touchdown+0.06f;
+        const auto settling=RailTitleScene::EvaluateSandClod(collapse,i);
+        const auto beforeSmoke=RailTitleScene::EvaluateCollapsePuff(collapse,i*RailTitleScene::CollapsePuffsPerClod);
+        const auto grains=RailTitleScene::EvaluateCollapseGrain(collapse,i*RailTitleScene::CollapseGrainsPerClod+6);
+        ordered &= settling.visible && beforeSmoke.opacity==0 && grains.opacity>0;
+        scattered |= std::abs(grains.velocity.x)>0.5f && std::abs(grains.velocity.z)>0.5f;
+        const auto world=MakeAffineMatrix(settling.scale,settling.rotation,settling.position);
+        for(const auto& vertex:mesh.vertices) {
+            const float worldY=vertex.position.x*world.m[0][1]+vertex.position.y*world.m[1][1]+
+                vertex.position.z*world.m[2][1]+world.m[3][1];
+            contact &= worldY>=collapse.origin.y-0.025f;
+        }
+        collapse.age=touchdown+0.25f; const auto earlyPuff=RailTitleScene::EvaluateCollapsePuff(collapse,i*RailTitleScene::CollapsePuffsPerClod);
+        collapse.age=touchdown+0.55f; const auto big=RailTitleScene::EvaluateCollapsePuff(collapse,i*RailTitleScene::CollapsePuffsPerClod);
+        ordered &= earlyPuff.opacity>0 && big.radius>earlyPuff.radius && big.position.y>earlyPuff.position.y;
+        collapse.age=4.5f;
+        bounded &= !RailTitleScene::EvaluateSandClod(collapse,i).visible &&
+            RailTitleScene::EvaluateCollapsePuff(collapse,i*RailTitleScene::CollapsePuffsPerClod).opacity==0 &&
+            RailTitleScene::EvaluateCollapseGrain(collapse,i*RailTitleScene::CollapseGrainsPerClod+6).opacity==0;
+    }
+    runner.Expect(gravity && ordered && scattered && contact && bounded,
+        "Heavy clods must accelerate downward, break into scattered grains at contact, then produce delayed growing smoke without ground penetration or persistent particles");
+    Vector3 reference{};
+    for(int fps:{30,60,120}) {
+        RailTitleScene title; title.Initialize();
+        runner.Expect(!title.SandCollapse().active && title.CollapseDustStrength()==0,
+            "Collapse must remain absent from the idle title");
+        title.Update(0.02f); title.BeginStart();
+        const auto placementCount=title.Scenery().terrainPlacements.size();
+        bool clear=true,limited=true,early=false,sawClods=false,sawDust=false;
+        bool leftDust=false,rightDust=false,upperDust=false;
+        float peakUnmaskedDust=0.0f;
+        for(int frame=0;frame<fps*3;++frame) {
+            title.Update(1.0f/fps);
+            if(frame==fps-1) early=!title.SandCollapse().active;
+            limited &= title.RenderScenery().terrainPlacements.size()<=placementCount+RailTitleScene::CollapseClodCount &&
+                title.Scenery().terrainPlacements.size()==placementCount;
+            const auto& state=title.SandCollapse();
+            const auto basis=title.SceneryPath().Evaluate(400);
+            for(uint32_t i=0;i<RailTitleScene::CollapseClodCount;++i) {
+                const auto clod=RailTitleScene::EvaluateSandClod(state,i);
+                if(!clod.visible) continue;
+                sawClods=true;
+                const Vector3 delta{clod.position.x-basis.position.x,clod.position.y-basis.position.y,clod.position.z-basis.position.z};
+                clear &= std::abs(delta.x*basis.right.x+delta.z*basis.right.z)>3.0f;
+            }
+            sawDust |= title.CollapseDustStrength()>0.001f;
+            if(title.Blackout()==0) {
+                peakUnmaskedDust=(std::max)(peakUnmaskedDust,title.CollapseDustStrength());
+                const auto eye=title.CameraPosition(),target=title.CameraTarget();
+                const auto forward=Normalize(Vector3{target.x-eye.x,target.y-eye.y,target.z-eye.z});
+                const auto cameraRight=Normalize(Vector3{forward.z,0,-forward.x});
+                const Vector3 cameraUp{forward.y*cameraRight.z-forward.z*cameraRight.y,
+                    forward.z*cameraRight.x-forward.x*cameraRight.z,forward.x*cameraRight.y-forward.y*cameraRight.x};
+                const auto dot=[](Vector3 a,Vector3 b){return a.x*b.x+a.y*b.y+a.z*b.z;};
+                for(uint32_t i=0;i<RailTitleScene::CollapsePuffCount;++i) {
+                    const auto puff=RailTitleScene::EvaluateCollapsePuff(state,i);
+                    if(puff.opacity<0.02f) continue;
+                    const Vector3 delta{puff.position.x-eye.x,puff.position.y-eye.y,puff.position.z-eye.z};
+                    const float depth=dot(delta,forward);
+                    if(depth<=0.5f) continue;
+                    const float x=dot(delta,cameraRight)/(depth*std::tan(title.CameraFov()*0.5f));
+                    const float y=dot(delta,cameraUp)/(depth*std::tan(title.CameraFov()*0.5f));
+                    if(std::abs(x)<1.7778f && std::abs(y)<1) {
+                        leftDust |= x<-0.20f; rightDust |= x>0.20f; upperDust |= y>0;
+                    }
+                }
+            }
+            if(frame==fps*2-1) {
+                const auto clod=RailTitleScene::EvaluateSandClod(state,5);
+                if(fps==30) reference=clod.position;
+                else runner.Expect(std::abs(reference.y-clod.position.y)<0.002f &&
+                    std::abs(reference.x-clod.position.x)<0.002f && std::abs(reference.z-clod.position.z)<0.002f,
+                    "Collapse trajectories must match at 30, 60 and 120 fps");
+                const auto frozen=state;
+                title.Update(0);
+                runner.Expect(title.SandCollapse().age==frozen.age &&
+                    RailTitleScene::EvaluateSandClod(title.SandCollapse(),5).position.y==clod.position.y,
+                    "Paused titles must freeze sand and smoke without replaying emission");
+            }
+        }
+        runner.Expect(early && sawClods && sawDust && clear && limited,
+            "The real title departure must show clods before lens dust, keep the cart corridor clear and cap render allocations");
+        runner.Expect(leftDust && rightDust && upperDust && peakUnmaskedDust>0.35f,
+            "Sandstorm dust must visibly span both sides and upper view and build a broad airborne veil before the burn hides it: left="+
+            std::to_string(leftDust)+" right="+std::to_string(rightDust)+" upper="+std::to_string(upperDust)+" haze="+std::to_string(peakUnmaskedDust));
+        title.Initialize();
+        runner.Expect(!title.SandCollapse().active && title.RenderScenery().terrainPlacements.size()==placementCount-1,
+            "Restarting the title must remove every collapse placement and reset its clock");
+    }
+    AppFrameGraphBuildContext context{};
+    context.railCollapseDustStrength=0.1f;
+    runner.Expect(context.HasRailFilmBurnPresentation(),
+        "Near-camera collapse haze must route through the normal presentation composite even before the burn begins");
+}
+
 void TestRailTitleGroundFire(RegressionRunner& runner) {
     uint32_t referenceShots=0,referenceImpacts=0;
     for(int fps : {30,60,120}) {
@@ -33083,10 +33198,11 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         runner.Expect(stack.ReplacePasses({post}), "Film-burn test postprocess must validate");
     }
     const std::string finalOutput = stack.BuildExecutionPlan().finalOutputResource;
-    for (float state : {0.0f, 0.45f, 1.0f, -1.0f}) {
+    for (float state : {0.0f, 0.45f, 1.0f, -1.0f, -2.0f, -3.0f}) {
         const float progress=(std::max)(0.0f,state);
-        const bool lensOnly=state<0.0f;
-        const bool active=progress>0.0f || lensOnly;
+        const bool lensOnly=state==-1.0f;
+        const bool sandOnly=state<=-2.0f;
+        const bool active=progress>0.0f || lensOnly || sandOnly;
         RenderGraph graph;
         graph.DeclareTransientRenderTarget("SceneColor", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
         graph.DeclareTransientRenderTarget("VfxAccumulation", 1, DXGI_FORMAT_R8G8B8A8_UNORM);
@@ -33104,6 +33220,10 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         context.postProcessStack = &stack;
         context.railFilmBurnProgress = progress;
         context.railFilmBurnLensStrength = lensOnly ? 0.35f : 0.0f;
+        context.railSandTransition = sandOnly;
+        context.railSandTransitionAge = sandOnly ? 2.01f : 0.0f;
+        context.railCollapseDustStrength = sandOnly ? 0.68f : 0.0f;
+        context.railFilmBurnIncoming = state==-3.0f;
         context.railFilmBurnInEditorViewport = editorViewport;
         AppPostProcessPipeline pipeline;
         pipeline.RegisterPasses(context);
@@ -33131,7 +33251,7 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         }
         if (active) {
             runner.Expect(burn != passes.end() && burn->executed && hud->executionIndex < burn->executionIndex,
-                "Lens-only exposure and blackout must present HUD after scene capture without leaking VFX");
+                "Lens exposure, opaque coverage and outgoing/incoming sand must present HUD after scene capture without leaking VFX");
             if (editorViewport) {
                 const auto editorUi = find("EditorUI");
                 runner.Expect(editorUi != passes.end() && editorUi->executed &&
@@ -33978,6 +34098,7 @@ int RunEditorCoreRegressionTests() {
         {"title running loop and menu layout", [&]() { TestRailTitleLoop(runner); }},
         {"title body suspension and wheel contact", [&]() { TestRailTitleBodySway(runner); }},
         {"title twin shield pursuit", [&]() { TestRailTitlePursuit(runner); }},
+        {"title sand collapse gravity breakup and delayed dust", [&]() { TestRailTitleSandCollapse(runner); }},
         {"title repeating ground fire", [&]() { TestRailTitleGroundFire(runner); }},
         {"authored drone attack timing", [&]() { TestAuthoredDroneAttackTiming(runner); }},
         {"vehicle impact audiovisual and damage HUD", [&]() { TestVehicleImpactAudiovisualAndHud(runner); }},

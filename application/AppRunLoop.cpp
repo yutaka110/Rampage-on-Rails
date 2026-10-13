@@ -4230,7 +4230,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             float impactLight=0.0f;
         };
         std::vector<SandBillboard> billboards;
-        billboards.reserve(180);
+        billboards.reserve(180+RailTitleScene::CollapseGrainCount+RailTitleScene::CollapsePuffCount);
         const float titleAlpha=railTitleScene_.Pursuer().alpha;
         for(const auto& cloud:railTitleScene_.DustClouds()) {
             const float age=cloud.age,t=age/RailTitleDustCloud::Lifetime;
@@ -4268,6 +4268,26 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 const float r=grain.radius*(grainIndex%7==0 ? 1.8f : 1.0f);
                 billboards.push_back({grain.position,Scale(right,r),Scale(up,r*1.3f),
                     {0.37f,0.25f,0.14f,grain.opacity*titleAlpha},-2.0f});
+            }
+        }
+        const auto& collapse=railTitleScene_.SandCollapse();
+        if(collapse.active) {
+            for(uint32_t i=0;i<RailTitleScene::CollapseGrainCount;++i) {
+                const auto grain=RailTitleScene::EvaluateCollapseGrain(collapse,i);
+                if(grain.opacity<0.001f) continue;
+                billboards.push_back({grain.position,Scale(right,grain.radius),Scale(up,grain.radius*1.4f),
+                    {0.48f,0.34f,0.20f,grain.opacity},-4.0f});
+            }
+            for(uint32_t i=0;i<RailTitleScene::CollapsePuffCount;++i) {
+                const auto puff=RailTitleScene::EvaluateCollapsePuff(collapse,i);
+                if(puff.opacity<0.001f) continue;
+                const Vector3 horizontal=Scale(Add(Scale(right,std::cos(puff.rotation)),Scale(up,std::sin(puff.rotation))),puff.radius);
+                const Vector3 vertical=Scale(Add(Scale(up,std::cos(puff.rotation)),Scale(right,-std::sin(puff.rotation))),puff.radius*puff.aspect);
+                // Reserved UV seeds select cohesive collapse dust. Existing
+                // impact dust stays unchanged; the final burn occludes both.
+                const float shade=0.80f+0.08f*float(i%3);
+                billboards.push_back({puff.position,horizontal,vertical,
+                    {0.63f*shade,0.46f*shade,0.29f*shade,puff.opacity},1000.0f+2.0f*float(i)});
             }
         }
         const Vector3 eye=railTitleScene_.CameraPosition();
@@ -12578,7 +12598,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         scene_.SyncCourseRailTrackRenderer(railTitleScene_.Track(),railTitleScene_.Distance(),
             &railTitleScene_.Wheels(),frameState_.viewMatrix,frameState_.projMatrix);
         scene_.SyncRailVehicleOccupantActorFrame({},frameState_.viewMatrix,frameState_.projMatrix);
-        scene_.SyncCourseMeshRenderQueue(railTitleEmptySpawns_,&railTitleScene_.Scenery(),
+        scene_.SyncCourseMeshRenderQueue(railTitleEmptySpawns_,&railTitleScene_.RenderScenery(),
             railTitleScene_.SceneryDistance(),railTitleScene_.SceneryPath(),frameState_.viewMatrix,frameState_.projMatrix,nullptr,nullptr,
             &railTitleScene_.Pursuer());
     } else {
@@ -12667,6 +12687,17 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         ? railTitleScene_.Blackout() : railTitleGameplayEntry_.Frame().blackout;
     graphContext.railFilmBurnTreatmentStrength = railTitleScreenVisible_ ? 1.0f : 0.55f;
     graphContext.railFilmBurnIncoming = !railTitleScreenVisible_;
+    graphContext.railSandTransition=railTitleScreenVisible_
+        ? railTitleScene_.Starting() : railTitleGameplayEntry_.Frame().blockingGameplay;
+    graphContext.railSandTransitionAge=railTitleScreenVisible_
+        ? railTitleScene_.SandCollapse().age
+        : RailTitleScene::StartDuration-RailTitleScene::CollapseBegin+railTitleGameplayEntry_.Elapsed();
+    if(!railTitleScreenVisible_ && graphContext.railSandTransition) {
+        // The same airborne powder clears around the incoming camera rather
+        // than dropping to black or restarting a second dust burst.
+        const float covered=railTitleGameplayEntry_.Frame().blackout;
+        graphContext.railCollapseDustStrength=0.68f*(std::clamp)(covered/0.65f,0.0f,1.0f);
+    }
     const auto projectPresentationPoint=[&](Vector3 world,Vector2& uv) {
         const auto& m=frameState_.viewProjectionMatrix.m;
         const float w=world.x*m[0][3]+world.y*m[1][3]+world.z*m[2][3]+m[3][3];
@@ -12690,6 +12721,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         graphContext.railFilmBurnLensStrength=railTitleScene_.LensLeakStrength();
         graphContext.railFilmBurnLensAge=railTitleScene_.LensLeakAge();
         graphContext.railFilmBurnTunnelShade=railTitleScene_.TunnelShade();
+        graphContext.railCollapseDustStrength=railTitleScene_.CollapseDustStrength();
         const auto& impact=railTitleScene_.RailImpact();
         if(!railTitleScene_.Starting() || impact.seed==0) railTitleLensSourceSeed_=0;
         if(graphContext.railFilmBurnLensStrength>0.0f && impact.seed!=railTitleLensSourceSeed_) {

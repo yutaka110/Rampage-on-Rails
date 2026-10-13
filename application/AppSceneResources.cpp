@@ -3118,7 +3118,7 @@ bool AppSceneResources::Initialize(
 
         const bool titleSolid = std::string_view(name) == "title_tunnel" || std::string_view(name) == "title_ground" ||
             std::string_view(name) == "title_cliff" || std::string_view(name) == "title_boulder" ||
-            std::string_view(name) == "title_stake";
+            std::string_view(name) == "title_stake" || std::string_view(name) == "title_sand_clod";
         if (titleSolid && (!ValidateModelGeometryOrientation(courseMeshData) ||
             !AuditModelClosedSurface(courseMeshData).IsValid())) {
             OutputDebugStringA(("[TitleLandscape] Rejected broken imported solid: " + std::string(name) + "\n").c_str());
@@ -3156,6 +3156,7 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("title_ground", "Resources/course_meshes/TitleLandscape", "TitleGround.obj", "titleCaveRock");
     registerCourseMesh("title_cliff", "Resources/course_meshes/TitleLandscape", "TitleCliff.obj", "titleCaveRock");
     registerCourseMesh("title_boulder", "Resources/course_meshes/TitleLandscape", "TitleBoulder.obj", "titleCaveRock");
+    registerCourseMesh("title_sand_clod", "Resources/course_meshes/TitleLandscape", "TitleSandClod.obj", "titleCaveRock");
     registerCourseMesh("title_stake", "Resources/course_meshes/TitleLandscape", "TitleStake.obj", "default");
     registerCourseMesh("title_tunnel", "Resources/course_meshes/TitleLandscape", "TitleTunnel.obj", "titleCaveRock");
     registerCourseMesh("curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall", "CurvedCanyonWall.obj", "courseOrganicRock");

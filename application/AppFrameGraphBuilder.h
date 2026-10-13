@@ -70,9 +70,13 @@ struct AppFrameGraphBuildContext {
     float railFilmBurnLensStrength = 0.0f;
     float railFilmBurnLensAge = 0.0f;
     float railFilmBurnTunnelShade = 0.0f;
+    float railCollapseDustStrength = 0.0f;
+    // Sand becomes fully opaque across the world swap, then clears in gameplay.
+    bool railSandTransition = false;
+    float railSandTransitionAge = 0.0f;
     bool railFilmBurnIncoming = false;
     bool HasRailFilmBurnPresentation() const {
-        return railFilmBurnProgress > 0.0f || railFilmBurnLensStrength > 0.0f;
+        return railFilmBurnProgress > 0.0f || railFilmBurnLensStrength > 0.0f || railCollapseDustStrength > 0.0f;
     }
     // Burn the viewport texture, leaving editor controls outside the effect.
     bool railFilmBurnInEditorViewport = false;

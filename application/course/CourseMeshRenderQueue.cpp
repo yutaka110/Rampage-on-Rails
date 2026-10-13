@@ -101,7 +101,7 @@ bool IsCourseMeshRenderEligible(
 
 bool IsTitleLandscapeMesh(std::string_view meshId) {
     return meshId == "title_ground" || meshId == "title_cliff" ||
-        meshId == "title_boulder" || meshId == "title_tunnel";
+        meshId == "title_boulder" || meshId == "title_tunnel" || meshId == "title_sand_clod";
 }
 
 Material BuildTitleLandscapePbrMaterial(std::string_view meshId) {
@@ -114,7 +114,7 @@ Material BuildTitleLandscapePbrMaterial(std::string_view meshId) {
     material.padding[2] = 1.00f; // Environment sky fill.
     material.shininess = 0.18f; // Terrain specular strength (not a Phong exponent).
     material.environmentCoefficient = 0.15f; // Strata strength.
-    material.specularMode = meshId == "title_ground" ? 9 : (meshId == "title_tunnel" ? 7 : 6);
+    material.specularMode = (meshId == "title_ground" || meshId == "title_sand_clod") ? 9 : (meshId == "title_tunnel" ? 7 : 6);
     material.padding2[0] = 0.10f; // Rim strength.
     material.padding2[1] = 0.55f; // Micro detail strength.
     material.padding2[2] = 1.0f; // Shared detail cache.
@@ -129,7 +129,7 @@ Material BuildTitleLandscapePbrMaterial(std::string_view meshId) {
     material.padding2[13] = 0.55f; // Strata breakup.
     material.padding2[14] = 0.25f; // Floor sand shadow.
     material.padding2[15] = 0.10f; // Backlight rim boost.
-    if (meshId == "title_ground") {
+    if (meshId == "title_ground" || meshId == "title_sand_clod") {
         // Ground054's normal map supplies the relief; avoid overlaying the
         // old procedural sand ripples / shared rock detail normal on top.
         material.padding[0] = 0.20f;

@@ -6,6 +6,11 @@ namespace {
 constexpr float Pi = 3.14159265358979323846f;
 Vector3 Add(Vector3 a, Vector3 b) { return {a.x+b.x,a.y+b.y,a.z+b.z}; }
 Vector3 Scale(Vector3 a, float s) { return {a.x*s,a.y*s,a.z*s}; }
+float CollapseRandom(uint32_t seed, uint32_t index, uint32_t channel) {
+    uint32_t bits=seed*747796405u+index*2891336453u+channel*277803737u;
+    bits=((bits>>((bits>>28u)+4u))^bits)*277803737u;
+    return float((bits>>22u)^bits)/float(UINT32_MAX);
+}
 
 }
 
@@ -16,6 +21,7 @@ bool RailTitleScene::Initialize() {
     shots_.clear(); attackCues_.clear();
     dustClouds_.clear();
     railImpact_ = {}; departureShotFired_ = false;
+    sandCollapse_={}; renderScenery_={};
     attackTime_ = 0.0; nextShotTime_ = 1.2;
     shotSequence_ = 0; burstShot_ = 0; muzzleFlashTime_ = 0.0f;
     constexpr int segments = 24;
@@ -211,6 +217,148 @@ void RailTitleScene::Update(float deltaTime) {
     pursuer_.alpha = 1.0f-Blackout();
     pursuer_.visible = pursuer_.alpha > 0.001f;
     UpdateAttack(dt);
+    UpdateSandCollapse();
+}
+
+void RailTitleScene::UpdateSandCollapse() {
+    if(!starting_) return;
+    sandCollapse_.active=railImpact_.seed!=0 && startTime_>=CollapseBegin;
+    sandCollapse_.seed=railImpact_.seed;
+    sandCollapse_.age=(std::max)(0.0f,startTime_-CollapseBegin);
+    // Reuse the fixed scenery coordinate frame. Dynamic clods never enter the
+    // playable terrain/collision system or modify the authored placements.
+    renderScenery_.terrainPlacements.resize(scenery_.terrainPlacements.size());
+    if(!sandCollapse_.active) return;
+    const auto basis=sceneryPath_.Evaluate(400.0f);
+    for(uint32_t i=0;i<CollapseClodCount;++i) {
+        const auto clod=EvaluateSandClod(sandCollapse_,i);
+        if(!clod.visible) continue;
+        const Vector3 delta=Add(clod.position,Scale(basis.position,-1));
+        CourseTerrainPlacement placement;
+        placement.id="title_collapse_clod_"+std::to_string(i);
+        placement.meshId="title_sand_clod";
+        placement.distance=400.0f;
+        placement.forwardOffset=delta.x*basis.tangent.x+delta.z*basis.tangent.z;
+        placement.lateralOffset=delta.x*basis.right.x+delta.z*basis.right.z;
+        placement.verticalOffset=delta.y;
+        placement.rotation=clod.rotation; placement.scale=clod.scale;
+        placement.cullAheadDistance=placement.cullBehindDistance=5000.0f;
+        renderScenery_.terrainPlacements.push_back(std::move(placement));
+    }
+}
+
+RailTitleSandClod RailTitleScene::EvaluateSandClod(const RailTitleSandCollapse& collapse, uint32_t index) {
+    RailTitleSandClod clod;
+    if(!collapse.active || index>=CollapseClodCount) return clod;
+    const auto rnd=[&](uint32_t channel){return CollapseRandom(collapse.seed,index,channel);};
+    const float band=float(index/8);
+    const float side=index%2==0 ? -1.0f : 1.0f;
+    const float birth=0.105f*band+(side>0 ? 0.075f : 0.0f)+rnd(0)*0.13f;
+    const float age=collapse.age-birth;
+    clod.emissionAge=age;
+    const float size=index%9==0 ? 0.50f+0.16f*rnd(1) : 0.20f+0.30f*rnd(1);
+    const float height=9.0f+1.2f*rnd(2), speed=14.0f+size*4.5f;
+    const float floorHeight=size*1.14f;
+    const float landing=(std::sqrt(speed*speed+19.6f*(height-floorHeight))-speed)/9.8f;
+    const float flight=(std::clamp)(age,0.0f,landing);
+    const float across=side*(3.95f+2.2f*rnd(3));
+    const float along=-4.5f+3.0f*band+(rnd(4)-0.5f)*2.2f;
+    // Five staggered ceiling sections collapse along both shoulders. Heavy
+    // pieces stay clear of the cart, while fine sand fills the central air.
+    const Vector3 horizontal=Add(Scale(collapse.right,-side*(0.25f+0.40f*rnd(5))),
+        Scale(collapse.forward,(rnd(6)-0.5f)*1.2f));
+    const Vector3 source=Add(collapse.origin,Add(Scale(collapse.right,across),Scale(collapse.forward,along)));
+    clod.impactPosition=Add(source,Scale(horizontal,landing));
+    clod.impactAge=age-landing;
+    clod.position=Add(source,Add(Scale(horizontal,flight),{0,height-speed*flight-4.9f*flight*flight,0}));
+    clod.velocity=age<landing ? Add(horizontal,{0,-speed-9.8f*flight,0}) : Vector3{};
+    clod.rotation={0.16f*std::sin(rnd(7)*6.28f+flight*3.0f),rnd(8)*6.28f+flight*(rnd(9)-0.5f)*4.0f,
+        0.22f*std::sin(rnd(10)*6.28f+flight*4.0f)};
+    // On contact the cohesive lump breaks down into the smaller grain burst.
+    // Dissolve its volume over 160ms; never bounce or hang above the ground.
+    const float crush=(std::clamp)(clod.impactAge/0.16f,0.0f,1.0f);
+    const float remaining=1.0f-crush*crush*(3.0f-2.0f*crush);
+    clod.scale={size*remaining,size*(0.80f+0.20f*rnd(11))*remaining,size*(0.85f+0.25f*rnd(12))*remaining};
+    if(clod.impactAge>=0.0f) {
+        clod.position.y=collapse.origin.y+floorHeight*remaining;
+        clod.rotation.x*=remaining; clod.rotation.z*=remaining;
+    }
+    clod.visible=age>=0.0f && remaining>0.01f;
+    return clod;
+}
+
+RailTitleSandGrain RailTitleScene::EvaluateCollapseGrain(const RailTitleSandCollapse& collapse, uint32_t index) {
+    RailTitleSandGrain grain;
+    if(!collapse.active || index>=CollapseGrainCount) return grain;
+    const auto clod=EvaluateSandClod(collapse,index/CollapseGrainsPerClod);
+    const auto rnd=[&](uint32_t channel){return CollapseRandom(collapse.seed,index+113,channel);};
+    const bool falling=index%CollapseGrainsPerClod<6;
+    const float age=falling ? clod.emissionAge-0.035f*rnd(0) : clod.impactAge-0.035f*rnd(0);
+    if(age<0.0f) return grain;
+    const float angle=rnd(1)*2*Pi;
+    const float speed=falling ? 1.3f+1.0f*rnd(2) : 3.5f+4.5f*rnd(2);
+    const float lift=falling ? -3.0f-3.5f*rnd(3) : 1.4f+2.2f*rnd(3);
+    const float height=falling ? 8.0f+2.0f*rnd(4) : 0.04f;
+    const float landing=(lift+std::sqrt(lift*lift+19.6f*height))/9.8f;
+    const float flight=(std::min)(age,landing), drag=std::exp(-3.4f*flight);
+    const float spread=speed*(1.0f-drag)/3.4f;
+    const Vector3 scatter=Add(Scale(collapse.right,std::cos(angle)*spread+0.35f*flight),
+        Scale(collapse.forward,std::sin(angle)*spread));
+    Vector3 source=clod.impactPosition;
+    if(falling) {
+        const auto relative=Add(source,Scale(collapse.origin,-1));
+        const float across=relative.x*collapse.right.x+relative.z*collapse.right.z;
+        source=Add(source,Add(Scale(collapse.right,-across*rnd(6)*0.95f),
+            Scale(collapse.forward,(rnd(7)-0.5f)*3.0f)));
+    }
+    grain.position=Add(source,Add(scatter,{0,(std::max)(0.0f,height+lift*flight-4.9f*flight*flight),0}));
+    grain.velocity=age<landing ? Add(Scale(collapse.right,std::cos(angle)*speed*drag+0.35f),
+        Add(Scale(collapse.forward,std::sin(angle)*speed*drag),{0,lift-9.8f*flight,0})) : Vector3{};
+    grain.radius=0.010f+0.018f*rnd(5);
+    grain.opacity=0.85f*(1.0f-(std::clamp)((age-landing)/0.18f,0.0f,1.0f));
+    return grain;
+}
+
+RailTitleCollapsePuff RailTitleScene::EvaluateCollapsePuff(const RailTitleSandCollapse& collapse, uint32_t index) {
+    RailTitleCollapsePuff puff;
+    if(!collapse.active || index>=CollapsePuffCount) return puff;
+    const auto clod=EvaluateSandClod(collapse,index/CollapsePuffsPerClod);
+    const auto rnd=[&](uint32_t channel){return CollapseRandom(collapse.seed,index+397,channel);};
+    const uint32_t layer=index%CollapsePuffsPerClod;
+    // Suspended powder sheds from the ceiling after the first grains; lower
+    // billows still wait for ground contact. This gives the storm vertical depth.
+    const bool ceiling=layer==3;
+    const float age=ceiling ? clod.emissionAge-0.16f-0.035f*rnd(0) :
+        clod.impactAge-0.10f-0.045f*float(layer)-0.035f*rnd(0);
+    if(age<=0.0f || age>=2.3f) return puff;
+    const float growth=1.0f-std::exp(-age*2.6f);
+    const float angle=rnd(1)*2*Pi;
+    const float spread=(1.0f+1.7f*rnd(2))*growth;
+    const auto relative=Add(clod.impactPosition,Scale(collapse.origin,-1));
+    const float side=relative.x*collapse.right.x+relative.z*collapse.right.z<0 ? -1.0f : 1.0f;
+    const float inward=-side*(1.2f+1.2f*rnd(6))*growth;
+    puff.position=Add(clod.impactPosition,Add(Scale(collapse.right,std::cos(angle)*spread+inward),
+        Add(Scale(collapse.forward,std::sin(angle)*spread-age*1.8f),{0,0.18f+(0.7f+0.90f*float(layer))*growth,0})));
+    if(ceiling) puff.position.y=collapse.origin.y+8.0f-age*2.0f;
+    puff.radius=0.24f+(2.0f+1.25f*rnd(3))*growth;
+    puff.aspect=layer==0 ? 0.42f : 0.85f+0.18f*rnd(4);
+    puff.rotation=(rnd(5)-0.5f)*1.2f+age*0.13f;
+    puff.opacity=(1.0f-std::exp(-age*12.0f))*std::pow(1.0f-age/2.3f,1.3f)*(ceiling ? 0.10f : layer==0 ? 0.18f : 0.10f+0.025f*float(layer));
+    return puff;
+}
+
+float RailTitleScene::CollapseDustStrength() const {
+    if(!sandCollapse_.active) return 0.0f;
+    float density=0.0f;
+    for(uint32_t i=0;i<CollapsePuffCount;++i) {
+        const auto puff=EvaluateCollapsePuff(sandCollapse_,i);
+        const auto delta=Add(puff.position,Scale(cameraPosition_,-1));
+        const float distance=std::sqrt(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z);
+        density+=puff.opacity*(std::clamp)((8.0f+puff.radius-distance)/6.0f,0.0f,1.0f);
+    }
+    // A broad airborne veil builds as the expanding world clouds reach the eye.
+    // The existing burn still owns blackout, including the fully black endpoint.
+    return (std::min)(0.68f,1.0f-std::exp(-density*0.35f));
 }
 
 void RailTitleScene::UpdateAttack(float deltaTime) {
@@ -423,6 +571,10 @@ void RailTitleScene::BeginStart() {
     tunnel.scale={1,1,1};
     tunnel.cullAheadDistance=tunnel.cullBehindDistance=5000.0f;
     scenery_.terrainPlacements.push_back(tunnel);
+    renderScenery_=scenery_;
+    const auto collapseSite=sceneryPath_.Evaluate(400.0f+TunnelLead+14.0f);
+    sandCollapse_={Add(collapseSite.position,{0,-0.30f,0}),
+        collapseSite.right,collapseSite.tangent,0.0f,0,false};
 }
 float RailTitleScene::StartProgress() const { return (std::clamp)(startTime_/OrbitDuration,0.0f,1.0f); }
 RailTitleColors RailTitleScene::Colors(Vector4 gameplaySunColor) const {
@@ -456,7 +608,7 @@ float RailTitleScene::Blackout() const {
     // Wait until the chase camera has crossed the mouth, not just the cart.
     // Preserve the readable spread at its existing speed. Once the screen is
     // mostly covered, finish the peripheral pockets without a long black hold.
-    const float elapsed=TunnelCameraDepth()/Speed;
+    const float elapsed=TunnelCameraDepth()/Speed-FilmBurnDelay;
     const float tailStart=FilmBurnDuration*FilmBurnTailBegin;
     if(elapsed<=tailStart)
         return (std::clamp)(elapsed/FilmBurnDuration,0.0f,FilmBurnTailBegin);
