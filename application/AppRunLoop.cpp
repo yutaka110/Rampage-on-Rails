@@ -4270,6 +4270,32 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     {0.37f,0.25f,0.14f,grain.opacity*titleAlpha},-2.0f});
             }
         }
+        const auto& wallImpact=railTitleScene_.RailImpact();
+        if(wallImpact.active && wallImpact.wall) {
+            const float age=wallImpact.age;
+            const auto side=NormalizeOr(Cross(Vector3{0,1,0},wallImpact.normal),right);
+            const auto vertical=Cross(wallImpact.normal,side);
+            for(uint32_t i=0;i<8;++i) {
+                const float t=(std::max)(0.0f,age-0.012f*float(i));
+                const float angle=2.399963f*float(i)+float(wallImpact.seed)*0.71f;
+                const float spread=(0.5f+0.08f*float(i))*(1-std::exp(-t*5.0f));
+                const auto center=Add(wallImpact.position,Add(Scale(wallImpact.normal,0.20f+t*2.4f),
+                    Add(Scale(side,std::cos(angle)*spread),
+                        Add(Scale(vertical,std::sin(angle)*spread),Vector3{0,-0.8f*t*t,0}))));
+                const float radius=0.20f+(0.8f+0.06f*float(i))*(1-std::exp(-t*4.0f));
+                const float fade=(1-std::exp(-t*45.0f))*std::exp(-t*2.0f)*titleAlpha;
+                billboards.push_back({center,Scale(right,radius),Scale(up,radius*0.82f),
+                    {0.54f,0.38f,0.23f,fade*0.55f},float(2*(i+wallImpact.seed%47)),
+                    wallImpact.position,std::exp(-age*10.0f)});
+            }
+            for(uint32_t i=0;i<16;++i) {
+                const auto fragment=RailTitleScene::EvaluateRailSpark(wallImpact,100+i);
+                if(fragment.opacity<=0.001f) continue;
+                const float radius=fragment.radius*(1.2f+0.3f*float(i%3));
+                billboards.push_back({fragment.position,Scale(right,radius),Scale(up,radius*1.3f),
+                    {0.38f,0.26f,0.16f,fragment.opacity*titleAlpha},-2.0f});
+            }
+        }
         const auto& collapse=railTitleScene_.SandCollapse();
         if(collapse.active) {
             for(uint32_t i=0;i<RailTitleScene::CollapseGrainCount;++i) {
@@ -4358,15 +4384,24 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 (std::max)(0.0f,1.0f-age/0.28f);
             // Pale contact core and a larger, softer amber halo share the
             // depth-tested strike point; the core never fills the whole frame.
-            glowQuad(Add(railImpact.position,{0,0.15f,0}),Scale(right,1.50f),Scale(up,1.05f),6.0f,
+            const auto contactCenter=Add(railImpact.position,Scale(railImpact.normal,0.15f));
+            glowQuad(contactCenter,Scale(right,1.50f),Scale(up,1.05f),6.0f,
                 {1.45f,0.72f,0.19f,flash*0.65f});
-            glowQuad(Add(railImpact.position,{0,0.15f,0}),Scale(right,1.15f),Scale(up,0.85f),2.0f,
+            glowQuad(contactCenter,Scale(right,1.15f),Scale(up,0.85f),2.0f,
                 {2.2f,1.55f,0.70f,flash*1.8f});
             const auto strikeSample=railTitleScene_.Path().Evaluate(
                 railTitleScene_.Distance()+RailTitleScene::DepartureImpactAhead);
             const float contactGlow=std::exp(-age*10.0f)*(std::max)(0.0f,1.0f-age/0.32f);
-            glowQuad(Add(railImpact.position,{0,0.025f,0}),Scale(strikeSample.tangent,1.30f),
-                Scale(strikeSample.right,0.28f),6.0f,{2.0f,1.05f,0.29f,contactGlow});
+            if(railImpact.wall) {
+                const auto wallRight=NormalizeOr(Cross(Vector3{0,1,0},railImpact.normal),right);
+                const auto wallUp=Cross(railImpact.normal,wallRight);
+                glowQuad(Add(railImpact.position,Scale(railImpact.normal,0.035f)),
+                    Scale(wallRight,0.90f),Scale(wallUp,0.75f),6.0f,
+                    {2.0f,1.05f,0.29f,contactGlow});
+            } else {
+                glowQuad(Add(railImpact.position,{0,0.025f,0}),Scale(strikeSample.tangent,1.30f),
+                    Scale(strikeSample.right,0.28f),6.0f,{2.0f,1.05f,0.29f,contactGlow});
+            }
             for(uint32_t spark=0;spark<RailTitleScene::RailImpactSparkCount;++spark) {
                 const auto grain=RailTitleScene::EvaluateRailSpark(railImpact,spark);
                 if(grain.opacity<=0.001f) continue;
@@ -6880,7 +6915,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         for(const auto& cue:railTitleScene_.AttackCues()) {
             if(focused && cue.kind==RailTitleAttackCueKind::NearMiss)
                 (void)audio_.Play(railEnemyProjectileFlyBySound_,0.16f);
-            if(focused && cue.kind==RailTitleAttackCueKind::RailImpact)
+            if(focused && (cue.kind==RailTitleAttackCueKind::RailImpact || cue.kind==RailTitleAttackCueKind::WallImpact))
                 (void)audio_.Play(railVehicleCollisionSound_,0.20f);
             if(cue.kind!=RailTitleAttackCueKind::Muzzle) continue;
             const uint32_t id=vfxEngine_.Runtime().PlayEffectWithParams(

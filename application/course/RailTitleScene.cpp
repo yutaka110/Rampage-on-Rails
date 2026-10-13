@@ -1,4 +1,5 @@
 #include "RailTitleScene.h"
+#include "../ModelLoaderAssimp.h"
 #include <algorithm>
 #include <cmath>
 
@@ -6,6 +7,42 @@ namespace {
 constexpr float Pi = 3.14159265358979323846f;
 Vector3 Add(Vector3 a, Vector3 b) { return {a.x+b.x,a.y+b.y,a.z+b.z}; }
 Vector3 Scale(Vector3 a, float s) { return {a.x*s,a.y*s,a.z*s}; }
+float Dot(Vector3 a, Vector3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
+Vector3 Cross(Vector3 a, Vector3 b) {
+    return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};
+}
+// The title has one static cave and one cinematic wall shot. Cache the imported
+// geometry, and intersect it only when Start is confirmed, never every frame.
+bool TraceTitleTunnel(Vector3 origin, Vector3 end, Vector3& contact, Vector3& normal) {
+    static const auto mesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape","TitleTunnel.obj");
+    const auto direction=Add(end,Scale(origin,-1));
+    float nearest=1.0f;
+    bool found=false;
+    for(size_t i=0;i+2<mesh.indices.size();i+=3) {
+        const auto point=[&](uint32_t index) {
+            const auto& p=mesh.vertices[index].position;
+            return Vector3{p.x,p.y,p.z};
+        };
+        const auto a=point(mesh.indices[i]), b=point(mesh.indices[i+1]), c=point(mesh.indices[i+2]);
+        const auto e1=Add(b,Scale(a,-1)), e2=Add(c,Scale(a,-1));
+        const auto p=Cross(direction,e2);
+        const float determinant=Dot(e1,p);
+        if(std::abs(determinant)<0.000001f) continue;
+        const auto offset=Add(origin,Scale(a,-1));
+        const float u=Dot(offset,p)/determinant;
+        if(u<0 || u>1) continue;
+        const auto q=Cross(offset,e1);
+        const float v=Dot(direction,q)/determinant;
+        if(v<0 || u+v>1) continue;
+        const float t=Dot(e2,q)/determinant;
+        if(t<0 || t>nearest) continue;
+        nearest=t; found=true;
+        normal=Normalize(Cross(e1,e2));
+        if(Dot(normal,direction)>0) normal=Scale(normal,-1);
+    }
+    if(found) contact=Add(origin,Scale(direction,nearest));
+    return found;
+}
 float CollapseRandom(uint32_t seed, uint32_t index, uint32_t channel) {
     uint32_t bits=seed*747796405u+index*2891336453u+channel*277803737u;
     bits=((bits>>((bits>>28u)+4u))^bits)*277803737u;
@@ -21,6 +58,7 @@ bool RailTitleScene::Initialize() {
     shots_.clear(); attackCues_.clear();
     dustClouds_.clear();
     railImpact_ = {}; departureShotFired_ = false;
+    departureWallHit_=false;
     sandCollapse_={}; renderScenery_={};
     attackTime_ = 0.0; nextShotTime_ = 1.2;
     shotSequence_ = 0; burstShot_ = 0; muzzleFlashTime_ = 0.0f;
@@ -192,6 +230,7 @@ void RailTitleScene::Update(float deltaTime) {
     const auto behind = path_.Evaluate(state_.distance-gap);
     pursuer_.position = Add(behind.position,Scale(behind.right,-10.0f+2.4f*std::sin(age_*0.8f)));
     pursuer_.position.y += 3.6f+0.65f*std::sin(age_*1.7f);
+    if(starting_) pursuer_.position=DepartureDronePosition(startTime_);
     // Lead the moving cart, then deliberately miss onto the flat sand corridor.
     // Alternate sides of the rail, keeping every impact away from the sleepers.
     constexpr float lanes[]{-5.0f,5.5f,-4.5f};
@@ -382,7 +421,10 @@ void RailTitleScene::UpdateAttack(float deltaTime) {
         if(t>=1.0f) {
             if(shot.railStrike) {
                 railImpact_={shot.target,(std::max)(0.0f,startTime_-DepartureImpactTime),shot.id,true};
-                attackCues_.push_back({RailTitleAttackCueKind::RailImpact,shot.target});
+                railImpact_.wall=departureWallHit_;
+                railImpact_.normal=departureWallNormal_;
+                attackCues_.push_back({departureWallHit_ ? RailTitleAttackCueKind::WallImpact :
+                    RailTitleAttackCueKind::RailImpact,shot.target});
             } else {
                 attackCues_.push_back({RailTitleAttackCueKind::GroundImpact,shot.target});
                 dustClouds_.push_back({shot.target,0.0f,shot.id});
@@ -410,6 +452,7 @@ void RailTitleScene::UpdateAttack(float deltaTime) {
         shot.origin={local.x*world.m[0][0]+local.y*world.m[1][0]+local.z*world.m[2][0]+world.m[3][0],
             local.x*world.m[0][1]+local.y*world.m[1][1]+local.z*world.m[2][1]+world.m[3][1],
             local.x*world.m[0][2]+local.y*world.m[1][2]+local.z*world.m[2][2]+world.m[3][2]};
+        if(departureWallHit_) shot.origin=departureShotOrigin_;
         shot.age=startTime_-DepartureShotTime;
         const float t=shot.age/shot.duration;
         shot.position=Add(Scale(shot.origin,1-t),Scale(shot.target,t));
@@ -480,6 +523,16 @@ RailTitleSandGrain RailTitleScene::EvaluateRailSpark(const RailTitleRailImpact& 
     spark.position=Add(impact.position,{std::cos(angle)*spread,
         (std::max)(0.04f+lift*age-4.9f*age*age,0.04f),std::sin(angle)*spread});
     spark.velocity={std::cos(angle)*speed*drag,lift-9.8f*age,std::sin(angle)*speed*drag};
+    if(impact.wall) {
+        // Eject into the cave air, rather than spreading along a ground plane.
+        const auto side=Normalize(Cross(std::abs(impact.normal.y)<0.9f ? Vector3{0,1,0} : Vector3{1,0,0},impact.normal));
+        const auto vertical=Cross(impact.normal,side);
+        const auto velocity=Add(Scale(impact.normal,3.8f+4.0f*random(4)),
+            Add(Scale(side,std::cos(angle)*speed),Scale(vertical,std::sin(angle)*speed)));
+        spark.position=Add(impact.position,Add(Scale(impact.normal,0.07f),
+            Add(Scale(velocity,(1-drag)/1.8f),Vector3{0,-4.9f*age*age,0})));
+        spark.velocity=Add(Scale(velocity,drag),Vector3{0,-9.8f*age,0});
+    }
     spark.radius=0.060f+0.024f*random(3);
     spark.opacity=impact.active && age<life ? 0.95f*(1-fade*fade*(3-2*fade)) : 0.0f;
     return spark;
@@ -571,6 +624,7 @@ void RailTitleScene::BeginStart() {
     tunnel.scale={1,1,1};
     tunnel.cullAheadDistance=tunnel.cullBehindDistance=5000.0f;
     scenery_.terrainPlacements.push_back(tunnel);
+    PrepareDepartureWallShot();
     renderScenery_=scenery_;
     const auto collapseSite=sceneryPath_.Evaluate(400.0f+TunnelLead+14.0f);
     sandCollapse_={Add(collapseSite.position,{0,-0.30f,0}),
@@ -689,13 +743,55 @@ Vector3 RailTitleScene::DepartureDronePosition(float elapsed) const {
     const auto behind=path_.Evaluate(startDistance_+Speed*elapsed-gap);
     Vector3 position=Add(behind.position,Scale(behind.right,-10.0f+2.4f*std::sin(age*0.8f)));
     position.y+=3.6f+0.65f*std::sin(age*1.7f);
+    // Ease into the entrance corridor before firing at the opposite left wall.
+    // Keep the retained rail's longitudinal motion and all existing hover.
+    const auto entrance=sceneryPath_.Evaluate(400.0f+TunnelLead);
+    const float lateral=Dot(Add(position,Scale(entrance.position,-1)),entrance.right);
+    const float t=(std::clamp)(elapsed/1.45f,0.0f,1.0f);
+    position=Add(position,Scale(entrance.right,-lateral*t*t*(3.0f-2.0f*t)));
     return position;
 }
 Vector3 RailTitleScene::DepartureImpactTarget() const {
+    if(departureWallHit_) return departureWallTarget_;
     const auto sample=path_.Evaluate(startDistance_+Speed*DepartureImpactTime+DepartureImpactAhead);
     const auto& track=track_.Result().definition;
     return Add(sample.position,Add(Scale(sample.right,-track.trackGauge*0.5f),
         Scale(sample.up,track.railHeadVerticalOffset+track.railHeadHeight*0.5f+0.012f)));
+}
+void RailTitleScene::PrepareDepartureWallShot() {
+    departureWallHit_=false;
+    const auto frame=sceneryPath_.Evaluate(400.0f+TunnelLead);
+    const auto toWorld=[&](Vector3 p) {
+        return Add(frame.position,Add(Scale(frame.right,p.x),Add(Scale(frame.up,p.y),Scale(frame.tangent,p.z))));
+    };
+    const auto toLocal=[&](Vector3 p) {
+        const auto d=Add(p,Scale(frame.position,-1));
+        return Vector3{Dot(d,frame.right),Dot(d,frame.up),Dot(d,frame.tangent)};
+    };
+    // Aim beyond the upper left wall. The first mesh intersection owns the
+    // contact, including the irregular mouth, regardless of title lap phase.
+    Vector3 target=toWorld({-12.0f,7.0f,50.0f});
+    const auto position=DepartureDronePosition(DepartureShotTime);
+    for(int iteration=0;iteration<5;++iteration) {
+        const auto delta=Add(target,Scale(position,-1));
+        const float length=std::sqrt(Dot(delta,delta));
+        const Vector3 rotation{std::asin(delta.y/length),std::atan2(-delta.x,-delta.z),
+            0.05f*std::sin(DepartureShotTime*3.0f)};
+        const auto world=MakeAffineMatrix(Vector3{1.25f,1.25f,1.25f},rotation,position);
+        const Vector3 local{0.30f,-0.61f,-0.99f};
+        const Vector3 origin{local.x*world.m[0][0]+local.y*world.m[1][0]+local.z*world.m[2][0]+world.m[3][0],
+            local.x*world.m[0][1]+local.y*world.m[1][1]+local.z*world.m[2][1]+world.m[3][1],
+            local.x*world.m[0][2]+local.y*world.m[1][2]+local.z*world.m[2][2]+world.m[3][2]};
+        Vector3 contact{},normal{};
+        const auto end=Add(origin,Scale(Add(target,Scale(origin,-1)),1.05f));
+        if(!TraceTitleTunnel(toLocal(origin),toLocal(end),contact,normal)) return;
+        target=toWorld(contact);
+        departureShotOrigin_=origin;
+        departureWallTarget_=target;
+        departureWallNormal_=Normalize(Add(Scale(frame.right,normal.x),
+            Add(Scale(frame.up,normal.y),Scale(frame.tangent,normal.z))));
+    }
+    departureWallHit_=true;
 }
 CourseCameraKey RailTitleScene::DepartureCameraRig() {
     CourseCameraKey rig{};

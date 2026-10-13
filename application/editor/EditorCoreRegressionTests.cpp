@@ -32629,7 +32629,8 @@ void TestRailTitleGroundFire(RegressionRunner& runner) {
                 const float forward=delta.x*cart.tangent.x+delta.z*cart.tangent.z;
                 const float lateral=std::abs(delta.x*cart.right.x+delta.z*cart.right.z);
                 if(std::abs(forward)<3.55f+RailTitleScene::DepartureShotRadius)
-                    departureClearance &= lateral>2.4f+RailTitleScene::DepartureShotRadius;
+                    departureClearance &= lateral>2.4f+RailTitleScene::DepartureShotRadius ||
+                        delta.y>3.0f+RailTitleScene::DepartureShotRadius;
             }
         }
         runner.Expect(departureClearance,"Starting later in the title loop must still keep the cinematic shot clear of the cart");
@@ -32823,6 +32824,8 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
     const auto tunnelMesh=LoadObjFile_Assimp("Resources/course_meshes/TitleLandscape","TitleTunnel.obj");
     bool tunnelClear=!tunnelMesh.indices.empty(), entranceVisible=true, caveEnclosesView=true;
     bool departureStraight=true, departureSupported=true, rearCurvePreserved=true;
+    bool wallShotContact=true,wallShotVisible=true,wallEjecta=true;
+    int wallShotCount=0;
     for(int phase=0;phase<12;++phase) {
         RailTitleScene entry;entry.Initialize();
         const int idleFrames=int((phase/12.0f)*entry.LapLength()/RailTitleScene::Speed/0.05f);
@@ -32862,6 +32865,29 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
         for(int frame=0;frame<int(RailTitleScene::StartDuration/0.05f)+3 && !entry.ReadyForGameplay();++frame) {
             entry.Update(0.05f);
             const Vector3 eye=entry.CameraPosition();
+            for(const auto& shot:entry.Shots()) if(shot.railStrike) {
+                const float contact=nearest(tunnel,shot.origin,sub(shot.target,shot.origin));
+                wallShotContact &= std::abs(contact-1.0f)<0.001f && shot.target.y>4.0f;
+            }
+            for(const auto& cue:entry.AttackCues()) if(cue.kind==RailTitleAttackCueKind::WallImpact) {
+                ++wallShotCount;
+                const auto& hit=entry.RailImpact();
+                wallShotVisible &= std::abs(nearest(tunnel,eye,sub(hit.position,eye))-1.0f)<0.001f;
+                const auto viewForward=Normalize(sub(entry.CameraTarget(),eye));
+                const auto viewRight=Normalize(cross(Vector3{0,1,0},viewForward));
+                const auto viewUp=cross(viewForward,viewRight);
+                const auto toHit=sub(hit.position,eye);
+                const float projectedDepth=dot(toHit,viewForward)*std::tan(entry.CameraFov()*0.5f);
+                wallShotVisible &= projectedDepth>0 &&
+                    dot(toHit,viewRight)<-1.0f &&
+                    std::abs(dot(toHit,viewRight)/(projectedDepth*16.0f/9.0f))<0.88f &&
+                    std::abs(dot(toHit,viewUp)/projectedDepth)<0.80f;
+                auto sampled=hit; sampled.age=0.10f;
+                for(uint32_t i=0;i<RailTitleScene::RailImpactSparkCount;++i) {
+                    const auto fragment=RailTitleScene::EvaluateRailSpark(sampled,i);
+                    wallEjecta &= dot(sub(fragment.position,hit.position),hit.normal)>0.05f;
+                }
+            }
             auto cart=entry.Path().Evaluate(entry.Distance()).position;cart.y+=1.5f;
             const auto pose=entry.Path().Evaluate(entry.Distance());
             const auto delta=sub(pose.position,departure.position);
@@ -32897,6 +32923,10 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
         "All twelve departure phases must preserve the cart position and follow grounded straight rails toward the cave");
     runner.Expect(rearCurvePreserved,
         "Starting must preserve the travelled curve behind the cart, including a join inside a Bezier segment");
+    runner.Expect(wallShotContact && wallShotCount==12,
+        "At twelve departure phases, the shot must end at the first actual cave mesh intersection above the floor");
+    runner.Expect(wallShotVisible && wallEjecta,
+        "The left cave wall contact must remain visible to the camera and eject fragments into the air instead of behind the rock");
 
 }
 
@@ -32981,7 +33011,7 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
                     ++nearMisses;
                     impactDriven &= elapsed<RailTitleScene::DepartureImpactTime+0.04f;
                 }
-                if(cue.kind==RailTitleAttackCueKind::RailImpact) ++railHits;
+                if(cue.kind==RailTitleAttackCueKind::WallImpact) ++railHits;
             }
             for(const auto& shot:title.Shots()) if(shot.railStrike) {
                 if(!sawDepartureShot) {
@@ -33007,14 +33037,16 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
                     const float side=std::abs(delta.x*cart.right.x+delta.z*cart.right.z);
                     if(std::abs(forward)<3.55f+RailTitleScene::DepartureShotRadius) {
                         closestSide=(std::min)(closestSide,side);
-                        shotClearance &= side>2.4f+RailTitleScene::DepartureShotRadius;
+                        shotClearance &= side>2.4f+RailTitleScene::DepartureShotRadius ||
+                            delta.y>3.0f+RailTitleScene::DepartureShotRadius;
                     }
                 }
             }
             const auto& hit=title.RailImpact();
             if(hit.active) {
                 fixedRailContact &= hit.position.x==fixedTarget.x && hit.position.z==fixedTarget.z &&
-                    std::abs(hit.position.y-0.112f)<0.001f;
+                    hit.wall && hit.position.y>4.0f && std::abs(hit.normal.x*hit.normal.x+
+                        hit.normal.y*hit.normal.y+hit.normal.z*hit.normal.z-1.0f)<0.001f;
                 if(hit.age<0.12f) {
                     const auto cameraForward=Normalize(Vector3{title.CameraTarget().x-eye.x,
                         title.CameraTarget().y-eye.y,title.CameraTarget().z-eye.z});
@@ -33097,9 +33129,9 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             sweepPeakFrame<reflectionPeakFrame && title.LightSweep().y==0,
             "Localized light must cross after the orbit, peak before the rail reflection, pause cleanly and extinguish before blackout");
         runner.Expect(departureMuzzles==1 && nearMisses==1 && railHits==1 && sawDepartureShot &&
-            fixedRailContact && shotClearance && closestSide<5.2f && impactDriven,
-            "One departure shot must narrowly clear the moving cart, hit a fixed rail head once and then trigger its reflection");
-        runner.Expect(visibleRailContact,"Rail contact must project above the moving cart front lip during the initial spark burst");
+            fixedRailContact && shotClearance && impactDriven,
+            "One departure shot must clear the moving cart, hit a fixed cave wall once and then trigger its reflection");
+        runner.Expect(visibleRailContact,"Wall contact must project above the moving cart front lip during the initial spark burst");
         runner.Expect(lensOrdered && lensOverlapsShadow && peakLens>0.5f &&
             title.LensLeakStrength()<0.1f && title.LensLeakAge()>1.0f,
             "Lens exposure must follow one confirmed impact, pause on its clock, overlap cave shadow and decay before handoff");

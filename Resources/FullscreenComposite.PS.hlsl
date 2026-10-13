@@ -234,8 +234,8 @@ float3 RotateCollapseRock(float3 p, float3 axis, float sine, float cosine) {
 // Actual convex solid intersections in camera space, not textured flat quads.
 // A sphere rejection bounds the work before testing the fourteen rock faces.
 bool TraceCollapseRock(float3 ray, float3 center, float3 scale, float seed, float tumble,
-                       inout float nearest, out float3 stone) {
-    stone=0.0f;
+                       float fadeProgress, inout float nearest, out float3 stone, out float opacity) {
+    stone=0.0f;opacity=0.0f;
     float radius=length(scale);
     float along=dot(ray,center);
     if(along<=0.0f || along*along-dot(center,center)+radius*radius<0.0f) return false;
@@ -257,7 +257,12 @@ bool TraceCollapseRock(float3 ray, float3 center, float3 scale, float seed, floa
             uint corner=face-6;
             normal=float3((corner&1u)!=0 ? 1.0f : -1.0f,
                 (corner&2u)!=0 ? 1.0f : -1.0f,(corner&4u)!=0 ? 1.0f : -1.0f)*0.57735027f;
-            plane=1.19f+0.14f*frac(seed*17.3f+float(face)*0.293f);
+            // Unequal fracture cuts break the repeated bevelled-block shape.
+            normal=normalize(normal+0.12f*float3(
+                frac(seed*13.7f+float(face)*0.41f)-0.5f,
+                frac(seed*19.3f+float(face)*0.37f)-0.5f,
+                frac(seed*23.1f+float(face)*0.29f)-0.5f));
+            plane=1.08f+0.32f*frac(seed*17.3f+float(face)*0.293f);
         }
         float denominator=dot(normal,direction);
         float planeDistance=plane-dot(normal,origin);
@@ -272,21 +277,30 @@ bool TraceCollapseRock(float3 ray, float3 center, float3 scale, float seed, floa
         if(nearHit>farHit) return false;
     }
     if(nearHit<=0.0f || nearHit>=nearest) return false;
+    // Camera-up defines a descending veil of dust. Keep the solid surface
+    // present; this value controls smoke absorption, not see-through geometry.
+    float3 localUp=RotateCollapseRock(float3(0,1,0),axis,-sine,cosine);
+    float halfHeight=max(dot(abs(localUp),scale),0.001f);
+    float down=saturate((center.y+halfHeight-ray.y*nearHit)/(2.0f*halfHeight));
+    float fadeEdge=lerp(-0.18f,1.18f,saturate(fadeProgress));
+    opacity=smoothstep(fadeEdge-0.16f,fadeEdge+0.16f,down);
     nearest=nearHit;
     float3 normal=normalize(RotateCollapseRock(faceNormal/scale,axis,sine,cosine));
     float3 localHit=origin+direction*nearHit;
-    float relief=FilmBurnNoise(localHit.xy*7.5f+seed*23.0f)*0.65f+
-        FilmBurnNoise(localHit.yz*13.0f+19.0f)*0.35f;
+    float relief=FilmBurnNoise(localHit.xy*9.3f+seed*23.0f)*0.34f+
+        FilmBurnNoise(localHit.yz*13.7f+19.0f)*0.33f+
+        FilmBurnNoise(localHit.zx*18.1f+seed*31.0f)*0.33f;
     float diffuse=saturate(dot(normal,normalize(float3(-0.45f,0.80f,-0.65f))));
-    float fill=0.30f+0.12f*saturate(normal.y);
-    float rim=pow(1.0f-saturate(dot(normal,-ray)),3.0f)*0.065f;
-    float3 albedo=lerp(float3(0.39f,0.32f,0.25f),float3(0.53f,0.45f,0.35f),seed);
-    stone=albedo*(fill+diffuse*0.82f)*(0.82f+0.26f*relief)+rim*float3(0.8f,0.65f,0.44f);
+    float3 fill=float3(0.27f,0.23f,0.18f)+saturate(normal.y)*float3(0.09f,0.075f,0.055f);
+    float rim=pow(1.0f-saturate(dot(normal,-ray)),3.0f)*0.025f;
+    float3 albedo=lerp(float3(0.39f,0.29f,0.19f),float3(0.53f,0.41f,0.28f),seed);
+    float3 key=diffuse*float3(0.76f,0.63f,0.47f);
+    stone=albedo*(fill+key)*(0.82f+0.26f*relief)+rim*float3(0.8f,0.65f,0.44f);
     return true;
 }
 
-bool LateCollapseRocks(float2 uv, float age, out float3 stone, out float mist) {
-    stone=0.0f;mist=0.0f;
+bool LateCollapseRocks(float2 uv, float age, out float3 stone, out float mist, out float opacity) {
+    stone=0.0f;mist=0.0f;opacity=0.0f;
     // Late pieces have left the view before the incoming dust pass expires.
     if(age<0.85f || age>2.55f) return false;
     uint width,height;
@@ -296,33 +310,52 @@ bool LateCollapseRocks(float2 uv, float age, out float3 stone, out float mist) {
         (0.5f-uv.y)*2.0f*0.3650285f,1.0f));
     float nearest=10000.0f;
     bool hit=false;
-    [loop] for(uint i=0;i<8;++i) {
+    [loop] for(uint i=0;i<16;++i) {
         float seed=FilmBurnHash(float2(float(i)+7.0f,91.4f));
-        float birth=0.85f+float(i)*0.115f+seed*0.07f;
+        // Stratified lanes guarantee edge-to-edge coverage. Four uneven waves
+        // distribute rocks vertically instead of packing them into one row.
+        uint laneIndex=(i*5u)%16u;
+        float birth=0.85f+float(i/4u)*0.19f+float(i%4u)*0.035f+seed*0.07f;
         float flight=age-birth;
-        if(flight<0.0f || flight>1.0f) continue;
-        float depth=3.8f+2.8f*FilmBurnHash(float2(float(i),37.1f));
-        float lane=0.14f+0.72f*FilmBurnHash(float2(float(i),15.7f));
-        float size=i%3==0 ? 0.38f+seed*0.17f : 0.23f+seed*0.16f;
+        if(flight<0.0f) continue;
+        float depthSeed=FilmBurnHash(float2(float(i),37.1f));
+        uint depthLayer=i%4u;
+        float depth=depthLayer==0u ? 3.5f+1.3f*depthSeed :
+            depthLayer==3u ? 9.0f+3.0f*depthSeed : 6.0f+2.0f*depthSeed;
+        float lane=(float(laneIndex)+0.18f+0.64f*FilmBurnHash(float2(float(i),15.7f)))/16.0f;
+        float size=depthLayer==0u ? 0.34f+seed*0.16f : 0.23f+seed*0.18f;
+        float height=depth*0.3650285f+1.25f+seed*0.75f;
+        float speed=depthLayer==3u ? 7.6f+seed*1.3f : 9.0f+seed*1.6f;
+        float exitTime=(sqrt(speed*speed+19.6f*(height+depth*0.3650285f+size*1.8f))-speed)/9.8f;
+        if(flight>exitTime+0.12f) continue;
         float3 center=float3((lane-0.5f)*2.0f*aspect*0.3650285f*depth+(seed-0.5f)*flight*0.45f,
-            5.1f+seed-(9.4f+seed*1.5f)*flight-4.9f*flight*flight,depth-flight*0.35f);
-        float3 scale=size*float3(0.88f+seed*0.20f,0.70f+seed*0.25f,0.85f);
+            height-speed*flight-4.9f*flight*flight,depth-flight*0.35f);
+        float3 scale=size*float3(0.72f+0.45f*FilmBurnHash(float2(float(i),21.3f)),
+            0.58f+0.60f*FilmBurnHash(float2(float(i),48.7f)),
+            0.65f+0.50f*FilmBurnHash(float2(float(i),62.1f)));
         float tumble=seed*6.2831853f+flight*(3.5f+seed*3.0f);
         float3 candidate;
-        if(TraceCollapseRock(ray,center,scale,seed,tumble,nearest,candidate)) {
-            stone=candidate;mist=0.08f+depth*0.015f;hit=true;
+        float candidateOpacity;
+        float fade=smoothstep(exitTime*0.52f,exitTime*0.95f,flight);
+        if(TraceCollapseRock(ray,center,scale,seed,tumble,fade,nearest,candidate,candidateOpacity)) {
+            stone=candidate;mist=nearest;opacity=candidateOpacity;hit=true;
         }
-        // Two small solid chips separate from a falling lump, retaining its
-        // downward momentum while gaining lateral motion and extra gravity.
-        float chipAge=flight-0.22f;
-        if(chipAge<=0.0f) continue;
+        // Irregularly shed zero, one or two chips, with independent release
+        // times and directions. Avoid identical paired satellites on every rock.
+        uint chipCount=(uint)(FilmBurnHash(float2(float(i),73.9f))*3.0f);
         [unroll] for(uint chip=0;chip<2;++chip) {
-            float side=chip==0 ? -1.0f : 1.0f;
-            float3 chipCenter=center+float3(side*(0.13f+chipAge*1.2f),
-                -0.10f-chipAge*0.6f-2.2f*chipAge*chipAge,side*0.12f);
-            if(TraceCollapseRock(ray,chipCenter,scale*(chip==0 ? 0.24f : 0.18f),
-                frac(seed+float(chip)*0.39f),tumble+side*chipAge*6.0f,nearest,candidate)) {
-                stone=candidate;mist=0.09f+depth*0.015f;hit=true;
+            if(chip>=chipCount) continue;
+            float chipSeed=FilmBurnHash(float2(float(i)*3.0f+float(chip),107.3f));
+            float chipAge=flight-(0.12f+chipSeed*0.20f);
+            if(chipAge<=0.0f) continue;
+            float angle=chipSeed*6.2831853f;
+            float3 offset=float3(cos(angle)*scale.x*0.8f,sin(angle)*scale.y*0.7f,(chipSeed-0.5f)*scale.z);
+            float3 velocity=float3(cos(angle)*(0.65f+chipSeed),-0.3f-chipSeed*0.7f,sin(angle)*0.35f);
+            float3 chipCenter=center+offset+velocity*chipAge+float3(0,-2.2f*chipAge*chipAge,0);
+            float3 chipScale=scale*(0.10f+chipSeed*0.15f)*float3(0.80f,1.0f,0.85f);
+            if(TraceCollapseRock(ray,chipCenter,chipScale,chipSeed,
+                tumble+(chipSeed-0.5f)*chipAge*10.0f,fade,nearest,candidate,candidateOpacity)) {
+                stone=candidate;mist=nearest;opacity=candidateOpacity;hit=true;
             }
         }
     }
@@ -381,10 +414,18 @@ float4 PresentSandTransition(float2 uv) {
     float3 result=scene*transmittance+dustColor*(1.0f-transmittance);
     float3 stone;
     float rockMist;
-    if(LateCollapseRocks(uv,age,stone,rockMist)) {
-        // Near-camera solids remain legible even when the distant scene is
-        // fully concealed. The continuous age carries them across the swap.
-        result=lerp(stone,dustColor,saturate(rockMist+cloud*0.08f));
+    float rockOpacity;
+    if(LateCollapseRocks(uv,age,stone,rockMist,rockOpacity)) {
+        // One dust field scatters light from the cave and the falling solids.
+        // Distance softens far silhouettes and facet contrast; a descending
+        // local veil hides the top without making the stone transparent.
+        float storm=saturate(gCollapseDust+front*0.55f);
+        float pathDepth=max(rockMist-1.4f,0.0f);
+        float fogDepth=(0.045f+0.19f*storm*(0.60f+0.40f*cloud))*pathDepth;
+        float upperVeil=-log(max(rockOpacity,0.001f))*(0.85f+middle*0.30f);
+        float rockTransmission=exp(-fogDepth-upperVeil);
+        float3 rockColor=lerp(dustColor,stone,rockTransmission);
+        result=lerp(result,rockColor,incoming ? front : 1.0f);
     }
     return float4(result,1.0f);
 }

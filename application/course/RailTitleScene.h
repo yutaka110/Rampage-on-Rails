@@ -20,7 +20,7 @@ struct RailTitleShot final {
     bool railStrike = false;
     bool nearMissNotified = false;
 };
-enum class RailTitleAttackCueKind { Muzzle, GroundImpact, NearMiss, RailImpact };
+enum class RailTitleAttackCueKind { Muzzle, GroundImpact, NearMiss, RailImpact, WallImpact };
 struct RailTitleAttackCue final {
     RailTitleAttackCueKind kind = RailTitleAttackCueKind::Muzzle;
     Vector3 position{};
@@ -42,6 +42,8 @@ struct RailTitleRailImpact final {
     float age = 0.0f;
     uint32_t seed = 0;
     bool active = false;
+    Vector3 normal{0,1,0};
+    bool wall = false;
 };
 
 // A bounded, presentation-only collapse. Positions are fixed in world space;
@@ -177,6 +179,7 @@ private:
     void UpdateSandCollapse();
     Vector3 DepartureDronePosition(float elapsed) const;
     Vector3 DepartureImpactTarget() const;
+    void PrepareDepartureWallShot();
     float ChaseDistance() const { return 8.0f; }
     RailPath path_;
     RailPath sceneryPath_;
@@ -209,6 +212,8 @@ private:
     std::vector<RailTitleDustCloud> dustClouds_;
     RailTitleRailImpact railImpact_{};
     bool departureShotFired_ = false;
+    Vector3 departureShotOrigin_{}, departureWallTarget_{}, departureWallNormal_{0,1,0};
+    bool departureWallHit_ = false;
     double attackTime_ = 0.0;
     double nextShotTime_ = 1.2;
     uint32_t shotSequence_ = 0;
