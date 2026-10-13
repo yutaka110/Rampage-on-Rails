@@ -25,6 +25,7 @@ public:
         bool loop = false);
     void Stop(audio::SoundHandle handle);
     void SetPlayback(audio::SoundHandle handle, float volume, float pitch = 1.0f);
+    void SetPaused(audio::SoundHandle handle, bool paused);
     void Unload(audio::SoundHandle handle);
 
 private:

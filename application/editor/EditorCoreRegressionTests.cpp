@@ -32578,6 +32578,66 @@ void TestRailTitleSandCollapse(RegressionRunner& runner) {
         "Near-camera collapse haze must route through the normal presentation composite even before the burn begins");
 }
 
+void TestRailSandTransitionAudio(RegressionRunner& runner) {
+    for(int fps:{30,60,120}) {
+        RailSandTransitionAudioClock clock;
+        int starts=0;
+        for(int cycle=0;cycle<2;++cycle) {
+            clock.Update(false,0,true);
+            for(int i=0;i<=fps*3;++i) {
+                const float age=float(i)/fps;
+                starts+=clock.Update(true,age,true).start ? 1 : 0;
+                runner.Expect(!clock.Update(true,age,true).start,
+                    "Repeated rendering at the same sand age must not stack sound voices");
+                if(i==fps) {
+                    const auto pause=clock.Update(true,age,false);
+                    const auto resume=clock.Update(true,age,true);
+                    runner.Expect(pause.pauseChanged && pause.paused && !pause.start &&
+                        resume.pauseChanged && !resume.paused && !resume.start,
+                        "Focus loss must pause and resume the existing collapse buffer without replaying it");
+                }
+            }
+            runner.Expect(starts==cycle+1,
+                "Both directions must start once and keep one sound across the covered world swap");
+        }
+        runner.Expect(clock.Update(true,0,true).start,
+            "A new sand timeline must replace the old sound even without an inactive render frame");
+        clock.Reset();
+        runner.Expect(!clock.Update(true,0,false).start && clock.Update(true,0,true).start,
+            "An unfocused transition must defer playback until its clock can advance");
+        clock.Reset();
+        runner.Expect(!clock.Update(true,-1,true).start &&
+            !clock.Update(true,(std::numeric_limits<float>::quiet_NaN)(),true).start,
+            "Invalid presentation ages must not trigger collapse audio");
+    }
+    audio::AudioSystem audio;
+    const auto sound=audio.LoadWave("Resources/audio/rail_sand_transition.wav");
+    const auto* resource=audio.GetSound(sound);
+    runner.Expect(resource && resource->IsValid(),"The shipped collapse WAV must load through the native audio reader");
+    if(!resource || !resource->IsValid()) return;
+    const auto* format=resource->Format();
+    runner.Expect(format->wFormatTag==WAVE_FORMAT_PCM && format->nChannels==2 &&
+        format->nSamplesPerSec==48000 && format->wBitsPerSample==16 && format->nBlockAlign==4 &&
+        resource->pcmData.size()==48000u*4u*36u/10u,
+        "The sound must provide a 3.60-second stereo PCM buffer spanning the falling-rock tail");
+    const auto sample=[&](size_t index) {
+        const int value=int(resource->pcmData[index*2]) | (int(resource->pcmData[index*2+1])<<8);
+        return value>=32768 ? value-65536 : value;
+    };
+    int peak=0;
+    const size_t samples=resource->pcmData.size()/2;
+    double bodyEnergy=0,tailEnergy=0;
+    for(size_t i=0;i<samples;++i) {
+        const int value=sample(i);
+        peak=(std::max)(peak,std::abs(value));
+        if(i>=48000u*2u && i<48000u*4u) bodyEnergy+=double(value)*value;
+        if(i>=samples-4800u*2u) tailEnergy+=double(value)*value;
+    }
+    runner.Expect(peak>10000 && peak<30000 && sample(0)==0 && sample(samples-1)==0 &&
+        tailEnergy/(4800.0*2.0)<bodyEnergy/(48000.0*2.0)*0.05,
+        "The sound must retain headroom and end in a quiet tail without an abrupt final sample");
+}
+
 void TestRailTitleGroundFire(RegressionRunner& runner) {
     uint32_t referenceShots=0,referenceImpacts=0;
     for(int fps : {30,60,120}) {
@@ -33254,7 +33314,7 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
         context.railFilmBurnProgress = progress;
         context.railFilmBurnLensStrength = lensOnly ? 0.35f : 0.0f;
         context.railSandTransition = sandOnly || rockOnly || expiredRocks;
-        context.railSandTransitionAge = rockOnly ? 2.70f : expiredRocks ? 3.05f : sandOnly ? 2.01f : 0.0f;
+        context.railSandTransitionAge = rockOnly ? 3.15f : expiredRocks ? 3.45f : sandOnly ? 2.01f : 0.0f;
         context.railCollapseDustStrength = sandOnly ? 0.68f : 0.0f;
         context.railFilmBurnIncoming = state==-3.0f || rockOnly || expiredRocks;
         context.railFilmBurnInEditorViewport = editorViewport;
@@ -33308,6 +33368,61 @@ void TestRailFilmBurnPresentationGraph(RegressionRunner& runner) {
     }
     }
     }
+}
+
+void TestRailTransitionDemo(RegressionRunner& runner) {
+    for(int fps:{30,60,120}) {
+        RailTransitionDemo demo;
+        runner.Expect(!demo.ButtonVisible() && !demo.RequestReturn(),"Title must not accept a demo return request");
+        for(int cycle=0;cycle<2;++cycle) {
+            demo.BeginGameplay();
+            for(int i=0;i<fps*2;++i) demo.Update(1.0f/fps,false);
+            runner.Expect(!demo.ButtonVisible(),"The return delay must begin after the gameplay entry gate opens");
+            int frames=0;
+            while(!demo.ButtonVisible() && frames<fps*4) {demo.Update(1.0f/fps,true);++frames;}
+            runner.Expect(std::abs(float(frames)/fps-RailTransitionDemo::ButtonDelay)<1.01f/fps,
+                "The central return button must appear after the configured playable delay at every frame rate");
+            demo.Update(-1,true);demo.Update((std::numeric_limits<float>::quiet_NaN)(),true);
+            runner.Expect(demo.RequestReturn() && !demo.RequestReturn() && !demo.ButtonVisible() && !demo.NeedsTitleSwap(),
+                "One return activation must hide the button and reject duplicate/early world switches");
+            float previousAge=0,previousCover=0;
+            bool monotonic=true;
+            frames=0;
+            while(!demo.NeedsTitleSwap() && frames<fps*3) {
+                demo.Update(1.0f/fps,false);++frames;
+                monotonic &= demo.Coverage()>=previousCover && demo.SandAge()>=previousAge;
+                previousCover=demo.Coverage();previousAge=demo.SandAge();
+                const float frozenAge=demo.SandAge();
+                demo.Update(0,false);
+                monotonic &= demo.SandAge()==frozenAge && demo.TravelDeltaTime()==0;
+            }
+            runner.Expect(monotonic && demo.Coverage()==1.0f &&
+                std::abs(float(frames)/fps-RailTransitionDemo::CoverDuration)<1.01f/fps &&
+                std::abs(demo.SandAge()-(RailTitleScene::StartDuration-RailTitleScene::CollapseBegin))<0.0001f,
+                "Return must cover the entire frame on the existing sand timeline before permitting a title reset");
+            const float swapAge=demo.SandAge();demo.CommitTitleSwap();demo.CommitTitleSwap();
+            runner.Expect(demo.RevealingTitle() && demo.Coverage()==1 && demo.SandAge()==swapAge,
+                "The title reveal must preserve the sand/rock clock through one fully hidden world swap");
+            previousCover=1;
+            frames=0;
+            while(demo.Returning() && frames<fps*2) {
+                demo.Update(1.0f/fps,false);++frames;
+                monotonic &= demo.Coverage()<=previousCover && demo.SandAge()>=previousAge;
+                previousCover=demo.Coverage();previousAge=demo.SandAge();
+            }
+            runner.Expect(monotonic && !demo.Returning() && !demo.ButtonVisible() && demo.Coverage()==0 &&
+                std::abs(float(frames)/fps-RailTransitionDemo::RevealDuration)<1.01f/fps,
+                "The falling-rock tail must clear fully before the title accepts a fresh replay");
+        }
+    }
+    for(Vector2 size:std::initializer_list<Vector2>{{1600,900},{1920,1080},{1280,1024},{900,1600}}) {
+        const float scale=(std::min)(size.x/1600,size.y/900);
+        runner.Expect(RailTransitionDemo::HitTest(size.x*0.5f,size.y*0.5f,size.x,size.y) &&
+            !RailTransitionDemo::HitTest(size.x*0.5f+181*scale,size.y*0.5f,size.x,size.y) &&
+            !RailTransitionDemo::HitTest(size.x*0.5f,size.y*0.5f+47*scale,size.x,size.y),
+            "Demo click bounds must match the centered button across widescreen and letterboxed layouts");
+    }
+    runner.Expect(!RailTransitionDemo::HitTest(0,0,0,0),"An empty viewport must not activate the demo button");
 }
 
 void TestRailTitleGameplayEntry(RegressionRunner& runner) {
@@ -34167,11 +34282,13 @@ int RunEditorCoreRegressionTests() {
         {"title landscape ground and camera clearance", [&]() { TestRailTitleLandscape(runner); }},
         {"title cinematic and ambience lifecycle", [&]() { TestRailTitleCinematic(runner); }},
         {"title gameplay camera audio and HUD startup", [&]() { TestRailTitleGameplayEntry(runner); }},
+        {"transition demo return and replay", [&]() { TestRailTransitionDemo(runner); }},
         {"film burn scene HUD capture and presentation ordering", [&]() { TestRailFilmBurnPresentationGraph(runner); }},
         {"title running loop and menu layout", [&]() { TestRailTitleLoop(runner); }},
         {"title body suspension and wheel contact", [&]() { TestRailTitleBodySway(runner); }},
         {"title twin shield pursuit", [&]() { TestRailTitlePursuit(runner); }},
         {"title sand collapse gravity breakup and delayed dust", [&]() { TestRailTitleSandCollapse(runner); }},
+        {"sand transition audio clock and native asset", [&]() { TestRailSandTransitionAudio(runner); }},
         {"title repeating ground fire", [&]() { TestRailTitleGroundFire(runner); }},
         {"authored drone attack timing", [&]() { TestAuthoredDroneAttackTiming(runner); }},
         {"vehicle impact audiovisual and damage HUD", [&]() { TestVehicleImpactAudiovisualAndHud(runner); }},

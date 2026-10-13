@@ -47,6 +47,7 @@ void AppAudio::Unload(audio::SoundHandle handle) {
 }
 
 void AppAudio::Stop(audio::SoundHandle handle) { audioSystem_.Stop(handle); }
+void AppAudio::SetPaused(audio::SoundHandle handle,bool paused) { audioSystem_.SetPaused(handle,paused); }
 void AppAudio::SetPlayback(audio::SoundHandle handle, float volume, float pitch) {
     audioSystem_.SetPlayback(handle,volume,pitch);
 }

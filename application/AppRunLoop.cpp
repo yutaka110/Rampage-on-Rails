@@ -1529,6 +1529,7 @@ AppRunLoop::AppRunLoop(
         "rail-session-retry", 680.0f, 0.160f, 0.50f);
     railTitleAmbience_ = audio_.LoadWave("Resources/audio/title_rail_ambience.wav");
     railTitleTunnelAmbience_ = audio_.LoadWave("Resources/audio/title_rail_ambience_tunnel.wav");
+    railSandTransitionSound_ = audio_.LoadWave("Resources/audio/rail_sand_transition.wav");
     railTitleReticleBootSound_ = audio_.CreateTone("rail-reticle-boot",920.0f,0.045f,0.20f);
     railTitleGaugesBootSound_ = audio_.CreateTone("rail-gauges-boot",1240.0f,0.065f,0.18f);
     railVehicleRollingSound_ = audio_.CreateTone(
@@ -1715,6 +1716,7 @@ AppRunLoop::AppRunLoop(
         railTitleScreenVisible_ = !combatLoopExpansionEnabled &&
             !ResolveCombatLoop10SecondModeFromCommandLine() &&
             !railDefenseUiProofEnabled_;
+        railTransitionDemoEnabled_=railTitleScreenVisible_;
         if (railTitleScreenVisible_) {
             railTitleSavedTerrainEnabled_ = runtimeState_.terrain.enabled;
             railTitleSavedLight_ = runtimeState_.directionalLightData;
@@ -3214,6 +3216,7 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
     std::vector<int> submissionJapaneseCodepoints{
         // Title: レールであばレール (で is already in the HUD set below).
         0x3042, 0x3070, 0x30EB, 0x30EC, 0x30FC, 0x529B,
+        0x306B, 0x30BF, 0x30A4, 0x30C8, // タイトルに戻る (remaining glyphs are below).
         0x304B, 0x3051, 0x3059, 0x3063, 0x3066, 0x3067, 0x3068, 0x306E, 0x3078, 0x307E, 0x308A, 0x308D,
         0x3092, 0x4E00, 0x4E0B, 0x4E0D, 0x4E2D, 0x4E3B, 0x4E45, 0x4E86, 0x4E88, 0x4ECA, 0x4EFB, 0x4F53,
         0x505C, 0x5099, 0x50B7, 0x5168, 0x518D, 0x524D, 0x529F, 0x52D9, 0x533A, 0x5371, 0x53EF, 0x53F3,
@@ -3648,7 +3651,9 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
     };
 
-    if (!railShooterInitialized_) {
+    // Returning to title deliberately invalidates gameplay, but its independent
+    // logo/menu still need the native atlas draw path.
+    if (!railShooterInitialized_ && !railTitleScreenVisible_) {
         return false;
     }
 
@@ -4481,6 +4486,30 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     defensePromptInput.settings = railShooterDefensePromptRendererSettings_;
     railShooterDefensePromptRenderer_.Update(defensePromptInput);
     emitHudCommands(railShooterDefensePromptRenderer_.Frame().commands);
+
+    if(railTransitionDemoEnabled_ && railTransitionDemo_.ButtonVisible() &&
+        !imguiLayer_.WantsDeveloperDiagnostics()) {
+        const float s=(std::min)(float(hudWidth)/1600.0f,float(hudHeight)/900.0f);
+        const float cx=float(hudWidth)*0.5f,cy=float(hudHeight)*0.5f;
+        const float x=cx-180*s,y=cy-46*s,w=360*s,h=92*s;
+        const float fade=railTransitionDemo_.ButtonOpacity();
+        const Vector4 accent=railTransitionDemoHover_ ? Vector4{1.0f,0.84f,0.49f,fade} :
+            Vector4{0.90f,0.71f,0.39f,fade*0.85f};
+        addQuad(x+4*s,y+6*s,w,h,uvWhite,{0,0,0,fade*0.28f});
+        addQuadCorners({x+10*s,y},{x+w,y},{x,y+h},{x+w-10*s,y+h},uvWhite,
+            {0.055f,0.043f,0.030f,fade*0.97f});
+        addQuad(x+12*s,y,w-12*s,2*s,uvWhite,accent);
+        addQuad(x,y+h-2*s,w-12*s,2*s,uvWhite,accent);
+        const auto label=u8"タイトルに戻る";
+        addCenteredText(std::string(reinterpret_cast<const char*>(label)),cx,cy-5*s,1.35f*s,
+            {1.0f,0.96f,0.84f,fade});
+        // A bright key cap makes the keyboard shortcut legible over the cave.
+        addQuad(cx-108*s,cy+9*s,102*s,30*s,uvWhite,{0.90f,0.78f,0.52f,fade});
+        addQuad(cx-107*s,cy+10*s,100*s,28*s,uvWhite,{0.14f,0.11f,0.075f,fade});
+        addCenteredText("ENTER",cx-57*s,cy+30*s,0.85f*s,{1.0f,0.98f,0.90f,fade});
+        addCenteredText("/",cx+10*s,cy+30*s,0.85f*s,{0.93f,0.89f,0.81f,fade});
+        addCenteredText("CLICK",cx+61*s,cy+30*s,0.85f*s,{0.93f,0.89f,0.81f,fade});
+    }
 
     return railLockOnHudAtlasVertexCount_ > 0;
 }
@@ -6436,6 +6465,7 @@ void AppRunLoop::LogRailShooterPerfSpike() {
 }
 
 void AppRunLoop::Shutdown() {
+    StopRailSandTransitionAudio();
     StopRailEnemyAttackFeedback();
     ResetEnemyProjectilePresentation();
     frameCoordinator_.FlushGpu();
@@ -6504,6 +6534,7 @@ void AppRunLoop::UpdateWeaponAttachment() {
 }
 
 void AppRunLoop::EnterVfxPreviewScene() {
+    StopRailSandTransitionAudio();
     StopRailEnemyAttackFeedback();
     StopGameSessionPresentation();
     railShooterVehicleActor_.Reset();
@@ -6534,6 +6565,7 @@ void AppRunLoop::EnterVfxPreviewScene() {
 }
 
 void AppRunLoop::EnterMultiMaterialShowcaseScene() {
+    StopRailSandTransitionAudio();
     StopRailEnemyAttackFeedback();
     StopGameSessionPresentation();
     railShooterVehicleActor_.Reset();
@@ -6736,7 +6768,7 @@ void AppRunLoop::EnterRailShooterScene() {
 
 bool AppRunLoop::HandleTitleScreenMessage(
     UINT message, WPARAM wParam, LPARAM lParam) {
-    if (!railTitleScreenVisible_) return false;
+    if (!railTitleScreenVisible_ && !railTransitionDemoEnabled_) return false;
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
     if (imguiLayer_.IsVisible()) {
         const ImGuiIO& io = ImGui::GetIO();
@@ -6748,6 +6780,30 @@ bool AppRunLoop::HandleTitleScreenMessage(
             (keyboardMessage && io.WantCaptureKeyboard)) return false;
     }
 #endif
+    if(railTransitionDemoEnabled_ && railTransitionDemo_.Returning()) {
+        return (message>=WM_KEYFIRST && message<=WM_KEYLAST) ||
+            (message>=WM_MOUSEFIRST && message<=WM_MOUSELAST);
+    }
+    if(!railTitleScreenVisible_ && railTransitionDemoEnabled_ && railTransitionDemo_.ButtonVisible() &&
+        !imguiLayer_.WantsDeveloperDiagnostics()) {
+        const bool hit=RailTransitionDemo::HitTest(static_cast<short>(LOWORD(lParam)),
+            static_cast<short>(HIWORD(lParam)),float(windowWidth_),float(windowHeight_));
+        if(message==WM_MOUSEMOVE) { railTransitionDemoHover_=hit; return false; }
+        if(message==WM_LBUTTONDOWN && hit) {
+            railTransitionDemoPressed_=true; railTransitionDemoHover_=true; return true;
+        }
+        if(message==WM_LBUTTONUP) {
+            const bool pressed=railTransitionDemoPressed_;
+            railTransitionDemoPressed_=false;
+            if(pressed && hit) (void)railTransitionDemo_.RequestReturn();
+            return pressed || hit;
+        }
+        if(message==WM_KEYDOWN && (wParam==VK_RETURN || wParam==VK_SPACE)) {
+            if((lParam & (LPARAM{1}<<30))==0) (void)railTransitionDemo_.RequestReturn();
+            return true;
+        }
+    }
+    if(!railTitleScreenVisible_) return false;
     // Ignore repeated confirm/menu input while the start camera owns the view.
     if (railTitleScene_.Starting()) return (message >= WM_KEYFIRST && message <= WM_KEYLAST) ||
         (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST);
@@ -6787,8 +6843,57 @@ bool AppRunLoop::HandleTitleScreenMessage(
     return message != WM_MOUSEMOVE;
 }
 
+void AppRunLoop::ReturnToDemoTitle() {
+    if(!railTransitionDemo_.NeedsTitleSwap()) return;
+    StopRailEnemyAttackFeedback();
+    ClearShowcaseEffects();
+    railTitleDustIds_.clear(); railNormalShotLines_.clear();
+    runtimeState_.terrain.previewDistance=0.0f;
+    railShooterInitialized_=false;
+    ApplyRailShooterCourse();
+    railShooterDistance_=railShooterCourseRuntime_.Distance();
+    // Snapshot the restored gameplay environment before title lighting takes over.
+    railTitleSavedTerrainEnabled_=true;
+    railTitleSavedLight_=runtimeState_.directionalLightData;
+    railTitleSavedPointLight_=runtimeState_.pointLightData;
+    railTitleSavedSpotLight_=runtimeState_.spotLight;
+    for(int i=0;i<4;++i) railTitleSavedClearColor_[i]=runtimeState_.clearColor[i];
+    railTitleSavedSkybox_=runtimeState_.showSkybox;
+    railTitleSavedBackdrop_=runtimeState_.showProceduralBackdrop;
+    railTitleScene_=RailTitleScene{};
+    railTitleScreenVisible_=true; railTitleHasLastUpdate_=false;
+    railTitleMenuSelection_=0; railTitleControlsVisible_=false;
+    railTransitionDemoHover_=railTransitionDemoPressed_=false;
+    railTitleDustTimer_=0.0f; railTitleLensSourceSeed_=0;
+    railShooterHasLastUpdateTime_=false;
+    for(int key=0;key<256;++key) previousKeyDown_[key]=(GetAsyncKeyState(key)&0x8000)!=0;
+    previousLeftMouseDown_=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+    railTransitionDemo_.CommitTitleSwap();
+}
+
 void AppRunLoop::UpdateRailShooterFrame() {
     const auto updateStart = RailPerfClock::now();
+    float demoPresentationDt=0.0f;
+    if(railTransitionDemoEnabled_) {
+        const float dt=railTransitionDemoHasLastUpdate_ ?
+            std::chrono::duration<float>(updateStart-railTransitionDemoLastUpdate_).count() : 0.0f;
+        railTransitionDemoLastUpdate_=updateStart; railTransitionDemoHasLastUpdate_=true;
+        const bool focused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
+        demoPresentationDt=focused ? dt : 0.0f;
+        railTransitionDemo_.Update(focused ? dt : 0.0f,
+            !railTitleScreenVisible_ && !railTitleGameplayEntry_.Frame().blockingGameplay);
+        if(railTransitionDemo_.NeedsTitleSwap()) ReturnToDemoTitle();
+    }
+    if(railTransitionDemoEnabled_ && !railTitleScreenVisible_ &&
+        (railTransitionDemo_.ButtonVisible() || railTransitionDemo_.Returning())) {
+        // Hold the complete gameplay frame from the instant the return button
+        // appears. Only the demo's sand clock and button fade keep advancing.
+        frameState_.deltaTime=0.0f;
+        UpdateRailRollingAudio(demoPresentationDt,0.0f,0.7f);
+        vfxEngine_.Update(runtimeState_.vfx,0.0f);
+        railShooterHasLastUpdateTime_=false;
+        return;
+    }
     railInputRouteDebug_.railSceneActive = true;
     railInputRouteDebug_.releaseFireTriggered = false;
     railInputRouteDebug_.releaseTokenCount = 0;
@@ -6813,6 +6918,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if (railTitleScreenVisible_ && railTitleScene_.ReadyForGameplay()) {
         railTitleScreenVisible_ = false;
         railTitleGameplayEntry_.Begin();
+        if(railTransitionDemoEnabled_) railTransitionDemo_.BeginGameplay();
         titleHandoffThisFrame=true;
         runtimeState_.terrain.enabled = railTitleSavedTerrainEnabled_;
         runtimeState_.directionalLightData = railTitleSavedLight_;
@@ -6971,7 +7077,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     railShooterLastUpdateTime_ = updateStart;
     railShooterHasLastUpdateTime_ = true;
-    const bool titleEntryBlocked = railTitleGameplayEntry_.Frame().blockingGameplay;
+    const bool titleStartupBlocked = railTitleGameplayEntry_.Frame().blockingGameplay;
+    const bool titleEntryBlocked = titleStartupBlocked || railTransitionDemo_.Returning();
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
     const bool coursePreviewOwnsRail = coursePreviewSimulationSystem_.IsActive();
     const bool coursePreviewAdvancing =
@@ -7002,8 +7109,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
         !railShooterGameSession_.AllowsGameplaySimulation()) {
         gameplayDeltaTime = 0.0f;
     }
-    const float railTravelDeltaTime=titleEntryBlocked && !coursePreviewOwnsRail
-        ? entryFrame.travelDeltaTime : gameplayDeltaTime;
+    const float railTravelDeltaTime=!coursePreviewOwnsRail && titleStartupBlocked ? entryFrame.travelDeltaTime :
+        !coursePreviewOwnsRail && railTransitionDemo_.Returning() ? railTransitionDemo_.TravelDeltaTime() : gameplayDeltaTime;
     railWeaponHotReloadPollTimer_ += realGameplayDeltaTime;
     if (drone_perf::Enabled()) drone_perf::frame.simulationDeltaTime = gameplayDeltaTime;
     if (railWeaponHotReloadPollTimer_ >= 0.25f &&
@@ -8045,6 +8152,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     normalShotBlockedByUi =
         imguiLayer_.IsVisible() && ImGui::GetIO().WantCaptureMouse;
 #endif
+    normalShotBlockedByUi |= railTransitionDemoEnabled_ && railTransitionDemo_.ButtonVisible() &&
+        (railTransitionDemoHover_ || railTransitionDemoPressed_);
     const bool normalShotPressed = leftMouseDown && !wasLeftMouseDown;
     const bool normalShotReleased = !leftMouseDown && wasLeftMouseDown;
     const bool normalShotTriggerHeld = !titleEntryBlocked && leftMouseDown && !normalShotBlockedByUi && !lockModeActive;
@@ -9784,6 +9893,30 @@ void AppRunLoop::UpdateRailRollingAudio(float deltaTime,float targetGain,float t
         audio_.Stop(railTitleAmbience_);audio_.Stop(railTitleTunnelAmbience_);
         railTitleAmbiencePlaying_=railTitleTunnelAmbiencePlaying_=false;
     }
+}
+
+void AppRunLoop::UpdateRailSandTransitionAudio(bool active,float age,bool focused,float dust,float coverage) {
+    const auto cue=railSandTransitionAudioClock_.Update(active,age,focused);
+    if(cue.start) {
+        // One voice spans the covered world swap; only a new transition
+        // replaces it. Let the cave's short tail finish after the dust clears.
+        audio_.Stop(railSandTransitionSound_);
+        audio_.Play(railSandTransitionSound_,0.55f);
+    } else if(cue.pauseChanged) {
+        audio_.SetPaused(railSandTransitionSound_,cue.paused);
+    }
+    const float duck=active ? 1.0f-0.45f*(std::clamp)((std::max)(dust,coverage),0.0f,1.0f) : 1.0f;
+    const auto& entry=railTitleGameplayEntry_.Frame();
+    const float tunnelBlend=railTitleScreenVisible_ ? railTitleScene_.TunnelShade() :
+        entry.blockingGameplay ? 1.0f-entry.rollingHandoff*0.85f : 0.15f;
+    const float wet=railTitleTunnelAmbiencePlaying_ ? tunnelBlend*0.72f : 0.0f;
+    audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*duck*(1.0f-wet),1.0f);
+    audio_.SetPlayback(railTitleTunnelAmbience_,railTitleAudioGain_*duck*wet,1.0f);
+}
+
+void AppRunLoop::StopRailSandTransitionAudio() {
+    audio_.Stop(railSandTransitionSound_);
+    railSandTransitionAudioClock_.Reset();
 }
 
 void AppRunLoop::DispatchRailVehicleAudio(float deltaTime,float realDeltaTime) {
@@ -12783,7 +12916,22 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         }
         graphContext.railFilmBurnLightSource=railTitleLensSourceScreen_;
     }
+    if(railTransitionDemoEnabled_ && railTransitionDemo_.Returning()) {
+        // Reuse the exact outgoing/incoming sand shader and its continuous
+        // rock clock for the reverse trip, including the late falling pieces.
+        graphContext.railSandTransition=true;
+        graphContext.railSandTransitionAge=railTransitionDemo_.SandAge();
+        graphContext.railFilmBurnProgress=railTransitionDemo_.Coverage();
+        graphContext.railFilmBurnIncoming=railTransitionDemo_.RevealingTitle();
+        graphContext.railCollapseDustStrength=railTransitionDemo_.DustStrength();
+        graphContext.railFilmBurnLensStrength=0.0f;
+    }
     graphContext.railFilmBurnInEditorViewport = imguiLayer_.WantsDeveloperDiagnostics();
+    const bool collapseAudioActive=graphContext.railSandTransition &&
+        (!railTitleScreenVisible_ || graphContext.railFilmBurnIncoming || railTitleScene_.SandCollapse().active);
+    UpdateRailSandTransitionAudio(collapseAudioActive,graphContext.railSandTransitionAge,
+        hwnd_==nullptr || GetForegroundWindow()==hwnd_,
+        graphContext.railCollapseDustStrength,graphContext.railFilmBurnProgress);
     const auto registerPassesStart = RailPerfClock::now();
     const std::string railHudTargetResource =
         graphContext.HasRailFilmBurnPresentation()

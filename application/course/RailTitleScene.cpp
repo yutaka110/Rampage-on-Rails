@@ -659,10 +659,14 @@ float RailTitleScene::MenuOpacity() const {
     return 1.0f-t*t*(3.0f-2.0f*t);
 }
 float RailTitleScene::Blackout() const {
+    return starting_ ? SandCoverageAtAge(startTime_-CollapseBegin) : 0.0f;
+}
+float RailTitleScene::SandCoverageAtAge(float age) {
     // Wait until the chase camera has crossed the mouth, not just the cart.
     // Preserve the readable spread at its existing speed. Once the screen is
     // mostly covered, finish the peripheral pockets without a long black hold.
-    const float elapsed=TunnelCameraDepth()/Speed-FilmBurnDelay;
+    const float coverDelay=(TunnelLead+DepartureCameraRig().backDistance)/Speed+FilmBurnDelay-CollapseBegin;
+    const float elapsed=age-coverDelay;
     const float tailStart=FilmBurnDuration*FilmBurnTailBegin;
     if(elapsed<=tailStart)
         return (std::clamp)(elapsed/FilmBurnDuration,0.0f,FilmBurnTailBegin);
@@ -854,4 +858,76 @@ std::vector<CourseEventMarker> RailTitleGameplayEntry::DispatchCourseEvents(
     std::vector<CourseEventMarker> dispatched;
     dispatched.swap(pendingEvents_);
     return dispatched;
+}
+
+void RailTransitionDemo::BeginGameplay() {
+    phase_=Phase::Playing; playTime_=transitionTime_=0.0; travelDeltaTime_=0.0f;
+}
+void RailTransitionDemo::Update(float deltaTime, bool gameplayStarted) {
+    travelDeltaTime_=0.0f;
+    const double dt=std::isfinite(deltaTime) ? double((std::clamp)(deltaTime,0.0f,0.05f)) : 0.0;
+    if(phase_==Phase::Playing && gameplayStarted) playTime_+=dt;
+    if(phase_==Phase::Covering) {
+        const double previous=transitionTime_;
+        transitionTime_=(std::min)(double(CoverDuration),transitionTime_+dt);
+        travelDeltaTime_=static_cast<float>(transitionTime_-previous);
+    } else if(phase_==Phase::Revealing) {
+        transitionTime_=(std::min)(double(RevealDuration),transitionTime_+dt);
+        if(transitionTime_>=double(RevealDuration)) phase_=Phase::Title;
+    }
+}
+bool RailTransitionDemo::RequestReturn() {
+    if(!ButtonVisible()) return false;
+    phase_=Phase::Covering; transitionTime_=0.0; travelDeltaTime_=0.0f;
+    return true;
+}
+bool RailTransitionDemo::NeedsTitleSwap() const {
+    return phase_==Phase::Covering && transitionTime_>=double(CoverDuration) && Coverage()>=0.999f;
+}
+void RailTransitionDemo::CommitTitleSwap() {
+    if(!NeedsTitleSwap()) return;
+    phase_=Phase::Revealing; transitionTime_=0.0; travelDeltaTime_=0.0f;
+}
+bool RailTransitionDemo::Returning() const { return phase_==Phase::Covering || phase_==Phase::Revealing; }
+bool RailTransitionDemo::RevealingTitle() const { return phase_==Phase::Revealing; }
+bool RailTransitionDemo::ButtonVisible() const { return phase_==Phase::Playing && playTime_>=double(ButtonDelay); }
+float RailTransitionDemo::ButtonOpacity() const {
+    if(!ButtonVisible()) return 0.0f;
+    const float t=static_cast<float>((std::clamp)((playTime_-ButtonDelay)/0.25,0.0,1.0));
+    return t*t*(3.0f-2.0f*t);
+}
+float RailTransitionDemo::Coverage() const {
+    if(phase_==Phase::Covering) return RailTitleScene::SandCoverageAtAge(static_cast<float>(transitionTime_));
+    if(phase_==Phase::Revealing) return 1.0f-static_cast<float>((std::clamp)(
+        (transitionTime_-RailTitleGameplayEntry::RevealBegin)/
+        double(RailTitleGameplayEntry::RevealEnd-RailTitleGameplayEntry::RevealBegin),0.0,1.0));
+    return 0.0f;
+}
+float RailTransitionDemo::SandAge() const {
+    return phase_==Phase::Revealing || phase_==Phase::Title
+        ? CoverDuration+static_cast<float>(transitionTime_) : static_cast<float>(transitionTime_);
+}
+float RailTransitionDemo::DustStrength() const {
+    if(phase_==Phase::Revealing) return 0.68f*(std::clamp)(Coverage()/0.65f,0.0f,1.0f);
+    if(phase_!=Phase::Covering) return 0.0f;
+    const float t=(std::clamp)((static_cast<float>(transitionTime_)-0.10f)/1.10f,0.0f,1.0f);
+    return 0.68f*t*t*(3.0f-2.0f*t);
+}
+bool RailTransitionDemo::HitTest(float x,float y,float width,float height) {
+    const float s=(std::min)(width/1600.0f,height/900.0f);
+    if(s<=0.0f) return false;
+    return std::abs(x-width*0.5f)<=180.0f*s && std::abs(y-height*0.5f)<=46.0f*s;
+}
+
+RailSandTransitionAudioFrame RailSandTransitionAudioClock::Update(bool active,float age,bool focused) {
+    RailSandTransitionAudioFrame frame;
+    if(!std::isfinite(age) || age<0) active=false;
+    if(active && (!wasActive_ || age+0.001f<previousAge_)) started_=false;
+    if(active && focused && !started_) {frame.start=true;started_=true;}
+    frame.paused=!focused;
+    frame.pauseChanged=frame.paused!=paused_;
+    paused_=frame.paused;
+    previousAge_=active ? age : 0.0f;
+    wasActive_=active;
+    return frame;
 }

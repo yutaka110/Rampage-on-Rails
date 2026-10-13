@@ -102,6 +102,46 @@ private:
     std::vector<CourseEventMarker> pendingEvents_;
 };
 
+// Submission replay loop. The same sand clock crosses the game/title swap;
+// only a fully opaque cover permits resetting the playable world.
+class RailTransitionDemo final {
+public:
+    static constexpr float ButtonDelay = 2.0f;
+    static constexpr float CoverDuration = 2.01f;
+    static constexpr float RevealDuration = 1.29f;
+    void BeginGameplay();
+    void Update(float deltaTime, bool gameplayStarted);
+    bool RequestReturn();
+    bool NeedsTitleSwap() const;
+    void CommitTitleSwap();
+    bool Returning() const;
+    bool RevealingTitle() const;
+    bool ButtonVisible() const;
+    float ButtonOpacity() const;
+    float Coverage() const;
+    float SandAge() const;
+    float DustStrength() const;
+    float TravelDeltaTime() const { return travelDeltaTime_; }
+    static bool HitTest(float x, float y, float width, float height);
+private:
+    enum class Phase { Title, Playing, Covering, Revealing };
+    Phase phase_ = Phase::Title;
+    double playTime_ = 0.0, transitionTime_ = 0.0;
+    float travelDeltaTime_ = 0.0f;
+};
+
+struct RailSandTransitionAudioFrame final {
+    bool start=false, pauseChanged=false, paused=false;
+};
+class RailSandTransitionAudioClock final {
+public:
+    RailSandTransitionAudioFrame Update(bool active,float age,bool focused);
+    void Reset() { *this=RailSandTransitionAudioClock{}; }
+private:
+    bool wasActive_=false, started_=false, paused_=false;
+    float previousAge_=0.0f;
+};
+
 class RailTitleScene final {
 public:
     bool Initialize();
@@ -117,6 +157,7 @@ public:
     float StartProgress() const;
     float MenuOpacity() const;
     float Blackout() const;
+    static float SandCoverageAtAge(float age);
     float AmbienceGain() const;
     float RollingGain() const;
     float RailReflectionOpacity() const;

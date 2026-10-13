@@ -79,7 +79,7 @@ struct AppFrameGraphBuildContext {
         // LateCollapseRocks keeps a short, bounded tail after incoming coverage
         // reaches zero. Keep its capture/presentation path alive until it exits.
         const bool rockTail = railSandTransition &&
-            railSandTransitionAge >= 0.85f && railSandTransitionAge < 2.95f;
+            railSandTransitionAge >= 0.85f && railSandTransitionAge < 3.30f;
         return railFilmBurnProgress > 0.0f || railFilmBurnLensStrength > 0.0f ||
             railCollapseDustStrength > 0.0f || rockTail;
     }

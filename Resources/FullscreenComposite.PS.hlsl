@@ -303,7 +303,7 @@ bool LateCollapseRocks(float2 uv, float age, out float3 stone, out float mist, o
     stone=0.0f;mist=0.0f;opacity=0.0f;
     // Keep the last falling pieces briefly visible after the dense veil clears.
     // Matches the bounded rock tail in HasRailFilmBurnPresentation().
-    if(age<0.85f || age>2.95f) return false;
+    if(age<0.85f || age>3.30f) return false;
     uint width,height;
     gPostColor.GetDimensions(width,height);
     float aspect=float(width)/max(float(height),1.0f);
@@ -317,7 +317,7 @@ bool LateCollapseRocks(float2 uv, float age, out float3 stone, out float mist, o
         // distribute rocks vertically instead of packing them into one row.
         uint laneIndex=(i*5u)%16u;
         // Spread emission, keeping gravity and each fragment's fall speed intact.
-        float birth=0.85f+float(i/4u)*0.29f+float(i%4u)*0.035f+seed*0.07f;
+        float birth=0.85f+float(i/4u)*0.36f+float(i%4u)*0.035f+seed*0.07f;
         float flight=age-birth;
         if(flight<0.0f) continue;
         float depthSeed=FilmBurnHash(float2(float(i),37.1f));
@@ -391,6 +391,11 @@ float4 PresentSandTransition(float2 uv) {
     // Keep the moving cart visible through the building cloud until the last
     // dense surge. A long, almost opaque brown hold breaks the collapse flow.
     float opticalDepth=-log(max(1.0f-airborne,0.001f))+front*front*(1.25f+1.0f*cloud);
+    // Leave a thin moving powder field while the last fragments fall through
+    // the incoming scene. Its extinction reaches zero with the rock tail.
+    float settlingMist=incoming ? 0.10f*(0.30f+0.70f*cloud)*
+        (1.0f-smoothstep(2.50f,3.30f,age)) : 0.0f;
+    opticalDepth+=settlingMist;
     float transmittance=exp(-opticalDepth);
     // This exact endpoint conceals the swap even in thin peripheral pockets.
     // The fog pattern uses one continuous clock across both scenes.
@@ -429,7 +434,7 @@ float4 PresentSandTransition(float2 uv) {
         float3 rockColor=lerp(dustColor,stone,rockTransmission);
         // Let solid fragments outlast the screen-covering dust. Their upper
         // veil dissolves into powder, then exposes the moving gameplay scene.
-        float rockTail=(1.0f-smoothstep(2.70f,2.95f,age))*
+        float rockTail=(1.0f-smoothstep(3.00f,3.30f,age))*
             smoothstep(0.02f,0.28f,rockOpacity);
         result=lerp(result,rockColor,incoming ? max(front,rockTail) : 1.0f);
     }
