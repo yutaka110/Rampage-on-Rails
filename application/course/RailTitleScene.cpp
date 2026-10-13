@@ -454,9 +454,14 @@ float RailTitleScene::MenuOpacity() const {
 }
 float RailTitleScene::Blackout() const {
     // Wait until the chase camera has crossed the mouth, not just the cart.
-    // Give the burn enough screen time to show its discoloration and warp.
-    // The presentation shader owns the cave-shadow easing; this clock is linear.
-    return (std::clamp)(TunnelCameraDepth()/(Speed*FilmBurnDuration),0.0f,1.0f);
+    // Preserve the readable spread at its existing speed. Once the screen is
+    // mostly covered, finish the peripheral pockets without a long black hold.
+    const float elapsed=TunnelCameraDepth()/Speed;
+    const float tailStart=FilmBurnDuration*FilmBurnTailBegin;
+    if(elapsed<=tailStart)
+        return (std::clamp)(elapsed/FilmBurnDuration,0.0f,FilmBurnTailBegin);
+    const float tail=(std::clamp)((elapsed-tailStart)/FilmBurnTailDuration,0.0f,1.0f);
+    return FilmBurnTailBegin+(1.0f-FilmBurnTailBegin)*tail;
 }
 float RailTitleScene::TunnelCameraDepth() const {
     return starting_ ? static_cast<float>(travel_-startTravel_)-TunnelLead-ChaseDistance() : -TunnelLead;

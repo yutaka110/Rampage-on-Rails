@@ -61,8 +61,8 @@ struct RailTitleGameplayEntryFrame final {
 class RailTitleGameplayEntry final {
 public:
     static constexpr float Duration = 1.42f;
-    static constexpr float RevealBegin = 0.06f;
-    static constexpr float RevealEnd = 0.78f;
+    static constexpr float RevealBegin = 0.01f;
+    static constexpr float RevealEnd = 0.54f;
     void Reset();
     void Begin();
     void Update(float deltaTime);
@@ -123,8 +123,10 @@ public:
     float LapLength() const { return lapLength_; }
     static constexpr float Speed = 12.0f;
     static constexpr float OrbitDuration = 1.0f;
-    static constexpr float StartDuration = 3.25f;
-    static constexpr float FilmBurnDuration = 1.05f;
+    static constexpr float StartDuration = 3.14f;
+    static constexpr float FilmBurnDuration = 1.20f;
+    static constexpr float FilmBurnTailBegin = 0.72f;
+    static constexpr float FilmBurnTailDuration = 0.08f;
     static constexpr float DepartureShotTime = 1.02f;
     static constexpr float DepartureNearMissTime = 1.44f;
     static constexpr float DepartureImpactTime = 1.62f;

@@ -25,7 +25,7 @@ float FilmBurnTravelTime(float2 delta, float2 direction) {
     float along = dot(delta, direction);
     float across = dot(delta, float2(-direction.y, direction.x));
     // Heat runs toward the rail's vanishing point first, then spreads laterally
-    // and behind the source. This open fan has no centered circular aperture.
+    // and behind the source. Unequal travel rates give an asymmetric spread.
     float lateralSpread = sqrt(across * across + 0.20f * 0.20f) - 0.20f;
     return max(along, 0.0f) * 0.70f + max(-along, 0.0f) * 1.45f +
         lateralSpread * 0.64f + across * across * 0.20f;
@@ -52,8 +52,11 @@ void EvaluateRailFilmBurn(float2 screenUv, float progress, float treatmentStreng
         float reveal = 1.0f - progress;
         float2 depthUv = (screenUv - tunnelFocus) * float2(aspect * 1.4f, 1.8f);
         float centerExposure = exp(-dot(depthUv, depthUv));
-        visibility = smoothstep(0.04f + 0.10f * (1.0f - centerExposure),
-                                0.78f + 0.14f * (1.0f - centerExposure), reveal);
+        float revealStart = 0.10f * (1.0f - centerExposure);
+        float revealEnd = 0.78f + 0.14f * (1.0f - centerExposure);
+        float firstLight = saturate((reveal - revealStart) / (revealEnd - revealStart));
+        // Lift the first visible exposure promptly, keeping soft endpoints.
+        visibility = lerp(smoothstep(revealStart, revealEnd, reveal), firstLight, 0.25f);
         tint = lerp(float3(0.88f, 0.80f, 0.74f), 1.0f, smoothstep(0.12f, 0.75f, reveal));
         return;
     }
@@ -61,12 +64,12 @@ void EvaluateRailFilmBurn(float2 screenUv, float progress, float treatmentStreng
     float strength = saturate(treatmentStrength);
     float onset = smoothstep(0.0f, 0.10f, progress);
     float finish = 1.0f - smoothstep(0.86f, 1.0f, progress);
-    // The confirmed strike's lens leak already travels to this side of the
-    // glass before blackout. Start just outside that edge so darkness enters
-    // from the light's source side instead of opening a black disk mid-screen.
-    float2 burnSeed = float2(lightOrigin.x < 0.5f ? -0.04f : 1.04f,
-                            lerp(lightOrigin.y, 0.52f, 0.25f));
+    // Ignite inside the image at the confirmed strike's exposure imprint.
+    // The black region grows outward while its fastest lobe runs down the rail.
+    // Keep an interior seed even when a strike projects close to a screen edge.
+    float2 burnSeed = clamp(lightOrigin, float2(0.12f, 0.12f), float2(0.88f, 0.88f));
     float2 travelDirection = (tunnelFocus - burnSeed) * float2(aspect, 1.0f);
+    if (dot(travelDirection, travelDirection) < 0.0001f) travelDirection = float2(0.0f, -1.0f);
     travelDirection *= rsqrt(max(dot(travelDirection, travelDirection), 0.00001f));
     float2 lateralDirection = float2(-travelDirection.y, travelDirection.x);
     float2 sourceDelta = (screenUv - burnSeed) * float2(aspect, 1.0f);
@@ -80,17 +83,28 @@ void EvaluateRailFilmBurn(float2 screenUv, float progress, float treatmentStreng
     float charTexture = FilmBurnNoise(filmUv * float2(22.0f, 17.0f) + 47.1f);
     // Keep arrival times fixed while the threshold advances. Moving surface
     // texture can flicker and flow without making burnt regions reopen.
-    float sourceSpread = smoothstep(0.02f, 0.32f, length(sourceDelta));
-    float field = FilmBurnTravelTime(sourceDelta, travelDirection) + sourceSpread *
-        (0.16f * (broad - 0.5f) + 0.07f * (folds - 0.5f) +
-         0.016f * (charTexture - 0.5f));
+    float sourceSpread = smoothstep(0.02f, 0.24f, length(sourceDelta));
+    // Vary propagation over large connected patches, not just along the rim.
+    // Fast tongues run ahead while slow pockets hold the scene between them.
+    // Multiplicative variation breaks the underlying oval at every scale;
+    // keeping it static preserves one-way blackout without shape pulsation.
+    float propagation = FilmBurnNoise(flowPosition * float2(1.65f, 2.15f) + bend * 0.70f +
+                                      float2(12.7f, 6.3f));
+    float travelRate = lerp(0.58f, 1.42f, smoothstep(0.18f, 0.82f, propagation));
+    float field = FilmBurnTravelTime(sourceDelta, travelDirection) *
+        lerp(1.0f, travelRate, sourceSpread) + sourceSpread *
+        (0.22f * (broad - 0.5f) + 0.10f * (folds - 0.5f) +
+         0.020f * (charTexture - 0.5f));
     float farthestArrival = max(
         max(FilmBurnTravelTime((float2(0, 0) - burnSeed) * float2(aspect, 1), travelDirection),
             FilmBurnTravelTime((float2(1, 0) - burnSeed) * float2(aspect, 1), travelDirection)),
         max(FilmBurnTravelTime((float2(0, 1) - burnSeed) * float2(aspect, 1), travelDirection),
             FilmBurnTravelTime((float2(1, 1) - burnSeed) * float2(aspect, 1), travelDirection)));
     float phase = lerp(progress, smoothstep(0.0f, 1.0f, progress), 0.20f);
-    float edgeDistance = field - lerp(-0.20f, farthestArrival + 0.20f, phase);
+    // Travel time is convex before modulation, so its corner maximum bounds
+    // the whole image. Include the maximum rate and all noise amplitudes to
+    // cover even interior delayed pockets before progress reaches one.
+    float edgeDistance = field - lerp(-0.12f, farthestArrival * 1.42f + 0.23f, phase);
     // Evaluate derivatives before rejecting black pixels, so the burn front
     // keeps a stable refraction direction across partially covered quads.
     float2 gradient = float2(ddx(field) / texel.x, ddy(field) / texel.y);
@@ -150,17 +164,19 @@ void EvaluateRailFilmBurn(float2 screenUv, float progress, float treatmentStreng
         floor(progress * 25.0f) * float2(37.0f, 19.0f)) - 0.5f;
     burnLight = max(0.0f, burnLight + grain * 0.028f * opticalBand);
 }
-float3 EvaluateRailLensLeak(float2 uv, float2 source, float strength, float age, float shade) {
+float3 EvaluateRailLensLeak(float2 uv, float2 source, float2 tunnelFocus,
+                            float strength, float age, float shade) {
     if (strength <= 0.0f) return 0.0f;
     uint width, height;
     gPostColor.GetDimensions(width, height);
     float aspect = float(width) / max(float(height), 1.0f);
-    // A brief bloom begins on the actual rail strike. A softer exposure leak
-    // then drifts onto the nearest side of the glass and is swallowed by shade.
+    // A brief bloom begins on the actual rail strike. Retain its softer exposure
+    // imprint inside the glass, connecting the impact to the later burn seed.
     float2 sourceUv = (uv - source) * float2(aspect * 14.0f, 18.0f);
     float flash = exp(-dot(sourceUv, sourceUv)) * exp(-age * 14.0f);
-    float2 edge = float2(source.x < 0.5f ? 0.035f : 0.965f, lerp(source.y, 0.52f, 0.25f));
-    float2 leakCenter = lerp(source, edge, smoothstep(0.025f, 0.45f, age));
+    float2 burnSeed = clamp(source, float2(0.12f, 0.12f), float2(0.88f, 0.88f));
+    float2 leakCenter = lerp(source, burnSeed, smoothstep(0.025f, 0.45f, age));
+    leakCenter += (tunnelFocus - burnSeed) * 0.12f * smoothstep(0.05f, 0.50f, age);
     float2 leakUv = (uv - leakCenter) * float2(aspect * 3.0f, 3.8f);
     float mottling = FilmBurnNoise(uv * float2(6.0f, 11.0f) + float2(-age * 0.17f, 18.7f));
     float veil = exp(-dot(leakUv, leakUv)) * lerp(0.55f, 1.0f, mottling);
@@ -209,7 +225,8 @@ float4 main(PSInput input) : SV_TARGET
         float3 presentation = gPostColor.Sample(gSampler, sceneUv).rgb;
         presentation.r = gPostColor.Sample(gSampler, saturate(sceneUv + chromaticOffset)).r;
         presentation.b = gPostColor.Sample(gSampler, saturate(sceneUv - chromaticOffset)).b;
-        float3 lensLight = EvaluateRailLensLeak(uv, gImpactScreen, gLensLeak, gLensAge, gTunnelShade);
+        float3 lensLight = EvaluateRailLensLeak(uv, gImpactScreen, gTunnelFocus,
+                                               gLensLeak, gLensAge, gTunnelShade);
         return float4((presentation * tint + burnLight + lensLight) * visibility, 1.0f);
     }
     float4 scene = gSceneColor.Sample(gSampler, uv);

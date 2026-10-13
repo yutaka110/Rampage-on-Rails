@@ -32997,7 +32997,8 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
             "The film burn must retain enough intermediate frames to perceive the color and warp before blackout");
         runner.Expect(std::abs(title.CurrentSpeed()-12.0f)<0.001f &&
             std::abs(title.CameraFov()-0.70f)<0.001f &&
-            std::abs(title.TunnelCameraDepth()-13.0f)<0.01f,
+            std::abs(title.TunnelCameraDepth()-(RailTitleScene::Speed*RailTitleScene::StartDuration-
+                RailTitleScene::TunnelLead-RailTitleScene::DepartureCameraRig().backDistance))<0.01f,
             "The steady approach must reach the same inside-cave position at all frame rates");
         const auto departureRig=RailTitleScene::DepartureCameraRig();
         const auto departureSample=title.Path().Evaluate(title.Distance());
@@ -33169,9 +33170,12 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             entry.Frame().reticleProgress==0 && entry.Frame().gaugeProgress==0 &&
             entry.Frame().informationOpacity==0 && entry.Frame().rollingHandoff==0,
             "World handoff must start fully black with HUD hidden and rail audio retained");
-        entry.Update(0.04f);
+        entry.Update(0.005f);
         runner.Expect(entry.Frame().blackout==1 && entry.Frame().reticleProgress==0,
             "The incoming camera must settle under a short opaque hold before the tunnel opens");
+        entry.Update(0.03f);
+        runner.Expect(entry.Frame().blackout<1 && entry.Frame().reticleProgress==0 && entry.Frame().blockingGameplay,
+            "Incoming exposure must begin promptly after world handoff while HUD and combat remain gated");
         entry.Reset(); entry.Begin();
         int reticleCues=0,gaugeCues=0,frames=0,readableRevealFrames=0;
         bool ordered=true,monotonic=true;
@@ -33235,7 +33239,7 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             entry.Frame().rollingHandoff==1 &&
             std::abs(float(frames)/fps-RailTitleGameplayEntry::Duration)<1.01f/fps,
             "Camera reveal, reticle, gauges and information must finish in order with one cue each at every frame rate");
-        runner.Expect(readableRevealFrames>=int(fps*0.45f),
+        runner.Expect(readableRevealFrames>=int(fps*0.35f),
             "The incoming exposure recovery must remain readable while avoiding the outgoing burn's reversal");
         camera.titleHandoffWeight=0;
         const auto normal=normalDirector.Evaluate(camera);
