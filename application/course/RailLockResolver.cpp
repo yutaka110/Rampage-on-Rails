@@ -1,4 +1,4 @@
-#include "RailLockResolver.h"
+﻿#include "RailLockResolver.h"
 
 #include <algorithm>
 #include <cmath>
@@ -151,6 +151,18 @@ void RailLockResolver::Update(const RailLockResolverFrameInput& input) {
     if (input.reticle->lockPressed) {
         tokens_.clear();
     }
+
+    // Keep confirmed brackets on the moving target, including at full capacity.
+    // Acquisition time stays fixed so the confirmation animation never repeats.
+    std::erase_if(tokens_,[&](RailLockToken& token) {
+        const auto anchor=std::find_if(input.anchors->begin(),input.anchors->end(),[&](const auto& a) {
+            return SameTarget(a.target,token.target) && a.anchorId==token.anchorId;
+        });
+        if(anchor==input.anchors->end()) return true;
+        const auto point=ProjectToScreen(anchor->worldPosition,*input.viewProjection,input.viewportWidth,input.viewportHeight);
+        token.acquiredScreenPosition=point.behind?Vector2{-100000,-100000}:point.screen;
+        return false;
+    });
 
     RailLockCandidate best{};
     best.score = -(std::numeric_limits<float>::max)();

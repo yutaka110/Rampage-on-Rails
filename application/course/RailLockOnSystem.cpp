@@ -1,4 +1,4 @@
-#include "RailLockOnSystem.h"
+﻿#include "RailLockOnSystem.h"
 #include "GameplaySettingsValidation.h"
 
 #include "../diagnostics/DebugDrawSystem.h"
@@ -56,18 +56,27 @@ void RailLockOnSystem::Reset() {
     aimAssist_.Reset();
     resolver_.Reset();
     debugFrame_ = {};
+    lastRelease_ = {};
     elapsedTime_ = 0.0f;
 }
 
-void RailLockOnSystem::PrepareReticleForGameplay(const RailLockOnFrameInput& input) {
-    reticle_.Reset();
+void RailLockOnSystem::PrepareReticleForGameplay(const RailLockOnFrameInput& input, bool allowAim) {
+    if (!allowAim) reticle_.Reset();
     RailReticleFrameInput neutral{};
-    neutral.deltaTime = 0.0f;
+    neutral.hwnd = allowAim ? input.hwnd : nullptr;
+    neutral.deltaTime = allowAim ? input.deltaTime : 0.0f;
     neutral.viewportWidth = input.viewportWidth;
     neutral.viewportHeight = input.viewportHeight;
     neutral.hasCursorPosition = true;
     neutral.cursorPosition = {float(input.viewportWidth)*0.5f,float(input.viewportHeight)*0.5f};
+    if (allowAim) {
+        neutral.hasCursorPosition = input.hasCursorPosition;
+        neutral.cursorPosition = input.cursorPosition;
+        neutral.gamepadConnected = input.gamepadConnected;
+        neutral.gamepadAim = input.gamepadAim;
+    }
     neutral.hasLockHeldOverride = true;
+    neutral.lockHeldOverride = false;
     neutral.keyboardDirectionalAimEnabled = false;
     neutral.gameplayViewProjection = input.gameplayViewProjection;
     neutral.gameplayCameraPosition = input.gameplayCameraPosition;

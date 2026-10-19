@@ -1,9 +1,10 @@
-#include "CourseMeshRenderQueue.h"
+﻿#include "CourseMeshRenderQueue.h"
 
 #include "CourseSpawnRuntime.h"
 #include "DebrisCompositionSystem.h"
 #include "EnemyCombatPresentationBridge.h"
 #include "EnemyEncounterReadabilityDirector.h"
+#include "RailTitleScene.h"
 #include "utils/dx12/BufferHelper.h"
 
 #include <algorithm>
@@ -102,6 +103,84 @@ bool IsCourseMeshRenderEligible(
 bool IsTitleLandscapeMesh(std::string_view meshId) {
     return meshId == "title_ground" || meshId == "title_cliff" ||
         meshId == "title_boulder" || meshId == "title_tunnel" || meshId == "title_sand_clod";
+}
+
+bool IsGameplayLandscapeMesh(std::string_view meshId) {
+    return meshId == "root_spire_column" || meshId == "organic_arch_large" ||
+        meshId == "startup_rear_tunnel" || meshId == "startup_rear_floor" || meshId == "startup_rear_cap" ||
+        meshId == "rib_tunnel_wall" || meshId == "rib_tunnel_inner" || meshId == "curved_canyon_wall" ||
+        meshId == "vista_hole_wall" || meshId == "spire_broken_bridge_arc";
+}
+
+Material BuildGameplayLandscapePbrMaterial(std::string_view meshId) {
+    Material material=BuildTitleLandscapePbrMaterial("title_cliff");
+    material.specularMode=14; // Authored OBJ UVs; world-space terrain PBR.
+    material.color={0.72f,0.64f,0.57f,0.30f};
+    material.padding[0]=0.40f;
+    material.padding[1]=0.35f;
+    material.padding[2]=0.40f;
+    material.shininess=0.07f;
+    material.environmentCoefficient=0.25f;
+    material.padding2[0]=0.06f;
+    material.padding2[1]=0.35f;
+    material.padding2[9]=0.40f;
+    if (meshId == "organic_arch_large" || meshId == "rib_tunnel_wall" || meshId == "rib_tunnel_inner") {
+        // Match adjacent cliff strata/detail in world space, including the
+        // buried aprons and fracture rocks baked into the same solid mesh.
+        material.color = {0.90f, 0.84f, 0.77f, 0.55f};
+        material.padding[0] = 0.75f;
+        material.padding[1] = 0.55f;
+        material.padding[2] = 0.35f;
+        material.environmentCoefficient = 0.65f;
+        material.padding2[1] = 0.65f;
+        material.padding2[3] = 1.35f;
+        material.padding2[4] = 72.0f;
+        material.padding2[5] = 1.75f;
+        material.padding2[6] = 0.72f;
+        material.padding2[7] = 180.0f;
+        material.padding2[9] = 0.65f;
+        material.padding2[13] = 0.92f;
+    }
+    return material;
+}
+
+Material BuildRailStartupRearMaterial(const Material& gameplayTerrain) {
+    Material material=gameplayTerrain;
+    // Preserve the live course palette, detail scale and lighting response.
+    // Only the vertex-UV convention differs from the streamed terrain.
+    material.specularMode=14;
+    return material;
+}
+
+void CourseMeshRenderQueue::SyncStartupRearMaterial(const Material& gameplayTerrain) {
+    for(size_t i=0;i<visibleCount_;++i) {
+        auto& item=items_[i];
+        if(item.visible && item.materialData && std::string_view(item.meshId).starts_with("startup_rear_"))
+            *item.materialData=BuildRailStartupRearMaterial(gameplayTerrain);
+    }
+}
+
+float RailStartupRearFloorHeight(float forwardDistance) {
+    const float t=(std::clamp)((forwardDistance+12.0f)/52.0f,0.0f,1.0f);
+    // Bury the forward end in the much lower streamed cave floor, rather
+    // than leaving a raised rectangular platform beside the starting cart.
+    return -0.5f-30.0f*t*t*(3.0f-2.0f*t);
+}
+
+std::array<RailStartupRearScenery,3> BuildRailStartupRearScenery(const RailPath& path) {
+    const auto start=path.Evaluate(0.0f);
+    const auto rotation=RotationFromRailTangent(start.tangent);
+    auto tunnelRotation=rotation; tunnelRotation.y+=3.14159265359f;
+    // The existing sealed, irregular cave mesh is extended behind distance
+    // zero. Its mouth overlaps the streamed cave; its cap closes the far view.
+    return {{{"startup_rear_tunnel","title_tunnel",
+            Add(start.position,Scale(start.tangent,6.0f)),tunnelRotation,{2.2f,2.3f,2.0f}},
+        {"startup_rear_floor","course_startup.rear_floor",start.position,rotation,{1,1,1}},
+        // Overlap the cap and floor with a solid rock backstop so their
+        // different slopes cannot expose sky at the base of the far wall.
+        {"startup_rear_cap","course_rail.track_unit",
+            Add(Add(start.position,Scale(start.tangent,-142.0f)),Scale(start.up,8.0f)),
+            rotation,{64.0f,40.0f,12.0f}}}};
 }
 
 Material BuildTitleLandscapePbrMaterial(std::string_view meshId) {
@@ -214,7 +293,8 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
     const Matrix4x4& viewMatrix,
     const Matrix4x4& projMatrix,
     const EnemyCombatPresentationBridge* enemyPresentation,
-    const EnemyEncounterReadabilityDirector* enemyReadability) {
+    const EnemyEncounterReadabilityDirector* enemyReadability,
+    bool includeStartupRearScenery) {
     Reset();
     if (railPath.Length() <= 0.0f || models.empty()) {
         return;
@@ -238,6 +318,10 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
 
     // Collidable obstacles must not lose their draw slots to scenery.
     AddObstacleInstances(runtime, railPath, models, viewProjection);
+
+    if(includeStartupRearScenery || std::any_of(runtime.Enemies().begin(),runtime.Enemies().end(),
+            [](const auto& actor){return actor.startupFlightControlled;}))
+        AddStartupRearScenery(railPath,models,viewProjection);
 
     if (course != nullptr) {
         for (const CourseTerrainPlacement& placement : course->terrainPlacements) {
@@ -289,6 +373,10 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 *item->materialData = BuildTitleLandscapePbrMaterial(placement.meshId);
                 item->useMaterialOverride = true;
             }
+            if (IsGameplayLandscapeMesh(placement.meshId) && item->materialData != nullptr) {
+                *item->materialData=BuildGameplayLandscapePbrMaterial(placement.meshId);
+                item->useMaterialOverride=true;
+            }
             if (placement.meshId == "title_stake" && item->materialData != nullptr) {
                 Material timber{};
                 timber.color={1,1,1,1};
@@ -320,6 +408,28 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
             viewProjection);
     }
 
+}
+
+void CourseMeshRenderQueue::AddStartupRearScenery(const RailPath& path,
+        std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection) {
+    for(const auto& source:BuildRailStartupRearScenery(path)) {
+        const auto index=ResolveModelIndex(models,source.modelId,nullptr);
+        if(!models[index].loaded || models[index].name!=source.modelId) continue;
+        auto* item=AllocateItem(); if(!item) return;
+        item->kind=CourseMeshRenderKind::VistaBackground;
+        item->terrainLayer=CourseTerrainLayer::VistaBackground;
+        item->collisionMode=CourseTerrainCollisionMode::None;
+        item->name=item->meshId=source.meshId;
+        item->modelIndex=index;
+        item->visible=item->transformData!=nullptr;
+        item->sortDistance=-76.0f;
+        if(item->materialData) {
+            *item->materialData=BuildGameplayLandscapePbrMaterial("rib_tunnel_wall");
+            item->useMaterialOverride=true;
+        }
+        WriteItemTransform(*item,models[index].rootLocal,source.scale,source.rotation,
+            source.position,viewProjection);
+    }
 }
 
 void CourseMeshRenderQueue::AddObstacleInstances(
@@ -400,6 +510,13 @@ void CourseMeshRenderQueue::AddEnemyInstances(
     const EnemyCombatPresentationBridge* enemyPresentation,
     const EnemyEncounterReadabilityDirector* enemyReadability) {
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
+        // A frozen visual wreck owns all four parts after defeat. Do not also
+        // draw the shrinking, camera-facing live actor during its retirement.
+        if(enemyPresentation && std::any_of(enemyPresentation->Frame().destructionBursts.begin(),
+                enemyPresentation->Frame().destructionBursts.end(),[&](const auto& burst) {
+                    return burst.twinShield && burst.actorId==enemy.actorId;
+                })) continue;
+
         if (enemy.combatState.initialized &&
             enemy.combatState.phase == EnemyCombatPhase::Retired) {
             continue;
@@ -457,6 +574,11 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             enemy.desc.distanceOffset,
             enemy.desc.lateralOffset,
             enemy.desc.verticalOffset);
+        // RailPath clamps before its first control point. The entrance drone
+        // genuinely starts behind the cart/camera, beyond that authored start.
+        if(enemy.startupFlightControlled)
+            center=Add(center,Scale(sample.tangent,(std::min)(0.0f,
+                enemy.desc.spawnDistance+enemy.desc.distanceOffset)));
         if (presentation != nullptr) {
             center = Add(center, Scale(sample.tangent, presentation->forwardOffset));
             center = Add(center, Scale(sample.right, presentation->lateralOffset));
@@ -484,15 +606,9 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             if (presentation->turret) rotation = Add(presentation->turretWorldRotation,presentation->rotationOffset);
         }
         if (enemy.desc.meshId == "twin_shield_hull" && model.name == "twin_shield_hull") {
-            // Rigid reference geometry: no legacy sphere/pod scaling or squash.
-            // Model forward is -Z after Assimp's right-handed -> LH conversion.
-            const Vector3 toCamera{cameraPosition.x-center.x,cameraPosition.y-center.y,cameraPosition.z-center.z};
-            const float distance = std::sqrt(toCamera.x*toCamera.x+toCamera.y*toCamera.y+toCamera.z*toCamera.z);
-            if (distance > 0.001f) {
-                rotation = Add({std::asin((std::clamp)(toCamera.y/distance,-1.0f,1.0f)),
-                    std::atan2(-toCamera.x,-toCamera.z),0.0f},enemy.desc.localRotation);
-                if (presentation) rotation = Add(rotation,presentation->rotationOffset);
-            }
+            rotation=ResolveTwinShieldDroneFacing(sample.tangent,center,cameraPosition,
+                enemy.desc.localRotation,presentation?presentation->rotationOffset:Vector3{},
+                enemy.startupFlightControlled);
             const Vector3 scale{baseScale*(std::max)(0.01f,enemy.desc.localScale.x),
                 baseScale*(std::max)(0.01f,enemy.desc.localScale.y),
                 baseScale*(std::max)(0.01f,enemy.desc.localScale.z)};
@@ -501,7 +617,11 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 (readability ? readability->presentationAlpha : 1.0f);
             TwinShieldDronePose pose;
             pose.visible = true; pose.position = center; pose.rotation = rotation; pose.scale = scale;
-            if(enemy.weaponMount.ready && enemy.combatState.phase!=EnemyCombatPhase::Dying &&
+            if(enemy.startupFlightControlled) {
+                pose=BuildRailReadyDronePose(railPath,enemy.desc.spawnDistance+enemy.desc.distanceOffset,
+                    enemy.desc.lateralOffset,enemy.desc.verticalOffset,enemy.desc.localRotation,enemy.desc.radius);
+            }
+            if(!enemy.startupFlightControlled && enemy.weaponMount.ready && enemy.combatState.phase!=EnemyCombatPhase::Dying &&
                 enemy.combatState.phase!=EnemyCombatPhase::Retired) {
                 // The launch boundary owns this frame's rigid transform.
                 // Charge colour/shields remain procedural; banking and barrel
@@ -838,6 +958,22 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 0.72f),
             coreModelIndex);
     }
+    if(enemyPresentation && !models.empty()) for(const auto& burst:enemyPresentation->Frame().destructionBursts) {
+        if(!burst.twinShield) continue;
+        auto pose=burst.frozenPose;
+        pose.destructionAge=burst.age;
+        if(EvaluateTwinShieldDroneBreakup(pose).opacity<=0.001f) continue;
+        const uint32_t index=ResolveModelIndex(models,"twin_shield_hull",nullptr);
+        if(models[index].name!="twin_shield_hull" || !models[index].loaded) continue;
+        auto* item=AllocateItem();
+        if(!item) break;
+        item->kind=CourseMeshRenderKind::Enemy; item->name="drone_wreck";
+        item->meshId="twin_shield_hull"; item->sourceActorId=burst.actorId;
+        item->modelIndex=index; item->collisionMode=CourseTerrainCollisionMode::None;
+        item->sortDistance=0; item->visible=item->transformData!=nullptr;
+        if(item->visible) WriteTwinShieldDrone(*item,pose,models,viewProjection);
+    }
+
 }
 
 void CourseMeshRenderQueue::AddCourseDebrisInstances(
@@ -883,6 +1019,11 @@ void CourseMeshRenderQueue::AddCourseDebrisInstances(
         item->visible = model.loaded && item->transformData != nullptr;
         if (!item->visible) {
             continue;
+        }
+
+        if(IsGameplayLandscapeMesh(item->meshId) && item->materialData!=nullptr) {
+            *item->materialData=BuildGameplayLandscapePbrMaterial(item->meshId);
+            item->useMaterialOverride=true;
         }
 
         WriteItemTransform(
@@ -969,18 +1110,25 @@ void CourseMeshRenderQueue::AppendTwinShieldDrone(const TwinShieldDronePose& pos
 void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
     const TwinShieldDronePose& pose, std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewProjection) {
+    const bool wreck=pose.destructionAge>=0;
+    const auto breakup=wreck ? EvaluateTwinShieldDroneBreakup(pose) : TwinShieldDroneBreakupFrame{};
     if (hull.materialData) {
         *hull.materialData = {};
-        hull.materialData->color = {1,1,1,pose.alpha};
+        hull.materialData->color = {1,1,1,pose.alpha*(wreck?breakup.opacity:1.0f)};
         hull.materialData->uvTransform = MakeIdentity4x4();
         hull.materialData->enableLighting = true;
         hull.materialData->specularMode = 10; // Normal/roughness-mapped industrial metal.
         hull.materialData->environmentCoefficient = 0.72f;
-        hull.materialData->padding2[0] = pose.flash;
+        hull.materialData->padding2[0] = wreck?breakup.hullFlash:pose.flash;
         hull.useMaterialOverride = true;
     }
-    WriteItemTransform(hull,models[hull.modelIndex].rootLocal,pose.scale,pose.rotation,pose.position,viewProjection);
-    const Matrix4x4 actorWorld = MakeAffineMatrix(pose.scale,pose.rotation,pose.position);
+    const Matrix4x4 actorWorld = wreck?breakup.bodyWorld:BuildTwinShieldDroneWorldMatrix(pose);
+    if(hull.transformData) {
+        auto world=Multiply(models[hull.modelIndex].rootLocal,actorWorld);
+        hull.transformData->World=world;
+        hull.transformData->WVP=Multiply(world,viewProjection);
+        hull.transformData->WorldInverseTranspose=Transpose(Inverse(world));
+    }
     auto addReferencePart = [&](const char* id, const char* suffix,Vector3 offset,float yaw,bool core) {
         const uint32_t index = ResolveModelIndex(models,id,nullptr);
         if (models[index].name != id || !models[index].loaded) return;
@@ -999,14 +1147,17 @@ void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
                 part->materialData->enableLighting = false;
                 part->materialData->specularMode = 11;
                 part->materialData->environmentCoefficient = 0.0f;
-                part->materialData->padding2[0] = 1.8f+pose.charge*3.2f;
+                part->materialData->padding2[0] = wreck?breakup.coreGain:1.8f+pose.charge*3.2f;
+                if(wreck) part->materialData->color.w*=breakup.coreOpacity;
             }
             part->useMaterialOverride = true;
         }
         if (part->transformData) {
             // Compose in actor space, keeping each shield attached during banking.
             const Matrix4x4 local = MakeAffineMatrix(Vector3{1,1,1},Vector3{0,yaw,0},offset);
-            Matrix4x4 world = Multiply(Multiply(models[index].rootLocal,local),actorWorld);
+            Matrix4x4 world = wreck
+                ? Multiply(models[index].rootLocal,core?breakup.bodyWorld:(offset.x<0?breakup.leftWorld:breakup.rightWorld))
+                : Multiply(Multiply(models[index].rootLocal,local),actorWorld);
             part->transformData->World = world;
             part->transformData->WVP = Multiply(world,viewProjection);
             part->transformData->WorldInverseTranspose = Transpose(Inverse(world));

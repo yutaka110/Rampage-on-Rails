@@ -5,6 +5,7 @@
 #include <dxcapi.h>
 #include <filesystem>
 #include <unordered_map>
+#include <string>
 #include <wrl/client.h>
 
 #include "core/ShaderCompiler.h"
@@ -78,6 +79,13 @@ public:
     ID3D12PipelineState* GetDistortionCompositePSO() const { return distortionCompositePso_.Get(); }
     ID3D12PipelineState* GetAccretionCompositePSO() const { return accretionCompositePso_.Get(); }
     ID3D12PipelineState* GetDistanceFogPSO() const { return distanceFogPso_.Get(); }
+    ID3D12RootSignature* GetSunfallRootSignature() const { return sunfallRootSignature_.Get(); }
+    ID3D12PipelineState* GetSunfallVolumePSO() const { return sunfallVolumePso_.Get(); }
+    ID3D12PipelineState* GetSunfallCompositePSO() const { return sunfallCompositePso_.Get(); }
+    ID3D12PipelineState* GetHdrPostProcessPSO(const std::string& name) const {
+        const auto found=hdrPostProcessPsos_.find(name);
+        return found!=hdrPostProcessPsos_.end() ? found->second.Get() : nullptr;
+    }
     ID3D12PipelineState* GetContactAOPSO() const { return contactAoPso_.Get(); }
     ID3D12PipelineState* GetToneMappingPSO() const { return toneMappingPso_.Get(); }
     ID3D12PipelineState* GetGlowCompositePSO() const { return glowCompositePso_.Get(); }
@@ -125,6 +133,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> trailMeshStreamComputeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> trailMeshBuildComputeRootSignature_;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> compositeRootSignature_;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> sunfallRootSignature_;
 
     // PSO
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainPso_;      // 元の graphicsPipelineState
@@ -171,6 +180,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> distortionCompositePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> accretionCompositePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> distanceFogPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> sunfallVolumePso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> sunfallCompositePso_;
+    std::unordered_map<std::string,Microsoft::WRL::ComPtr<ID3D12PipelineState>> hdrPostProcessPsos_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> contactAoPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> toneMappingPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> glowCompositePso_;
@@ -261,6 +273,8 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> distortionCompositePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> accretionCompositePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> distanceFogPs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> sunfallVolumePs_;
+    Microsoft::WRL::ComPtr<IDxcBlob> sunfallCompositePs_;
     Microsoft::WRL::ComPtr<IDxcBlob> contactAoPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> toneMappingPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> glowCompositePs_;

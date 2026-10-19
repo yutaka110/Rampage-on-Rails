@@ -1,9 +1,12 @@
-#pragma once
+﻿#pragma once
 
 #include "CourseRailTrackMeshBakePipeline.h"
 #include "RailVehicleRenderer.h"
 #include "RailVehicleWheelContactPresentationBridge.h"
 #include "TwinShieldDronePose.h"
+#include <array>
+#include <functional>
+#include <span>
 
 // A presentation-only world: it never advances the playable course or combat.
 struct RailTitleColors final {
@@ -65,6 +68,61 @@ struct RailTitleCollapsePuff final {
     float radius = 0.0f, aspect = 1.0f, rotation = 0.0f, opacity = 0.0f;
 };
 
+struct RailReadyDroneFlight final {
+    float forward = -66.0f, lateral = 1.2f, vertical = 7.0f;
+    Vector3 rotation{0.0f,3.14159265f,0.0f};
+};
+RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed);
+RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed,const RailPath& rail,
+    float playerDistance,float playerSpeed);
+TwinShieldDronePose BuildRailReadyDronePose(const RailPath& rail,float railDistance,
+    float lateral,float vertical,Vector3 rotation,float radius);
+
+struct RailWorldRaycastInput;
+
+// Presentation only: no actor IDs, damage, locks or gameplay projectiles.
+class RailReadyDroneSalvo final {
+public:
+    using WallTrace=std::function<bool(Vector3,float,uint32_t,Vector3&,Vector3&)>;
+    static constexpr std::array<float,2> ShotTimes{1.46f,1.69f};
+    static constexpr float ShotSpeed=125.0f;
+    RailReadyDroneFlight Flight(float elapsed,float playerDistance,const RailPath& rail,float radius) const;
+    static Vector3 Muzzle(const TwinShieldDronePose& pose,uint32_t barrelIndex);
+    void Reset();
+    void Update(float elapsed,float playerDistance,const RailPath& rail,float radius,const WallTrace& trace);
+    bool Visible() const { return !shots_.empty() || impacts_[0].active || impacts_[1].active; }
+    std::span<const RailTitleShot> Shots() const { return shots_; }
+    std::span<const RailTitleRailImpact> Impacts() const { return impacts_; }
+    std::span<const RailTitleAttackCue> Cues() const { return cues_; }
+    float MuzzleFlash() const { return muzzleFlash_; }
+    Vector3 MuzzlePosition() const { return muzzlePosition_; }
+    static bool TraceLeftWall(const RailWorldRaycastInput& terrain,Vector3 origin,
+        float launchDistance,uint32_t shotIndex,Vector3& contact,Vector3& normal);
+    static bool ClearsVehicle(const RailTitleShot& shot,const RailPath& rail,float playerDistanceAtLaunch);
+private:
+    std::array<bool,2> planAttempted_{}, planned_{};
+    std::array<Vector3,2> targets_{};
+    std::array<float,2> durations_{};
+    std::array<bool,2> attempted_{};
+    std::array<bool,2> launched_{};
+    std::array<Vector3,2> normals_{};
+    std::array<RailTitleRailImpact,2> impacts_{};
+    std::vector<RailTitleShot> shots_{};
+    std::vector<RailTitleAttackCue> cues_{};
+    float muzzleFlash_=0.0f;
+    Vector3 muzzlePosition_{};
+};
+
+struct RailReadyCameraShot final {
+    // Rail-local right, up, forward. The eye orbits outside the vehicle.
+    Vector3 eyeOffset{0.0f,5.2f,-8.0f};
+    Vector3 droneOffset{1.2f,7.0f,-66.0f};
+    float weight = 1.0f;
+    float focusBlend = 0.0f;
+    float fovY = 0.70f;
+};
+RailReadyCameraShot EvaluateRailReadyCameraShot(float elapsed);
+
 // Presentation clock shared by the reveal, HUD startup, sound crossfade and
 // combat/input gate. Rail travel can continue on this clock without ticking combat.
 struct RailTitleGameplayEntryFrame final {
@@ -75,18 +133,33 @@ struct RailTitleGameplayEntryFrame final {
     float informationOpacity = 1.0f;
     float rollingHandoff = 1.0f;
     float travelDeltaTime = 0.0f;
+    float readyOpacity = 0.0f, readyProgress = 0.0f, goOpacity = 0.0f;
+    float droneTurnProgress = 0.0f;
+    bool active = false;
+    bool enemyFireAllowed = true;
     bool blockingGameplay = false;
     bool reticleStarted = false;
     bool gaugesStarted = false;
+    bool readyStarted = false, goStarted = false;
 };
+
+struct CourseEnemyActorDesc;
+CourseEnemyActorDesc BuildRailReadyDrone(float startDistance);
 
 class RailTitleGameplayEntry final {
 public:
-    static constexpr float Duration = 1.42f;
+    static constexpr float CameraSettleEnd = 3.0f;
+    static constexpr float DroneTurnBegin = 3.20f;
+    static constexpr float DroneTurnEnd = 4.35f;
+    static constexpr float DroneBrakeEnd = 4.70f;
+    static constexpr float Duration = 4.85f; // Complete the moving turn and braking before GO.
+    static constexpr float ReadyBegin = 0.64f;
+    static constexpr float EnemyFireBegin = Duration + 0.70f;
+    static constexpr float GoEnd = Duration + 0.85f;
     static constexpr float RevealBegin = 0.01f;
     static constexpr float RevealEnd = 0.54f;
     static constexpr float CameraBegin = 0.08f;
-    static constexpr float CameraEnd = 1.14f;
+    static constexpr float CameraEnd = 1.62f;
     void Reset();
     void Begin();
     void Update(float deltaTime);

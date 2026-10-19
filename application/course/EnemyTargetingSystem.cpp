@@ -1,4 +1,4 @@
-#include "EnemyTargetingSystem.h"
+﻿#include "EnemyTargetingSystem.h"
 
 #include "CourseSpawnRuntime.h"
 #include "EnemyCombatPresentationBridge.h"
@@ -48,8 +48,10 @@ Vector3 ProjectMuzzleToRail(const RailPath& rail, Vector3 world, float hint) {
 
 void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& input) {
     auto& mount=actor.weaponMount;
+    const auto previous=mount.dronePose;
+    const bool hadPrevious=mount.ready;
     mount={};
-    if(actor.desc.meshId!="twin_shield_hull" || !input.railPath ||
+    if(actor.startupFlightControlled || actor.desc.meshId!="twin_shield_hull" || !input.railPath ||
         !input.hasCameraPosition || input.railPath->Length()<=0 ||
         actor.combatState.phase==EnemyCombatPhase::Dying || actor.combatState.phase==EnemyCombatPhase::Retired) return;
     const auto animation=ResolveEnemyCombatActorPresentation(actor,input.presentationSettings?
@@ -58,16 +60,28 @@ void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& 
     const auto sample=input.railPath->Evaluate(distance);
     auto& pose=mount.dronePose;
     pose.visible=true;
+    pose.charge=animation.weaponCharge;
+    pose.flash=animation.flashStrength;
     pose.position=ResolveEnemyProjectileWorldPosition(*input.railPath,
         {actor.desc.lateralOffset,actor.desc.verticalOffset,distance});
     pose.position.x+=sample.tangent.x*animation.forwardOffset+sample.right.x*animation.lateralOffset+sample.up.x*animation.verticalOffset;
     pose.position.y+=sample.tangent.y*animation.forwardOffset+sample.right.y*animation.lateralOffset+sample.up.y*animation.verticalOffset;
     pose.position.z+=sample.tangent.z*animation.forwardOffset+sample.right.z*animation.lateralOffset+sample.up.z*animation.verticalOffset;
-    const auto forward=Unit({input.cameraPosition.x-pose.position.x,
-        input.cameraPosition.y-pose.position.y,input.cameraPosition.z-pose.position.z});
-    pose.rotation={std::asin((std::clamp)(forward.y,-1.0f,1.0f))+actor.desc.localRotation.x+animation.rotationOffset.x,
-        std::atan2(-forward.x,-forward.z)+actor.desc.localRotation.y+animation.rotationOffset.y,
-        actor.desc.localRotation.z+animation.rotationOffset.z};
+    if(hadPrevious && std::isfinite(input.deltaTime) && input.deltaTime>0.00001f) {
+        const float inverseTime=1.0f/input.deltaTime;
+        const Vector3 velocity{(pose.position.x-previous.position.x)*inverseTime,
+            (pose.position.y-previous.position.y)*inverseTime,(pose.position.z-previous.position.z)*inverseTime};
+        const float speed2=velocity.x*velocity.x+velocity.y*velocity.y+velocity.z*velocity.z;
+        // Reject teleports/editor corrections rather than launching a wreck at
+        // an unbounded speed. Prediction copies never publish this velocity.
+        if(std::isfinite(speed2) && speed2<=60.0f*60.0f) {
+            pose.flightVelocity=velocity;pose.hasFlightVelocity=true;
+        }
+    } else if(hadPrevious) {
+        pose.flightVelocity=previous.flightVelocity;pose.hasFlightVelocity=previous.hasFlightVelocity;
+    }
+    pose.rotation=ResolveTwinShieldDroneFacing(sample.tangent,pose.position,
+        input.cameraPosition,actor.desc.localRotation,animation.rotationOffset,false);
     float readableScale=1.0f;
     if(input.readability) if(const auto* readable=input.readability->FindActor(actor.actorId))
         readableScale=(std::max)(1.0f,readable->presentationScale);
@@ -138,6 +152,7 @@ uint32_t PrepareScheduledWeaponMount(CourseEnemyActor& actor,
         previousDistance=distance;
     }
     auto futureInput=input;
+    futureInput.deltaTime=0;
     const float playerTravel=travel->DistanceAt(delay)-startDistance;
     futureInput.cameraPosition=ResolveEnemyProjectileWorldPosition(*input.railPath,
         {cameraRail.x,cameraRail.y,cameraRail.z+playerTravel});

@@ -364,7 +364,7 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         EnemyBehaviorRuntimeState& state = actor.behaviorState;
         const EnemyBehaviorDefinition& definition = actor.behaviorDefinition;
         ++frame_.activeActors;
-        if (!definition.commercialBehavior) continue;
+        if (!definition.commercialBehavior || actor.startupFlightControlled) continue;
 
         const bool combatDisabled = actor.combatState.initialized &&
             (actor.combatState.phase == EnemyCombatPhase::Dying ||
@@ -625,6 +625,7 @@ void EnemyBehaviorSystem::ApplyMovement(
 
 bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
         float playerDistance, float playerForwardSpeed) {
+    if(actor.startupFlightControlled) return false;
     bool bandCorrection = false;
     EnemyBehaviorRuntimeState& state = actor.behaviorState;
     const EnemyBehaviorDefinition& definition = actor.behaviorDefinition;

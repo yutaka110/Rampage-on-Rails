@@ -465,7 +465,7 @@ void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
         const auto& definition = actor.behaviorDefinition;
         auto& behavior = actor.behaviorState;
         auto& staging = actor.entranceExitState;
-        if (!definition.maintainForwardEngagementBand ||
+        if (actor.startupFlightControlled || !definition.maintainForwardEngagementBand ||
             actor.desc.hitPoints <= 0.0f ||
             actor.combatState.phase == EnemyCombatPhase::Dying ||
             actor.combatState.phase == EnemyCombatPhase::Retired) continue;
@@ -658,7 +658,7 @@ bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
     const bool entranceExitSuppressesFire =
         enemy.entranceExitState.initialized &&
         enemy.entranceExitState.attackSuppressed;
-    if (enemy.desc.suppressFire || entranceExitSuppressesFire ||
+    if (enemy.startupFlightControlled || enemy.desc.suppressFire || entranceExitSuppressesFire ||
         (enemy.combatState.initialized && !enemy.combatState.canFire)) {
         enemy.fireVisibleTime = 0.0f;
         enemy.fireSafetyAllowed = false;
@@ -915,9 +915,70 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
     }
     actor.desc.projectileDefinitionId = actor.desc.projectileDefinition.id;
     enemyAttackCoordinator_.InitializeActor(actor);
+    if (actor.desc.establishedEntrance) {
+        actor.entranceExitState.initialized = true;
+        actor.entranceExitState.phase = EnemyEntranceExitPhase::Active;
+        actor.entranceExitState.presentationAlpha = actor.entranceExitState.presentationScale = 1.0f;
+        actor.entranceExitState.attackSuppressed = false;
+        actor.entranceExitState.targetable = true;
+    }
     enemies_.push_back(std::move(actor));
     if (errorMessage != nullptr) errorMessage->clear();
     return true;
+}
+
+bool CourseSpawnRuntime::SetEnemyLocalRotation(uint32_t actorId, Vector3 rotation) {
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y) || !std::isfinite(rotation.z)) return false;
+    for (auto& actor : enemies_) {
+        if (actor.actorId != actorId) continue;
+        actor.desc.localRotation = rotation;
+        actor.weaponMount.ready = false;
+        return true;
+    }
+    return false;
+}
+
+bool CourseSpawnRuntime::SetEnemyStartupFlight(uint32_t actorId, float playerDistance,
+        float forward, float lateral, float vertical, Vector3 rotation,
+        bool releaseToCombat, float playerSpeed) {
+    if(!FiniteValues({playerDistance,forward,lateral,vertical,rotation.x,rotation.y,
+            rotation.z,playerSpeed})) return false;
+    for(auto& actor:enemies_) {
+        if(actor.actorId!=actorId || !actor.desc.establishedEntrance) continue;
+        actor.startupFlightControlled=!releaseToCombat;
+        actor.desc.spawnDistance=playerDistance+forward;
+        actor.desc.distanceOffset=0.0f;
+        actor.desc.lateralOffset=lateral;
+        actor.desc.verticalOffset=vertical;
+        actor.desc.localRotation=rotation;
+        actor.weaponMount.ready=false;
+        actor.formationState={};
+        auto& state=actor.behaviorState;
+        state.authoredForwardOffset=state.integratedForwardOffset=0.0f;
+        state.authoredLateralOffset=lateral;
+        state.authoredVerticalOffset=vertical;
+        state.engagementBandForwardDistance=forward;
+        if(releaseToCombat) {
+            // This visible entrance already occupies its endpoint. Do not let
+            // the formation's age-zero hidden-spawn placement snap it elsewhere.
+            actor.formationState.hoverInitialized=true;
+            // Seed the same hover phase and velocity as the cinematic endpoint.
+            // Subtract its procedural offset so GO never teleports the actor.
+            state.hoverPreferredForwardDistance=forward;
+            state.engagementBandVelocity=(std::max)(0.0f,playerSpeed);
+            CourseEnemyActor preview=actor;
+            AdvanceEnemyBehaviorMovement(preview,0.0f,playerDistance,playerSpeed);
+            state.integratedForwardOffset=-preview.behaviorState.behaviorForwardOffset;
+            state.authoredLateralOffset-=preview.behaviorState.behaviorLateralOffset;
+            state.authoredVerticalOffset-=preview.behaviorState.behaviorVerticalOffset;
+            state.behaviorForwardOffset=preview.behaviorState.behaviorForwardOffset;
+            state.behaviorLateralOffset=preview.behaviorState.behaviorLateralOffset;
+            state.behaviorVerticalOffset=preview.behaviorState.behaviorVerticalOffset;
+            state.attackCooldownRemaining=(std::max)(state.attackCooldownRemaining,actor.desc.firstShotDelay);
+        }
+        return true;
+    }
+    return false;
 }
 
 bool CourseSpawnRuntime::MarkEnemyAttackTelegraphPresented(

@@ -106,7 +106,7 @@ terrain|520.000|hero_landmark|crossfire_right_curved_wall|curved_canyon_wall|34.
 terrain|735.000|hero_landmark|tunnel_mouth_rib_crown|rib_tunnel_wall|0.000|40.000|84.000|40.000|64.000|6.000|0.000|0.000|0.000|none|20|180.000|300.000|6d4cde1b48870c23c4abb338557dfa93|1|0
 terrain|776.000|gameplay_collision|tunnel_left_collision_wall|rail_hazard_solid|-12.000|2.000|18.000|2.000|7.000|8.000|0.000|0.000|0.000|proxy|30|80.000|220.000|45d9c591e19c63670f47682858231397|1|0
 terrain|828.000|gameplay_collision|tunnel_right_collision_wall|rail_hazard_solid|12.000|2.000|18.000|2.000|7.000|8.000|0.000|0.000|0.000|proxy|30|80.000|220.000|c0348c6de6f14c994984eb9a37c8a0c9|1|0
-terrain|875.000|hero_landmark|rib_tunnel_interior_sweep|rib_tunnel_wall|0.000|40.000|130.000|44.000|64.000|12.000|0.000|0.000|0.000|none|20|180.000|300.000|efb07c65f83feb8e7f9fd8bebf7fc29e|1|0
+terrain|875.000|hero_landmark|rib_tunnel_interior_sweep|rib_tunnel_inner|0.000|40.000|130.000|44.000|64.000|12.000|0.000|0.000|0.000|none|20|180.000|300.000|efb07c65f83feb8e7f9fd8bebf7fc29e|1|0
 terrain|980.000|vista_background|spire_far_hole_wall|vista_hole_wall|64.000|42.000|760.000|32.000|34.000|5.000|0.000|-18.000|0.000|none|0|420.000|220.000|fb97314af78e7d0949f3fe90c6eda019|1|0
 terrain|1010.000|hero_landmark|falling_spire_root_column|root_spire_column|-36.000|30.000|160.000|9.000|42.000|8.000|0.000|4.000|0.000|none|20|220.000|220.000|dc754a6307251c41fca0302421687a71|1|0
 terrain|1085.000|gameplay_collision|spire_debris_collision_lane|rail_hazard_solid|11.000|4.000|30.000|5.000|3.000|8.000|0.000|0.000|0.000|proxy|30|90.000|240.000|8e236597c8e324c0fa59d399bcde7170|1|0
@@ -116,7 +116,7 @@ terrain|1265.000|vista_background|gatekeeper_shadow_wall|vista_hole_wall|0.000|3
 # Rock clusters compose debris as attached, hero, falling, or vista groups instead of loose floating rocks.
 rock_cluster|430.000|crossfire_left_wall_chips|curved_canyon_wall|left_wall|attached_debris|3|0.180|0.380|7.000|1.800|6.000|34.000|90.000|150.000|0.000|0.000|0.000|-|02bf0b2b517b0d81554c7c86b4c21651|1|0
 rock_cluster|520.000|crossfire_right_wall_chips|curved_canyon_wall|right_wall|attached_debris|3|0.180|0.360|7.000|1.800|6.000|34.000|90.000|150.000|0.000|0.000|0.000|-|afb49c9b9fb591a3e5c7a9ef1d985bf3|1|0
-rock_cluster|780.000|tunnel_floor_contact_stones|rib_tunnel_wall|floor|attached_debris|4|0.160|0.340|10.000|1.400|7.000|24.000|70.000|160.000|0.000|0.000|0.000|-|bcefa077c299d66f3cc45affc2f89fff|1|0
+rock_cluster|780.000|tunnel_floor_contact_stones|curved_canyon_wall|floor|attached_debris|4|0.160|0.340|10.000|1.400|7.000|24.000|70.000|160.000|0.000|0.000|0.000|-|bcefa077c299d66f3cc45affc2f89fff|1|0
 rock_cluster|1015.000|falling_spire_break_mass|root_spire_column|ceiling_break|hero_fracture|3|0.620|1.280|14.000|6.000|10.000|34.000|120.000|240.000|0.000|0.000|0.000|-|37da14737bf3c45b97b528c1d14756cb|1|0
 rock_cluster|1085.000|spire_falling_event_debris|spire_broken_bridge_arc|ceiling_break|falling_debris|5|0.240|0.680|16.000|9.000|12.000|38.000|50.000|150.000|0.000|0.000|0.000|-|8626cbe5bc410227134b73a445ccc277|1|0
 rock_cluster|1265.000|gatekeeper_far_silhouette_rocks|vista_hole_wall|vista_wall|vista_silhouette|4|1.100|2.400|72.000|20.000|64.000|54.000|300.000|360.000|0.000|0.000|0.000|-|9e4ceda2dc25a77bd735d07a144d3b4b|1|0

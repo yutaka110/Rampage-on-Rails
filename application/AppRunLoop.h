@@ -1,5 +1,8 @@
 ﻿#pragma once
 #include "course/RailTitleScene.h"
+#include "course/RailLockVolley.h"
+#include "SunfallAtmosphere.h"
+#include "CaveLighting.h"
 #include "terrain/TerrainCollisionWorld.h"
 
 #include <Windows.h>
@@ -493,6 +496,7 @@ private:
     audio::SoundHandle railEnemyAttackSound_{};
     audio::SoundHandle railEnemyHitReactSound_{};
     audio::SoundHandle railEnemyDeathSound_{};
+    audio::SoundHandle railEnemyCoreBreakSound_{};
     audio::SoundHandle railEnemyProjectileLaunchSound_{};
     audio::SoundHandle railEnemyProjectileFlyBySound_{};
     audio::SoundHandle railEnemyProjectileImpactSound_{};
@@ -509,6 +513,8 @@ private:
     uint32_t railTelegraphVibrationController_ = UINT32_MAX;
     uint32_t railSessionVibrationController_ = UINT32_MAX;
     RailLockOnSystem railShooterLockOnSystem_;
+    RailLockVolley railLockVolley_;
+    audio::SoundHandle railLockAcquireSound_{}, railLockFullSound_{}, railLockReleaseSound_{};
     RailAimAssistPresetRegistry railAimAssistPresetRegistry_{};
     struct RailHudAtlasVertex {
         Vector4 position;
@@ -547,6 +553,7 @@ private:
         bool valid = false;
     };
     std::vector<SubmissionHudGlyph> submissionHudGlyphs_;
+    std::vector<SubmissionHudGlyph> submissionStartCueGlyphs_;
     bool submissionHudFontReady_ = false;
     bool submissionHudManuallyHidden_ = false;
     std::vector<RailNormalShotLine> railNormalShotLines_;
@@ -809,6 +816,8 @@ private:
     bool releaseShowcaseInitialized_ = false;
     bool railTitleScreenVisible_ = false;
     RailTitleGameplayEntry railTitleGameplayEntry_{};
+    uint32_t railReadyDroneActorId_ = 0;
+    RailReadyDroneSalvo railReadyDroneSalvo_{};
     RailTransitionDemo railTransitionDemo_{};
     bool railTransitionDemoEnabled_ = false;
     bool railTransitionDemoHover_ = false, railTransitionDemoPressed_ = false;
@@ -828,9 +837,13 @@ private:
     audio::SoundHandle railTitleTunnelAmbience_{};
     audio::SoundHandle railTitleReticleBootSound_{};
     audio::SoundHandle railTitleGaugesBootSound_{};
+    audio::SoundHandle railReadySound_{}, railGoSound_{};
+    audio::SoundHandle railDroneFlybySound_{};
     bool railTitleAmbiencePlaying_ = false;
     bool railTitleTunnelAmbiencePlaying_ = false;
     float railTitleAudioGain_ = 0.0f;
+    SunfallExposure sunfallExposure_{};
+    CaveOpeningLighting caveOpeningLighting_{};
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;
     RailTitleScene railTitleScene_;

@@ -1996,6 +1996,7 @@
     </ClInclude>
     <ClInclude Include="application\course\RailTitleScene.h" />
     <ClInclude Include="application\course\TwinShieldDronePose.h" />
+    <ClInclude Include="application\course\TwinShieldDroneKillFlash.h" />
     <ClInclude Include="application\course\RailShooterHudRenderer.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -2096,6 +2097,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailLockOnTypes.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailLockReticlePresentation.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailLockResolver.h">

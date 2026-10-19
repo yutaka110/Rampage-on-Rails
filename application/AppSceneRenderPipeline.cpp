@@ -746,6 +746,10 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.appPipelines->GetSkyboxPSO());
 
                 if (skyboxReady) {
+                    const auto& sun=ctx.runtimeState->directionalLightData;
+                    const float sunlight[8]={sun.direction.x,sun.direction.y,sun.direction.z,
+                        ctx.sunfallActive ? 1.0f : 0.0f,sun.color.x,sun.color.y,sun.color.z,sun.intensity};
+                    passContext.commandList->SetGraphicsRoot32BitConstants(2,8,sunlight,0);
                     ctx.frameRenderer->DrawSkybox(
                         passContext.commandList,
                         ctx.srvDescriptorHeap,
@@ -969,7 +973,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             for (const CourseMeshRenderItem& item : ctx.scene->CourseMeshes().Items()) {
                 const AppManagedModelResource* model =
                     ctx.scene->FindManagedModel(item.modelIndex);
-                if (IsTitleLandscapeMesh(item.meshId) || !item.visible ||
+                if (IsTitleLandscapeMesh(item.meshId) || IsGameplayLandscapeMesh(item.meshId) || !item.visible ||
                     model == nullptr ||
                     !item.transformResource) {
                     continue;
@@ -1240,7 +1244,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             const auto& courseItems = ctx.scene->CourseMeshes().Items();
             const bool hasTitleLandscape = std::any_of(courseItems.begin(), courseItems.end(),
                 [](const CourseMeshRenderItem& item) {
-                    return item.visible && IsTitleLandscapeMesh(item.meshId);
+                    return item.visible && (IsTitleLandscapeMesh(item.meshId) || IsGameplayLandscapeMesh(item.meshId));
                 });
             const bool drawGameplayTerrain = ctx.runtimeState->terrain.enabled &&
                 ctx.terrainChunkManager != nullptr;
@@ -1310,7 +1314,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->cascadeShadowSrvTableGpu);
             }
             for (const CourseMeshRenderItem& item : courseItems) {
-                if (!item.visible || !IsTitleLandscapeMesh(item.meshId) ||
+                if (!item.visible || !(IsTitleLandscapeMesh(item.meshId) || IsGameplayLandscapeMesh(item.meshId)) ||
                     !item.transformResource || !item.materialResource) continue;
                 const AppManagedModelResource* model = ctx.scene->FindManagedModel(item.modelIndex);
                 if (model == nullptr || model->mesh.indexCount == 0) continue;

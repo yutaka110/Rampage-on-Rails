@@ -161,13 +161,18 @@ struct CameraForGPU {
     std::array<Vector4, 4> titleWheelContacts{};
     Vector4 titleLightSweep{};
     Vector4 titleRailImpact{};
+    Vector4 sunfallSky{};
+    std::array<Vector4, 4> caveOpenings{};
+    Vector4 caveRailOrigin{};
+    Vector4 caveRailForward{};
+    Vector4 caveRange{};
 };
-static_assert(sizeof(CameraForGPU) == 160);
+static_assert(sizeof(CameraForGPU) == 288);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};
     Vector4 cascadeSplits{};
-    Vector4 parameters{}; // x: depth bias, y: strength, z: enabled, w: texel size
+    Vector4 parameters{}; // x: bias, y: strength, z: 0 off / 1 cascades / 2 single map, w: texel size
 };
 
 struct TerrainPbrLayerGpuConstants {
@@ -306,7 +311,8 @@ public:
         const Matrix4x4& projMatrix,
         const EnemyCombatPresentationBridge* enemyPresentation = nullptr,
         const EnemyEncounterReadabilityDirector* enemyReadability = nullptr,
-        const TwinShieldDronePose* titlePursuer = nullptr);
+        const TwinShieldDronePose* titlePursuer = nullptr,
+        bool includeStartupRearScenery = false);
     void SyncRailVehicleRenderFrame(
         const RailVehicleRenderFrame& frame,
         const Matrix4x4& viewMatrix,

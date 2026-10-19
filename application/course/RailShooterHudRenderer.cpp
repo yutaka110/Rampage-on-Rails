@@ -315,7 +315,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     } else if(definition.showThreat && hud.threatWarning) {
         ink(hud.threatText,width*0.5f,safe+76*scale,0.80f*scale,critical,center);
     }
-    if(definition.showSessionBanner && hud.showBanner && hud.bannerAlpha>0) {
+    if(definition.showSessionBanner && !input.startCueActive && hud.showBanner && hud.bannerAlpha>0) {
         const float a=opacity*hud.bannerAlpha;
         const float y=height*0.27f;
         const float w=(std::min)(560*scale,width-2*safe);
@@ -336,6 +336,44 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
             command.color.w*=startupGauge;
             command.x-=(1.0f-startupGauge)*8.0f*scale;
         } else command.color.w*=(std::clamp)(input.startupInformationOpacity,0.0f,1.0f);
+    }
+    // The start cue has its own opacity, independent from ordinary HUD boot.
+    // Keep the start cue and its small progress bar above the aiming area.
+    const float readyAlpha = (std::clamp)(input.readyOpacity,0.0f,1.0f)*opacity;
+    const float goAlpha = (std::clamp)(input.goOpacity,0.0f,1.0f)*opacity;
+    const float cueY = height*0.25f;
+    const auto startCue = [&](const char* word, float alpha, Vector4 color) {
+        if(alpha<=0.0f) return;
+        const size_t begin=next.commands.size();
+        // One close, opaque shadow separates the face from both pale sky and
+        // dark rock without a glow or a heavy extruded edge.
+        text(word,width*0.5f+2.0f*scale,cueY+3.0f*scale,4.8f*scale,
+            {0.025f,0.020f,0.015f,alpha*0.95f},center);
+        color.w=alpha;
+        text(word,width*0.5f,cueY,4.8f*scale,color,center);
+        for(size_t i=begin;i<next.commands.size();++i)
+            next.commands[i].textStyle=RailShooterHudTextStyle::StartCue;
+    };
+    startCue("READY",readyAlpha,{1.0f,0.98f,0.94f,1.0f});
+    startCue("GO",goAlpha,{0.79f,1.0f,0.91f,1.0f});
+    const float cueAlpha=(std::max)(readyAlpha,goAlpha);
+    if(cueAlpha>0.0f) {
+        // Use the shared cinematic clock: focus pause freezes the fill, and
+        // GO completes it only after the camera and drone are in position.
+        const float progress=goAlpha>0.0f ? 1.0f : (std::clamp)(input.readyProgress,0.0f,1.0f);
+        const float w=240.0f*scale,h=6.0f*scale;
+        const float x=width*0.5f-w*0.5f,y=cueY+24.0f*scale;
+        const Vector4 fill=goAlpha>0.0f ? Vector4{0.60f,1.0f,0.80f,cueAlpha} :
+            Vector4{0.96f,0.77f,0.43f,cueAlpha};
+        rect(x-3*scale,y-3*scale,w+6*scale,h+6*scale,
+            {0.018f,0.016f,0.013f,cueAlpha*0.78f});
+        rect(x,y,w,h,{0.34f,0.31f,0.25f,cueAlpha*0.60f});
+        rect(x,y,w*progress,h,fill);
+        rect(x,y,w*progress,1.0f*scale,{1.0f,0.98f,0.88f,cueAlpha*0.65f});
+        rect(x-5*scale,y-3*scale,1.0f*scale,h+6*scale,
+            {0.92f,0.86f,0.72f,cueAlpha*0.85f});
+        rect(x+w+4*scale,y-3*scale,1.0f*scale,h+6*scale,
+            {0.92f,0.86f,0.72f,cueAlpha*0.85f});
     }
     std::erase_if(next.commands,[](const auto& command){return command.color.w<=0.0f;});
     next.visible = !next.commands.empty();

@@ -790,6 +790,44 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame.rig.roll = Lerp(frame.rig.roll, rig.roll, handoffWeight);
         AppendMode(frame.mode, "Title Handoff");
     }
+    const float startWeight=std::isfinite(input.startupCameraWeight)
+        ? (std::clamp)(input.startupCameraWeight,0.0f,1.0f) : 0.0f;
+    if(startWeight>0.0f) {
+        const auto toWorld=[&](Vector3 local) {
+            return Add(cameraSample.position,Add(Scale(cameraSample.right,local.x),
+                Add(Scale(cameraSample.up,local.y),Scale(cameraSample.tangent,local.z))));
+        };
+        const Vector3 eye=toWorld(input.startupCameraEyeOffset);
+        Vector3 drone=toWorld(input.startupCameraDroneOffset);
+        if(input.spawnRuntime!=nullptr && input.startupCameraDroneId!=0) {
+            for(const auto& actor:input.spawnRuntime->Enemies()) {
+                if(actor.actorId!=input.startupCameraDroneId) continue;
+                drone=ResolveRailLocal(*input.railPath,actor.desc.spawnDistance,
+                    actor.desc.distanceOffset,actor.desc.lateralOffset,actor.desc.verticalOffset);
+                const float distance=actor.desc.spawnDistance+actor.desc.distanceOffset;
+                if(distance<0.0f)
+                    drone=Add(drone,Scale(input.railPath->Evaluate(0.0f).tangent,distance));
+                break;
+            }
+        }
+        // Bisect viewing directions rather than world positions: a distant
+        // drone must not push the nearer cart off the opposite screen edge.
+        const Vector3 cartDirection=NormalizeOr(Subtract(toWorld({0,5.8f,0}),eye),cameraSample.tangent);
+        const Vector3 droneDirection=NormalizeOr(Subtract(drone,eye),cameraSample.tangent);
+        const Vector3 trackingDirection=NormalizeOr(Add(Scale(cartDirection,0.48f),
+            Scale(droneDirection,0.52f)),cameraSample.tangent);
+        const Vector3 trackingTarget=Add(eye,Scale(trackingDirection,32.0f));
+        const Vector3 departureTarget=toWorld({0.0f,2.0f,14.0f});
+        const Vector3 target=LerpVector3(departureTarget,trackingTarget,
+            (std::clamp)(input.startupCameraFocusBlend,0.0f,1.0f));
+        frame.position=LerpVector3(frame.position,eye,startWeight);
+        frame.target=LerpVector3(frame.target,target,startWeight);
+        frame.baseTarget=frame.target;
+        frame.rig.fovY=Lerp(frame.rig.fovY,input.startupCameraFovY,startWeight);
+        frame.rig.roll*=1.0f-startWeight;
+        frame.forward=NormalizeOr(Subtract(frame.target,frame.position),cameraSample.tangent);
+        AppendMode(frame.mode,"READY Pursuit");
+    }
     ApplyVehicleFraming(frame, input, cameraSample);
     // Collision and sight checks must inspect the corrected/transitioned pose.
     ApplyCameraCollisionProtection(frame, input, cameraSample, frame.mode);

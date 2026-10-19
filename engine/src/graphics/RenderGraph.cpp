@@ -166,7 +166,10 @@ void RenderGraph::DeclareTransientRenderTarget(
     const std::string key = name;
     TransientRenderTargetDesc& desc = transientRenderTargets_[std::move(name)];
     desc.name = key;
-    desc.resolutionScale = (std::max)(desc.resolutionScale, resolutionScale);
+    // The descriptor's default is 1.0, not an earlier declaration. Respect a
+    // first half/quarter-resolution request; merge only repeated declarations.
+    desc.resolutionScale = desc.format == DXGI_FORMAT_UNKNOWN
+        ? resolutionScale : (std::max)(desc.resolutionScale, resolutionScale);
     desc.format = format;
     desc.clearColor[0] = clearColor != nullptr ? clearColor[0] : 0.0f;
     desc.clearColor[1] = clearColor != nullptr ? clearColor[1] : 0.0f;

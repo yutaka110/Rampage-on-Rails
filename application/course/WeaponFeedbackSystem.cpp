@@ -257,6 +257,7 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
     event.feedbackKind = feedbackKind;
     event.worldPosition = request.hitPoint;
     event.worldNormal = request.hitNormal;
+    event.incomingDirection = request.rayDirection;
     event.requestedDamage = damageResult.requestedDamage;
     event.appliedDamage = damageResult.appliedDamage;
     event.remainingHitPoints = damageResult.remainingHitPoints;
@@ -265,9 +266,19 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
     event.destroyed = damageResult.destroyed;
     ConfigurePresentation(event);
 
-    SpawnImpactVfx(runtime, event);
+    const bool droneCoreBreak=event.destroyed && event.hitKind==RailAimHitKind::Enemy &&
+        std::any_of(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& actor) {
+            return actor.actorId==event.targetActorId && actor.desc.meshId=="twin_shield_hull";
+        });
+    if(droneCoreBreak) {
+        // Native world ribbons are emitted by the accepted Defeated event.
+        // Do not stack a long yellow contact ring over the short core cut.
+        event.impactCueId="weapon_feedback_drone_core_break";
+        event.impactEffectName.clear();
+        event.hudDuration=0.18f;
+    } else SpawnImpactVfx(runtime, event);
     result.accepted = true;
-    result.vfxSpawned = true;
+    result.vfxSpawned = !droneCoreBreak;
     ++acceptedEventCount_;
     lastAcceptedEvent_ = event;
     recentEvents_.push_back(event);

@@ -1,4 +1,4 @@
-#include "EnemyCombatSystem.h"
+﻿#include "EnemyCombatSystem.h"
 
 #include "CourseSpawnRuntime.h"
 
@@ -309,6 +309,10 @@ bool EnemyCombatSystem::SubmitDamageResultActors(std::span<CourseEnemyActor> act
             state.phase != EnemyCombatPhase::Retired) {
             EnterPhase(*actor, EnemyCombatPhase::Dying,
                 EnemyCombatEventKind::Defeated, false);
+            if(actor->hasDefeatedPose && feedbackEvent) {
+                ConfigureTwinShieldDroneDestructionHit(actor->defeatedPose,
+                    feedbackEvent->worldPosition,feedbackEvent->incomingDirection,actor->actorId);
+            }
         }
         if (!state.defeatEventPublished) {
             QueueEvent(*actor, EnemyCombatEventKind::Defeated,
@@ -373,6 +377,10 @@ void EnemyCombatSystem::EnterPhase(
     EnemyCombatRuntimeState& state = actor.combatState;
     if (state.phase == phase) {
         return;
+    }
+    if(phase==EnemyCombatPhase::Dying && actor.desc.meshId=="twin_shield_hull") {
+        actor.hasDefeatedPose=actor.weaponMount.ready;
+        if(actor.hasDefeatedPose) actor.defeatedPose=actor.weaponMount.dronePose;
     }
     state.phase = phase;
     state.phaseElapsedSeconds = 0.0f;

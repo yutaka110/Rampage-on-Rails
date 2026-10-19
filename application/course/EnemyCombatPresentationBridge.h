@@ -1,10 +1,12 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
+#include <functional>
 #include <span>
 #include <vector>
 
 #include "EnemyCombatSystem.h"
+#include "TwinShieldDronePose.h"
 #include "../terrain/RailPath.h"
 #include "utils/math/Vector.h"
 
@@ -29,6 +31,8 @@ enum class EnemyCombatPresentationAudioCueKind : uint8_t {
     Attack,
     HitReact,
     Death,
+    CoreBreak,
+    Crash,
 };
 
 struct EnemyCombatPresentationSettings final {
@@ -110,6 +114,10 @@ struct EnemyDestructionBurst final {
     Vector3 worldPosition{};
     float radius = 1.0f;
     float age = 0.0f;
+    bool twinShield = false;
+    TwinShieldDronePose frozenPose{};
+    Vector3 crashPosition{}, crashNormal{0,1,0};
+    bool crashEmitted = false;
 };
 
 struct EnemyCombatPresentationFrame final {
@@ -134,6 +142,8 @@ struct EnemyCombatPresentationInput final {
     float deltaTime = 0.0f;
     bool gameplayActive = true;
     EnemyCombatPresentationSettings settings{};
+    // Called only when a new wreck is created, never during its per-frame fall.
+    std::function<bool(Vector3,Vector3,float,Vector3&,Vector3&)> traceDestructionGround;
 };
 
 // Converts authoritative combat state/events into procedural model animation,

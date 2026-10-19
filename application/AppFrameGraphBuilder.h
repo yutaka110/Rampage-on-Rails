@@ -61,6 +61,10 @@ struct AppFrameGraphBuildContext {
     const EffectRuntimeFrame* effectRuntime = nullptr;
     ParticleRenderFallback primaryParticleFx{};
     float beamTime = 0.0f;
+    bool sunfallActive = false;
+    float sunfallGroundHeight = 0.0f;
+    float sunfallExposure = 1.0f;
+    float sunfallOutdoorBlend = 0.0f;
     // Presentation-only; zero keeps the normal render path allocation-free.
     float railFilmBurnProgress = 0.0f;
     // Incoming reveal uses a quieter optical treatment than outgoing blackout.

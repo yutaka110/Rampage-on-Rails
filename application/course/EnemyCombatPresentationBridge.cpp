@@ -1,6 +1,7 @@
-#include "EnemyCombatPresentationBridge.h"
+﻿#include "EnemyCombatPresentationBridge.h"
 
 #include "CourseSpawnRuntime.h"
+#include "EnemyEncounterReadabilityDirector.h"
 #include "../diagnostics/DebugDrawSystem.h"
 
 #include <algorithm>
@@ -488,10 +489,35 @@ void EnemyCombatPresentationBridge::Update(
     }
 
     if (input.gameplayActive) {
-        for (auto& burst : frame_.destructionBursts)
-            burst.age += (std::max)(0.0f, input.deltaTime);
+        for (auto& burst : frame_.destructionBursts) {
+            burst.age += std::isfinite(input.deltaTime) ? (std::max)(0.0f,input.deltaTime) : 0.0f;
+            const float impactAge=burst.frozenPose.destructionImpactAge;
+            if(!burst.twinShield || impactAge<0 || burst.age<impactAge || burst.crashEmitted) continue;
+            burst.crashEmitted=true;
+            // An overdue effect must not replay after a long frame or resume.
+            if(burst.age-impactAge>=0.50f) continue;
+            const auto offset=Subtract(burst.crashPosition,input.listenerPosition);
+            const float distance=Length(offset);
+            const float reference=(std::max)(1.0f,input.settings.audioReferenceDistance);
+            const float attenuation=reference/(reference+distance);
+            EnemyCombatPresentationAudioCue cue;
+            cue.kind=EnemyCombatPresentationAudioCueKind::Crash;
+            cue.actorId=burst.actorId; cue.worldPosition=burst.crashPosition;
+            cue.volume=0.78f*input.settings.masterAudioVolume*attenuation;
+            cue.pitch=0.72f+0.025f*float(burst.actorId%5);
+            cue.pan=(std::clamp)(Dot(offset,input.listenerRight)/
+                (std::max)(1.0f,input.settings.audioPanWidth),-1.0f,1.0f);
+            if(frame_.audioCues.size()<input.settings.maximumAudioCuesPerFrame) frame_.audioCues.push_back(cue);
+            else ++frame_.droppedAudioCues;
+            frame_.cameraShakeImpulse=(std::max)(frame_.cameraShakeImpulse,0.32f*attenuation);
+        }
         std::erase_if(frame_.destructionBursts,
-            [](const EnemyDestructionBurst& burst) { return burst.age >= 0.65f; });
+            [](const EnemyDestructionBurst& burst) {
+                const float impactAge=burst.frozenPose.destructionImpactAge;
+                const float lifetime=burst.twinShield ? (impactAge>=0 ? impactAge+2.25f :
+                    TwinShieldDroneSmokePuff::FallbackStop+TwinShieldDroneSmokePuff::Lifetime) : 0.65f;
+                return burst.age>=lifetime;
+            });
     }
     frame_.actors.reserve(input.runtime->Enemies().size());
     for (const CourseEnemyActor& actor : input.runtime->Enemies()) {
@@ -545,6 +571,9 @@ void EnemyCombatPresentationBridge::Update(
         for (const EnemyCombatEvent* event : prioritized) {
             const CourseEnemyActor* actor = FindEnemy(*input.runtime, event->actorId);
             if (actor == nullptr) continue;
+            if(event->kind==EnemyCombatEventKind::Defeated &&
+                std::any_of(frame_.destructionBursts.begin(),frame_.destructionBursts.end(),
+                    [&](const auto& burst) {return burst.actorId==event->actorId;})) continue;
             if (actor->desc.hitPoints <= 0 &&
                 (event->kind == EnemyCombatEventKind::AttackCommitted ||
                  event->kind == EnemyCombatEventKind::TelegraphStarted)) continue;
@@ -619,9 +648,17 @@ void EnemyCombatPresentationBridge::Update(
                     ? 1.22f : 1.0f;
                 break;
             case EnemyCombatEventKind::Defeated:
-                cue.kind = EnemyCombatPresentationAudioCueKind::Death;
-                cue.volume = 0.62f;
-                cue.pitch = 0.88f + static_cast<float>(actor->actorId % 5u) * 0.035f;
+                if(actor->desc.meshId=="twin_shield_hull") {
+                    cue.kind=EnemyCombatPresentationAudioCueKind::CoreBreak;
+                    const auto simultaneous=std::count_if(frame_.audioCues.begin(),frame_.audioCues.end(),
+                        [](const auto& sound) {return sound.kind==EnemyCombatPresentationAudioCueKind::CoreBreak;});
+                    cue.volume=0.56f/std::sqrt(1.0f+0.60f*float(simultaneous));
+                    cue.pitch=0.98f+float(actor->actorId%5u)*0.02f;
+                } else {
+                    cue.kind = EnemyCombatPresentationAudioCueKind::Death;
+                    cue.volume = 0.62f;
+                    cue.pitch = 0.88f + static_cast<float>(actor->actorId % 5u) * 0.035f;
+                }
                 break;
             case EnemyCombatEventKind::TelegraphStarted:
             case EnemyCombatEventKind::Retired:
@@ -660,15 +697,75 @@ void EnemyCombatPresentationBridge::Update(
                         frame_.destructionBursts.begin(), frame_.destructionBursts.end(),
                         [&](const EnemyDestructionBurst& burst) { return burst.actorId == actor->actorId; });
                     if (!alreadyVisible && frame_.destructionBursts.size() < 16) {
-                        frame_.destructionBursts.push_back({actor->actorId, mix.position,
-                            (std::clamp)(actor->desc.radius, 0.6f, 4.0f), 0.0f});
+                        EnemyDestructionBurst burst{actor->actorId,mix.position,
+                            (std::clamp)(actor->desc.radius,0.6f,4.0f),0.0f};
+                        burst.twinShield=actor->desc.meshId=="twin_shield_hull";
+                        if(burst.twinShield) {
+                            auto& pose=burst.frozenPose;
+                            if(actor->hasDefeatedPose) pose=actor->defeatedPose;
+                            else {
+                                const auto sample=input.railPath->Evaluate(actor->desc.spawnDistance+actor->desc.distanceOffset);
+                                pose.visible=true; pose.position=mix.position;
+                                pose.rotation=ResolveTwinShieldDroneFacing(sample.tangent,pose.position,
+                                    input.listenerPosition,actor->desc.localRotation,{},false);
+                                const float size=actor->desc.radius*kTwinShieldGameplayModelScale;
+                                pose.scale={size*actor->desc.localScale.x,size*actor->desc.localScale.y,size*actor->desc.localScale.z};
+                            }
+                            const auto sample=input.railPath->Evaluate(actor->desc.spawnDistance+actor->desc.distanceOffset);
+                            pose.destructionAge=0; pose.destructionSeed=actor->actorId;
+                            if(pose.destructionHitSide==0)
+                                ConfigureTwinShieldDroneDestructionHit(pose,pose.position,{},actor->actorId);
+                            pose.destructionDrift=pose.hasFlightVelocity ? pose.flightVelocity :
+                                Scale(sample.tangent,(std::clamp)(actor->behaviorState.engagementBandVelocity,-30.0f,45.0f));
+                            pose.flash=0; pose.death=0; pose.alpha=1;
+                            burst.worldPosition=pose.position;
+                            pose.destructionImpactAge=-1;
+                            if(input.traceDestructionGround) {
+                                // Sweep the ballistic lower hull in bounded 0.25s
+                                // segments, once. The callback uses the shared terrain BVH.
+                                const auto trajectory=[&](float t) {
+                                    return EvaluateTwinShieldDroneGroundProbe(pose,t);
+                                };
+                                auto previous=trajectory(0);
+                                for(int segment=1;segment<=12;++segment) {
+                                    const float endAge=0.25f*float(segment);
+                                    const auto next=trajectory(endAge);
+                                    Vector3 contact{},normal{};
+                                    if(input.traceDestructionGround(previous,next,
+                                            actor->desc.spawnDistance+actor->desc.distanceOffset+
+                                                Dot(Subtract(next,pose.position),sample.tangent),contact,normal)) {
+                                        const float length=Length(Subtract(next,previous));
+                                        const float fraction=length>0.0001f ? Dot(Subtract(contact,previous),Subtract(next,previous))/(length*length) : -1;
+                                        if(std::isfinite(fraction) && fraction>=0 && fraction<=1.001f && normal.y>0.20f) {
+                                            float low=endAge-0.25f,high=endAge;
+                                            // Refine against the contact plane using the actual
+                                            // recoiling/slipping path, without more terrain queries.
+                                            for(int refinement=0;refinement<10;++refinement) {
+                                                const float middle=(low+high)*0.5f;
+                                                if(Dot(Subtract(trajectory(middle),contact),normal)>0) low=middle;
+                                                else high=middle;
+                                            }
+                                            pose.destructionImpactAge=(low+high)*0.5f;
+                                            burst.crashPosition=contact; burst.crashNormal=normal;
+                                        }
+                                        // Stop at the first solid surface, including walls.
+                                        break;
+                                    }
+                                    previous=next;
+                                }
+                            }
+                        }
+                        frame_.destructionBursts.push_back(burst);
                     }
+                    // The depth-tested core cut and small connection arcs own
+                    // drone defeat. Keep the large particle blast for ground impact.
+                    if(actor->desc.meshId=="twin_shield_hull") continue;
                     // WeaponFeedback owns the contact impact. This is a larger,
                     // actor-centered destruction burst and is emitted once.
                     vfx.cueId = "enemy_combat_death";
                     vfx.effectName = "enemy_death_burst";
                     vfx.color = {1.0f, 0.34f, 0.08f, 0.96f};
-                    vfx.radius = (std::max)(1.25f, actor->desc.radius * 1.72f);
+                    vfx.radius = (std::max)(1.25f, actor->desc.radius * (actor->desc.meshId=="twin_shield_hull"?0.75f:1.72f));
                     vfx.lifetime = 0.90f;
                 } else if (attackVfx) {
                     const RailPathSample sample = input.railPath->Evaluate(
@@ -728,7 +825,9 @@ void EnemyCombatPresentationBridge::Update(
 void EnemyCombatPresentationBridge::AppendDestructionPrimitives(
     ge3::debug::DebugDrawSystem& draw) const {
     for (const auto& burst : frame_.destructionBursts) {
-        const float t = burst.age / 0.65f;
+        const float sparkAge=burst.age-(burst.twinShield?0.14f:0.0f);
+        if(sparkAge<0 || sparkAge>=0.65f) continue;
+        const float t = sparkAge / 0.65f;
         const float alpha = (1.0f - t) * (1.0f - t);
         for (int i = 0; i < 10; ++i) {
             const float angle = i * 2.399963f + static_cast<float>(burst.actorId % 13u);
@@ -775,6 +874,8 @@ const char* ToString(EnemyCombatPresentationAudioCueKind kind) noexcept {
     case EnemyCombatPresentationAudioCueKind::Attack: return "Attack";
     case EnemyCombatPresentationAudioCueKind::HitReact: return "HitReact";
     case EnemyCombatPresentationAudioCueKind::Death: return "Death";
+    case EnemyCombatPresentationAudioCueKind::CoreBreak: return "Core Break";
+    case EnemyCombatPresentationAudioCueKind::Crash: return "Crash";
     }
     return "Unknown";
 }

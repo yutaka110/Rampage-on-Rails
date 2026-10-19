@@ -10,6 +10,8 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <unordered_set>
+#include <iterator>
 
 using Microsoft::WRL::ComPtr;
 
@@ -107,6 +109,31 @@ uint64_t HashAppendString(uint64_t hash, const std::string& value) {
     return HashAppend(hash, value.data(), value.size());
 }
 
+uint64_t HashShaderSourceTree(uint64_t hash,const std::filesystem::path& path,
+    std::unordered_set<std::wstring>& visited) {
+    std::error_code error;
+    const auto normalized=std::filesystem::weakly_canonical(path,error).lexically_normal();
+    if(!visited.insert(normalized.wstring()).second) return hash;
+    hash=HashAppendString(hash,normalized.wstring());
+    std::ifstream source(path,std::ios::binary);
+    const std::string contents{std::istreambuf_iterator<char>(source),std::istreambuf_iterator<char>()};
+    hash=HashAppend(hash,contents.data(),contents.size());
+    // Included palettes and cbuffer layouts affect bytecode too. Editing only
+    // an .hlsli must never reuse an older parent's cached shader.
+    size_t offset=0;
+    while((offset=contents.find("#include",offset))!=std::string::npos) {
+        const size_t lineEnd=contents.find('\n',offset);
+        const size_t begin=contents.find('"',offset+8);
+        if(begin==std::string::npos || (lineEnd!=std::string::npos && begin>lineEnd)) {offset+=8;continue;}
+        const size_t end=contents.find('"',begin+1);
+        if(end==std::string::npos) break;
+        const auto include=path.parent_path()/contents.substr(begin+1,end-begin-1);
+        hash=HashShaderSourceTree(hash,include,visited);
+        offset=end+1;
+    }
+    return hash;
+}
+
 std::filesystem::path ShaderBytecodeCachePath(
     const std::filesystem::path& resolvedPath,
     const wchar_t* profile) {
@@ -131,6 +158,8 @@ std::filesystem::path ShaderBytecodeCachePath(
 #endif
     hash = HashAppend(hash, &writeTimeTicks, sizeof(writeTimeTicks));
     hash = HashAppend(hash, &sourceSize, sizeof(sourceSize));
+    std::unordered_set<std::wstring> visited;
+    hash=HashShaderSourceTree(hash,resolvedPath,visited);
 
     char fileName[48]{};
     std::snprintf(fileName, sizeof(fileName), "%016llx.dxil", static_cast<unsigned long long>(hash));
@@ -340,6 +369,10 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/DistortionComposite.PS.hlsl",
         L"resources/Accretion.PS.hlsl",
         L"resources/DistanceFog.PS.hlsl",
+        L"resources/SunfallLighting.hlsli",
+        L"resources/TitleLighting.hlsli",
+        L"resources/SunfallVolume.PS.hlsl",
+        L"resources/SunfallComposite.PS.hlsl",
         L"resources/ContactAO.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
@@ -692,7 +725,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     skyboxTextureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     skyboxTextureRange.OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER skyboxRootParams[2] = {};
+    D3D12_ROOT_PARAMETER skyboxRootParams[3] = {};
     skyboxRootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_CBV;
     skyboxRootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
     skyboxRootParams[0].Descriptor.ShaderRegister = 0;
@@ -701,6 +734,10 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     skyboxRootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
     skyboxRootParams[1].DescriptorTable.NumDescriptorRanges = 1;
     skyboxRootParams[1].DescriptorTable.pDescriptorRanges = &skyboxTextureRange;
+    skyboxRootParams[2].ParameterType=D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    skyboxRootParams[2].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
+    skyboxRootParams[2].Constants.ShaderRegister=1;
+    skyboxRootParams[2].Constants.Num32BitValues=8;
 
     D3D12_ROOT_SIGNATURE_DESC skyboxRsDesc{};
     skyboxRsDesc.NumParameters = _countof(skyboxRootParams);
@@ -1486,6 +1523,20 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         IID_PPV_ARGS(&compositeRootSignature_));
     if (FAILED(hr)) return FailHr("CreateRootSignature(Composite)", hr);
 
+    // Two SRVs (scene depth, local sunlight shadow) and 52 frame constants.
+    // 54 root DWORDs stay below D3D12's 64-DWORD limit.
+    D3D12_ROOT_PARAMETER sunfallParams[3] = {compositeParams[0],compositeParams[1],compositeParams[3]};
+    sunfallParams[2].Constants.Num32BitValues=52;
+    D3D12_ROOT_SIGNATURE_DESC sunfallDesc=compositeRootDesc;
+    sunfallDesc.NumParameters=3;
+    sunfallDesc.pParameters=sunfallParams;
+    ComPtr<ID3DBlob> sunfallSignature,sunfallError;
+    hr=D3D12SerializeRootSignature(&sunfallDesc,D3D_ROOT_SIGNATURE_VERSION_1,&sunfallSignature,&sunfallError);
+    if(FAILED(hr)) return FailHr("D3D12SerializeRootSignature(Sunfall)",hr);
+    hr=device->CreateRootSignature(0,sunfallSignature->GetBufferPointer(),sunfallSignature->GetBufferSize(),
+        IID_PPV_ARGS(&sunfallRootSignature_));
+    if(FAILED(hr)) return FailHr("CreateRootSignature(Sunfall)",hr);
+
     // ------------------------------
     // Compile shaders
     // ------------------------------
@@ -1549,6 +1600,9 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     distortionCompositePs_ = Compile_(L"resources/DistortionComposite.PS.hlsl", L"ps_6_0");
     accretionCompositePs_ = Compile_(L"resources/Accretion.PS.hlsl", L"ps_6_0");
     distanceFogPs_ = Compile_(L"resources/DistanceFog.PS.hlsl", L"ps_6_0");
+    sunfallVolumePs_ = Compile_(L"resources/SunfallVolume.PS.hlsl", L"ps_6_0");
+    sunfallCompositePs_ = Compile_(L"resources/SunfallComposite.PS.hlsl", L"ps_6_0");
+    if(!sunfallVolumePs_ || !sunfallCompositePs_) return false;
     contactAoPs_ = Compile_(L"resources/ContactAO.PS.hlsl", L"ps_6_0");
     toneMappingPs_ = Compile_(L"resources/ToneMapping.PS.hlsl", L"ps_6_0");
     glowCompositePs_ = Compile_(L"resources/GlowComposite.PS.hlsl", L"ps_6_0");
@@ -2075,6 +2129,45 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     hr = device->CreateGraphicsPipelineState(&compositeDesc, IID_PPV_ARGS(&compositePso_));
     if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Composite)", hr);
 
+    {
+        auto d=compositeDesc;
+        d.RTVFormats[0]=DXGI_FORMAT_R16G16B16A16_FLOAT;
+        d.pRootSignature=sunfallRootSignature_.Get();
+        d.PS={sunfallVolumePs_->GetBufferPointer(),sunfallVolumePs_->GetBufferSize()};
+        hr=device->CreateGraphicsPipelineState(&d,IID_PPV_ARGS(&sunfallVolumePso_));
+        if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(SunfallVolume)",hr);
+        d.pRootSignature=compositeRootSignature_.Get();
+        d.PS={sunfallCompositePs_->GetBufferPointer(),sunfallCompositePs_->GetBufferSize()};
+        hr=device->CreateGraphicsPipelineState(&d,IID_PPV_ARGS(&sunfallCompositePso_));
+        if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(SunfallComposite)",hr);
+    }
+
+    {
+        // Only the Sunfall route uses these variants. Keep light energy above
+        // one through bloom and the scene chain, until the single tone map.
+        const std::pair<const char*,IDxcBlob*> hdrShaders[]={
+            {"FullscreenComposite",compositePs_.Get()},{"BloomExtract",bloomExtractPs_.Get()},
+            {"BloomDownsample",bloomDownsamplePs_.Get()},{"BloomUpsample",bloomUpsamplePs_.Get()},
+            {"BlurHorizontal",blurHorizontalPs_.Get()},{"BlurVertical",blurVerticalPs_.Get()},
+            {"BoxBlurHorizontal",boxBlurHorizontalPs_.Get()},{"BoxBlurVertical",boxBlurVerticalPs_.Get()},
+            {"GaussianBlurHorizontal",gaussianBlurHorizontalPs_.Get()},
+            {"GaussianBlurVertical",gaussianBlurVerticalPs_.Get()},
+            {"DistortionComposite",distortionCompositePs_.Get()},{"AccretionComposite",accretionCompositePs_.Get()},
+            {"DistanceFog",distanceFogPs_.Get()},{"ContactAO",contactAoPs_.Get()},
+            {"GlowComposite",glowCompositePs_.Get()},{"WarpTunnelGenerate",warpTunnelGeneratePs_.Get()},
+            {"WarpTunnelComposite",warpTunnelCompositePs_.Get()},{"DissolveMask",dissolveMaskPs_.Get()},
+            {"Dissolve",dissolvePs_.Get()},{"Random",randomPs_.Get()},
+            {"PrewittOutline",prewittOutlinePs_.Get()},{"Grayscale",grayscalePs_.Get()},
+            {"Vignette",vignettePs_.Get()}};
+        hdrPostProcessPsos_.clear();
+        for(const auto& [name,shader]:hdrShaders) {
+            auto d=compositeDesc;
+            d.RTVFormats[0]=DXGI_FORMAT_R16G16B16A16_FLOAT;
+            d.PS={shader->GetBufferPointer(),shader->GetBufferSize()};
+            hr=device->CreateGraphicsPipelineState(&d,IID_PPV_ARGS(&hdrPostProcessPsos_[name]));
+            if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(HDR postprocess)",hr);
+        }
+    }
     {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC d = compositeDesc;
         d.PS = { bloomExtractPs_->GetBufferPointer(), bloomExtractPs_->GetBufferSize() };
@@ -2693,6 +2786,10 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/DistortionComposite.PS.hlsl",
         L"resources/Accretion.PS.hlsl",
         L"resources/DistanceFog.PS.hlsl",
+        L"resources/SunfallLighting.hlsli",
+        L"resources/TitleLighting.hlsli",
+        L"resources/SunfallVolume.PS.hlsl",
+        L"resources/SunfallComposite.PS.hlsl",
         L"resources/ContactAO.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",

@@ -12,6 +12,11 @@ cbuffer Camera : register(b2)
     float4 titleWheelContacts[4];
     float4 titleLightSweep; // sheet offset/intensity, rail glint distance/intensity
     float4 titleRailImpact; // fixed world contact and transient radiance
+    float4 sunfallSky; // enabled, outdoor blend, sky fill, reserved
+    float4 caveOpenings[4]; // world position and diffuse influence radius
+    float4 caveRailOrigin; // world position and course distance
+    float4 caveRailForward;
+    float4 caveRange; // outdoor start, transition length, outdoor strength, enabled
 }
 
 static float TitleCaveExposure()

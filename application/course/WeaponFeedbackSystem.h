@@ -39,6 +39,7 @@ struct WeaponFeedbackEvent {
     HitFeedbackKind feedbackKind = HitFeedbackKind::None;
     Vector3 worldPosition{};
     Vector3 worldNormal{};
+    Vector3 incomingDirection{};
     float requestedDamage = 0.0f;
     float appliedDamage = 0.0f;
     float remainingHitPoints = 0.0f;

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <span>
@@ -127,6 +127,7 @@ struct CourseEnemyActorDesc {
     EnemyFormationDefinition formationDefinition{};
     bool previewOnly = false;
     bool suppressFire = false;
+    bool establishedEntrance = false; // Already visible during a gated start sequence.
 };
 
 struct CourseObstacleActorDesc {
@@ -191,6 +192,11 @@ struct CourseEnemyActor {
     bool encounterPacingEvaluated = false;
     bool encounterPacingAttackAllowed = true;
     uint32_t actorId = 0;
+
+    bool startupFlightControlled = false;
+    // Captured at lethal damage before live targeting clears its weapon pose.
+    TwinShieldDronePose defeatedPose{};
+    bool hasDefeatedPose = false;
 
     // Repeating front drones stay alive until defeated, including after their
     // source section/Wave has completed. Only scene reset clears them outright.
@@ -303,6 +309,11 @@ public:
     bool DeferEnemyAttackForUnreachableLaunch(uint32_t actorId);
 
     bool SpawnEnemyActor(CourseEnemyActorDesc desc, std::string* errorMessage = nullptr);
+    bool SetEnemyLocalRotation(uint32_t actorId, Vector3 rotation);
+    // Own the real actor's entrance without running combat or formation AI.
+    bool SetEnemyStartupFlight(uint32_t actorId, float playerDistance,
+        float forward, float lateral, float vertical, Vector3 rotation,
+        bool releaseToCombat = false, float playerSpeed = 0.0f);
     bool SpawnObstacle(CourseObstacleActorDesc desc, std::string* errorMessage = nullptr);
     void SpawnVfxCue(CourseVfxCueDesc desc);
     void SubmitPendingVfx(EffectRuntime& effectRuntime, const RailPath& railPath);

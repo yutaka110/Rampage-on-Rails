@@ -9,6 +9,7 @@
 #include <fstream>
 #include <utility>
 #include <vector>
+#include <unordered_map>
 
 #include "../diagnostics/DebugDrawSystem.h"
 #include "TerrainVolumeField.h"
@@ -171,21 +172,6 @@ struct RockScatterPlacement {
     uint32_t kind = 0;
 };
 
-struct ErodedArchShellSample {
-    Vector3 position{};
-    Vector3 normal{};
-};
-
-struct HeroArchLayout {
-    float patternStart = 0.0f;
-    float patternLength = 1.0f;
-    float heroOpeningDistance = 0.0f;
-    float foregroundFrameDistance = 0.0f;
-    float heroArcT = 0.50f;
-    float heroAlongRadius = 1.0f;
-    float heroArcRadius = 0.18f;
-};
-
 Vector3 Add(const Vector3& a, const Vector3& b) {
     return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
@@ -256,6 +242,16 @@ Vector2 PackTerrainSurfaceAttributes(Vector2 uv, float contactAo, float rockVari
 
 float SignedNoise(uint32_t seed, int32_t a, int32_t b) {
     return Hash01(seed ^ static_cast<uint32_t>(a * 73856093) ^ static_cast<uint32_t>(b * 19349663)) * 2.0f - 1.0f;
+}
+
+float SmoothSignedNoise(uint32_t seed, float x, float y) {
+    const int32_t ix = static_cast<int32_t>(std::floor(x));
+    const int32_t iy = static_cast<int32_t>(std::floor(y));
+    const float tx = SmoothStep(0.0f, 1.0f, x - std::floor(x));
+    const float ty = SmoothStep(0.0f, 1.0f, y - std::floor(y));
+    return std::lerp(
+        std::lerp(SignedNoise(seed, ix, iy), SignedNoise(seed, ix + 1, iy), tx),
+        std::lerp(SignedNoise(seed, ix, iy + 1), SignedNoise(seed, ix + 1, iy + 1), tx), ty);
 }
 
 float RockVariationFromSeed(uint32_t seed, const TerrainGenerationSettings& settings) {
@@ -527,36 +523,95 @@ void PushGridIndices(
 }
 
 void PushMaskedGridIndices(
-    std::vector<uint32_t>& indices,
+    TerrainCpuMesh& mesh,
     uint32_t base,
     uint32_t rows,
     uint32_t columns,
     const std::vector<float>& openingMasks,
-    bool flipWinding) {
+    bool flipWinding,
+    bool floorConnected = false,
+    float rimDepth = 0.0f,
+    bool twoSided = false) {
+    constexpr float threshold=0.42f;
+    const uint32_t cellRows=rows-1u, cellColumns=columns-1u;
+    std::vector<bool> connected(static_cast<size_t>(cellRows)*cellColumns,!floorConnected);
+    if(floorConnected) {
+        // Discard detached ceiling islands, retaining the playable floor and
+        // every wall/roof patch connected to it. The angular seam wraps.
+        std::vector<uint32_t> queue;
+        auto visit=[&](uint32_t y,uint32_t x) {
+            const uint32_t i=y*cellColumns+x,a=y*columns+x;
+            if(connected[i] || (openingMasks[a]>=threshold && openingMasks[a+1]>=threshold &&
+                openingMasks[a+columns]>=threshold && openingMasks[a+columns+1]>=threshold)) return;
+            connected[i]=true;queue.push_back(i);
+        };
+        for(uint32_t y=0;y<cellRows;++y) for(uint32_t x=0;x<cellColumns;++x)
+            if(std::sin(6.28318530718f*(static_cast<float>(x)+0.5f)/cellColumns)<0.05f) visit(y,x);
+        for(size_t i=0;i<queue.size();++i) {
+            const uint32_t y=queue[i]/cellColumns,x=queue[i]%cellColumns,a=y*columns+x;
+            if(y>0 && (openingMasks[a]<threshold || openingMasks[a+1]<threshold)) visit(y-1,x);
+            if(y+1<cellRows && (openingMasks[a+columns]<threshold || openingMasks[a+columns+1]<threshold)) visit(y+1,x);
+            if(openingMasks[a]<threshold || openingMasks[a+columns]<threshold) visit(y,(x+cellColumns-1)%cellColumns);
+            if(openingMasks[a+1]<threshold || openingMasks[a+columns+1]<threshold) visit(y,(x+1)%cellColumns);
+        }
+    }
+    std::unordered_map<uint64_t,uint32_t> intersections;
+    auto intersect=[&](uint32_t a,uint32_t b) {
+        const uint64_t key=(static_cast<uint64_t>((std::min)(a,b))<<32)|(std::max)(a,b);
+        if(const auto found=intersections.find(key);found!=intersections.end()) return found->second;
+        const float t=(std::clamp)((threshold-openingMasks[a])/(openingMasks[b]-openingMasks[a]),0.0f,1.0f);
+        const VertexData va=mesh.vertices[base+a],vb=mesh.vertices[base+b];
+        VertexData v=va;
+        v.position={std::lerp(va.position.x,vb.position.x,t),std::lerp(va.position.y,vb.position.y,t),
+            std::lerp(va.position.z,vb.position.z,t),1};
+        v.normal=NormalizeOr(Add(Scale(va.normal,1-t),Scale(vb.normal,t)),va.normal);
+        // Preserve the packed AO/variation bucket rather than interpolating
+        // unrelated material IDs across a newly cut boundary.
+        v.texcoord={std::lerp(va.texcoord.x,vb.texcoord.x,t),
+            std::floor(t<0.5f ? va.texcoord.y : vb.texcoord.y)+
+            std::lerp(va.texcoord.y-std::floor(va.texcoord.y),vb.texcoord.y-std::floor(vb.texcoord.y),t)};
+        const uint32_t result=static_cast<uint32_t>(mesh.vertices.size());
+        mesh.vertices.push_back(v);intersections.emplace(key,result);return result;
+    };
+    auto triangle=[&](uint32_t a,uint32_t b,uint32_t c) {
+        if(a==b || b==c || c==a) return;
+        const auto& p=mesh.vertices[a].position;const auto& q=mesh.vertices[b].position;const auto& r=mesh.vertices[c].position;
+        const Vector3 area=Cross({q.x-p.x,q.y-p.y,q.z-p.z},{r.x-p.x,r.y-p.y,r.z-p.z});
+        if(area.x*area.x+area.y*area.y+area.z*area.z<1.0e-10f) return;
+        if(flipWinding) std::swap(b,c);
+        mesh.indices.insert(mesh.indices.end(),{a,b,c});
+        if(twoSided) mesh.indices.insert(mesh.indices.end(),{a,c,b});
+    };
+    auto clip=[&](uint32_t a,uint32_t b,uint32_t c) {
+        const uint32_t input[3]={a,b,c};uint32_t polygon[4]{},cut[2]{},count=0,cuts=0;
+        for(uint32_t i=0;i<3;++i) {
+            const uint32_t p=input[i],q=input[(i+1)%3];
+            const bool inside=openingMasks[p]<threshold,nextInside=openingMasks[q]<threshold;
+            if(inside) polygon[count++]=base+p;
+            if(inside!=nextInside) {const uint32_t v=intersect(p,q);polygon[count++]=v;cut[cuts++]=v;}
+        }
+        for(uint32_t i=1;i+1<count;++i) triangle(polygon[0],polygon[i],polygon[i+1]);
+        if(cuts==2 && cut[0]!=cut[1] && rimDepth>0) {
+            VertexData p=mesh.vertices[cut[0]],q=mesh.vertices[cut[1]],r=p,s=q;
+            r.position.x-=p.normal.x*rimDepth;r.position.y-=p.normal.y*rimDepth;r.position.z-=p.normal.z*rimDepth;
+            s.position.x-=q.normal.x*rimDepth;s.position.y-=q.normal.y*rimDepth;s.position.z-=q.normal.z*rimDepth;
+            const Vector3 edge{q.position.x-p.position.x,q.position.y-p.position.y,q.position.z-p.position.z};
+            const Vector3 depth{r.position.x-p.position.x,r.position.y-p.position.y,r.position.z-p.position.z};
+            if(edge.x*edge.x+edge.y*edge.y+edge.z*edge.z<1.0e-10f) return;
+            p.normal=q.normal=r.normal=s.normal=NormalizeOr(Cross(edge,depth),p.normal);
+            const uint32_t v=static_cast<uint32_t>(mesh.vertices.size());
+            mesh.vertices.insert(mesh.vertices.end(),{p,q,r,s});
+            mesh.indices.insert(mesh.indices.end(),{v,v+1,v+2,v+1,v+3,v+2,v,v+2,v+1,v+1,v+2,v+3});
+        }
+    };
     for (uint32_t y = 0; y + 1 < rows; ++y) {
         for (uint32_t x = 0; x + 1 < columns; ++x) {
             const uint32_t a = y * columns + x;
             const uint32_t b = a + 1;
             const uint32_t c = a + columns;
             const uint32_t d = c + 1;
-            const float avgMask =
-                (openingMasks[a] + openingMasks[b] + openingMasks[c] + openingMasks[d]) * 0.25f;
-            const float maxMask = (std::max)(
-                (std::max)(openingMasks[a], openingMasks[b]),
-                (std::max)(openingMasks[c], openingMasks[d]));
-            if (avgMask > 0.42f || (maxMask > 0.74f && avgMask > 0.28f)) {
-                continue;
-            }
-
-            const uint32_t ia = base + a;
-            const uint32_t ib = base + b;
-            const uint32_t ic = base + c;
-            const uint32_t id = base + d;
-            if (flipWinding) {
-                indices.insert(indices.end(), {ia, ic, ib, ib, ic, id});
-            } else {
-                indices.insert(indices.end(), {ia, ib, ic, ib, id, ic});
-            }
+            if(!connected[y*cellColumns+x]) continue;
+            clip(a,b,c);clip(b,d,c);
         }
     }
 }
@@ -1597,245 +1652,6 @@ void AppendOpenCanyonSideVeil(
     }
 }
 
-ErodedArchShellSample EvaluateErodedArchShellPoint(
-    const RailPath& railPath,
-    const TerrainGenerationSettings& settings,
-    uint32_t seed,
-    float distance,
-    float arcT,
-    uint32_t layerIndex) {
-    constexpr float kPi = 3.14159265359f;
-    const float layer = static_cast<float>(layerIndex);
-    const float angle = kPi * (0.055f + arcT * 0.890f);
-    const float ca = std::cos(angle);
-    const float sa = std::sin(angle);
-    const int32_t noiseX = static_cast<int32_t>(std::floor(distance * 0.026f));
-    const int32_t noiseY = static_cast<int32_t>(std::floor(arcT * 23.0f));
-    const float broad =
-        SignedNoise(seed + 173u, noiseX / 3, noiseY / 2) * 0.58f +
-        SignedNoise(seed + 181u, noiseX, noiseY) * 0.42f;
-    const float rib =
-        std::sin(distance * 0.030f + arcT * (18.0f + layer * 3.0f) + Hash01(seed + 191u) * 6.28318530718f);
-    const float shellPulse =
-        1.0f + broad * (0.050f + layer * 0.012f) + rib * (0.026f + layer * 0.006f);
-    const float lateralRadius =
-        settings.canyonHalfWidth * (2.35f + layer * 0.26f) +
-        settings.openCanyonFarWallDistance * (0.18f + layer * 0.055f);
-    const float verticalRadius =
-        settings.wallHeight * (2.25f + layer * 0.20f) +
-        settings.openCanyonFarWallHeight * (0.72f + layer * 0.09f);
-    const float floorY = -settings.corridorRadius * (1.04f + layer * 0.05f);
-    const float lateral = ca * lateralRadius * shellPulse;
-    const float vertical =
-        floorY +
-        sa * verticalRadius * shellPulse -
-        (1.0f - sa) * settings.wallHeight * 0.22f +
-        SignedNoise(seed + 197u, noiseX, noiseY) * settings.wallHeight * 0.12f;
-    const RailPathSample sample = railPath.Evaluate(distance);
-    const Vector3 inwardNormal = NormalizeOr(
-        Add(Scale(sample.right, -ca), Scale(sample.up, -sa * 0.72f)),
-        Scale(sample.up, -1.0f));
-    const Vector3 position = Add(
-        sample.position,
-        Add(
-            Scale(sample.right, lateral),
-            Add(
-                Scale(sample.up, vertical),
-                Scale(sample.tangent, SignedNoise(seed + 199u, noiseX, noiseY) * settings.chunkLength * (0.055f + layer * 0.020f)))));
-
-    return {position, inwardNormal};
-}
-
-HeroArchLayout BuildHeroArchLayout(
-    const TerrainGenerationSettings& settings,
-    const TerrainChunkDebugInfo& chunk) {
-    const float patternLength = (std::max)(settings.chunkLength * 5.2f, 360.0f);
-    const float firstPatternStart =
-        settings.openCanyonStartDistance +
-        (std::max)(settings.openCanyonTransitionLength, 1.0f) * 0.38f;
-    const float chunkMid = (chunk.startDistance + chunk.endDistance) * 0.5f;
-    const float patternIndex = (std::max)(
-        0.0f,
-        std::floor((chunkMid - firstPatternStart) / patternLength));
-
-    HeroArchLayout layout{};
-    layout.patternStart = firstPatternStart + patternIndex * patternLength;
-    layout.patternLength = patternLength;
-    layout.heroOpeningDistance = layout.patternStart + patternLength * 0.74f;
-    layout.foregroundFrameDistance = layout.patternStart + patternLength * 0.18f;
-    layout.heroArcT = 0.58f;
-    layout.heroAlongRadius = settings.chunkLength * 0.58f;
-    layout.heroArcRadius = 0.105f;
-    return layout;
-}
-
-float ErodedArchHeroOpeningMask(
-    float distance,
-    float arcT,
-    const TerrainGenerationSettings& settings,
-    const HeroArchLayout& layout,
-    uint32_t seed,
-    uint32_t layerIndex) {
-    const float layer = static_cast<float>(layerIndex);
-    const float centerDistance =
-        layout.heroOpeningDistance +
-        (Hash01(seed + layerIndex * 211u + 17u) - 0.5f) * settings.chunkLength * 0.12f;
-    const float centerArc =
-        layout.heroArcT +
-        (Hash01(seed + layerIndex * 223u + 19u) - 0.5f) * 0.018f;
-    const float radiusAlong = layout.heroAlongRadius * (1.0f + layer * 0.06f);
-    const float radiusArc = layout.heroArcRadius * (1.0f + layer * 0.05f);
-    const float floorSafety = SmoothStep(0.42f, 0.54f, arcT);
-
-    auto ellipse = [&](float cd, float ca, float rd, float ra, uint32_t salt) {
-        const float du = (distance - cd) / rd;
-        const float da = (arcT - ca) / ra;
-        const float d = std::sqrt(du * du + da * da);
-        const float ragged =
-            0.86f +
-            SignedNoise(
-                seed + salt,
-                static_cast<int32_t>(std::floor(distance * 0.055f)),
-                static_cast<int32_t>(std::floor(arcT * 41.0f))) * 0.14f;
-        return (std::clamp)((1.0f - d) * ragged * 2.4f, 0.0f, 1.0f);
-    };
-
-    const float hero = ellipse(centerDistance, centerArc, radiusAlong, radiusArc, 307u) * floorSafety;
-    const float secondary = ellipse(
-        centerDistance + layout.patternLength * 0.26f,
-        centerArc + 0.08f,
-        radiusAlong * 0.46f,
-        radiusArc * 0.54f,
-        313u) * (0.22f + layer * 0.05f) * floorSafety;
-    return (std::max)(
-        hero,
-        secondary);
-}
-
-void AppendErodedArchOpeningRim(
-    TerrainCpuMesh& mesh,
-    const RailPath& railPath,
-    const TerrainGenerationSettings& settings,
-    uint32_t seed,
-    float centerDistance,
-    float centerArcT,
-    float radiusAlong,
-    float radiusArcT,
-    uint32_t layerIndex,
-    float rockVariation) {
-    constexpr uint32_t kSegments = 28;
-    uint32_t inner[kSegments]{};
-    uint32_t outer[kSegments]{};
-    for (uint32_t i = 0; i < kSegments; ++i) {
-        const float t = static_cast<float>(i) / static_cast<float>(kSegments);
-        const float a = t * 6.28318530718f;
-        const float ragged =
-            1.0f +
-            SignedNoise(seed + 401u, static_cast<int32_t>(i), static_cast<int32_t>(layerIndex)) * 0.16f;
-        for (uint32_t ring = 0; ring < 2u; ++ring) {
-            const float r = ring == 0u ? 0.84f : 1.18f;
-            const float distance = centerDistance + std::cos(a) * radiusAlong * r * ragged;
-            const float arcT = (std::clamp)(centerArcT + std::sin(a) * radiusArcT * r * ragged, 0.04f, 0.96f);
-            ErodedArchShellSample shell = EvaluateErodedArchShellPoint(
-                railPath,
-                settings,
-                seed + 409u,
-                distance,
-                arcT,
-                layerIndex);
-            const float protrude = settings.wallHeight * (0.12f + static_cast<float>(ring) * 0.05f);
-            const Vector3 p = Add(shell.position, Scale(shell.normal, protrude));
-            const uint32_t index = PushVertex(
-                mesh,
-                p,
-                shell.normal,
-                {distance * 0.0042f + static_cast<float>(layerIndex) * 3.0f, t * 2.2f},
-                0.18f + static_cast<float>(layerIndex) * 0.10f,
-                rockVariation);
-            if (ring == 0u) {
-                inner[i] = index;
-            } else {
-                outer[i] = index;
-            }
-        }
-    }
-
-    for (uint32_t i = 0; i < kSegments; ++i) {
-        const uint32_t next = (i + 1u) % kSegments;
-        PushTriangleTwoSided(mesh.indices, outer[i], inner[i], outer[next]);
-        PushTriangleTwoSided(mesh.indices, outer[next], inner[i], inner[next]);
-    }
-}
-
-void AppendErodedArchForegroundFrame(
-    TerrainCpuMesh& mesh,
-    const RailPath& railPath,
-    const TerrainGenerationSettings& settings,
-    const TerrainChunkDebugInfo& chunk,
-    const HeroArchLayout& layout,
-    uint32_t seed) {
-    const float frameStart = layout.foregroundFrameDistance - settings.chunkLength * 0.55f;
-    const float frameEnd = layout.foregroundFrameDistance + settings.chunkLength * 0.82f;
-    if (frameEnd < chunk.startDistance || frameStart > chunk.endDistance) {
-        return;
-    }
-
-    constexpr uint32_t kColumns = 5;
-    constexpr uint32_t kRows = 4;
-    const float arcRanges[2][2] = {
-        {0.035f, 0.260f},
-        {0.740f, 0.965f},
-    };
-
-    for (uint32_t side = 0; side < 2u; ++side) {
-        const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        for (uint32_t y = 0; y <= kRows; ++y) {
-            const float tv = static_cast<float>(y) / static_cast<float>(kRows);
-            const float arcT = std::lerp(arcRanges[side][0], arcRanges[side][1], tv);
-            for (uint32_t x = 0; x <= kColumns; ++x) {
-                const float tu = static_cast<float>(x) / static_cast<float>(kColumns);
-                const float d = std::lerp(frameStart, frameEnd, tu);
-                ErodedArchShellSample shell = EvaluateErodedArchShellPoint(
-                    railPath,
-                    settings,
-                    seed + side * 97u,
-                    d,
-                    arcT,
-                    0u);
-                const int32_t nx = static_cast<int32_t>(std::floor(d * 0.055f));
-                const float fracture =
-                    SignedNoise(seed + side * 131u + 19u, nx, static_cast<int32_t>(y)) * settings.wallHeight * 0.18f;
-                const float protrude =
-                    settings.wallHeight * (0.42f + std::sin(tv * 3.14159265359f) * 0.32f);
-                const Vector3 p = Add(
-                    shell.position,
-                    Add(
-                        Scale(shell.normal, protrude),
-                        Scale(railPath.Evaluate(d).tangent, fracture)));
-                PushVertex(
-                    mesh,
-                    p,
-                    shell.normal,
-                    {d * 0.0045f + static_cast<float>(side) * 6.0f, tv * 2.4f},
-                    0.62f,
-                    0.24f);
-            }
-        }
-
-        const uint32_t stride = kColumns + 1u;
-        for (uint32_t y = 0; y < kRows; ++y) {
-            for (uint32_t x = 0; x < kColumns; ++x) {
-                const uint32_t a = base + y * stride + x;
-                const uint32_t b = a + 1u;
-                const uint32_t c = a + stride;
-                const uint32_t d = c + 1u;
-                PushTriangleTwoSided(mesh.indices, a, b, c);
-                PushTriangleTwoSided(mesh.indices, b, d, c);
-            }
-        }
-    }
-}
-
 void AppendErodedArchFloorGuide(
     TerrainCpuMesh& mesh,
     const RailPath& railPath,
@@ -1860,13 +1676,13 @@ void AppendErodedArchFloorGuide(
         for (uint32_t x = 0; x <= kColumns; ++x) {
             const float tu = static_cast<float>(x) / static_cast<float>(kColumns);
             const float d = std::lerp(
-                chunk.startDistance - settings.chunkLength * 0.10f,
-                chunk.endDistance + settings.chunkLength * 0.42f,
+                chunk.startDistance,
+                chunk.endDistance,
                 tu);
             const RailPathSample sample = railPath.Evaluate(d);
             const int32_t noiseX = static_cast<int32_t>(std::floor(d * 0.045f));
             const float width =
-                settings.corridorRadius * (0.58f + std::sin(tu * 3.14159265359f) * 0.26f);
+                settings.corridorRadius * (0.74f + std::sin(d * 0.013f) * 0.06f);
             const float trough =
                 -settings.wallHeight * 0.035f * (1.0f - std::abs(side)) +
                 SignedNoise(seed + 503u, noiseX, static_cast<int32_t>(y)) * settings.wallHeight * 0.018f;
@@ -1898,124 +1714,115 @@ void AppendErodedArchFloorGuide(
     }
 }
 
-void AppendErodedArchCanyonShell(
+// Background ridges grow out of the canyon shoulders. World-distance sampling
+// makes the skyline and terraces identical at every streaming/LOD boundary.
+void AppendConnectedCanyonRidges(
     TerrainCpuMesh& mesh,
     const RailPath& railPath,
     const TerrainVolumeField& volumeField,
     const TerrainGenerationSettings& settings,
     const TerrainChunkDebugInfo& chunk) {
-    const float startBlend = volumeField.OpenCanyonBlend(chunk.startDistance);
-    const float endBlend = volumeField.OpenCanyonBlend(chunk.endDistance);
-    const float chunkBlend = (std::max)(startBlend, endBlend);
-    if (chunkBlend <= 0.04f || settings.openCanyonFarWallHeight <= 1.0f) {
+    if (volumeField.OpenCanyonBlend(chunk.endDistance) <= 0.04f ||
+        settings.openCanyonFarWallHeight <= 1.0f) {
         return;
     }
-
-    const HeroArchLayout layout = BuildHeroArchLayout(settings, chunk);
-
-    constexpr uint32_t kLayers = 2;
     constexpr uint32_t kColumns = 20;
-    constexpr uint32_t kArcRows = 16;
-    for (uint32_t layerIndex = 0; layerIndex < kLayers; ++layerIndex) {
-        const uint32_t seed =
-            settings.seed +
-            51101u +
-            layerIndex * 2333u +
-            static_cast<uint32_t>((std::max)(0.0f, layout.patternStart)) * 7u;
-        const float layer = static_cast<float>(layerIndex);
-        const float alongStart =
-            chunk.startDistance -
-            settings.chunkLength * (0.22f - layer * 0.04f) +
-            layer * settings.chunkLength * 0.32f;
-        const float alongEnd = chunk.endDistance + settings.chunkLength * (0.82f + layer * 0.18f);
-        const float span = alongEnd - alongStart;
-        const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-        const float rockVariation = 0.30f + layer * 0.08f + Hash01(seed + 29u) * 0.06f;
-
-        for (uint32_t y = 0; y <= kArcRows; ++y) {
-            const float arcT = static_cast<float>(y) / static_cast<float>(kArcRows);
-            for (uint32_t x = 0; x <= kColumns; ++x) {
-                const float u = static_cast<float>(x) / static_cast<float>(kColumns);
-                const float d = alongStart + span * u;
-                ErodedArchShellSample shell = EvaluateErodedArchShellPoint(
-                    railPath,
-                    settings,
-                    seed,
-                    d,
-                    arcT,
-                    layerIndex);
-                const float contact =
-                    0.18f +
-                    layer * 0.20f +
-                    std::pow(std::sin(arcT * 3.14159265359f), 1.8f) * 0.08f;
-                PushVertex(
-                    mesh,
-                    shell.position,
-                    shell.normal,
-                    {d * 0.0036f + layer * 4.0f, arcT * 4.6f},
-                    contact,
-                    rockVariation);
-            }
-        }
-
-        const uint32_t stride = kColumns + 1u;
-        for (uint32_t y = 0; y < kArcRows; ++y) {
-            for (uint32_t x = 0; x < kColumns; ++x) {
-                const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(kColumns);
-                const float arcT = (static_cast<float>(y) + 0.5f) / static_cast<float>(kArcRows);
-                const float cellDistance = alongStart + span * u;
-                const float floorClosedOpening = arcT < 0.48f ? 0.0f : ErodedArchHeroOpeningMask(cellDistance, arcT, settings, layout, seed, layerIndex);
-                const float skylineCut =
-                    arcT > 0.84f
-                        ? (arcT - 0.84f) / 0.16f *
-                            (0.18f + 0.34f * Hash01(seed + x * 41u + y * 73u))
-                        : 0.0f;
-                if (floorClosedOpening > 0.46f || skylineCut > 0.82f) {
-                    continue;
+    constexpr uint32_t kRows = 12;
+    constexpr uint32_t kStride = kColumns + 1;
+    for (uint32_t sideIndex = 0; sideIndex < 2; ++sideIndex) {
+        const float side = sideIndex == 0 ? -1.0f : 1.0f;
+        const uint32_t seed = settings.seed + 51101u + sideIndex * 2333u;
+        const auto point = [&](float distance, float heightT, uint32_t layer) {
+            const auto sample = railPath.Evaluate(distance);
+            const float blend = volumeField.OpenCanyonBlend(distance);
+            const float l = static_cast<float>(layer);
+            const float broad = SmoothSignedNoise(seed, distance * 0.007f, l * 2.3f);
+            const float fractures = SmoothSignedNoise(seed + 17u, distance * 0.034f, l * 3.7f);
+            const float skyline = settings.wallHeight * (1.4f + l * 0.45f) +
+                settings.openCanyonFarWallHeight * (0.10f + l * 0.05f);
+            const float height = skyline * (0.83f + broad * 0.25f + fractures * 0.12f);
+            const float baseLateral = settings.canyonHalfWidth * (1.10f + l * 0.65f) +
+                settings.openCanyonFarWallDistance * (0.025f + l * 0.075f);
+            // Broad sloping terraces, not a flat vertical curtain. The outward
+            // setback also keeps the skyline clear of the central firing lane.
+            const float terrace = heightT * (0.63f + 0.37f * heightT) +
+                std::sin(heightT * 15.0f + broad * 2.0f) * 0.035f * std::sin(heightT * 3.14159265359f);
+            const float relief = SmoothSignedNoise(seed + 31u, distance * 0.045f, heightT * 5.0f + l) *
+                settings.wallHeight * 0.10f * std::sin(heightT * 3.14159265359f);
+            const float lateral = baseLateral + terrace * settings.wallHeight * (0.86f + l * 0.30f) +
+                broad * settings.wallHeight * 0.14f + relief;
+            const float baseY = -settings.corridorRadius * 1.55f;
+            // Enter from below the existing floor instead of appearing as a
+            // tall isolated slab at the beginning of the outdoor interval.
+            const float vertical = baseY + heightT * height * SmoothStep(0.04f, 0.70f, blend);
+            return Add(sample.position, Add(Scale(sample.right, side * lateral), Scale(sample.up, vertical)));
+        };
+        std::array<uint32_t, 2> bases{};
+        for (uint32_t layer = 0; layer < 2; ++layer) {
+            bases[layer] = static_cast<uint32_t>(mesh.vertices.size());
+            for (uint32_t row = 0; row <= kRows; ++row) {
+                const float v = static_cast<float>(row) / kRows;
+                for (uint32_t col = 0; col <= kColumns; ++col) {
+                    const float d = col == kColumns ? chunk.endDistance :
+                        std::lerp(chunk.startDistance, chunk.endDistance, static_cast<float>(col) / kColumns);
+                    const auto p = point(d, v, layer);
+                    const auto du = Subtract(point(d + 0.15f, v, layer), point(d - 0.15f, v, layer));
+                    const auto dv = Subtract(point(d, (std::min)(1.0f, v + 0.005f), layer),
+                        point(d, (std::max)(0.0f, v - 0.005f), layer));
+                    auto normal = NormalizeOr(Cross(du, dv), Scale(railPath.Evaluate(d).right, -side));
+                    if (Dot(normal, Scale(railPath.Evaluate(d).right, -side)) < 0) normal = Scale(normal, -1);
+                    PushVertex(mesh, p, normal, {d * 0.0036f, v * 3.4f},
+                        0.12f + (1.0f - v) * 0.22f, 0.34f + layer * 0.09f);
                 }
-                const uint32_t a = base + y * stride + x;
-                const uint32_t b = a + 1u;
-                const uint32_t c = a + stride;
-                const uint32_t dIndex = c + 1u;
-                PushTriangleTwoSided(mesh.indices, a, b, c);
-                PushTriangleTwoSided(mesh.indices, b, dIndex, c);
+            }
+            for (uint32_t row = 0; row < kRows; ++row) {
+                for (uint32_t col = 0; col < kColumns; ++col) {
+                    const uint32_t a = bases[layer] + row * kStride + col;
+                    PushTriangleTwoSided(mesh.indices, a, a + 1, a + kStride);
+                    PushTriangleTwoSided(mesh.indices, a + 1, a + kStride + 1, a + kStride);
+                }
             }
         }
-
-        if (layout.heroOpeningDistance + layout.heroAlongRadius * 1.12f >= chunk.startDistance &&
-            layout.heroOpeningDistance - layout.heroAlongRadius * 1.12f <= chunk.endDistance) {
-            AppendErodedArchOpeningRim(
-                mesh,
-                railPath,
-                settings,
-                seed + 701u,
-                layout.heroOpeningDistance,
-                layout.heroArcT,
-                layout.heroAlongRadius,
-                layout.heroArcRadius,
-                layerIndex,
-                rockVariation);
+        // The ridge has an actual shoulder between its two rock faces.
+        // Do not put a cross-section at every chunk boundary: those internal
+        // caps were visible as enormous flat walls against the sky.
+        constexpr uint32_t kCrownRows = 6;
+        const auto crownPoint = [&](float d, float t) {
+            const auto inner = point(d, 1.0f, 0);
+            const auto outer = point(d, 1.0f, 1);
+            const auto sample = railPath.Evaluate(d);
+            const float weathering = std::sin(t * 3.14159265359f) * settings.wallHeight *
+                (0.08f + SmoothSignedNoise(seed + 53u, d * 0.035f, t * 4.0f) * 0.06f);
+            return Add(Add(Scale(inner, 1.0f - t), Scale(outer, t)), Scale(sample.up, weathering));
+        };
+        const uint32_t crownBase = static_cast<uint32_t>(mesh.vertices.size());
+        for (uint32_t row = 0; row <= kCrownRows; ++row) {
+            const float t = static_cast<float>(row) / kCrownRows;
+            for (uint32_t col = 0; col <= kColumns; ++col) {
+                const auto inner = mesh.vertices[bases[0] + kRows * kStride + col];
+                VertexData top = inner;
+                const float d = col == kColumns ? chunk.endDistance :
+                    std::lerp(chunk.startDistance, chunk.endDistance, static_cast<float>(col) / kColumns);
+                const auto sample = railPath.Evaluate(d);
+                const auto p = crownPoint(d, t);
+                top.position = {p.x, p.y, p.z, 1.0f};
+                const auto du = Subtract(crownPoint(d + 0.15f, t), crownPoint(d - 0.15f, t));
+                const auto dv = Subtract(crownPoint(d, (std::min)(1.0f, t + 0.005f)),
+                    crownPoint(d, (std::max)(0.0f, t - 0.005f)));
+                top.normal = NormalizeOr(Cross(du, dv), sample.up);
+                if (Dot(top.normal, sample.up) < 0) top.normal = Scale(top.normal, -1);
+                top.texcoord = PackTerrainSurfaceAttributes({d * 0.0036f, t}, 0.08f, 0.38f);
+                mesh.vertices.push_back(top);
+            }
         }
-
-        const float secondaryDistance = layout.heroOpeningDistance + layout.patternLength * 0.26f;
-        if (layerIndex == 0u &&
-            secondaryDistance + layout.heroAlongRadius * 0.58f >= chunk.startDistance &&
-            secondaryDistance - layout.heroAlongRadius * 0.58f <= chunk.endDistance) {
-            AppendErodedArchOpeningRim(
-                mesh,
-                railPath,
-                settings,
-                seed + 809u,
-                secondaryDistance,
-                layout.heroArcT + 0.08f,
-                layout.heroAlongRadius * 0.46f,
-                layout.heroArcRadius * 0.54f,
-                layerIndex,
-                rockVariation);
+        for (uint32_t row = 0; row < kCrownRows; ++row) {
+            for (uint32_t col = 0; col < kColumns; ++col) {
+                const uint32_t a = crownBase + row * kStride + col;
+                PushTriangleTwoSided(mesh.indices, a, a + kStride, a + 1);
+                PushTriangleTwoSided(mesh.indices, a + 1, a + kStride, a + kStride + 1);
+            }
         }
     }
-
-    AppendErodedArchForegroundFrame(mesh, railPath, settings, chunk, layout, settings.seed + 61703u);
     AppendErodedArchFloorGuide(mesh, railPath, volumeField, settings, chunk, settings.seed + 62921u);
 }
 
@@ -2025,7 +1832,7 @@ void AppendOpenCanyonDistantWalls(
     const TerrainVolumeField& volumeField,
     const TerrainGenerationSettings& settings,
     const TerrainChunkDebugInfo& chunk) {
-    AppendErodedArchCanyonShell(mesh, railPath, volumeField, settings, chunk);
+    AppendConnectedCanyonRidges(mesh, railPath, volumeField, settings, chunk);
 }
 
 void AppendRockOutcrop(
@@ -3886,12 +3693,12 @@ TerrainCpuMesh BuildChunkMesh(
         return {};
     }
     PushMaskedGridIndices(
-        mesh.indices,
+        mesh,
         volumeBase,
         longitudinalSteps + 1,
         radialSegments + 1,
         openingMasks,
-        true);
+        true,true,settings.wallHeight*0.045f);
     if (stopToken.stop_requested()) {
         return {};
     }
@@ -3933,10 +3740,11 @@ TerrainCpuMesh BuildChunkMesh(
         const uint32_t seed = chunk.seed + 1601u + i * 149u;
         const float t = (static_cast<float>(i) + Hash01(seed + 5u)) /
             static_cast<float>((std::max)(outcropCount, 1u));
-        const RailPathSample sample = railPath.Evaluate(
-            chunk.startDistance + (chunk.endDistance - chunk.startDistance) * std::clamp(t, 0.0f, 1.0f));
+        const float distance=chunk.startDistance + (chunk.endDistance - chunk.startDistance) * std::clamp(t, 0.0f, 1.0f);
+        const RailPathSample sample = railPath.Evaluate(distance);
         const float side = Hash01(seed + 11u) < 0.5f ? -1.0f : 1.0f;
         const bool ceiling = Hash01(seed + 17u) < 0.42f;
+        if(ceiling && volumeField.OpeningMask(distance,1.57079632679f)>0.40f) continue;
         AppendRockOutcrop(mesh, sample, settings, seed, side, ceiling, t);
     }
 
@@ -3974,26 +3782,14 @@ TerrainCpuMesh BuildChunkMesh(
         }
         const uint32_t seed = chunk.seed + 2003u + i * 173u;
         const float t = 0.28f + Hash01(seed + 9u) * 0.44f;
+        if(volumeField.OpenCanyonBlend(std::lerp(chunk.startDistance,chunk.endDistance,t))>0.35f) continue;
         const RailPathSample sample = railPath.Evaluate(
             chunk.startDistance + (chunk.endDistance - chunk.startDistance) * t);
         AppendOneSidedCliffOverhang(mesh, sample, settings, seed, t);
     }
 
-    for (size_t triangle = 0; triangle + 2 < mesh.indices.size(); triangle += 3) {
-        if ((triangle & 0x1ffu) == 0u && stopToken.stop_requested()) {
-            return {};
-        }
-        VertexData& a = mesh.vertices[mesh.indices[triangle]];
-        VertexData& b = mesh.vertices[mesh.indices[triangle + 1]];
-        VertexData& c = mesh.vertices[mesh.indices[triangle + 2]];
-        const Vector3 pa{a.position.x, a.position.y, a.position.z};
-        const Vector3 pb{b.position.x, b.position.y, b.position.z};
-        const Vector3 pc{c.position.x, c.position.y, c.position.z};
-        const Vector3 normal = NormalizeOr(Cross(Subtract(pb, pa), Subtract(pc, pa)), {0.0f, 1.0f, 0.0f});
-        a.normal = NormalizeOr(Add(a.normal, normal), normal);
-        b.normal = NormalizeOr(Add(b.normal, normal), normal);
-        c.normal = NormalizeOr(Add(c.normal, normal), normal);
-    }
+    // Preserve the analytic surface normals. Iteratively adding front AND
+    // reverse faces to shared vertices makes lighting depend on index order.
 
     return mesh;
 }

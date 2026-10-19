@@ -17,3 +17,9 @@ lock-file update and license review.
 The title ground uses [Ground054 from ambientCG](https://ambientcg.com/view?id=Ground054),
 provided under [CC0 1.0 Universal](https://docs.ambientcg.com/license/).
 Import provenance is recorded in `Resources/terrain/Ground054_1K-JPG/README.md`.
+
+The READY/GO start cues use Barlow Condensed Bold Italic, copyright 2017
+The Barlow Project Authors (https://github.com/jpt/barlow), obtained from
+https://github.com/google/fonts/tree/main/ofl/barlowcondensed.
+The unmodified font and its SIL Open Font License 1.1 are distributed together
+in `Resources/UI/Fonts/`; see `OFL-BarlowCondensed.txt`.

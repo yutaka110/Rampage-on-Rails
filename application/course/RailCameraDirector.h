@@ -184,6 +184,13 @@ struct RailCameraDirectorFrameInput {
     // Title-to-game match cut, resolved in rail space before vehicle/terrain safety.
     float titleHandoffWeight = 0.0f;
     CourseCameraKey titleHandoffRig{};
+    // Gated READY flyby, resolved before the existing framing/collision passes.
+    float startupCameraWeight = 0.0f;
+    float startupCameraFocusBlend = 0.0f;
+    float startupCameraFovY = 0.98f;
+    Vector3 startupCameraEyeOffset{};
+    Vector3 startupCameraDroneOffset{};
+    uint32_t startupCameraDroneId = 0;
     // Conservative rendered vehicle bounds, including bank and suspension.
     bool vehicleFramingActive = false;
     std::array<Vector3, 8> vehicleBoundsCorners{};

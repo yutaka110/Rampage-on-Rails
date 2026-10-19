@@ -13,6 +13,28 @@ float ImpactNoise(float2 p) {
     return lerp(lerp(n.x,n.y,f.x),lerp(n.z,n.w,f.x),f.y);
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>17.5f) {
+        // A sharp tapered core-break cut, with a restrained cyan shoulder.
+        float along=(input.texcoord.x-18.0f)*2.0f-1.0f;
+        float across=input.texcoord.y*2.0f-1.0f;
+        float taper=pow(saturate(1.0f-abs(along)),0.58f);
+        float width=0.10f+0.90f*taper;
+        float core=exp(-across*across/(width*width)*24.0f);
+        float halo=exp(-across*across/(width*width)*4.0f)*0.34f;
+        float ends=1.0f-smoothstep(0.86f,1.0f,abs(along));
+        float3 color=lerp(input.color.rgb,float3(3.0f,3.1f,3.2f),core);
+        return float4(color,(core+halo)*ends*taper*input.color.a);
+    }
+    if(input.texcoord.x>15.5f) {
+        float2 p=float2(input.texcoord.x-16.5f,input.texcoord.y-0.5f)*2.0f;
+        float glow=exp(-dot(p,p)*4.0f)*(1-smoothstep(0.65f,1.0f,length(p)));
+        return float4(input.color.rgb,glow*input.color.a);
+    }
+    if(input.texcoord.x>13.5f) {
+        float across=input.texcoord.y*2.0f-1.0f;
+        float glow=exp(-across*across*6.0f)*(1-smoothstep(0.75f,1.0f,abs(across)));
+        return float4(input.color.rgb,glow*input.color.a);
+    }
     if(input.texcoord.x>11.5f) {
         float along=input.texcoord.x-12.0f;
         float across=input.texcoord.y*2.0f-1.0f;

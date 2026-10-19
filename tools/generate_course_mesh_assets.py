@@ -178,61 +178,137 @@ def eroded(u, v, strength=0.035, seed=0):
     return (noise2(u * 6.0, v * 9.0, seed) - 0.5) * strength
 
 
+def smooth_noise(x, y, seed=0):
+    ix, iy = math.floor(x), math.floor(y)
+    tx, ty = x - ix, y - iy
+    tx, ty = tx * tx * (3 - 2 * tx), ty * ty * (3 - 2 * ty)
+    a = noise2(ix, iy, seed) * (1 - tx) + noise2(ix + 1, iy, seed) * tx
+    b = noise2(ix, iy + 1, seed) * (1 - tx) + noise2(ix + 1, iy + 1, seed) * tx
+    return (a * (1 - ty) + b * ty) * 2 - 1
+
+
+def add_closed_rock_patch(mesh, surface, u_count, v_count):
+    """A solid slab with identical boundary samples on all six surfaces.
+
+    surface(u, v, depth) supplies both faces and their connected perimeter;
+    depth runs from -1 to 1. No independently displaced seam or loose legs.
+    """
+    mesh.add_grid(lambda u, v: surface(u, v, -1), u_count, v_count, flip=True)
+    mesh.add_grid(lambda u, v: surface(u, v, 1), u_count, v_count)
+    mesh.add_grid(lambda u, v: surface(u, 0, v * 2 - 1), u_count, 8)
+    mesh.add_grid(lambda u, v: surface(u, 1, v * 2 - 1), u_count, 8, flip=True)
+    mesh.add_grid(lambda u, v: surface(0, v, u * 2 - 1), 8, v_count)
+    mesh.add_grid(lambda u, v: surface(1, v, u * 2 - 1), 8, v_count, flip=True)
+
+
+def rock_arch_surface(u, v, depth, seed, tunnel=False, inner_variant=False):
+    angle = math.pi * (1 - u)
+    sine, cosine = math.sin(angle), math.cos(angle)
+    # The aperture and crown share the same full-height supports. The old
+    # semicircle stopped above the floor, with disconnected rectangular legs.
+    crown = smooth_noise(u * 8, 0, seed) * 0.11 + math.sin(u * 17 + 0.7) * 0.035
+    inner_width = (0.94 if tunnel else 0.51) + smooth_noise(u * 5, 2, seed) * 0.035
+    outer_width = (1.40 if tunnel else 1.08) + smooth_noise(u * 7, 4, seed) * 0.14
+    # Broad shoulders continue into the surrounding cliff. Keep the inner
+    # aperture intact: all large changes grow towards the outside of the arch.
+    shoulder = abs(cosine) ** 0.65 * (0.80 if tunnel else 1.12)
+    shoulder *= (0.70 + 0.60 * u) if inner_variant else (1.20 - 0.45 * u)
+    outer_width += shoulder
+    width = inner_width * (1 - v) + outer_width * v
+    width += abs(cosine) ** 6 * v * 0.20
+    notch_center = 0.40 if inner_variant else 0.62
+    notch = math.exp(-((u - notch_center) / 0.035) ** 2) * 0.28
+    notch += math.exp(-((u - 0.24) / 0.025) ** 2) * 0.14
+    outer_height = 1.94 + smooth_noise(u * 5, 7, seed) * 0.22 - notch
+    height = ((1.46 if tunnel else 1.16) * (1 - v) + outer_height * v) + crown
+    x = cosine * width + sine * (0.07 + v * v * (-0.16 if inner_variant else 0.12))
+    y = -1.10 + sine * height
+    relief = smooth_noise(u * 9, v * 4, seed + 1) * 0.32
+    relief += smooth_noise(u * 24, v * 9, seed + 2) * 0.055
+    # Recessed oblique fractures break up the front face at a readable scale.
+    fracture = math.exp(-((u - (0.30 + v * 0.075)) / 0.018) ** 2)
+    fracture += math.exp(-((u - (0.72 - v * 0.045)) / 0.014) ** 2) * 0.7
+    thickness = 0.82 + smooth_noise(u * 6, v * 3, seed + 3) * 0.24
+    thickness *= 0.46 + 0.54 * math.sin(math.pi * v) ** 0.65
+    thickness *= 1 - fracture * 0.30
+    if tunnel:
+        # Receding, irregular ribs, rather than a thin open cylindrical sheet.
+        relief += math.sin(depth * 12 + u * 3) * 0.035 * (1 - depth * depth)
+        thickness *= 1.55
+    return (x, y, relief + depth * thickness)
+
+
+def add_fractured_boulder(mesh, center, radii, seed):
+    # Closed low-poly rocks are baked into the arch draw, not extra actors.
+    rings, slices = 6, 12
+    positions = [(0, -1, 0)]
+    for row in range(1, rings):
+        a = -math.pi * 0.5 + math.pi * row / rings
+        for col in range(slices):
+            b = math.tau * col / slices
+            positions.append((math.cos(a) * math.cos(b), math.sin(a), math.cos(a) * math.sin(b)))
+    positions.append((0, 1, 0))
+    transformed = []
+    for x, y, z in positions:
+        chip = 1 + smooth_noise(x * 3 + z, y * 3, seed) * 0.19
+        transformed.append(tuple(center[i] + (x, y, z)[i] * radii[i] * chip for i in range(3)))
+
+    def face(a, b, c):
+        pa, pb, pc = (transformed[i] for i in (a, b, c))
+        n = normalize(cross(sub(pb, pa), sub(pc, pa)))
+        mesh.add_face(*(mesh.add_vertex(p, (p[0], p[1]), n) for p in (pa, pb, pc)))
+
+    for col in range(slices):
+        nxt = (col + 1) % slices
+        face(0, 1 + col, 1 + nxt)
+        for row in range(rings - 2):
+            a, b = 1 + row * slices + col, 1 + row * slices + nxt
+            c, d = a + slices, b + slices
+            face(a, c, b)
+            face(b, c, d)
+        face(len(positions) - 1, 1 + (rings - 2) * slices + nxt,
+             1 + (rings - 2) * slices + col)
+
+
+def add_arch_cliff_roots(mesh, seed, tunnel):
+    for side in (-1, 1):
+        # A continuous buried apron climbs from the foot into the side wall.
+        # Its top and sides share exactly the same perimeter samples.
+        inner = 1.02 if tunnel else 0.74
+        width = 2.25 if tunnel else 2.60
+        def apron(u, v, depth, side=side):
+            x = side * (inner + width * u)
+            z = side * (1 - 2 * v) * (1.8 + u * 0.65)
+            peak = math.exp(-((u - 0.26) / 0.25) ** 2 - ((v - 0.5) / 0.40) ** 2)
+            top = -1.10 + peak * 0.42 + u * u * 0.62
+            top += smooth_noise(u * 7, v * 6, seed + (0 if side < 0 else 9)) * 0.055 * math.sin(math.pi * u)
+            return x, -1.42 + (top + 1.42) * ((depth + 1) * 0.5), z
+        # Broad aprons need fewer samples than the visible arch fractures.
+        # Keep Assimp's expanded corner stream below the editor's 65535 cap.
+        add_closed_rock_patch(mesh, apron, 24, 16)
+        for i in range(6):
+            t = i / 5
+            x = side * (inner + 0.22 + t * 1.30)
+            z = (-1 if i % 2 else 1) * (0.55 + noise2(i, side, seed) * 0.80)
+            y = -0.98 + math.sin(t * math.pi) * 0.12
+            add_fractured_boulder(mesh, (x, y, z),
+                (0.15 + t * 0.06, 0.10 + noise2(i, 2, seed) * 0.08, 0.32 + t * 0.18),
+                seed + i * 37 + (0 if side < 0 else 19))
+
+
 def make_organic_arch():
     mesh = Mesh("OrganicArchLarge_HD", "organic_rock")
-    outer, inner, base_y, depth = 1.05, 0.42, -0.72, 0.24
-
-    def arch_surface(z, flip):
-        mesh.add_grid(
-            lambda u, v: (
-                math.cos(math.pi * (1.0 - u)) * (inner + (outer - inner) * v),
-                base_y + math.sin(math.pi * (1.0 - u)) * (inner + (outer - inner) * v),
-                z + eroded(u, v, 0.04, 11),
-            ),
-            80,
-            14,
-            flip=flip,
-        )
-
-    arch_surface(-depth, False)
-    arch_surface(depth, True)
-
-    for side_x0, side_x1 in [(-outer, -inner), (inner, outer)]:
-        mesh.add_grid(
-            lambda u, v, x0=side_x0, x1=side_x1: (
-                x0 + (x1 - x0) * u,
-                -1.0 + (base_y + 0.10) * v,
-                -depth + depth * 2.0 * (0.5 + eroded(u, v, 0.08, 13)),
-            ),
-            12,
-            32,
-        )
-
-    for x in (-outer, outer):
-        mesh.add_grid(
-            lambda u, v, sx=x: (
-                sx + eroded(u, v, 0.03, 17),
-                -1.0 + 2.0 * v,
-                -depth + 2.0 * depth * u,
-            ),
-            8,
-            50,
-        )
+    add_closed_rock_patch(mesh, lambda u, v, d: rock_arch_surface(u, v, d, 11), 96, 24)
+    add_arch_cliff_roots(mesh, 111, False)
     return mesh
 
 
-def make_rib_tunnel():
-    mesh = Mesh("RibTunnelWall_HD", "rib_rock")
-    length = 2.0
-    mesh.add_grid(
-        lambda u, v: (
-            math.cos(math.radians(18.0 + 144.0 * u)) * (0.74 + 0.10 * math.sin(v * math.pi * 11.0)),
-            -0.80 + math.sin(math.radians(18.0 + 144.0 * u)) * (0.74 + 0.10 * math.sin(v * math.pi * 11.0)),
-            -length * 0.5 + length * v + eroded(u, v, 0.025, 21),
-        ),
-        72,
-        96,
-    )
+def make_rib_tunnel(inner_variant=False):
+    mesh = Mesh("RibTunnelInner_HD" if inner_variant else "RibTunnelWall_HD", "rib_rock")
+    seed = 57 if inner_variant else 21
+    add_closed_rock_patch(mesh,
+        lambda u, v, d: rock_arch_surface(u, v, d, seed, True, inner_variant), 96, 24)
+    add_arch_cliff_roots(mesh, seed + 100, True)
     return mesh
 
 
@@ -255,14 +331,23 @@ def make_root_spire():
             n = normalize((math.cos(a), 0.12 * math.sin(t * math.pi), math.sin(a)))
             row.append(mesh.add_vertex((x, y, z), (j / slices, 1.0 - t), n))
         ids.append(row)
+    # Match the smooth normal to the actual taper and twist, including the
+    # periodic seam. Radial normals alone hide the vertical stone profile.
+    for i in range(rings + 1):
+        for j in range(slices):
+            dy = sub(mesh.vertices[ids[min(i + 1, rings)][j] - 1],
+                     mesh.vertices[ids[max(i - 1, 0)][j] - 1])
+            da = sub(mesh.vertices[ids[i][(j + 1) % slices] - 1],
+                     mesh.vertices[ids[i][(j - 1) % slices] - 1])
+            mesh.normals[ids[i][j] - 1] = normalize(cross(dy, da))
     for i in range(rings):
         for j in range(slices):
             a = ids[i][j]
             b = ids[i][(j + 1) % slices]
             c = ids[i + 1][(j + 1) % slices]
             d = ids[i + 1][j]
-            mesh.add_face(a, b, c)
-            mesh.add_face(a, c, d)
+            mesh.add_face(a, c, b)
+            mesh.add_face(a, d, c)
     for root_index, angle in enumerate((0.35, 2.45, 4.35)):
         mesh.add_grid(
             lambda u, v, a=angle: (
@@ -278,35 +363,38 @@ def make_root_spire():
 
 def make_curved_wall():
     mesh = Mesh("CurvedCanyonWall_HD", "organic_rock")
-    mesh.add_grid(
-        lambda u, v: (
-            -1.0 + 2.0 * u,
-            -1.0 + 2.0 * v,
-            0.28 * math.cos((u - 0.5) * math.pi) + eroded(u, v, 0.08, 31) + 0.03 * math.sin(v * 50.0),
-        ),
-        96,
-        80,
-    )
+    def surface(u, v, depth):
+        skyline = 0.80 + smooth_noise(u * 7, 0, 31) * 0.20
+        x = (u * 2 - 1) * (1 + math.sin(v * 5) * 0.07)
+        y = -1.18 + (skyline + 1.18) * v
+        z = 0.24 * math.cos((u - 0.5) * math.pi)
+        z += smooth_noise(u * 8, v * 10, 32) * 0.07
+        return x, y, z + depth * (0.16 + 0.08 * (1 - v))
+    add_closed_rock_patch(mesh, surface, 80, 36)
     return mesh
 
 
 def make_vista_hole_wall():
     mesh = Mesh("VistaHoleWall_HD", "vista_rock")
-    for x0, x1, y0, y1 in [
-        (-1.30, -0.36, -1.00, 1.00),
-        (0.36, 1.30, -1.00, 1.00),
-        (-0.36, 0.36, 0.48, 1.00),
-        (-0.36, 0.36, -1.00, -0.48),
-    ]:
-        mesh.add_grid(
-            lambda u, v, ax=x0, bx=x1, ay=y0, by=y1: (
-                ax + (bx - ax) * u,
-                ay + (by - ay) * v,
-                eroded(u + ax, v + ay, 0.06, 41),
-            ),
-            40,
-            40,
-        )
+    # A closed weathered buttress, with an irregular skylight bored through
+    # its thickness. A polar rectangle keeps the four outer sides connected.
+    def surface(u, v, depth):
+        a = u * math.tau
+        ca, sa = math.cos(a), math.sin(a)
+        inner = 0.35 + smooth_noise(ca * 3 + 4, sa * 3 + 4, 41) * 0.055
+        outer = 1 / max(abs(ca) / 1.3, abs(sa))
+        outer *= 1 + smooth_noise(ca * 5 + 8, sa * 5 + 8, 42) * 0.12
+        r = inner * (1 - v) + outer * v
+        x, y = ca * r, sa * r - 0.18
+        if y < -0.18:
+            y = -0.18 + (y + 0.18) * 1.65  # bury the foot beneath the canyon floor
+        z = smooth_noise(x * 4, y * 4, 43) * 0.10 + depth * (0.6 + v * 0.18)
+        return x, y, z
+    # Periodic u perimeter: no end caps, whose overlapping copies would flicker.
+    mesh.add_grid(lambda u, v: surface(u, v, -1), 128, 24)
+    mesh.add_grid(lambda u, v: surface(u, v, 1), 128, 24, flip=True)
+    mesh.add_grid(lambda u, v: surface(u, 0, v * 2 - 1), 128, 8, flip=True)
+    mesh.add_grid(lambda u, v: surface(u, 1, v * 2 - 1), 128, 8)
     return mesh
 
 
@@ -344,6 +432,7 @@ def main():
     specs = [
         ("OrganicArchLarge", "OrganicArchLarge.obj", "organic_rock", "organic_rock_albedo.bmp", make_organic_arch()),
         ("RibTunnelWall", "RibTunnelWall.obj", "rib_rock", "rib_rock_albedo.bmp", make_rib_tunnel()),
+        ("RibTunnelInner", "RibTunnelInner.obj", "rib_rock", "rib_rock_albedo.bmp", make_rib_tunnel(True)),
         ("RootSpireColumn", "RootSpireColumn.obj", "root_rock", "root_rock_albedo.bmp", make_root_spire()),
         ("CurvedCanyonWall", "CurvedCanyonWall.obj", "organic_rock", "organic_rock_albedo.bmp", make_curved_wall()),
         ("VistaHoleWall", "VistaHoleWall.obj", "vista_rock", "vista_rock_albedo.bmp", make_vista_hole_wall()),

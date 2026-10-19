@@ -1,0 +1,6 @@
+newmtl rib_rock
+Ka 0.18 0.16 0.14
+Kd 0.78 0.66 0.54
+Ks 0.10 0.09 0.08
+Ns 24.0
+map_Kd ../materials/rib_rock_albedo.bmp
