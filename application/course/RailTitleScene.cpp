@@ -820,8 +820,21 @@ void RailTitleGameplayEntry::Reset() {
     frame_={};
     pendingEvents_.clear();
 }
-RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed) {
+RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed,uint32_t droneIndex) {
     const float t=std::isfinite(elapsed) ? (std::max)(0.0f,elapsed) : 0.0f;
+    const bool wingman=droneIndex==1;
+    const float side=wingman?-1.0f:1.0f;
+    const float approachBegin=wingman?RailTitleGameplayEntry::WingmanReadyBegin:0.64f;
+    const float passEnd=wingman?2.38f:2.15f;
+    const float passDelay=passEnd-2.15f;
+    const float turnBegin=wingman?3.32f:RailTitleGameplayEntry::DroneTurnBegin;
+    const float turnEnd=wingman?4.46f:RailTitleGameplayEntry::DroneTurnEnd;
+    const float brakeEnd=wingman?4.76f:RailTitleGameplayEntry::DroneBrakeEnd;
+    const float startForward=wingman?-80.0f:-66.0f;
+    const float hoverForward=wingman?44.0f:34.0f;
+    const float startSide=wingman?1.8f:1.2f;
+    const float passSide=wingman?6.8f:5.9f;
+    const float approachHeight=wingman?8.4f:7.0f;
     const auto smooth=[&](float from,float to) {
         const float u=(std::clamp)((t-from)/(to-from),0.0f,1.0f);
         return u*u*(3.0f-2.0f*u);
@@ -841,72 +854,74 @@ RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed) {
         return ((6*u2-6*u)*a+(-6*u2+6*u)*b)/(to-from)+
             (3*u2-4*u+1)*va+(3*u2-2*u)*vb;
     };
-    constexpr float turnRadius=6.5f,turnOuterSide=9.0f;
-    constexpr float turnDuration=RailTitleGameplayEntry::DroneTurnEnd-RailTitleGameplayEntry::DroneTurnBegin;
-    constexpr float brakeDuration=RailTitleGameplayEntry::DroneBrakeEnd-RailTitleGameplayEntry::DroneTurnEnd;
-    constexpr float turnSpeed=Pi*turnRadius/turnDuration;
-    constexpr float brakeRelativeSpeed=turnSpeed+RailTitleScene::Speed;
-    constexpr float turnExitForward=34.0f+brakeRelativeSpeed*brakeDuration*0.5f;
-    constexpr float turnEntryForward=turnExitForward+RailTitleScene::Speed*turnDuration;
+    const float turnRadius=wingman?7.0f:6.5f,turnOuterSide=9.0f;
+    const float turnDuration=turnEnd-turnBegin;
+    const float brakeDuration=brakeEnd-turnEnd;
+    const float turnSpeed=Pi*turnRadius/turnDuration;
+    const float brakeRelativeSpeed=turnSpeed+RailTitleScene::Speed;
+    const float turnExitForward=hoverForward+brakeRelativeSpeed*brakeDuration*0.5f;
+    const float turnEntryForward=turnExitForward+RailTitleScene::Speed*turnDuration;
     RailReadyDroneFlight flight;
     // Start as a distant pursuer in the rail lane. The lateral clearance is
     // needed only for the brief pass, not for the whole approach.
-    if(t<0.64f) flight.forward=-66.0f;
-    else if(t<2.15f) flight.forward=hermite(0.64f,2.15f,-66.0f,14.0f,0.0f,36.0f);
-    else if(t<RailTitleGameplayEntry::DroneTurnBegin)
-        flight.forward=hermite(2.15f,RailTitleGameplayEntry::DroneTurnBegin,
+    if(t<approachBegin) flight.forward=startForward;
+    else if(t<passEnd) flight.forward=hermite(approachBegin,passEnd,startForward,14.0f,0.0f,36.0f);
+    else if(t<turnBegin)
+        flight.forward=hermite(passEnd,turnBegin,
             14.0f,turnEntryForward,36.0f,turnSpeed-RailTitleScene::Speed);
-    const float pass=smooth(1.15f,2.05f);
-    const float widen=smooth(2.15f,RailTitleGameplayEntry::DroneTurnBegin);
-    flight.lateral=1.2f+4.7f*pass+3.1f*widen;
-    flight.vertical=7.0f;
-    Vector3 velocity{4.7f*smoothSpeed(1.15f,2.05f)+
-        3.1f*smoothSpeed(2.15f,RailTitleGameplayEntry::DroneTurnBegin),0,RailTitleScene::Speed};
-    if(t>=0.64f && t<2.15f)
-        velocity.z+=hermiteSpeed(0.64f,2.15f,-66.0f,14.0f,0.0f,36.0f);
-    else if(t>=2.15f && t<RailTitleGameplayEntry::DroneTurnBegin)
-        velocity.z+=hermiteSpeed(2.15f,RailTitleGameplayEntry::DroneTurnBegin,
+    const float pass=smooth(1.15f+passDelay,2.05f+passDelay);
+    const float widen=smooth(passEnd,turnBegin);
+    flight.lateral=side*(startSide+(passSide-startSide)*pass+(turnOuterSide-passSide)*widen);
+    flight.vertical=approachHeight;
+    Vector3 velocity{side*((passSide-startSide)*smoothSpeed(1.15f+passDelay,2.05f+passDelay)+
+        (turnOuterSide-passSide)*smoothSpeed(passEnd,turnBegin)),0,RailTitleScene::Speed};
+    if(t>=approachBegin && t<passEnd)
+        velocity.z+=hermiteSpeed(approachBegin,passEnd,startForward,14.0f,0.0f,36.0f);
+    else if(t>=passEnd && t<turnBegin)
+        velocity.z+=hermiteSpeed(passEnd,turnBegin,
             14.0f,turnEntryForward,36.0f,turnSpeed-RailTitleScene::Speed);
     // Define a moving semicircle in world travel, subtracting cart travel
     // only when writing the relative rail distance. Nose and bank belong to
     // this same curve; the drone actually flies back before braking to hover.
-    const float turn=(std::clamp)((t-RailTitleGameplayEntry::DroneTurnBegin)/turnDuration,0.0f,1.0f);
-    if(t>=RailTitleGameplayEntry::DroneTurnBegin) {
+    const float turn=(std::clamp)((t-turnBegin)/turnDuration,0.0f,1.0f);
+    if(t>=turnBegin) {
         const float angle=Pi*turn;
-        flight.lateral=turnOuterSide-turnRadius+turnRadius*std::cos(angle);
+        flight.lateral=side*(turnOuterSide-turnRadius+turnRadius*std::cos(angle));
         flight.forward=turnEntryForward+turnRadius*std::sin(angle)-
-            RailTitleScene::Speed*(std::min)(t-RailTitleGameplayEntry::DroneTurnBegin,turnDuration);
-        flight.vertical=7.0f-turn*turn*(3.0f-2.0f*turn);
-        velocity={-turnSpeed*std::sin(angle),-6.0f*turn*(1.0f-turn)/turnDuration,
+            RailTitleScene::Speed*(std::min)(t-turnBegin,turnDuration);
+        flight.vertical=approachHeight-turn*turn*(3.0f-2.0f*turn);
+        velocity={-side*turnSpeed*std::sin(angle),-6.0f*turn*(1.0f-turn)/turnDuration,
             turnSpeed*std::cos(angle)};
     }
     float yaw=std::atan2(-velocity.x,-velocity.z);
     if(yaw<0.0f) yaw+=2.0f*Pi;
     flight.rotation={std::atan2(velocity.y,std::sqrt(velocity.x*velocity.x+velocity.z*velocity.z)),yaw,0};
-    const float bankIn=smooth(RailTitleGameplayEntry::DroneTurnBegin-0.18f,RailTitleGameplayEntry::DroneTurnBegin);
-    const float bankOut=1.0f-smooth(RailTitleGameplayEntry::DroneTurnEnd,RailTitleGameplayEntry::DroneBrakeEnd);
+    const float bankIn=smooth(turnBegin-0.18f,turnBegin);
+    const float bankOut=1.0f-smooth(turnEnd,brakeEnd);
     // Lean into the right-hand lane change, then counter-bank as it settles.
     // Two bounded weight transfers give the approach inertia without idle wobble.
-    const float approachBank=0.19f*(smooth(1.06f,1.32f)-2.0f*smooth(1.57f,1.84f)+smooth(1.96f,2.17f));
-    const float outwardBank=0.10f*(smooth(2.15f,2.40f)-smooth(2.70f,3.02f));
-    flight.rotation.z=(approachBank+outwardBank)*(1.0f-bankIn)-
-        (0.55f+0.08f*std::sin(Pi*turn))*bankIn*bankOut;
-    if(t>=RailTitleGameplayEntry::DroneTurnEnd) {
-        const float remaining=1.0f-(std::clamp)((t-RailTitleGameplayEntry::DroneTurnEnd)/brakeDuration,0.0f,1.0f);
-        flight.forward=34.0f+brakeRelativeSpeed*brakeDuration*0.5f*remaining*remaining;
+    const float approachBank=0.19f*(smooth(1.06f+passDelay,1.32f+passDelay)-
+        2.0f*smooth(1.57f+passDelay,1.84f+passDelay)+smooth(1.96f+passDelay,2.17f+passDelay));
+    const float outwardBank=0.10f*(smooth(passEnd,2.40f+passDelay)-smooth(2.70f+passDelay,3.02f+passDelay));
+    flight.rotation.z=side*((approachBank+outwardBank)*(1.0f-bankIn)-
+        (0.55f+0.08f*std::sin(Pi*turn))*bankIn*bankOut);
+    if(t>=turnEnd) {
+        const float remaining=1.0f-(std::clamp)((t-turnEnd)/brakeDuration,0.0f,1.0f);
+        flight.forward=hoverForward+brakeRelativeSpeed*brakeDuration*0.5f*remaining*remaining;
         flight.rotation.x=flight.rotation.y=0.0f;
     }
     return flight;
 }
 
 RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed,const RailPath& rail,
-        float playerDistance,float playerSpeed) {
-    auto flight=EvaluateRailReadyDroneFlight(elapsed);
+        float playerDistance,float playerSpeed,uint32_t droneIndex) {
+    auto flight=EvaluateRailReadyDroneFlight(elapsed,droneIndex);
+    const float turnEnd=droneIndex==1?4.46f:RailTitleGameplayEntry::DroneTurnEnd;
     if(!std::isfinite(elapsed) || !std::isfinite(playerDistance) || !std::isfinite(playerSpeed) ||
-            rail.Length()<=0.0f || elapsed>=RailTitleGameplayEntry::DroneTurnEnd) return flight;
+            rail.Length()<=0.0f || elapsed>=turnEnd) return flight;
     constexpr float h=0.002f;
     const auto position=[&](float step) {
-        const auto adjacent=EvaluateRailReadyDroneFlight(elapsed+step);
+        const auto adjacent=EvaluateRailReadyDroneFlight(elapsed+step,droneIndex);
         const float distance=playerDistance+playerSpeed*step+adjacent.forward;
         const auto sample=rail.Evaluate(distance);
         return Add(sample.position,Add(Scale(sample.tangent,(std::min)(0.0f,distance)),
@@ -984,32 +999,46 @@ RailReadyDroneFlight RailReadyDroneSalvo::Flight(float elapsed,float playerDista
     return flight;
 }
 
-bool RailReadyDroneSalvo::TraceLeftWall(const RailWorldRaycastInput& terrain,Vector3 origin,
+bool RailReadyDroneSalvo::TraceVehicleNearMiss(const RailWorldRaycastInput& terrain,Vector3 origin,
         float launchDistance,uint32_t index,Vector3& contact,Vector3& normal) {
-    if(!terrain.railPath || !terrain.terrainSettings || index>=ShotTimes.size()) return false;
+    if(!terrain.railPath || !terrain.terrainSettings || index>=ShotTimes.size() ||
+        !std::isfinite(launchDistance) || !std::isfinite(origin.x) ||
+        !std::isfinite(origin.y) || !std::isfinite(origin.z)) return false;
     const auto& rail=*terrain.railPath;
-    const TerrainVolumeField field(rail,*terrain.terrainSettings,terrain.terrainEdits,terrain.terrainPreview);
-    for(float ahead:{45.0f,60.0f,78.0f}) {
-        const float d=launchDistance+ahead+8.0f*float(index);
-        Vector3 outward;
-        const auto surface=field.SurfacePoint(d,Pi-0.22f,&outward);
-        const auto target=Add(surface,Scale(outward,3.0f));
-        RailAimState aim;
-        aim.valid=true; aim.worldRayOrigin=origin;
-        aim.worldRayDirection=Normalize(Add(target,Scale(origin,-1))); aim.maxDistance=180;
-        auto query=terrain;
-        query.aim=&aim; query.playerDistance=launchDistance;
-        query.spawnRuntime=nullptr; query.course=nullptr; query.includeVisualColumns=false;
-        const auto hit=RailWorldRaycast::Query(query);
-        const auto frame=rail.Evaluate(d);
-        if(!hit.hit || hit.kind!=RailAimHitKind::ProceduralTerrain || hit.distance<6 ||
-                Dot(hit.normal,frame.right)<0.15f) continue;
-        RailTitleShot test; test.origin=origin; test.target=hit.position;
-        test.duration=std::sqrt(Dot(Add(hit.position,Scale(origin,-1)),Add(hit.position,Scale(origin,-1))))/ShotSpeed;
-        if(!ClearsVehicle(test,rail,launchDistance)) continue;
-        contact=hit.position; normal=hit.normal; return true;
+    const auto atLaunch=rail.Evaluate(launchDistance);
+    const float side=Dot(Add(origin,Scale(atLaunch.position,-1)),atLaunch.right)<0?-1.0f:1.0f;
+    const float clearance=6.8f+0.35f*float(index);
+    // Predict the moving cart's side first. A fixed far-wall target can look
+    // like unrelated sideways fire while the pursuit camera swings around.
+    // Stay on the gun's side so the miss cannot cut through the cart en route.
+    float arrival=0.0f;Vector3 pass{};
+    for(int iteration=0;iteration<8;++iteration) {
+        const auto cart=rail.Evaluate(launchDistance+RailTitleScene::Speed*arrival);
+        pass=Add(cart.position,Add(Scale(cart.right,side*clearance),Scale(cart.up,4.2f)));
+        const auto delta=Add(pass,Scale(origin,-1));
+        arrival=std::sqrt(Dot(delta,delta))/ShotSpeed;
     }
-    return false;
+    const auto delta=Add(pass,Scale(origin,-1));
+    const float passDistance=std::sqrt(Dot(delta,delta));
+    if(!std::isfinite(passDistance) || passDistance<4.0f || passDistance>165.0f) return false;
+    RailAimState aim;
+    aim.valid=true;aim.worldRayOrigin=origin;aim.worldRayDirection=Scale(delta,1.0f/passDistance);
+    // A near miss may continue much farther down an open tunnel than a shot
+    // aimed at its wall. Keep the ray straight, and leave time for the real
+    // impact and its dust to finish before the bounded READY clock stops.
+    aim.maxDistance=(std::min)(300.0f,
+        ShotSpeed*(RailTitleGameplayEntry::GoEnd-ShotTimes[index]-1.55f));
+    auto query=terrain;
+    query.aim=&aim;query.playerDistance=launchDistance;
+    query.spawnRuntime=nullptr;query.course=nullptr;query.includeVisualColumns=false;
+    // Continue that one straight ray to its first real terrain contact. Do not
+    // bend a projectile after it passes the cart or invent a visible impact.
+    const auto hit=RailWorldRaycast::Query(query);
+    if(!hit.hit || hit.kind!=RailAimHitKind::ProceduralTerrain || hit.distance<passDistance+1.0f ||
+        Dot(hit.normal,hit.normal)<0.5f) return false;
+    RailTitleShot test;test.origin=origin;test.target=hit.position;test.duration=hit.distance/ShotSpeed;
+    if(!ClearsVehicle(test,rail,launchDistance)) return false;
+    contact=hit.position;normal=hit.normal;return true;
 }
 
 bool RailReadyDroneSalvo::ClearsVehicle(const RailTitleShot& shot,const RailPath& rail,float playerDistanceAtLaunch) {
@@ -1102,30 +1131,37 @@ RailReadyCameraShot EvaluateRailReadyCameraShot(float elapsed) {
     RailReadyCameraShot shot;
     const float reveal=smooth(0.0f,0.64f);
     const float angle=-2.65f*reveal*(1.0f-smooth(1.65f,2.75f));
-    const float radius=8.0f+6.0f*reveal+8.0f*smooth(1.85f,2.85f);
+    // Complete the orbit without simultaneously dollying far backwards.
+    // The two aircraft keep their flight paths and real scale; a narrower
+    // forward lens lets their bank and nose direction remain readable.
+    const float radius=8.0f+6.0f*reveal;
     shot.eyeOffset={std::sin(angle)*radius,
-        5.2f+2.0f*reveal+2.8f*smooth(1.80f,2.85f),-std::cos(angle)*radius};
+        5.2f+2.0f*reveal+1.3f*smooth(1.80f,RailTitleGameplayEntry::CameraSettleEnd),
+        -std::cos(angle)*radius};
     const auto flight=EvaluateRailReadyDroneFlight(t);
     shot.droneOffset={flight.lateral,flight.vertical,flight.forward};
+    const auto wingman=EvaluateRailReadyDroneFlight(t,1);
+    shot.wingmanOffset={wingman.lateral,wingman.vertical,wingman.forward};
     shot.focusBlend=reveal;
-    shot.weight=1.0f-smooth(2.50f,RailTitleGameplayEntry::CameraSettleEnd);
-    shot.fovY=0.70f+0.28f*reveal;
+    shot.weight=1.0f-smooth(RailTitleGameplayEntry::CameraReleaseBegin,
+        RailTitleGameplayEntry::CameraReleaseEnd);
+    shot.fovY=0.70f+0.28f*reveal-0.22f*smooth(2.20f,RailTitleGameplayEntry::CameraSettleEnd);
     return shot;
 }
 
-CourseEnemyActorDesc BuildRailReadyDrone(float startDistance) {
+CourseEnemyActorDesc BuildRailReadyDrone(float startDistance,uint32_t droneIndex) {
     CourseEnemyActorDesc desc;
-    desc.waveId = desc.actorAssetId = "start_sentinel";
+    desc.waveId = desc.actorAssetId = droneIndex==1?"start_sentinel_wingman":"start_sentinel";
     desc.meshId = "twin_shield_hull";
     desc.spawnDistance = startDistance;
-    const auto flight=EvaluateRailReadyDroneFlight(0.0f);
+    const auto flight=EvaluateRailReadyDroneFlight(0.0f,droneIndex);
     desc.distanceOffset = flight.forward;
     desc.lateralOffset = flight.lateral;
     desc.verticalOffset = flight.vertical;
     desc.radius = 1.65f;
     desc.hitPoints = 32.0f;
     desc.lifetime = 3600.0f;
-    desc.firstShotDelay = 1.0f;
+    desc.firstShotDelay = droneIndex==1?1.4f:1.0f;
     desc.fireInterval = 1.5f;
     desc.bulletRadius = 0.42f;
     desc.localRotation = flight.rotation;
@@ -1138,7 +1174,7 @@ CourseEnemyActorDesc BuildRailReadyDrone(float startDistance) {
     desc.behaviorDefinition.maintainForwardEngagementBand = true;
     desc.behaviorDefinition.lateralAmplitude = 1.4f;
     desc.behaviorDefinition.verticalAmplitude = 0.45f;
-    desc.formationDefinition = EnemyFormationDefinition::CommercialDefault("start_sentinel");
+    desc.formationDefinition = EnemyFormationDefinition::CommercialDefault(desc.waveId);
     desc.establishedEntrance = true;
     return desc;
 }
@@ -1200,11 +1236,15 @@ std::vector<CourseEventMarker> RailTitleGameplayEntry::DispatchCourseEvents(
 
 void RailTransitionDemo::BeginGameplay() {
     phase_=Phase::Playing; playTime_=transitionTime_=0.0; travelDeltaTime_=0.0f;
+    startupComplete_=false;
 }
-void RailTransitionDemo::Update(float deltaTime, bool gameplayStarted) {
+void RailTransitionDemo::Update(float deltaTime, bool startupComplete) {
     travelDeltaTime_=0.0f;
     const double dt=std::isfinite(deltaTime) ? double((std::clamp)(deltaTime,0.0f,0.05f)) : 0.0;
-    if(phase_==Phase::Playing && gameplayStarted) playTime_+=dt;
+    if(phase_==Phase::Playing) {
+        startupComplete_ |= startupComplete;
+        if(startupComplete_) playTime_+=dt;
+    }
     if(phase_==Phase::Covering) {
         const double previous=transitionTime_;
         transitionTime_=(std::min)(double(CoverDuration),transitionTime_+dt);
@@ -1228,10 +1268,10 @@ void RailTransitionDemo::CommitTitleSwap() {
 }
 bool RailTransitionDemo::Returning() const { return phase_==Phase::Covering || phase_==Phase::Revealing; }
 bool RailTransitionDemo::RevealingTitle() const { return phase_==Phase::Revealing; }
-bool RailTransitionDemo::ButtonVisible() const { return phase_==Phase::Playing && playTime_>=double(ButtonDelay); }
+bool RailTransitionDemo::ButtonVisible() const { return phase_==Phase::Playing && startupComplete_; }
 float RailTransitionDemo::ButtonOpacity() const {
     if(!ButtonVisible()) return 0.0f;
-    const float t=static_cast<float>((std::clamp)((playTime_-ButtonDelay)/0.25,0.0,1.0));
+    const float t=static_cast<float>((std::clamp)(playTime_/0.25,0.0,1.0));
     return t*t*(3.0f-2.0f*t);
 }
 float RailTransitionDemo::Coverage() const {

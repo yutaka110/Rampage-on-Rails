@@ -798,10 +798,11 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
                 Add(Scale(cameraSample.up,local.y),Scale(cameraSample.tangent,local.z))));
         };
         const Vector3 eye=toWorld(input.startupCameraEyeOffset);
-        Vector3 drone=toWorld(input.startupCameraDroneOffset);
-        if(input.spawnRuntime!=nullptr && input.startupCameraDroneId!=0) {
+        const auto subject=[&](uint32_t actorId,Vector3 fallback) {
+            Vector3 drone=toWorld(fallback);
+            if(input.spawnRuntime==nullptr || actorId==0) return drone;
             for(const auto& actor:input.spawnRuntime->Enemies()) {
-                if(actor.actorId!=input.startupCameraDroneId) continue;
+                if(actor.actorId!=actorId) continue;
                 drone=ResolveRailLocal(*input.railPath,actor.desc.spawnDistance,
                     actor.desc.distanceOffset,actor.desc.lateralOffset,actor.desc.verticalOffset);
                 const float distance=actor.desc.spawnDistance+actor.desc.distanceOffset;
@@ -809,11 +810,21 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
                     drone=Add(drone,Scale(input.railPath->Evaluate(0.0f).tangent,distance));
                 break;
             }
-        }
+            return drone;
+        };
+        const Vector3 drone=subject(input.startupCameraDroneId,input.startupCameraDroneOffset);
         // Bisect viewing directions rather than world positions: a distant
         // drone must not push the nearer cart off the opposite screen edge.
         const Vector3 cartDirection=NormalizeOr(Subtract(toWorld({0,5.8f,0}),eye),cameraSample.tangent);
-        const Vector3 droneDirection=NormalizeOr(Subtract(drone,eye),cameraSample.tangent);
+        Vector3 droneDirection=NormalizeOr(Subtract(drone,eye),cameraSample.tangent);
+        if(input.startupCameraWingmanId!=0) {
+            const Vector3 wingman=subject(input.startupCameraWingmanId,input.startupCameraWingmanOffset);
+            const Vector3 wingmanDirection=NormalizeOr(Subtract(wingman,eye),droneDirection);
+            // Lead the eye with the first pass; a small group bias leaves room
+            // for the staggered second silhouette without switching subjects.
+            droneDirection=NormalizeOr(Add(Scale(droneDirection,0.78f),
+                Scale(wingmanDirection,0.22f)),droneDirection);
+        }
         const Vector3 trackingDirection=NormalizeOr(Add(Scale(cartDirection,0.48f),
             Scale(droneDirection,0.52f)),cameraSample.tangent);
         const Vector3 trackingTarget=Add(eye,Scale(trackingDirection,32.0f));

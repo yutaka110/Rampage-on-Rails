@@ -1535,11 +1535,14 @@ AppRunLoop::AppRunLoop(
     railLockAcquireSound_=audio_.CreateTone("rail-lock-confirm",1080.0f,0.045f,0.30f);
     railLockFullSound_=audio_.CreateTone("rail-lock-full",1640.0f,0.085f,0.32f);
     railLockReleaseSound_=audio_.CreateTone("rail-lock-release",620.0f,0.095f,0.30f);
+    railPulseFireSound_=audio_.LoadWave("Resources/audio/rail_pulse_fire.wav");
+    railPrimaryKillSound_=audio_.LoadWave("Resources/audio/rail_primary_kill.wav");
     railTitleReticleBootSound_ = audio_.CreateTone("rail-reticle-boot",920.0f,0.045f,0.20f);
     railTitleGaugesBootSound_ = audio_.CreateTone("rail-gauges-boot",1240.0f,0.065f,0.18f);
     railReadySound_ = audio_.LoadWave("Resources/audio/rail_ready.wav");
     railGoSound_ = audio_.LoadWave("Resources/audio/rail_go.wav");
     railDroneFlybySound_ = audio_.LoadWave("Resources/audio/rail_drone_flyby.wav");
+    railDroneWingmanFlybySound_ = audio_.LoadWave("Resources/audio/rail_drone_wingman_flyby.wav");
     railVehicleRollingSound_ = audio_.CreateTone(
         "rail-vehicle-rolling", 105.0f, 0.055f, 0.16f);
     railVehicleJointSound_ = audio_.CreateTone(
@@ -1735,8 +1738,8 @@ AppRunLoop::AppRunLoop(
         railTitleScreenVisible_ = !combatLoopExpansionEnabled &&
             !ResolveCombatLoop10SecondModeFromCommandLine() &&
             !railDefenseUiProofEnabled_ && sunfallPreviewDistance==0;
-        // Continue playing beyond the entry sequence for outdoor visual checks.
-        // This also disables the timed button, background freeze and return input.
+        // Continue normal gameplay after READY/GO without the submission
+        // replay button or its background freeze.
         railTransitionDemoEnabled_=false;
         if (railTitleScreenVisible_) {
             railTitleSavedTerrainEnabled_ = runtimeState_.terrain.enabled;
@@ -3922,26 +3925,16 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
     }
 
-    for (const RailNormalShotLine& shot : railNormalShotLines_) {
-        const float t = shot.lifetime > 0.0f
-            ? (std::clamp)(shot.age / shot.lifetime, 0.0f, 1.0f)
-            : 1.0f;
-        const float alpha = (1.0f - t) * (1.0f - t);
-        if (alpha <= 0.001f || !validPoint(shot.start) || !validPoint(shot.end)) {
-            continue;
-        }
-        const Vector4 beamColor = shot.hit
-            ? Vector4{0.78f, 0.98f, 1.0f, 0.72f * alpha}
-            : Vector4{0.42f, 0.78f, 1.0f, 0.42f * alpha};
-        addSoftLine(shot.start, shot.end, shot.thickness, beamColor);
-        if (shot.hit) {
-            addCentered(shot.end, 10.0f + 8.0f * alpha, uvGlow, Vector4{0.65f, 0.96f, 1.0f, 0.30f * alpha});
-            addCentered(shot.end, 3.8f + 2.2f * alpha, uvPip, Vector4{0.86f, 1.0f, 1.0f, 0.86f * alpha});
-        }
-    }
-
     const auto drawReticleFrame=[&](const RailLockReticleVisual& visual) {
         if(!visual.visible) return;
+        // A short travelling glint belongs only to acquisition, outside the
+        // dark keyline. Held targets never pulse or rotate.
+        for(size_t i=0;i<visual.segmentCount;++i) {
+            const auto& segment=visual.segments[i];
+            if(segment.highlight>0.001f)
+                addSoftLine(segment.start,segment.end,visual.stroke*3.0f,
+                    {0.12f,0.78f,1.0f,visual.ink.w*segment.highlight*0.32f});
+        }
         // Draw every dark edge first, then every foreground stroke. This also
         // protects chamfer joints from the next segment's outline.
         for(size_t i=0;i<visual.segmentCount;++i) {
@@ -3952,6 +3945,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         for(size_t i=0;i<visual.segmentCount;++i) {
             const auto& segment=visual.segments[i];
             auto color=visual.ink;color.w*=segment.opacity;
+            color.x+=(0.95f-color.x)*segment.highlight;
+            color.y+=(1.0f-color.y)*segment.highlight;
             addLine(segment.start,segment.end,visual.stroke*segment.strokeScale,color);
         }
     };
@@ -3969,12 +3964,33 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         drawReticleFrame(visual);
         // The ordinal identifies the stored lock. It never sits over the core
         // or the warning label above the middle of the enemy.
-        addCenteredRect(visual.ordinalPosition,13.0f*hudScale,15.0f*hudScale,uvWhite,
-            {0.008f,0.014f,0.022f,opacity*0.78f});
+        addCenteredRect(visual.ordinalPosition,20.0f*hudScale,13.0f*hudScale,uvWhite,
+            {0.008f,0.014f,0.022f,opacity*0.72f});
+        const auto drawOrdinal=[&](Vector2 center,Vector4 color) {
+            const float scale=0.54f*hudScale;
+            const int ordinal=(std::clamp)(index+1,0,99);
+            addGlyph(char('0'+ordinal/10),center.x-12*scale,center.y-9*scale,scale,color);
+            addGlyph(char('0'+ordinal%10),center.x,center.y-9*scale,scale,color);
+        };
         for(const Vector2 offset:{Vector2{-hudScale,0},Vector2{hudScale,0},Vector2{0,-hudScale},Vector2{0,hudScale}})
-            addNumber(index+1,{visual.ordinalPosition.x+offset.x,visual.ordinalPosition.y+offset.y},
-                0.62f*hudScale,visual.edge);
-        addNumber(index+1,visual.ordinalPosition,0.62f*hudScale,visual.ink);
+            drawOrdinal({visual.ordinalPosition.x+offset.x,visual.ordinalPosition.y+offset.y},visual.edge);
+        drawOrdinal(visual.ordinalPosition,visual.ink);
+    }
+
+    // Open the stored jaws briefly at button release, while the authorized
+    // laser travels. This is a visual tail, independent of active lock tokens.
+    size_t releasedMarkerCount=0;
+    for(const auto& laser:railLockVolley_.Lasers()) {
+        if(laser.age>=RailLockReticleVisual::ReleaseDuration || (laser.resolved && !laser.hit)) continue;
+        const auto projected=ProjectRailOverlayPoint(laser.end,frameState_.viewProjectionMatrix,hudWidth,hudHeight);
+        if(!projected.inDepth || !projected.onscreen) continue;
+        RailLockToken token;token.target=laser.target;token.acquiredScreenPosition=projected.screen;
+        float bodyRadius=0;
+        if(laser.target.kind==RailLockTargetKind::Enemy)
+            if(const auto* body=railEnemyEncounterReadabilityDirector_.FindActor(laser.target.actorId))
+                bodyRadius=body->projectedDiameterPixels*0.5f*body->presentationScale;
+        drawReticleFrame(BuildRailReleasedReticleVisual(token,laser.age,hudScale,opacity,bodyRadius));
+        if(++releasedMarkerCount>=16) break;
     }
 
     // The white player cursor is independent of confirmed targets, including
@@ -4260,8 +4276,9 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     emitHudCommands(railShooterHudRenderer_.Frame().commands);
 
     RailShooterDefensePromptRenderInput defensePromptInput{};
-    defensePromptInput.presentation = railDefenseUiProofEnabled_ || titleEntry.blockingGameplay
-        ? nullptr : &railEnemyAttackDefensePresentationBridge_.Frame();
+    // Hide tactical instruction cards (dodge left/right, shoot enemy/bullet).
+    // Defense simulation and accepted outcome feedback keep their own state.
+    defensePromptInput.presentation = nullptr;
     defensePromptInput.outcome =
         &railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
     defensePromptInput.viewportWidth = hudWidth;
@@ -4295,11 +4312,16 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
 
     const auto& wrecks=railEnemyCombatPresentationBridge_.Frame().destructionBursts;
-    const bool hasWorldEffects=railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || !wrecks.empty();
+    const auto& enemyBulletFrame=railEnemyProjectileVfxRenderer_.Frame();
+    const bool hasEnemyOrbs=!railTitleScreenVisible_ && std::any_of(enemyBulletFrame.proxies.begin(),enemyBulletFrame.proxies.end(),
+        [](const auto& p){return p.spriteBacked;});
+    const bool hudVisible=imguiLayer_.EditorViewportOverlay().LayerVisible(editor::EditorViewportOverlayLayerId::GameplayHud);
+    if(!hudVisible) railLockOnHudAtlasVertexCount_=0;
+    const bool hasWorldEffects=hasEnemyOrbs || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || !wrecks.empty();
     if (hasWorldEffects) {
         // Suppress every gameplay overlay, including the reticle built above.
         if (railTitleScreenVisible_) railLockOnHudAtlasVertexCount_ = 0;
-        if(railTitleScreenVisible_) emitHudCommands(railShooterHudRenderer_.Frame().commands);
+        if(railTitleScreenVisible_ && hudVisible) emitHudCommands(railShooterHudRenderer_.Frame().commands);
         // Append world billboards after the UI range. They retain homogeneous
         // depth and are drawn separately into SceneColor with read-only depth.
         const Vector3 right=Normalize(Vector3{frameState_.viewMatrix.m[0][0],frameState_.viewMatrix.m[1][0],frameState_.viewMatrix.m[2][0]});
@@ -4319,6 +4341,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             Vector3 center,horizontal,vertical; Vector4 color; float seed;
             Vector3 impactOrigin{};
             float impactLight=0.0f;
+            float uvY=0.0f;
         };
         std::vector<SandBillboard> billboards;
         billboards.reserve(180+RailTitleScene::CollapseGrainCount+RailTitleScene::CollapsePuffCount);
@@ -4340,6 +4363,53 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         const auto clouds=railTitleScreenVisible_ ? std::span<const RailTitleDustCloud>(railTitleScene_.DustClouds()) : std::span<const RailTitleDustCloud>(crashClouds);
         const auto impacts=railTitleScreenVisible_ ? std::span<const RailTitleRailImpact>(&railTitleScene_.RailImpact(),1) : std::span<const RailTitleRailImpact>(crashImpacts);
         const auto shots=railTitleScreenVisible_ ? std::span<const RailTitleShot>(railTitleScene_.Shots()) : railReadyDroneSalvo_.Shots();
+        std::vector<RailLockContact> lockContacts;
+        if(!railTitleScreenVisible_) {
+            const auto contacts=railLockVolley_.Contacts();
+            lockContacts.assign(contacts.begin(),contacts.end());
+            for(auto& contact:lockContacts) if(contact.destroyed) {
+                const auto wreck=std::find_if(wrecks.begin(),wrecks.end(),[&](const auto& w){return w.actorId==contact.actorId && w.twinShield;});
+                if(wreck!=wrecks.end()) {contact.wreckPose=wreck->frozenPose;contact.hasWreckPose=true;}
+            }
+        }
+        std::vector<RailLockDebrisFrame> lockDebris;
+        lockDebris.reserve(lockContacts.size());
+        for(const auto& contact:lockContacts) lockDebris.push_back(contact.Debris());
+        const auto debrisRadius=[&](const RailLockDebris& chip) {
+            const auto& m=frameState_.viewProjectionMatrix.m;
+            const float w=chip.position.x*m[0][3]+chip.position.y*m[1][3]+chip.position.z*m[2][3]+m[3][3];
+            const float pixelWorld=2*(std::max)(0.0f,w)/
+                ((std::max)(0.001f,std::abs(frameState_.projMatrix.m[1][1]))*float(hudHeight));
+            return (std::max)(chip.radius,pixelWorld*0.8f);
+        };
+        size_t solidDebris=0;
+        for(size_t contactIndex=0;contactIndex<lockContacts.size();++contactIndex) {
+            const auto& debris=lockDebris[contactIndex];
+            for(size_t i=0;i<debris.count && solidDebris<160;++i,++solidDebris) {
+                const auto& chip=debris.fragments[i];
+                const float radius=debrisRadius(chip),c=std::cos(chip.rotation),s=std::sin(chip.rotation);
+                const auto h=Scale(Add(Scale(right,c),Scale(up,s)),radius*1.35f);
+                const auto v=Scale(Add(Scale(up,c),Scale(right,-s)),radius*0.70f);
+                billboards.push_back({chip.position,h,v,{0.22f+chip.heat*0.75f,0.18f+chip.heat*0.20f,
+                    0.13f,chip.opacity},4000.0f});
+            }
+        }
+        // The solid orb body shares the sorted alpha world pass with smoke.
+        // Unlike an additive glow this preserves a shaded silhouette outdoors.
+        const auto orbBody=[&](Vector3 center,float radius,float opacity,float animationUvY) {
+            billboards.push_back({center,Scale(right,radius),Scale(up,radius),
+                {1.0f,0.20f,0.025f,opacity},2000.0f,{},0.0f,animationUvY});
+        };
+        if(hasEnemyOrbs) for(const auto& p:enemyBulletFrame.proxies) {
+            if(p.spriteBacked) orbBody(p.worldPosition,p.coreRadius,1.0f,p.orbAnimationUvY);
+        }
+        const auto shotRadius=[&](const RailTitleShot& shot) {
+            return railTitleScreenVisible_ ? (shot.railStrike?RailTitleScene::DepartureShotRadius:0.90f) : 0.42f;
+        };
+        for(const auto& shot:shots) {
+            const uint32_t clock=uint32_t(std::fmod((std::max)(0.0f,shot.age)*0.55f,1.0f)*64);
+            orbBody(shot.position,shotRadius(shot),titleAlpha,float(2*(clock+64*(shot.id%16))));
+        }
         for(const auto& cloud:clouds) {
             const float age=cloud.age,t=age/RailTitleDustCloud::Lifetime;
             const float fade=(1.0f-std::exp(-age*38.0f))*std::pow((std::max)(0.0f,1.0f-t),1.15f)*titleAlpha;
@@ -4438,6 +4508,20 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     {0.63f*shade,0.46f*shade,0.29f*shade,puff.opacity},1000.0f+2.0f*float(i)});
             }
         }
+        if(!railTitleScreenVisible_) for(const auto& kill:railPrimaryKills_.Kills()) {
+            const auto frame=kill.Evaluate(right,up);
+            const float gain=1/std::sqrt(1+0.25f*float(railPrimaryKills_.Kills().size()-1));
+            for(size_t i=0;i<frame.smokeCount;++i) {
+                const auto& puff=frame.smoke[i];
+                const auto h=Scale(Add(Scale(right,std::cos(puff.rotation)),Scale(up,std::sin(puff.rotation))),puff.radius);
+                const auto v=Scale(Add(Scale(up,std::cos(puff.rotation)),Scale(right,-std::sin(puff.rotation))),puff.radius*puff.aspect);
+                // Alpha-blended, depth-tested soot belongs to the sorted smoke
+                // pass. Its short internal light cools before the wreck falls.
+                billboards.push_back({puff.center,h,v,{0.25f,0.23f,0.21f,puff.opacity*gain},
+                    600.0f+2.0f*float(puff.variant),kill.CoreAt(0.025f),
+                    (1-rail_primary_kill_detail::Ramp(kill.age,0.065f,0.19f))*0.18f*gain});
+            }
+        }
         const Vector3 eye=frameState_.cameraWorldPosition;
         std::sort(billboards.begin(),billboards.end(),[&](const auto& a,const auto& b) {
             const auto da=Add(a.center,Scale(eye,-1)),db=Add(b.center,Scale(eye,-1));
@@ -4461,8 +4545,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 color.x+=sweepLight*1.4f; color.y+=sweepLight*0.95f; color.z+=sweepLight*0.38f;
                 return color;
             };
-            dustVertex(a,{puff.seed,0},litColor(a)); dustVertex(b,{puff.seed+1,0},litColor(b)); dustVertex(c,{puff.seed,1},litColor(c));
-            dustVertex(c,{puff.seed,1},litColor(c)); dustVertex(b,{puff.seed+1,0},litColor(b)); dustVertex(d,{puff.seed+1,1},litColor(d));
+            dustVertex(a,{puff.seed,puff.uvY},litColor(a)); dustVertex(b,{puff.seed+1,puff.uvY},litColor(b)); dustVertex(c,{puff.seed,puff.uvY+1},litColor(c));
+            dustVertex(c,{puff.seed,puff.uvY+1},litColor(c)); dustVertex(b,{puff.seed+1,puff.uvY},litColor(b)); dustVertex(d,{puff.seed+1,puff.uvY+1},litColor(d));
         }
         // Camera-facing world ribbons aligned to flight, with a tip and tapered tail.
         // Keep their suffix separate so the glow uses additive rather than smoke blending.
@@ -4492,14 +4576,192 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 dustVertex(c,{10+u1,0},color); dustVertex(b,{10+u0,1},color); dustVertex(d,{10+u1,1},color);
             }
         }
-        const auto glowQuad=[&](Vector3 center,Vector3 h,Vector3 v,float uvBase,Vector4 color) {
+        const auto glowQuad=[&](Vector3 center,Vector3 h,Vector3 v,float uvBase,Vector4 color,float uvY=0.0f) {
             if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+6>kMaxAtlasVertices) return;
             const auto a=Add(center,Add(Scale(h,-1),v)),b=Add(center,Add(h,v));
             const auto c=Add(center,Add(Scale(h,-1),Scale(v,-1))),d=Add(center,Add(h,Scale(v,-1)));
-            dustVertex(a,{uvBase,0},color); dustVertex(b,{uvBase+1,0},color); dustVertex(c,{uvBase,1},color);
-            dustVertex(c,{uvBase,1},color); dustVertex(b,{uvBase+1,0},color); dustVertex(d,{uvBase+1,1},color);
+            dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
+            dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
         };
+        const auto orbTail=[&](Vector3 center,Vector3 tail,Vector3 direction,float radius,float opacity,float animationUvY) {
+            const auto head=Add(center,Scale(direction,-radius*0.55f));
+            const auto delta=Add(head,Scale(tail,-1)),middle=Scale(Add(tail,head),0.5f);
+            const auto side=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(middle,-1)),right)),right);
+            if(Dot(delta,delta)>0.0001f) {
+                glowQuad(middle,Scale(delta,0.5f),Scale(side,radius*0.40f),32.0f,{1.7f,0.35f,0.035f,opacity*0.50f});
+                glowQuad(middle,Scale(delta,0.5f),Scale(side,radius*0.10f),32.0f,{2.2f,0.90f,0.22f,opacity*0.45f});
+            }
+            glowQuad(center,Scale(right,radius*1.35f),Scale(up,radius*1.35f),16.0f,{1.5f,0.22f,0.018f,opacity*0.11f});
+            glowQuad(center,Scale(right,radius*1.20f),Scale(up,radius*1.20f),34.0f,{1.8f,0.38f,0.035f,opacity*0.80f},animationUvY);
+        };
+        if(hasEnemyOrbs) for(const auto& p:enemyBulletFrame.proxies) {
+            if(p.spriteBacked) orbTail(p.worldPosition,p.trailStart,p.motionDirection,p.coreRadius,1.0f,p.orbAnimationUvY);
+        }
+        if(!railTitleScreenVisible_) for(const auto& kill:railPrimaryKills_.Kills()) {
+            const auto frame=kill.Evaluate(right,up);
+            const float gain=1/std::sqrt(1+0.25f*float(railPrimaryKills_.Kills().size()-1));
+            const auto& vp=frameState_.viewProjectionMatrix.m;
+            const float clipW=frame.center.x*vp[0][3]+frame.center.y*vp[1][3]+frame.center.z*vp[2][3]+vp[3][3];
+            const float pixelWorld=2*(std::max)(0.0f,clipW)/
+                ((std::max)(0.001f,std::abs(frameState_.projMatrix.m[1][1]))*float(hudHeight));
+            for(size_t i=0;i<frame.fireCount;++i) {
+                const auto& fire=frame.fire[i];
+                const auto h=Scale(Add(Scale(right,std::cos(fire.rotation)),Scale(up,std::sin(fire.rotation))),fire.radius);
+                const auto v=Scale(Add(Scale(up,std::cos(fire.rotation)),Scale(right,-std::sin(fire.rotation))),fire.radius*fire.aspect);
+                const uint32_t step=uint32_t((std::clamp)(fire.phase,0.0f,1.0f)*31+0.5f);
+                glowQuad(fire.center,h,v,30.0f,{1.0f,1.0f,1.0f,fire.opacity*gain},float(2*(step+32*fire.variant)));
+            }
+            for(size_t i=0;i<frame.count;++i) {
+                const auto& stroke=frame.strokes[i];
+                const auto delta=Add(stroke.end,Scale(stroke.start,-1));
+                const float length=std::sqrt(Dot(delta,delta));
+                if(length<0.001f) continue;
+                const auto direction=Scale(delta,1/length),center=Scale(Add(stroke.start,stroke.end),0.5f);
+                const auto width=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(center,-1)),right)),up);
+                const bool spark=stroke.kind==RailPrimaryKillStrokeKind::Spark;
+                const float halfWidth=(std::max)(stroke.width,pixelWorld*(spark?0.8f:1.6f));
+                const float alpha=stroke.opacity*gain;
+                if(spark) {
+                    glowQuad(center,Scale(delta,0.5f),Scale(width,halfWidth*2.5f),8.0f,{2.2f,0.55f,0.08f,alpha*0.28f});
+                    glowQuad(center,Scale(delta,0.5f),Scale(width,halfWidth),24.0f,{3.0f,1.8f,0.55f,alpha});
+                } else {
+                    glowQuad(center,Scale(delta,0.5f),Scale(width,halfWidth*2.0f),28.0f,{1.4f,0.20f,0.04f,alpha*0.18f});
+                    glowQuad(center,Scale(delta,0.5f),Scale(width,halfWidth),28.0f,{2.0f,0.90f,0.35f,alpha});
+                }
+            }
+            if(frame.flash>0) {
+                const float flash=frame.flash*gain;
+                glowQuad(frame.center,Scale(right,kill.size*0.55f),Scale(up,kill.size*0.55f),16.0f,{2.2f,0.55f,0.08f,flash*0.30f});
+                glowQuad(frame.center,Scale(right,kill.size*0.18f),Scale(up,kill.size*0.18f),16.0f,{4.0f,3.6f,3.0f,flash});
+            }
+        }
+        if(!railTitleScreenVisible_) for(const auto& shot:railPulseShots_.Shots()) {
+            const auto head=shot.Head(),tail=shot.Tail();
+            const auto center=Scale(Add(head,tail),0.5f);
+            const auto half=Scale(Add(head,Scale(tail,-1)),0.5f);
+            const auto width=NormalizeOr(Cross(shot.direction,NormalizeOr(Add(eye,Scale(center,-1)),right)),right);
+            const auto& vp=frameState_.viewProjectionMatrix.m;
+            const float clipW=head.x*vp[0][3]+head.y*vp[1][3]+head.z*vp[2][3]+vp[3][3];
+            const float pixelWorld=2*(std::max)(0.0f,clipW)/
+                ((std::max)(0.001f,std::abs(frameState_.projMatrix.m[1][1]))*float(hudHeight));
+            const float radius=(std::max)(0.10f,pixelWorld*1.4f);
+            const float opacity=shot.Opacity();
+            // The short dash and round nose live in SceneColor with depth,
+            // so cave rock and the cart can occlude them naturally.
+            glowQuad(center,half,Scale(width,radius*2.8f),26.0f,{0.12f,0.62f,1.5f,opacity*0.40f});
+            glowQuad(center,half,Scale(width,radius),26.0f,{0.55f,1.65f,2.3f,opacity});
+            glowQuad(head,Scale(right,radius*1.65f),Scale(up,radius*1.65f),16.0f,{0.35f,1.2f,2.2f,opacity*0.80f});
+            glowQuad(head,Scale(right,radius*0.72f),Scale(up,radius*0.72f),16.0f,{2.4f,2.8f,3.0f,opacity});
+            const float flash=shot.MuzzleOpacity();
+            if(flash>0) {
+                glowQuad(shot.start,Scale(right,0.40f),Scale(up,0.40f),16.0f,{0.15f,0.85f,1.6f,flash*0.60f});
+                glowQuad(shot.start,Scale(right,0.15f),Scale(up,0.15f),16.0f,{2.0f,2.6f,3.0f,flash});
+            }
+        }
         if(!railTitleScreenVisible_) {
+            const auto& contacts=lockContacts;
+            const auto hotContacts=std::count_if(contacts.begin(),contacts.end(),[](const auto& c){return c.age<0.16f;});
+            const float contactGain=1/std::sqrt(1.0f+0.18f*float((std::max)(0,int(hotContacts)-1)));
+            size_t glowingDebris=0;
+            for(size_t contactIndex=0;contactIndex<contacts.size();++contactIndex) {
+                const auto& contact=contacts[contactIndex];
+                const float age=contact.age,size=contact.size;
+                const auto impact=contact.Presentation();
+                const auto packedPhase=[&](float phase,uint32_t variant) {
+                    const auto step=uint32_t((std::clamp)(phase,0.0f,1.0f)*31+0.5f);
+                    return float(2*(step+32*(variant%16)));
+                };
+                // Lift the contact slightly off the sensor surface. The halo,
+                // broken shock front and sparks still use scene depth.
+                const auto center=contact.CenterAt(age);
+                const auto variant=uint32_t(contact.shotId%16);
+                const float seed=float(contact.shotId%997)*0.173f;
+                const float rotation=contact.destroyed?((variant&1)?-0.48f:0.48f)+0.10f*std::sin(seed):seed;
+                const auto rotatedRight=Add(Scale(right,std::cos(rotation)),Scale(up,std::sin(rotation)));
+                const auto rotatedUp=Add(Scale(right,-std::sin(rotation)),Scale(up,std::cos(rotation)));
+                const auto& vp=frameState_.viewProjectionMatrix.m;
+                const float clipW=center.x*vp[0][3]+center.y*vp[1][3]+center.z*vp[2][3]+vp[3][3];
+                const float pixelWorld=2*(std::max)(0.0f,clipW)/
+                    ((std::max)(0.001f,std::abs(frameState_.projMatrix.m[1][1]))*float(hudHeight));
+                const float referenceScale=float(hudHeight)/900.0f;
+                if(impact.pierceOpacity>0.001f) {
+                    const float extent=(std::max)(impact.pierceExtent,pixelWorld*(contact.destroyed?36.0f:25.0f)*referenceScale);
+                    const float width=(std::max)(size*(contact.destroyed?0.15f:0.10f),pixelWorld*(contact.destroyed?2.5f:1.7f)*referenceScale);
+                    const float alpha=impact.pierceOpacity*contactGain;
+                    glowQuad(center,Scale(rotatedRight,extent),Scale(rotatedUp,width*3.2f),38.0f,{0.10f,0.72f,1.8f,alpha*0.20f});
+                    glowQuad(center,Scale(rotatedRight,extent),Scale(rotatedUp,width),38.0f,{0.55f,1.65f,2.6f,alpha});
+                    for(int jet=0;jet<2;++jet) {
+                        const float angle=rotation+(jet==0?0.72f:3.62f);
+                        const auto direction=Add(Scale(right,std::cos(angle)),Scale(up,std::sin(angle)));
+                        const auto side=Add(Scale(up,std::cos(angle)),Scale(right,-std::sin(angle)));
+                        const float length=extent*(jet==0?0.65f:0.46f);
+                        glowQuad(Add(center,Scale(direction,length*0.45f)),Scale(direction,length*0.5f),Scale(side,width*0.65f),38.0f,
+                            {0.30f,1.2f,2.2f,impact.jetOpacity*contactGain*(contact.destroyed?0.62f:0.32f)});
+                    }
+                }
+                if(impact.burstOpacity>0.001f) {
+                    const float alpha=impact.burstOpacity*contactGain;
+                    glowQuad(center,Scale(rotatedRight,impact.burstRadius),Scale(rotatedUp,impact.burstRadius),20.0f,
+                        {0.22f,1.30f,2.40f,alpha},packedPhase(impact.burstPhase,variant));
+                    // Unequal lobes expand out of the same contact in 3D and
+                    // erode individually, giving the strike a bursting volume.
+                    for(int lobe=0;lobe<(contact.destroyed?0:3);++lobe) {
+                        const float angle=seed+float(lobe)*2.399963f;
+                        const auto outward=Add(Scale(right,std::cos(angle)),Scale(up,std::sin(angle)));
+                        const float spread=size*(contact.destroyed?2.5f:1.6f)*age;
+                        const auto origin=Add(center,Add(Scale(outward,spread),Scale(contact.normal,spread*(0.35f+0.2f*lobe))));
+                        const float radius=impact.burstRadius*(0.46f+0.07f*lobe);
+                        glowQuad(origin,Scale(rotatedRight,radius),Scale(rotatedUp,radius*(0.80f+0.10f*lobe)),20.0f,
+                            {0.16f,1.00f,2.0f,alpha*0.58f},packedPhase((std::min)(1.0f,impact.burstPhase+0.12f),variant+3+lobe));
+                    }
+                }
+                if(impact.haloOpacity>0.001f) {
+                    const float radius=impact.burstRadius*1.5f;
+                    glowQuad(center,Scale(right,radius),Scale(up,radius),16.0f,
+                        {0.12f,0.65f,1.4f,impact.haloOpacity*contactGain*0.28f});
+                }
+                if(impact.shockOpacity>0.001f) {
+                    const float extent=contact.destroyed?(std::max)(impact.shockExtent,pixelWorld*40.0f*referenceScale):impact.shockExtent;
+                    glowQuad(center,Scale(rotatedRight,extent),Scale(rotatedUp,extent*(contact.destroyed?0.72f:0.88f)),contact.destroyed?36.0f:22.0f,
+                        {0.36f,1.50f,2.30f,impact.shockOpacity*contactGain*(contact.destroyed?1.0f:0.85f)},packedPhase(impact.shockPhase,variant));
+                }
+                if(impact.ruptureOpacity>0.001f) {
+                    glowQuad(center,Scale(rotatedRight,impact.ruptureRadius),Scale(rotatedUp,impact.ruptureRadius*0.80f),30.0f,
+                        {1.0f,0.78f,0.55f,impact.ruptureOpacity*contactGain*0.75f},packedPhase(impact.rupturePhase,variant));
+                }
+                const auto& debris=lockDebris[contactIndex];
+                for(size_t i=0;i<debris.count && glowingDebris<160;++i,++glowingDebris) {
+                    const auto& chip=debris.fragments[i];
+                    const auto delta=Add(chip.position,Scale(chip.tail,-1));
+                    const auto middle=Scale(Add(chip.position,chip.tail),0.5f);
+                    const auto side=NormalizeOr(Cross(NormalizeOr(delta,up),NormalizeOr(Add(eye,Scale(middle,-1)),right)),right);
+                    const float radius=debrisRadius(chip);
+                    const float light=chip.opacity*chip.heat*contactGain;
+                    const Vector4 ember{2.4f,0.72f+0.90f*chip.heat,0.12f+0.35f*chip.heat,light};
+                    if(Dot(delta,delta)>0.0001f)
+                        glowQuad(middle,Scale(delta,0.5f),Scale(side,radius*0.90f),32.0f,{ember.x,ember.y,ember.z,light*0.72f});
+                    glowQuad(chip.position,Scale(right,radius*0.80f),Scale(up,radius*0.80f),24.0f,ember);
+                }
+                for(uint32_t spark=0;spark<(contact.destroyed?0u:impact.fragments);++spark) {
+                    const float t=age-(0.008f+0.003f*float(spark));
+                    const float life=(contact.destroyed?0.22f:0.14f)+0.018f*float(spark%4);
+                    if(t<0 || t>=life) continue;
+                    const float angle=seed+float(spark)*2.399963f;
+                    const auto radial=Add(Scale(right,std::cos(angle)),Scale(up,std::sin(angle)));
+                    const auto velocity=Scale(Add(Scale(radial,6.0f+1.1f*float(spark%3)),
+                        Scale(contact.normal,2.0f+0.7f*float(spark%2))),size*(contact.destroyed?1.25f:0.85f));
+                    const float drag=std::exp(-t*6.0f),travel=(1-drag)/6.0f;
+                    const auto head=Add(center,Add(Scale(velocity,travel),Vector3{0,-4.9f*t*t,0}));
+                    const auto direction=NormalizeOr(Add(Scale(velocity,drag),Vector3{0,-9.8f*t,0}),radial);
+                    const auto width=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(head,-1)),right)),up);
+                    const float fade=(1-t/life)*contactGain;
+                    const float halfLength=size*(0.050f+0.15f*(1-t/life));
+                    const Vector4 color=spark%3==0?Vector4{2.8f,1.8f,0.65f,fade}:Vector4{0.55f,1.8f,2.8f,fade};
+                    glowQuad(head,Scale(direction,halfLength),Scale(width,size*0.045f),24.0f,color);
+                    glowQuad(head,Scale(direction,halfLength*1.8f),Scale(width,size*0.095f),8.0f,
+                        {color.x,color.y,color.z,fade*0.18f});
+                }
+            }
             const auto simultaneous=std::count_if(wrecks.begin(),wrecks.end(),[](const auto& wreck) {
                 return wreck.twinShield && wreck.age<TwinShieldDroneKillFlash::CutLifetime;
             });
@@ -4507,8 +4769,11 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             for(const auto& wreck:wrecks) {
                 if(!wreck.twinShield || wreck.age>=TwinShieldDroneKillFlash::Lifetime) continue;
                 const auto flash=EvaluateTwinShieldDroneKillFlash(wreck.frozenPose,wreck.age);
+                const bool nativeLockImpact=std::any_of(contacts.begin(),contacts.end(),[&](const auto& c){return c.destroyed && c.actorId==wreck.actorId;});
                 for(size_t index=0;index<flash.count;++index) {
                     const auto& stroke=flash.strokes[index];
+                    if(railPrimaryKills_.ContainsActor(wreck.actorId) && stroke.kind!=TwinShieldKillStrokeKind::Arc) continue;
+                    if(nativeLockImpact && stroke.kind!=TwinShieldKillStrokeKind::Arc) continue;
                     const auto delta=Add(stroke.end,Scale(stroke.start,-1));
                     const float length=std::sqrt(Dot(delta,delta));
                     if(length<0.001f) continue;
@@ -4517,16 +4782,27 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     const auto width=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(center,-1)),right)),right);
                     const auto horizontal=Scale(direction,length*0.5f);
                     const float alpha=stroke.opacity*gain;
+                    // Preserve a small readable core at combat distance. The
+                    // geometry still lives in world space and obeys depth.
+                    const auto& vp=frameState_.viewProjectionMatrix.m;
+                    const float clipW=center.x*vp[0][3]+center.y*vp[1][3]+center.z*vp[2][3]+vp[3][3];
+                    const float pixelWorld=2*(std::max)(0.0f,clipW)/
+                        ((std::max)(0.001f,std::abs(frameState_.projMatrix.m[1][1]))*float(hudHeight));
                     if(stroke.kind==TwinShieldKillStrokeKind::Cut) {
-                        glowQuad(center,horizontal,Scale(width,stroke.width),18.0f,{0.32f,1.10f,1.65f,alpha});
+                        const float halfWidth=(std::max)(stroke.width,pixelWorld*2.5f);
+                        glowQuad(center,horizontal,Scale(width,halfWidth),18.0f,{0.32f,1.10f,1.65f,alpha});
                     } else if(stroke.kind==TwinShieldKillStrokeKind::Arc) {
-                        glowQuad(center,horizontal,Scale(width,stroke.width*2.8f),8.0f,{0.18f,0.72f,1.40f,alpha*0.30f});
-                        glowQuad(center,horizontal,Scale(width,stroke.width),8.0f,{1.30f,1.90f,2.20f,alpha});
+                        const float halfWidth=(std::max)(stroke.width,pixelWorld*1.1f);
+                        glowQuad(center,horizontal,Scale(width,halfWidth*2.8f),8.0f,{0.18f,0.72f,1.40f,alpha*0.30f});
+                        glowQuad(center,horizontal,Scale(width,halfWidth),8.0f,{1.30f,1.90f,2.20f,alpha});
                     } else {
                         glowQuad(center,horizontal,Scale(width,stroke.width),8.0f,{1.3f,1.8f,2.0f,alpha});
                     }
                 }
-                if(flash.count>0 && wreck.age<0.07f) {
+                const bool hasContact=std::any_of(contacts.begin(),contacts.end(),[&](const auto& c) {
+                    return c.destroyed && c.actorId==wreck.actorId;
+                });
+                if(flash.count>0 && wreck.age<0.07f && !hasContact && !railPrimaryKills_.ContainsActor(wreck.actorId)) {
                     const float size=(wreck.frozenPose.scale.x+wreck.frozenPose.scale.y+wreck.frozenPose.scale.z)/3;
                     const float fade=(1-wreck.age/0.07f)*gain;
                     glowQuad(flash.core,Scale(right,size*0.18f),Scale(up,size*0.18f),16.0f,{2.0f,2.5f,2.8f,fade});
@@ -4634,26 +4910,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             }
         }
         for(const auto& shot:shots) {
-            if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+12>kMaxAtlasVertices) break;
             const auto direction=Normalize(Add(shot.target,Scale(shot.origin,-1)));
-            const auto side=NormalizeOr(Cross(direction,Normalize(Add(eye,Scale(shot.position,-1)))),right);
             const float flown=std::sqrt(Dot(Add(shot.position,Scale(shot.origin,-1)),Add(shot.position,Scale(shot.origin,-1))));
-            const auto tail=Add(shot.position,Scale(direction,-(std::min)(flown,railTitleScreenVisible_?1.8f:2.8f)));
-            const auto width=Scale(side,railTitleScreenVisible_?0.26f:0.14f);
-            const auto a=Add(shot.position,width),b=Add(shot.position,Scale(width,-1));
-            const auto c=Add(tail,width),d=Add(tail,Scale(width,-1));
-            const Vector4 color{1.0f,0.055f,0.015f,titleAlpha};
-            const Vector4 trailColor{color.x,color.y,color.z,titleAlpha*0.72f};
-            dustVertex(a,{0,0},trailColor); dustVertex(b,{0,1},trailColor); dustVertex(c,{1,0},trailColor);
-            dustVertex(c,{1,0},trailColor); dustVertex(b,{0,1},trailColor); dustVertex(d,{1,1},trailColor);
-            // The 1.8 m circular head provides a clear aiming target even near
-            // the distant drone. Keep the shorter, dimmer trail directional.
-            const float headRadius=railTitleScreenVisible_ ? (shot.railStrike ? RailTitleScene::DepartureShotRadius : 0.90f) : 0.42f;
-            const auto h=Scale(right,headRadius),v=Scale(up,headRadius);
-            const auto ha=Add(shot.position,Add(Scale(h,-1),v)),hb=Add(shot.position,Add(h,v));
-            const auto hc=Add(shot.position,Add(Scale(h,-1),Scale(v,-1))),hd=Add(shot.position,Add(h,Scale(v,-1)));
-            dustVertex(ha,{4,0},color); dustVertex(hb,{5,0},color); dustVertex(hc,{4,1},color);
-            dustVertex(hc,{4,1},color); dustVertex(hb,{5,0},color); dustVertex(hd,{5,1},color);
+            const float radius=shotRadius(shot),travel=(std::min)(flown,radius*3.0f);
+            // Do not let a newly spawned tail extend forward beyond its head.
+            const uint32_t clock=uint32_t(std::fmod((std::max)(0.0f,shot.age)*0.55f,1.0f)*64);
+            if(travel>radius*0.55f)
+                orbTail(shot.position,Add(shot.position,Scale(direction,-travel)),direction,radius,titleAlpha,float(2*(clock+64*(shot.id%16))));
         }
         if(!railTitleScreenVisible_) for(const auto& laser:railLockVolley_.Lasers()) {
             const float opacity=laser.Opacity();
@@ -4668,11 +4931,15 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 const auto view=NormalizeOr(Add(eye,Scale(center,-1)),right);
                 const auto side=NormalizeOr(Cross(NormalizeOr(delta,up),view),right);
                 const float fade=opacity*float(i+1)/segments;
-                glowQuad(center,Scale(delta,0.52f),Scale(side,0.20f),14.0f,{0.10f,0.55f,1.50f,fade*0.40f});
-                glowQuad(center,Scale(delta,0.52f),Scale(side,0.055f),14.0f,{1.10f,1.70f,2.10f,fade});
+                const float arrival=TwinShieldDestructionSmooth(head,0.78f,1.0f)*std::pow(float(i+1)/segments,3.0f);
+                glowQuad(center,Scale(delta,0.52f),Scale(side,0.24f+0.08f*arrival),14.0f,{0.10f,0.65f,1.70f,fade*0.44f});
+                glowQuad(center,Scale(delta,0.52f),Scale(side,0.075f+0.035f*arrival),14.0f,{1.20f,1.85f,2.30f,fade});
             }
-            glowQuad(laser.position,Scale(right,0.30f),Scale(up,0.30f),16.0f,{0.30f,0.85f,1.80f,opacity*0.65f});
-            glowQuad(laser.position,Scale(right,0.11f),Scale(up,0.11f),16.0f,{1.60f,2.10f,2.40f,opacity});
+            if(!laser.resolved) {
+                const float radius=0.36f+0.16f*TwinShieldDestructionSmooth(head,0.78f,1.0f);
+                glowQuad(laser.position,Scale(right,radius),Scale(up,radius),16.0f,{0.30f,0.95f,2.0f,opacity*0.70f});
+                glowQuad(laser.position,Scale(right,radius*0.32f),Scale(up,radius*0.32f),16.0f,{1.80f,2.30f,2.70f,opacity});
+            }
         }
         railTitleTracerVertexCount_=railTitleDustVertexCount_-dustCount;
         railTitleDustVertexCount_=dustCount;
@@ -4684,9 +4951,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
 void AppRunLoop::RegisterRailLockOnHudPass(
     ID3D12GraphicsCommandList* commandList,
     const std::string& targetResourceName) {
-    if (targetResourceName.empty() ||
-        !imguiLayer_.EditorViewportOverlay().LayerVisible(
-            editor::EditorViewportOverlayLayerId::GameplayHud)) {
+    if (targetResourceName.empty()) {
         return;
     }
 
@@ -5663,10 +5928,11 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             "Production Projectile Readability Guard",
             &projectileVisualSettings.productionPrimitivesEnabled);
         ImGui::Text(
-            "Runtime=%u presentation=%zu submitted=%u effects=%u fallback=%u unavailable=%u culled=%u budget=%u",
+            "Runtime=%u presentation=%zu submitted=%u sprites=%u effects=%u fallback=%u unavailable=%u culled=%u budget=%u",
             railShooterSpawnRuntime_.EnemyProjectiles().Frame().activeProjectiles,
             projectilePresentationFrame.projectiles.size(),
             projectileVisualFrame.productionSubmittedProjectiles,
+            projectileVisualFrame.spriteBackedProjectiles,
             projectileVisualFrame.effectBackedProjectiles,
             projectileVisualFrame.fallbackProjectiles,
             projectileVisualFrame.unavailableProjectiles,
@@ -6804,7 +7070,7 @@ void AppRunLoop::EnterRailShooterScene() {
     }
     railEnemyAttackTelegraphSystem_.Reset();
     StopRailEnemyAttackFeedback();
-    railShooterLockOnSystem_.Reset(); railLockVolley_.Reset();
+    railShooterLockOnSystem_.Reset(); railLockVolley_.Reset(); railPulseShots_.Reset(); railPrimaryKills_.Reset();
     railShooterSpeedDirector_.Reset();
     railShooterRideDirector_.Reset();
     railShooterTrackFeedbackDirector_.Reset();
@@ -6941,7 +7207,7 @@ void AppRunLoop::ReturnToDemoTitle() {
     if(!railTransitionDemo_.NeedsTitleSwap()) return;
     StopRailEnemyAttackFeedback();
     ClearShowcaseEffects();
-    railTitleDustIds_.clear(); railNormalShotLines_.clear();
+    railTitleDustIds_.clear(); railPulseShots_.Reset(); railPrimaryKills_.Reset();
     runtimeState_.terrain.previewDistance=0.0f;
     railShooterInitialized_=false;
     ApplyRailShooterCourse();
@@ -6975,7 +7241,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         const bool focused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
         demoPresentationDt=focused ? dt : 0.0f;
         railTransitionDemo_.Update(focused ? dt : 0.0f,
-            !railTitleScreenVisible_ && !railTitleGameplayEntry_.Frame().blockingGameplay);
+            !railTitleScreenVisible_ && !railTitleGameplayEntry_.Frame().active);
         if(railTransitionDemo_.NeedsTitleSwap()) ReturnToDemoTitle();
     }
     if(railTransitionDemoEnabled_ && !railTitleScreenVisible_ &&
@@ -7012,12 +7278,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if (railTitleScreenVisible_ && railTitleScene_.ReadyForGameplay()) {
         railTitleScreenVisible_ = false;
         railTitleGameplayEntry_.Begin();
-        railReadyDroneActorId_ = 0;
+        railReadyDroneActorIds_ = {};
         railReadyDroneSalvo_.Reset();
-        if (railShooterSpawnRuntime_.SpawnEnemyActor(BuildRailReadyDrone(railShooterDistance_))) {
-            railReadyDroneActorId_ = railShooterSpawnRuntime_.Enemies().back().actorId;
-            const auto flight=EvaluateRailReadyDroneFlight(0.0f);
-            (void)railShooterSpawnRuntime_.SetEnemyStartupFlight(railReadyDroneActorId_,
+        for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+            if(!railShooterSpawnRuntime_.SpawnEnemyActor(BuildRailReadyDrone(railShooterDistance_,i))) continue;
+            railReadyDroneActorIds_[i] = railShooterSpawnRuntime_.Enemies().back().actorId;
+            const auto flight=EvaluateRailReadyDroneFlight(0.0f,i);
+            (void)railShooterSpawnRuntime_.SetEnemyStartupFlight(railReadyDroneActorIds_[i],
                 railShooterDistance_,flight.forward,flight.lateral,flight.vertical,flight.rotation);
         }
         if(railTransitionDemoEnabled_) railTransitionDemo_.BeginGameplay();
@@ -7192,6 +7459,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance ||
         coursePreviewOwnsRail;
     const bool entryFocused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
+    const float previousEntryElapsed=railTitleGameplayEntry_.Elapsed();
     railTitleGameplayEntry_.Update(!titleHandoffThisFrame && !coursePreviewFrozen && entryFocused?
         realGameplayDeltaTime:0.0f);
     const auto& entryFrame=railTitleGameplayEntry_.Frame();
@@ -7201,7 +7469,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
         (void)audio_.Play(railReadySound_,0.24f);
         (void)audio_.Play(railDroneFlybySound_,0.42f);
     }
+    if(railReadyDroneActorIds_[1]!=0 && previousEntryElapsed<RailTitleGameplayEntry::WingmanReadyBegin &&
+        railTitleGameplayEntry_.Elapsed()>=RailTitleGameplayEntry::WingmanReadyBegin)
+        (void)audio_.Play(railDroneWingmanFlybySound_,0.32f);
     audio_.SetPaused(railDroneFlybySound_,!entryFocused || coursePreviewFrozen);
+    audio_.SetPaused(railDroneWingmanFlybySound_,!entryFocused || coursePreviewFrozen);
     if(entryFrame.goStarted) (void)audio_.Play(railGoSound_,0.34f);
     if(entryFrame.reticleStarted) (void)audio_.Play(railTitleReticleBootSound_,0.16f);
     if(entryFrame.gaugesStarted) (void)audio_.Play(railTitleGaugesBootSound_,0.14f);
@@ -7254,17 +7526,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
             }
         }
     }
-    for (RailNormalShotLine& line : railNormalShotLines_) {
-        line.age += gameplayDeltaTime;
-    }
-    railNormalShotLines_.erase(
-        std::remove_if(
-            railNormalShotLines_.begin(),
-            railNormalShotLines_.end(),
-            [](const RailNormalShotLine& line) {
-                return line.age >= line.lifetime;
-            }),
-        railNormalShotLines_.end());
+    railPulseShots_.Update(gameplayDeltaTime);
+    railPrimaryKills_.Update(gameplayDeltaTime);
 
     if (!railShooterInitialized_) {
         EnterRailShooterScene();
@@ -7433,7 +7696,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         vehicleFrame.triggeredEvents,!titleEntryBlocked && gameplayDeltaTime>0.0f);
     railShooterDistance_ = vehicleFrame.state.distance;
 
-    if(railReadyDroneActorId_!=0 && entryFrame.active) {
+    if(railReadyDroneActorIds_[0]!=0 && entryFrame.active) {
         railReadyDroneSalvo_.Update(railTitleGameplayEntry_.Elapsed(),railShooterDistance_,railPath_,1.65f,
             [&](Vector3 origin,float launchDistance,uint32_t index,Vector3& contact,Vector3& normal) {
                 RailWorldRaycastInput terrain;
@@ -7442,7 +7705,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 terrain.terrainEdits=&railShooterCourse_.terrainEditLayer;
                 terrain.terrainPreview=&runtimeState_.terrain.previewEditLayer;
                 terrain.terrainCollision=&terrainCollisionWorld_;
-                return RailReadyDroneSalvo::TraceLeftWall(terrain,origin,launchDistance,index,contact,normal);
+                return RailReadyDroneSalvo::TraceVehicleNearMiss(terrain,origin,launchDistance,index,contact,normal);
             });
         for(const auto& cue:railReadyDroneSalvo_.Cues()) {
             if(cue.kind==RailTitleAttackCueKind::Muzzle)
@@ -7452,12 +7715,16 @@ void AppRunLoop::UpdateRailShooterFrame() {
         }
     }
 
-    if(railReadyDroneActorId_!=0 && (titleStartupBlocked || entryFrame.goStarted)) {
-        const auto flight=railReadyDroneSalvo_.Flight(railTitleGameplayEntry_.Elapsed(),
-            railShooterDistance_,railPath_,1.65f);
-        (void)railShooterSpawnRuntime_.SetEnemyStartupFlight(railReadyDroneActorId_,
-            railShooterDistance_,flight.forward,flight.lateral,flight.vertical,
-            flight.rotation,entryFrame.goStarted,vehicleFrame.state.speed);
+    if(titleStartupBlocked || entryFrame.goStarted) {
+        for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+            if(railReadyDroneActorIds_[i]==0) continue;
+            const auto flight=i==0 ? railReadyDroneSalvo_.Flight(railTitleGameplayEntry_.Elapsed(),
+                railShooterDistance_,railPath_,1.65f) : EvaluateRailReadyDroneFlight(
+                    railTitleGameplayEntry_.Elapsed(),railPath_,railShooterDistance_,RailTitleScene::Speed,i);
+            (void)railShooterSpawnRuntime_.SetEnemyStartupFlight(railReadyDroneActorIds_[i],
+                railShooterDistance_,flight.forward,flight.lateral,flight.vertical,
+                flight.rotation,entryFrame.goStarted,vehicleFrame.state.speed);
+        }
     }
 
     RailVehicleMountedEvasionInput mountedEvasionInput{};
@@ -7934,14 +8201,16 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.distance = railShooterDistance_;
     cameraInput.titleHandoffWeight = entryFrame.cameraHandoffWeight;
     cameraInput.titleHandoffRig = RailTitleScene::DepartureCameraRig();
-    if(titleStartupBlocked && railReadyDroneActorId_!=0) {
+    if(entryFrame.active && railReadyDroneActorIds_[0]!=0) {
         const auto shot=EvaluateRailReadyCameraShot(railTitleGameplayEntry_.Elapsed());
         cameraInput.startupCameraWeight=shot.weight;
         cameraInput.startupCameraFocusBlend=shot.focusBlend;
         cameraInput.startupCameraFovY=shot.fovY;
         cameraInput.startupCameraEyeOffset=shot.eyeOffset;
         cameraInput.startupCameraDroneOffset=shot.droneOffset;
-        cameraInput.startupCameraDroneId=railReadyDroneActorId_;
+        cameraInput.startupCameraDroneId=railReadyDroneActorIds_[0];
+        cameraInput.startupCameraWingmanId=railReadyDroneActorIds_[1];
+        cameraInput.startupCameraWingmanOffset=shot.wingmanOffset;
     }
     cameraInput.deltaTime = coursePreviewAdvancing
         ? kFallbackGameplayDeltaTime : railTravelDeltaTime;
@@ -8589,54 +8858,35 @@ void AppRunLoop::UpdateRailShooterFrame() {
         encounterReadabilityInput);
     railInputRouteDebug_.normalShotsFired = collisionStats.playerShotsFired;
     railInputRouteDebug_.normalShotHits = collisionStats.playerShotWorldHits;
-    if (collisionStats.playerShotsFired > 0 &&
-        railShooterCollisionSystem_.LastShotVisible() &&
-        railPath_.Length() > 0.0f) {
-        const CourseCollisionWeaponState& visualWeapon = railShooterCollisionSystem_.Weapon();
-        const Vector3 muzzleWorld = combatMountFrame.valid
-            ? Add(
-                combatMountFrame.weaponWorldPosition,
-                Scale(combatMountFrame.forward, visualWeapon.muzzleForwardOffset))
-            : RailLocalPoint(
-                railPath_,
-                railShooterDistance_,
-                collisionInput.player.lateralOffset,
-                collisionInput.player.verticalOffset,
-                visualWeapon.muzzleForwardOffset);
-        const Vector3 hitWorld = railShooterCollisionSystem_.LastShotHasWorldPoint()
-            ? railShooterCollisionSystem_.LastShotWorldPoint()
-            : RailLocalPoint(
-                railPath_,
-                railShooterCollisionSystem_.LastShotDistance(),
-                railShooterCollisionSystem_.LastShotLateralOffset(),
-                railShooterCollisionSystem_.LastShotVerticalOffset(),
-                0.0f);
-        RailOverlayProjectedPoint muzzleScreen =
-            ProjectRailOverlayPoint(muzzleWorld, frameState_.viewProjectionMatrix, metrics.width, metrics.height);
-        RailOverlayProjectedPoint hitScreen =
-            ProjectRailOverlayPoint(hitWorld, frameState_.viewProjectionMatrix, metrics.width, metrics.height);
-        if (!muzzleScreen.inDepth) {
-            muzzleScreen.screen = {
-                static_cast<float>(metrics.width) * 0.5f,
-                static_cast<float>(metrics.height) * 0.78f};
-            muzzleScreen.inDepth = true;
-        }
-        if (hitScreen.inDepth) {
-            RailNormalShotLine line{};
-            line.start = muzzleScreen.screen;
-            line.end = hitScreen.screen;
-            line.lifetime = 0.070f;
-            line.thickness = railInputRouteDebug_.normalShotHits > 0 ? 2.4f : 1.5f;
-            line.hit = railInputRouteDebug_.normalShotHits > 0;
-            railNormalShotLines_.push_back(line);
-            constexpr size_t kMaxNormalShotLines = 18;
-            if (railNormalShotLines_.size() > kMaxNormalShotLines) {
-                railNormalShotLines_.erase(
-                    railNormalShotLines_.begin(),
-                    railNormalShotLines_.begin() + static_cast<std::ptrdiff_t>(
-                        railNormalShotLines_.size() - kMaxNormalShotLines));
-            }
-        }
+    const auto& pulseTraces = railShooterCollisionSystem_.PlayerShotTraces();
+    if (!pulseTraces.empty() && railPath_.Length() > 0.0f) {
+        const auto& visualWeapon = railShooterCollisionSystem_.Weapon();
+        const Vector3 muzzle = combatMountFrame.valid
+            ? Add(combatMountFrame.weaponWorldPosition, Scale(combatMountFrame.forward, visualWeapon.muzzleForwardOffset))
+            : RailLocalPoint(railPath_, railShooterDistance_, collisionInput.player.lateralOffset,
+                collisionInput.player.verticalOffset, visualWeapon.muzzleForwardOffset);
+        for (const auto& trace : pulseTraces)
+            railPulseShots_.Enqueue(trace.shotId, muzzle, trace.end, trace.presentationAge);
+        const float pitch = 1.0f + 0.018f * (float(pulseTraces.back().shotId % 3) - 1.0f);
+        (void)audio_.PlaySpatial(railPulseFireSound_, 0.18f, reticleNormX * 0.20f, pitch);
+    }
+    // Consume accepted primary kills directly, independently of tracer emission.
+    const auto& primaryWrecks=railEnemyCombatPresentationBridge_.Frame().destructionBursts;
+    for(const auto& feedback:railShooterCollisionSystem_.WeaponFeedback().RecentEvents()) {
+        if(feedback.sequence<=railPrimaryKills_.LastObservedSequence()) continue;
+        const auto wreck=std::find_if(primaryWrecks.begin(),primaryWrecks.end(),
+            [&](const auto& burst){return burst.actorId==feedback.targetActorId;});
+        const TwinShieldDronePose* pose= wreck!=primaryWrecks.end() && wreck->twinShield ? &wreck->frozenPose : nullptr;
+        const float size=pose ? (pose->scale.x+pose->scale.y+pose->scale.z)/3 :
+            wreck!=primaryWrecks.end() ? wreck->radius*0.6f : 1.0f;
+        if(!railPrimaryKills_.ObserveFeedback(feedback,size,pose)) continue;
+        if(railPrimaryKills_.NewCount()<=2)
+            (void)audio_.PlaySpatial(railPrimaryKillSound_,0.24f/std::sqrt(float(railPrimaryKills_.NewCount())),
+                reticleNormX*0.4f,1.0f+0.025f*float(feedback.shotId%3));
+        std::ofstream primaryLog=app::OpenRotatingLog("logs/rail_primary_kills.log");
+        if(primaryLog) primaryLog<<"shot="<<feedback.shotId<<" actor="<<feedback.targetActorId
+            <<" source=primary flashAge=0 pose="<<(pose?1:0)
+            <<" firstShieldDetach="<<(pose?TwinShieldDroneDetachAge(*pose,TwinShieldDestructionSide(*pose)):-1.0f)<<'\n';
     }
     railShooterCombatFeelSystem_.ApplyCollisionStats(collisionStats);
     railShooterCombatFeelSystem_.ApplyPlayerDamageResults(
@@ -8774,7 +9024,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 railShooterRideDirector_.Reset();
                 railShooterTrackFeedbackDirector_.Reset();
                 railShooterRideMotionEnvelope_.Reset();
-                railNormalShotLines_.clear();
+                railPulseShots_.Reset(); railPrimaryKills_.Reset();
                 OutputDebugStringA(("[GameSessionRetry] " + retry.message + "\n").c_str());
             } else {
                 OutputDebugStringA(("[GameSessionRetry] " + retryError + "\n").c_str());
@@ -8874,7 +9124,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         const WeaponFeedbackEvent& feedback =
             railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
         railShooterCameraDirector_.AddFeedbackImpulse(
-            feedback.cameraShake,
+            railPrimaryKills_.NewCount()>0 ? (std::max)(feedback.cameraShake,0.62f) : feedback.cameraShake,
             -0.004f * feedback.intensity,
             0.002f * feedback.intensity);
     }
@@ -10378,6 +10628,7 @@ void AppRunLoop::DispatchEnemyProjectilePresentation(
     vfxRenderInput.viewportHeightPixels = projectileMetrics.height;
     vfxRenderInput.gameplayActive = gameplayActive || previewActive;
     vfxRenderInput.settings = railEnemyProjectileVfxRendererSettings_;
+    vfxRenderInput.settings.orbSpritesEnabled = appPipelines_.GetTitleDustPSO()!=nullptr && appPipelines_.GetTitleTracerPSO()!=nullptr;
     vfxRenderInput.readabilitySettings =
         railEnemyProjectileReadabilitySettings_;
     railEnemyProjectileVfxRenderer_.Update(vfxRenderInput);
@@ -10679,12 +10930,17 @@ void AppRunLoop::DispatchPlayerDamagePresentation() {
 
 void AppRunLoop::StopGameSessionPresentation() {
     railLockVolley_.Reset();
+    railPulseShots_.Reset();
+    railPrimaryKills_.Reset();
+    audio_.Stop(railPulseFireSound_);
+    audio_.Stop(railPrimaryKillSound_);
     audio_.Stop(railLockAcquireSound_); audio_.Stop(railLockFullSound_); audio_.Stop(railLockReleaseSound_);
     railTitleGameplayEntry_.Reset();
-    railReadyDroneActorId_ = 0;
+    railReadyDroneActorIds_ = {};
     railReadyDroneSalvo_.Reset();
     audio_.Stop(railReadySound_); audio_.Stop(railGoSound_);
     audio_.Stop(railDroneFlybySound_);
+    audio_.Stop(railDroneWingmanFlybySound_);
     audio_.Stop(railTitleAmbience_);audio_.Stop(railTitleTunnelAmbience_);
     railTitleAmbiencePlaying_=railTitleTunnelAmbiencePlaying_=false;
     railTitleAudioGain_=0.0f;

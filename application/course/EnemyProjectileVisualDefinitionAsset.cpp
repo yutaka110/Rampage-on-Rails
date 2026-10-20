@@ -123,13 +123,11 @@ EnemyProjectileVisualDefinitionAsset::CommercialDefault(
     result.projectileDefinitionId = "*";
     switch (trajectory) {
     case EnemyProjectileTrajectory::Direct:
-        result.style = EnemyProjectileVisualStyle::Bolt;
+        result.style = EnemyProjectileVisualStyle::Orb;
         break;
     case EnemyProjectileTrajectory::Predictive:
         result.id = "fallback_predictive";
-        result.style = EnemyProjectileVisualStyle::Bolt;
-        result.haloColor = {1.0f, 0.72f, 0.08f, 0.90f};
-        result.trailColor = {1.0f, 0.48f, 0.04f, 0.66f};
+        result.style = EnemyProjectileVisualStyle::Orb;
         break;
     case EnemyProjectileTrajectory::Homing:
         result.id = "fallback_homing";
@@ -147,6 +145,15 @@ EnemyProjectileVisualDefinitionAsset::CommercialDefault(
         result.coreRadiusScale = 1.9f;
         result.maximumWorldRadius = 5.5f;
         break;
+    }
+    if(result.style==EnemyProjectileVisualStyle::Orb) {
+        result.haloColor={1.0f,0.20f,0.025f,0.40f};
+        result.trailColor={1.0f,0.32f,0.045f,0.55f};
+        result.haloRadiusScale=1.35f;
+        result.threatRadiusScale=1.0f;
+        result.pulseAmplitude=0;
+        result.trailLengthInRadii=3.0f;
+        result.trailWidthScale=0.28f;
     }
     return result;
 }

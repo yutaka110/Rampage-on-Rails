@@ -1,6 +1,8 @@
 ﻿#pragma once
 #include "course/RailTitleScene.h"
 #include "course/RailLockVolley.h"
+#include "course/RailPulseShotPresentation.h"
+#include "course/RailPrimaryKillPresentation.h"
 #include "SunfallAtmosphere.h"
 #include "CaveLighting.h"
 #include "terrain/TerrainCollisionWorld.h"
@@ -514,20 +516,16 @@ private:
     uint32_t railSessionVibrationController_ = UINT32_MAX;
     RailLockOnSystem railShooterLockOnSystem_;
     RailLockVolley railLockVolley_;
+    RailPulseShotPresentation railPulseShots_;
+    RailPrimaryKillPresentation railPrimaryKills_;
+    audio::SoundHandle railPulseFireSound_{};
+    audio::SoundHandle railPrimaryKillSound_{};
     audio::SoundHandle railLockAcquireSound_{}, railLockFullSound_{}, railLockReleaseSound_{};
     RailAimAssistPresetRegistry railAimAssistPresetRegistry_{};
     struct RailHudAtlasVertex {
         Vector4 position;
         Vector2 texcoord;
         Vector4 color;
-    };
-    struct RailNormalShotLine {
-        Vector2 start{};
-        Vector2 end{};
-        float age = 0.0f;
-        float lifetime = 0.085f;
-        float thickness = 2.0f;
-        bool hit = false;
     };
     Microsoft::WRL::ComPtr<ID3D12Resource> railLockOnHudAtlasTexture_;
     Microsoft::WRL::ComPtr<ID3D12Resource> railLockOnHudAtlasVertexResource_;
@@ -556,7 +554,6 @@ private:
     std::vector<SubmissionHudGlyph> submissionStartCueGlyphs_;
     bool submissionHudFontReady_ = false;
     bool submissionHudManuallyHidden_ = false;
-    std::vector<RailNormalShotLine> railNormalShotLines_;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;
     RailPath railPath_;
@@ -816,7 +813,7 @@ private:
     bool releaseShowcaseInitialized_ = false;
     bool railTitleScreenVisible_ = false;
     RailTitleGameplayEntry railTitleGameplayEntry_{};
-    uint32_t railReadyDroneActorId_ = 0;
+    std::array<uint32_t,kRailReadyDroneCount> railReadyDroneActorIds_{};
     RailReadyDroneSalvo railReadyDroneSalvo_{};
     RailTransitionDemo railTransitionDemo_{};
     bool railTransitionDemoEnabled_ = false;
@@ -839,6 +836,7 @@ private:
     audio::SoundHandle railTitleGaugesBootSound_{};
     audio::SoundHandle railReadySound_{}, railGoSound_{};
     audio::SoundHandle railDroneFlybySound_{};
+    audio::SoundHandle railDroneWingmanFlybySound_{};
     bool railTitleAmbiencePlaying_ = false;
     bool railTitleTunnelAmbiencePlaying_ = false;
     float railTitleAudioGain_ = 0.0f;

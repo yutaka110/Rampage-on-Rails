@@ -191,6 +191,8 @@ struct RailCameraDirectorFrameInput {
     Vector3 startupCameraEyeOffset{};
     Vector3 startupCameraDroneOffset{};
     uint32_t startupCameraDroneId = 0;
+    uint32_t startupCameraWingmanId = 0;
+    Vector3 startupCameraWingmanOffset{};
     // Conservative rendered vehicle bounds, including bank and suspension.
     bool vehicleFramingActive = false;
     std::array<Vector3, 8> vehicleBoundsCorners{};

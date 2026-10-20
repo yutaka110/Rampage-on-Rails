@@ -56,6 +56,7 @@ struct TwinShieldDronePose final {
     float destructionHitSide = 0.0f; // Local -X/+X; zero uses the seeded centre-hit fallback.
     Vector3 flightVelocity{};
     bool hasFlightVelocity = false;
+    bool primaryDestruction = false; // Short, forceful break for a lethal primary shot.
 };
 
 inline Matrix4x4 BuildTwinShieldDroneWorldMatrix(const TwinShieldDronePose& pose) {
@@ -98,10 +99,24 @@ inline void ConfigureTwinShieldDroneDestructionHit(TwinShieldDronePose& pose,
 }
 
 inline float TwinShieldDroneDetachAge(const TwinShieldDronePose& pose,float side) {
-    const float first=0.24f+0.018f*float(pose.destructionSeed%3u);
+    const float first=pose.primaryDestruction ? 0.055f+0.006f*float(pose.destructionSeed%3u)
+        : 0.24f+0.018f*float(pose.destructionSeed%3u);
     // Keep the surviving wing on the rolling aircraft until the impact flash.
     return side==TwinShieldDestructionSide(pose) ? first :
         (pose.destructionImpactAge>=0 ? pose.destructionImpactAge+0.025f : 1.28f);
+}
+
+inline float TwinShieldDroneDestructionMotionAge(const TwinShieldDronePose& pose,float age) {
+    // Only the struck aircraft holds for 20 ms after the initial recoil.
+    // Input, primary fire cadence, enemy projectiles and rail travel keep ticking.
+    if(!pose.primaryDestruction || age<=0.025f) return age;
+    return age<0.045f ? 0.025f : age-0.020f;
+}
+
+inline float TwinShieldDroneDestructionKick(const TwinShieldDronePose& pose,float age) {
+    return pose.primaryDestruction ? TwinShieldDestructionSmooth(age,0,0.020f)*
+        (1-TwinShieldDestructionSmooth(age,0.055f,0.13f)) :
+        (1-std::exp(-age*38.0f))*std::exp(-age*11.0f);
 }
 
 struct TwinShieldDroneDestructionFlight final {
@@ -113,29 +128,33 @@ inline TwinShieldDroneDestructionFlight EvaluateTwinShieldDroneDestructionFlight
         const TwinShieldDronePose& pose,float age) {
     age=std::isfinite(age)?(std::max)(0.0f,age):0.0f;
     if(pose.destructionImpactAge>=0) age=(std::min)(age,pose.destructionImpactAge);
+    const float motionRate=pose.primaryDestruction && age>=0.025f && age<0.045f ? 0.0f : 1.0f;
+    age=TwinShieldDroneDestructionMotionAge(pose,age);
     const auto anchor=BuildTwinShieldDroneWorldMatrix(pose);
     Vector3 right{anchor.m[0][0],0,anchor.m[0][2]};
     const float horizontal=std::sqrt(right.x*right.x+right.z*right.z);
     right=horizontal>0.001f?Vector3{right.x/horizontal,0,right.z/horizontal}:Vector3{1,0,0};
     const float side=TwinShieldDestructionSide(pose);
-    const float loss=(std::max)(0.0f,age-0.14f),fall=(std::max)(0.0f,age-0.20f);
-    const float kick=(1-std::exp(-age*38.0f))*std::exp(-age*11.0f);
+    const float loss=(std::max)(0.0f,age-(pose.primaryDestruction?0.06f:0.14f));
+    const float fall=(std::max)(0.0f,age-(pose.primaryDestruction?0.095f:0.20f));
+    const float kick=TwinShieldDroneDestructionKick(pose,age);
     const float vibration=0.035f*std::sin(age*63.0f)*std::exp(-age*14.0f);
-    const float imbalance=TwinShieldDestructionSmooth(age,0.14f,0.42f);
+    const float imbalance=pose.primaryDestruction ? TwinShieldDestructionSmooth(age,0.055f,0.18f) :
+        TwinShieldDestructionSmooth(age,0.14f,0.42f);
     TwinShieldDroneDestructionFlight result;
-    result.roll=-side*(0.48f*kick+vibration+0.25f*imbalance+1.50f*loss+1.35f*loss*loss);
+    result.roll=-side*((pose.primaryDestruction?0.60f:0.48f)*kick+vibration+0.25f*imbalance+1.50f*loss+1.35f*loss*loss);
     const float drag=std::exp(-age*0.60f),travel=0.35f*age+0.65f*(1-drag)/0.60f;
-    const float recoil=(1-std::exp(-age*5.0f))/5.0f;
+    const float recoil=(1-std::exp(-age*5.0f))/5.0f*(pose.primaryDestruction?2.8f:1.0f);
     const float wave=std::sin(loss*2.8f),waveRate=2.8f*std::cos(loss*2.8f);
     const float slip=side*loss*loss*(1.20f+0.25f*wave);
     const float slipRate=side*(2*loss*(1.20f+0.25f*wave)+0.25f*loss*loss*waveRate);
     result.position={pose.position.x+pose.destructionDrift.x*travel+pose.destructionImpulse.x*recoil+right.x*slip,
         pose.position.y+pose.destructionDrift.y*travel+pose.destructionImpulse.y*recoil-4.9f*fall*fall,
         pose.position.z+pose.destructionDrift.z*travel+pose.destructionImpulse.z*recoil+right.z*slip};
-    const float inertia=0.35f+0.65f*drag,impulse=std::exp(-age*5.0f);
-    result.velocity={pose.destructionDrift.x*inertia+pose.destructionImpulse.x*impulse+right.x*slipRate,
-        pose.destructionDrift.y*inertia+pose.destructionImpulse.y*impulse-9.8f*fall,
-        pose.destructionDrift.z*inertia+pose.destructionImpulse.z*impulse+right.z*slipRate};
+    const float inertia=0.35f+0.65f*drag,impulse=std::exp(-age*5.0f)*(pose.primaryDestruction?2.8f:1.0f);
+    result.velocity={(pose.destructionDrift.x*inertia+pose.destructionImpulse.x*impulse+right.x*slipRate)*motionRate,
+        (pose.destructionDrift.y*inertia+pose.destructionImpulse.y*impulse-9.8f*fall)*motionRate,
+        (pose.destructionDrift.z*inertia+pose.destructionImpulse.z*impulse+right.z*slipRate)*motionRate};
     return result;
 }
 
@@ -145,7 +164,8 @@ inline Matrix4x4 EvaluateTwinShieldDroneDestructionBody(const TwinShieldDronePos
     age=std::isfinite(age)?(std::max)(0.0f,age):0.0f;
     if(pose.destructionImpactAge>=0) age=(std::min)(age,pose.destructionImpactAge);
     const auto flight=EvaluateTwinShieldDroneDestructionFlight(pose,age);
-    const float kick=(1-std::exp(-age*38.0f))*std::exp(-age*11.0f);
+    age=TwinShieldDroneDestructionMotionAge(pose,age);
+    const float kick=TwinShieldDroneDestructionKick(pose,age);
     const float horizontal=std::sqrt(flight.velocity.x*flight.velocity.x+flight.velocity.z*flight.velocity.z);
     const float heading=horizontal>0.05f?std::atan2(-flight.velocity.x,-flight.velocity.z):pose.rotation.y;
     const float driftLength=std::sqrt(pose.destructionDrift.x*pose.destructionDrift.x+pose.destructionDrift.z*pose.destructionDrift.z);
@@ -153,9 +173,10 @@ inline Matrix4x4 EvaluateTwinShieldDroneDestructionBody(const TwinShieldDronePos
     float initialTurn=std::remainder(baseHeading-pose.rotation.y,6.28318530718f);
     if(std::abs(initialTurn)>3.0f) initialTurn=TwinShieldDestructionSide(pose)*std::abs(initialTurn);
     const float yawChange=initialTurn+std::remainder(heading-pose.rotation.y-initialTurn,6.28318530718f);
-    const float align=TwinShieldDestructionSmooth(age,0.16f,0.76f);
+    const float align=pose.primaryDestruction ? TwinShieldDestructionSmooth(age,0.09f,0.45f) :
+        TwinShieldDestructionSmooth(age,0.16f,0.76f);
     const float pitch=std::atan2(flight.velocity.y,(std::max)(0.05f,horizontal));
-    const Vector3 orientation{pose.rotation.x+(pitch-pose.rotation.x)*align+0.18f*kick*(1-align),
+    const Vector3 orientation{pose.rotation.x+(pitch-pose.rotation.x)*align+(pose.primaryDestruction?0.32f:0.18f)*kick*(1-align),
         pose.rotation.y+yawChange*align,pose.rotation.z};
     return Multiply(MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,pose.flightBank+flight.roll},Vector3{}),
         MakeAffineMatrix(pose.scale,orientation,flight.position));
@@ -213,9 +234,10 @@ inline TwinShieldDroneBreakupFrame EvaluateTwinShieldDroneBreakup(const TwinShie
     const float age=std::isfinite(pose.destructionAge) ? (std::max)(0.0f,pose.destructionAge) : 0.0f;
     const auto smooth=TwinShieldDestructionSmooth;
     const float pulse=smooth(age,0.0f,0.055f)*(1-smooth(age,0.10f,0.30f));
-    result.coreGain=1.8f+pose.charge*3.2f+16.0f*pulse;
-    result.coreOpacity=1-smooth(age,0.20f,0.44f);
-    result.hullFlash=0.30f*pulse;
+    result.coreGain=1.8f+pose.charge*3.2f+(pose.primaryDestruction?4.0f:6.0f)*pulse;
+    result.coreOpacity=pose.primaryDestruction ? 1-smooth(age,0.08f,0.22f) : 1-smooth(age,0.11f,0.26f);
+    // Keep the metal faces readable beneath the localized white contact/cut.
+    result.hullFlash=(pose.primaryDestruction?0.03f:0.04f)*pulse;
     result.opacity=pose.destructionImpactAge>=0
         ? 1-smooth(age,pose.destructionImpactAge,pose.destructionImpactAge+0.18f)
         : 1-smooth(age,1.02f,TwinShieldDroneBreakupFrame::Lifetime);
@@ -234,10 +256,11 @@ inline TwinShieldDroneBreakupFrame EvaluateTwinShieldDroneBreakup(const TwinShie
         const auto after=Multiply(local,EvaluateTwinShieldDroneDestructionBody(pose,detach+h));
         const auto sideAxis=Normalize(Vector3{releaseBody.m[0][0],releaseBody.m[0][1],releaseBody.m[0][2]});
         const bool first=side==TwinShieldDestructionSide(pose);
-        const float spin=dt*(first?1.0f:0.70f)+dt*dt*(first?0.38f:0.22f);
+        const float spin=pose.primaryDestruction && first ? dt*5.8f+dt*dt*2.5f :
+            dt*(first?1.0f:0.70f)+dt*dt*(first?0.38f:0.22f);
         auto world=Multiply(MakeAffineMatrix(Vector3{1,1,1},
             Vector3{side*spin*0.72f,side*spin*0.95f,-side*spin*1.65f},Vector3{}),release);
-        const float eject=side*(first?2.4f:1.6f)*size;
+        const float eject=side*(first?(pose.primaryDestruction?12.0f:2.4f):1.6f)*size;
         world.m[3][0]+=((after.m[3][0]-before.m[3][0])/(2*h)+sideAxis.x*eject)*dt;
         world.m[3][1]+=((after.m[3][1]-before.m[3][1])/(2*h)+sideAxis.y*eject+(first?0.55f:0.20f))*dt-4.9f*dt*dt;
         world.m[3][2]+=((after.m[3][2]-before.m[3][2])/(2*h)+sideAxis.z*eject)*dt;

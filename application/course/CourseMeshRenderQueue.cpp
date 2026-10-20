@@ -5,6 +5,7 @@
 #include "EnemyCombatPresentationBridge.h"
 #include "EnemyEncounterReadabilityDirector.h"
 #include "RailTitleScene.h"
+#include "TwinShieldDroneShading.h"
 #include "utils/dx12/BufferHelper.h"
 
 #include <algorithm>
@@ -1112,6 +1113,13 @@ void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
     const Matrix4x4& viewProjection) {
     const bool wreck=pose.destructionAge>=0;
     const auto breakup=wreck ? EvaluateTwinShieldDroneBreakup(pose) : TwinShieldDroneBreakupFrame{};
+    auto attachment = [&](float side) {
+        const float intact = 1.0f - 0.45f * (std::clamp)(pose.charge, 0.0f, 1.0f);
+        const float detach = TwinShieldDroneDetachAge(pose, side);
+        return intact * (wreck ? 1.0f - TwinShieldDestructionSmooth(pose.destructionAge, detach,
+            detach + (pose.primaryDestruction?0.06f:0.18f)) : 1.0f);
+    };
+    const float leftAttachment = attachment(-1.0f), rightAttachment = attachment(1.0f);
     if (hull.materialData) {
         *hull.materialData = {};
         hull.materialData->color = {1,1,1,pose.alpha*(wreck?breakup.opacity:1.0f)};
@@ -1128,6 +1136,9 @@ void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
         hull.transformData->World=world;
         hull.transformData->WVP=Multiply(world,viewProjection);
         hull.transformData->WorldInverseTranspose=Transpose(Inverse(world));
+        if (hull.materialData)
+            SetTwinShieldDroneContactShading(*hull.materialData,
+                hull.transformData->WorldInverseTranspose, 0.0f, leftAttachment, rightAttachment);
     }
     auto addReferencePart = [&](const char* id, const char* suffix,Vector3 offset,float yaw,bool core) {
         const uint32_t index = ResolveModelIndex(models,id,nullptr);
@@ -1161,6 +1172,10 @@ void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
             part->transformData->World = world;
             part->transformData->WVP = Multiply(world,viewProjection);
             part->transformData->WorldInverseTranspose = Transpose(Inverse(world));
+            if (!core && part->materialData)
+                SetTwinShieldDroneContactShading(*part->materialData,
+                    part->transformData->WorldInverseTranspose, offset.x < 0 ? -1.0f : 1.0f,
+                    leftAttachment, rightAttachment);
         }
     };
     const float spread = 1.09f + pose.charge*0.14f + pose.death*0.40f;

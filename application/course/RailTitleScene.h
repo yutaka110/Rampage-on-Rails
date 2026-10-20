@@ -72,9 +72,10 @@ struct RailReadyDroneFlight final {
     float forward = -66.0f, lateral = 1.2f, vertical = 7.0f;
     Vector3 rotation{0.0f,3.14159265f,0.0f};
 };
-RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed);
+inline constexpr uint32_t kRailReadyDroneCount=2;
+RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed,uint32_t droneIndex=0);
 RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed,const RailPath& rail,
-    float playerDistance,float playerSpeed);
+    float playerDistance,float playerSpeed,uint32_t droneIndex=0);
 TwinShieldDronePose BuildRailReadyDronePose(const RailPath& rail,float railDistance,
     float lateral,float vertical,Vector3 rotation,float radius);
 
@@ -96,7 +97,7 @@ public:
     std::span<const RailTitleAttackCue> Cues() const { return cues_; }
     float MuzzleFlash() const { return muzzleFlash_; }
     Vector3 MuzzlePosition() const { return muzzlePosition_; }
-    static bool TraceLeftWall(const RailWorldRaycastInput& terrain,Vector3 origin,
+    static bool TraceVehicleNearMiss(const RailWorldRaycastInput& terrain,Vector3 origin,
         float launchDistance,uint32_t shotIndex,Vector3& contact,Vector3& normal);
     static bool ClearsVehicle(const RailTitleShot& shot,const RailPath& rail,float playerDistanceAtLaunch);
 private:
@@ -114,9 +115,11 @@ private:
 };
 
 struct RailReadyCameraShot final {
-    // Rail-local right, up, forward. The eye orbits outside the vehicle.
+    // Rail-local right, up, forward. Rear pursuit settles into a close forward
+    // shot; its weight releases after the turn, across GO rather than mid-pass.
     Vector3 eyeOffset{0.0f,5.2f,-8.0f};
     Vector3 droneOffset{1.2f,7.0f,-66.0f};
+    Vector3 wingmanOffset{-1.8f,8.4f,-80.0f};
     float weight = 1.0f;
     float focusBlend = 0.0f;
     float fovY = 0.70f;
@@ -144,7 +147,7 @@ struct RailTitleGameplayEntryFrame final {
 };
 
 struct CourseEnemyActorDesc;
-CourseEnemyActorDesc BuildRailReadyDrone(float startDistance);
+CourseEnemyActorDesc BuildRailReadyDrone(float startDistance,uint32_t droneIndex=0);
 
 class RailTitleGameplayEntry final {
 public:
@@ -153,7 +156,10 @@ public:
     static constexpr float DroneTurnEnd = 4.35f;
     static constexpr float DroneBrakeEnd = 4.70f;
     static constexpr float Duration = 4.85f; // Complete the moving turn and braking before GO.
+    static constexpr float CameraReleaseBegin = Duration - 0.05f;
+    static constexpr float CameraReleaseEnd = Duration + 0.60f;
     static constexpr float ReadyBegin = 0.64f;
+    static constexpr float WingmanReadyBegin = ReadyBegin + 0.28f;
     static constexpr float EnemyFireBegin = Duration + 0.70f;
     static constexpr float GoEnd = Duration + 0.85f;
     static constexpr float RevealBegin = 0.01f;
@@ -179,11 +185,10 @@ private:
 // only a fully opaque cover permits resetting the playable world.
 class RailTransitionDemo final {
 public:
-    static constexpr float ButtonDelay = 2.0f;
     static constexpr float CoverDuration = 2.01f;
     static constexpr float RevealDuration = 1.29f;
     void BeginGameplay();
-    void Update(float deltaTime, bool gameplayStarted);
+    void Update(float deltaTime, bool startupComplete);
     bool RequestReturn();
     bool NeedsTitleSwap() const;
     void CommitTitleSwap();
@@ -199,6 +204,7 @@ public:
 private:
     enum class Phase { Title, Playing, Covering, Revealing };
     Phase phase_ = Phase::Title;
+    bool startupComplete_ = false;
     double playTime_ = 0.0, transitionTime_ = 0.0;
     float travelDeltaTime_ = 0.0f;
 };

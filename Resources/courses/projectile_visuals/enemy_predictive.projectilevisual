@@ -1,1 +1,3 @@
-visual|visual_predictive_gold|enemy_predictive|bolt|enemy_projectile_core|enemy_projectile_halo|1.0|1.0|1.0|1.0|1.0|0.08|0.62|0.94|1.0|0.04|0.48|0.72|1.55|2.35|0.0045|4.2|1.16|0.08|2.4|10.0|0.42|true
+# Orange-core energy sphere: stable solid silhouette, compact halo and short tail.
+# Visuals only; projectile IDs, collision and flight remain authored separately.
+visual|visual_predictive_gold|enemy_predictive|orb|enemy_projectile_core|enemy_projectile_halo|1.0|1.0|1.0|1.0|1.0|0.20|0.025|0.40|1.0|0.32|0.045|0.55|1.55|1.35|0.0045|4.2|1.0|0.0|2.4|3.0|0.28|true

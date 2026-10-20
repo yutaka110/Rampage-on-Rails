@@ -59,6 +59,7 @@ struct WeaponFeedbackEvent {
     bool blocked = false;
     bool weakPoint = false;
     bool destroyed = false;
+    bool lockOnContact = false;
 };
 
 struct WeaponFeedbackDispatchResult {

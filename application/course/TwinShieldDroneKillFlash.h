@@ -10,7 +10,7 @@ struct TwinShieldKillStroke final {
     TwinShieldKillStrokeKind kind=TwinShieldKillStrokeKind::Cut;
 };
 struct TwinShieldDroneKillFlash final {
-    static constexpr float CutLifetime=0.11f, Lifetime=0.23f;
+    static constexpr float CutLifetime=0.17f, ArcBegin=0.15f, Lifetime=0.32f;
     std::array<TwinShieldKillStroke,19> strokes{};
     size_t count=0;
     Vector3 core{};
@@ -47,23 +47,38 @@ inline TwinShieldDroneKillFlash EvaluateTwinShieldDroneKillFlash(const TwinShiel
     if(age<TwinShieldDroneKillFlash::CutLifetime) {
         const float t=age/TwinShieldDroneKillFlash::CutLifetime;
         const float halfLength=size*(1.15f+0.48f*(1-std::exp(-age*160)));
-        const float intensity=(1-t)*(1-t);
+        // Hold the bright strike for one 30 Hz frame, then leave a readable
+        // tapered tail instead of losing most of its energy immediately.
+        const float intensity=1-TwinShieldDestructionSmooth(age,0.03f,TwinShieldDroneKillFlash::CutLifetime);
         append(add(result.core,scale(direction,-halfLength)),add(result.core,scale(direction,halfLength)),
-            size*(0.060f+0.035f*(1-t)),intensity,TwinShieldKillStrokeKind::Cut);
+            size*(0.080f+0.050f*(1-t)),intensity,TwinShieldKillStrokeKind::Cut);
     }
-    // Two small irregular pulses at the shield connections, below the cut's
-    // brightness. Both finish before the first wing breaks away.
-    const float arcPulse=(1-TwinShieldDestructionSmooth(age,0.055f,0.085f))*
-        TwinShieldDestructionSmooth(age,0.018f,0.028f)+
-        0.48f*TwinShieldDestructionSmooth(age,0.105f,0.115f)*(1-TwinShieldDestructionSmooth(age,0.155f,0.185f));
+    // The cut leads; discharge travels out to the shield joints as its tail
+    // fades. A shorter restrike bridges into the existing wing separation.
+    const float arcPulse=TwinShieldDestructionSmooth(age,TwinShieldDroneKillFlash::ArcBegin,0.18f)*
+        (1-TwinShieldDestructionSmooth(age,0.215f,0.245f))+
+        0.65f*TwinShieldDestructionSmooth(age,0.25f,0.265f)*(1-TwinShieldDestructionSmooth(age,0.28f,0.315f));
+    auto dischargePose=pose;dischargePose.destructionAge=age;
+    const auto breakup=arcPulse>0.001f ? EvaluateTwinShieldDroneBreakup(dischargePose) : TwinShieldDroneBreakupFrame{};
     if(arcPulse>0.001f) for(float wing:{-1.0f,1.0f}) {
-        Vector3 previous=transform({wing*0.34f,0,-1.02f});
+        const auto origin=transform({wing*0.34f,0,-1.02f});
+        const auto& shield=wing<0?breakup.leftWorld:breakup.rightWorld;
+        // Shield matrices contain their actor-space hinge offset, including
+        // the detached motion. This is the same inner joint as x=+/-1.03.
+        const Vector3 joint{shield.m[3][0]-wing*0.06f*shield.m[0][0]-0.96f*shield.m[2][0],
+            shield.m[3][1]-wing*0.06f*shield.m[0][1]-0.96f*shield.m[2][1],
+            shield.m[3][2]-wing*0.06f*shield.m[0][2]-0.96f*shield.m[2][2]};
+        const float front=TwinShieldDestructionSmooth(age,TwinShieldDroneKillFlash::ArcBegin,0.205f);
+        Vector3 previous=origin;
         for(int segment=1;segment<=6;++segment) {
-            const float t=float(segment)/6;
-            const float jitter=segment==6?0.0f:
+            const float begin=float(segment-1)/6;
+            if(front<=begin) break;
+            const float t=(std::min)(float(segment)/6,front);
+            const float jitter=t>=0.999f?0.0f:
                 (segment%2?1.0f:-1.0f)*(0.025f+0.025f*std::sin(float(pose.destructionSeed%17u)+segment*2.3f));
-            const auto point=transform({wing*(0.34f+0.69f*t),jitter,-1.02f+0.06f*t});
-            append(previous,point,size*0.012f,arcPulse*0.30f,TwinShieldKillStrokeKind::Arc);
+            const auto point=add(add(origin,scale(add(joint,scale(origin,-1)),t)),
+                {body.m[1][0]*jitter,body.m[1][1]*jitter,body.m[1][2]*jitter});
+            append(previous,point,size*0.025f,arcPulse*0.70f,TwinShieldKillStrokeKind::Arc);
             previous=point;
         }
     }

@@ -4,8 +4,11 @@
 #include <set>
 #include "../course/RailTitleScene.h"
 #include "../course/RailLockVolley.h"
+#include "../course/RailPulseShotPresentation.h"
+#include "../course/RailPrimaryKillPresentation.h"
 #include "../course/RailLockReticlePresentation.h"
 #include "../course/TwinShieldDroneKillFlash.h"
+#include "../course/TwinShieldDroneShading.h"
 #include "../AppFrameGraphBuilder.h"
 #include "../AppImGuiLayer.h"
 #include "../AppPostProcessPipeline.h"
@@ -22704,6 +22707,197 @@ void ValidateProductionTerrainBvh(RegressionRunner& runner) {
     }
 }
 
+void TestRailPrimaryKillPresentation(RegressionRunner& runner) {
+    RailPath rail;
+    rail.SetControlPoints({{{0,0,0},18,32},{{0,0,200},18,32}});
+    CourseSpawnRuntime runtime;
+    CourseEnemyActorDesc enemy{};
+    enemy.spawnDistance=60; enemy.radius=3; enemy.hitPoints=24; enemy.meshId="twin_shield_hull";
+    runner.Expect(runtime.SpawnEnemyActor(enemy),"Primary kill test must spawn a real damageable drone");
+    auto primaryActor=runtime.Enemies().front();
+    primaryActor.weaponMount.ready=true;
+    auto& livePose=primaryActor.weaponMount.dronePose;
+    livePose.visible=true; livePose.position={0,0,60}; livePose.scale={2,2,2};
+    livePose.hasFlightVelocity=true; livePose.flightVelocity={0,0,8};
+    RestoreEnemyFixture(runner,runtime,primaryActor);
+    runtime.EnemyCombat().ConsumeEvents();
+    RailAimState aim{};
+    aim.valid=true; aim.worldRayOrigin={0,0,0}; aim.worldRayDirection={0,0,1}; aim.maxDistance=92;
+    RailWorldRaycastInput query{}; query.aim=&aim; query.railPath=&rail; query.spawnRuntime=&runtime;
+    ApplyRailAimHit(aim,RailWorldRaycast::Query(query));
+    CourseCollisionFrameInput input{};
+    input.worldAim=&aim; input.railPath=&rail; input.player.verticalOffset=0;
+    input.deltaTime=0.016f; input.weapon.triggerHeld=true;
+    CourseCollisionSystem collision;
+    RailPrimaryKillPresentation presentation;
+    collision.Update(runtime,input);
+    runner.Expect(!presentation.ObserveFeedback(collision.WeaponFeedback().LastAcceptedEvent()),
+        "An ordinary accepted primary hit must not trigger the kill-only strike");
+    input.deltaTime=0.10f;
+    const auto lethal=collision.Update(runtime,input);
+    const auto feedback=collision.WeaponFeedback().LastAcceptedEvent();
+    EnemyCombatPresentationBridge primaryBridge;
+    EnemyCombatPresentationInput primaryInput;
+    const auto primaryEvents=runtime.EnemyCombat().ConsumeEvents();
+    primaryInput.runtime=&runtime; primaryInput.railPath=&rail; primaryInput.events=primaryEvents; primaryInput.deltaTime=0;
+    primaryBridge.Update(primaryInput);
+    runner.Expect(primaryBridge.Frame().destructionBursts.size()==1,
+        "A lethal primary shot must retain a drawable wreck for the same presentation frame");
+    if(primaryBridge.Frame().destructionBursts.empty()) return;
+    const auto wreckPose=primaryBridge.Frame().destructionBursts.front().frozenPose;
+    runner.Expect(lethal.playerShotEnemyHits==1 && feedback.destroyed && wreckPose.primaryDestruction &&
+        presentation.ObserveFeedback(feedback,1.5f,&wreckPose) &&
+        presentation.NewCount()==1 && presentation.Kills().front().actorId==feedback.targetActorId,
+        "An actual lethal primary hit must create exactly one strike at the accepted contact even after actor retirement");
+    runner.Expect(!presentation.ObserveFeedback(feedback) && presentation.NewCount()==1,
+        "A repeated lethal contact must not replay the slash, sound or camera impulse");
+    auto bad=feedback;
+    ++bad.shotId; bad.lockOnContact=true;
+    runner.Expect(!presentation.Enqueue(bad),"Lock-laser destruction must retain its own presentation");
+    ++bad.shotId; bad.lockOnContact=false; bad.hitKind=RailAimHitKind::Obstacle;
+    runner.Expect(!presentation.Enqueue(bad),"Breaking an obstacle must not masquerade as an enemy kill");
+    ++bad.shotId; bad.hitKind=RailAimHitKind::Enemy; bad.blocked=true;
+    runner.Expect(!presentation.Enqueue(bad),"Blocked damage must not create a primary kill flash");
+    ++bad.shotId; bad.blocked=false; bad.worldPosition.x=(std::numeric_limits<float>::quiet_NaN)();
+    runner.Expect(!presentation.Enqueue(bad),"Invalid kill geometry must be rejected before the world draw");
+    const auto captured=presentation.Kills().front();
+    const auto first=captured.Evaluate({1,0,0},{0,1,0});
+    auto peak=captured; peak.age=0.04f;
+    const auto crossed=peak.Evaluate({1,0,0},{0,1,0});
+    auto fragments=captured;fragments.age=0.090f;
+    const auto fractureFrame=fragments.Evaluate({1,0,0},{0,1,0});
+    runner.Expect(first.fireCount==1 && first.flash==1 && first.smokeCount==0 &&
+        crossed.fireCount==6 && crossed.smokeCount==0 && fractureFrame.fireCount==6 && fractureFrame.smokeCount>0,
+        "A real primary kill must burst from the core immediately, expand before shield release and emit delayed smoke");
+    runner.Expect(first.count==1 && crossed.count==1 && crossed.strokes[0].opacity<0.30f && fractureFrame.count==12 &&
+        crossed.fire[0].radius>first.fire[0].radius*3 && crossed.fire[0].radius<captured.size*1.1f,
+        "The burst must expand inside the shield silhouette while the short supporting glint yields to fracture fragments");
+    auto smokeOnly=captured;smokeOnly.age=0.34f;
+    const auto aftermath=smokeOnly.Evaluate({1,0,0},{0,1,0});
+    runner.Expect(aftermath.fireCount==0 && aftermath.flash==0 && aftermath.count==0 && aftermath.smokeCount==5,
+        "Flame and slash must clear before the thin smoke and falling wreck aftermath");
+    auto displaced=captured;displaced.dronePose.position.x+=100;
+    const auto shifted=displaced.Evaluate({1,0,0},{0,1,0});
+    runner.Expect(std::abs((shifted.fire[0].center.x-first.fire[0].center.x)-100)<0.001f,
+        "Core explosion geometry must retain the actual world-space sensor origin");
+    auto noWreck=fragments;noWreck.hasDronePose=false;
+    const auto fallbackBurst=noWreck.Evaluate({1,0,0},{0,1,0});
+    runner.Expect(fallbackBurst.fireCount>0 && rail_primary_kill_detail::Finite(fallbackBurst.fire[0].center),
+        "Primary kill bursts must also remain valid without a captured drawable drone pose");
+    const auto centerAtHoldA=[&] {auto k=captured;k.age=0.030f;return k.Evaluate({1,0,0},{0,1,0}).center;}();
+    const auto centerAtHoldB=[&] {auto k=captured;k.age=0.040f;return k.Evaluate({1,0,0},{0,1,0}).center;}();
+    const auto distance=[](Vector3 a,Vector3 b) {return std::sqrt((a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y)+(a.z-b.z)*(a.z-b.z));};
+    runner.Expect(captured.hasDronePose && distance(centerAtHoldA,centerAtHoldB)<0.0001f &&
+        distance(first.center,centerAtHoldA)>0.15f,
+        "The flash must follow the actual sensor recoil and its 20ms local hold, rather than float on the collision sphere");
+    const float struckSide=TwinShieldDestructionSide(wreckPose),detach=TwinShieldDroneDetachAge(wreckPose,struckSide);
+    auto early=wreckPose;early.destructionAge=0.10f;
+    const auto broken=EvaluateTwinShieldDroneBreakup(early);
+    auto body=broken.bodyWorld;const auto inv=Inverse(body);
+    const auto released=Multiply(struckSide<0?broken.leftWorld:broken.rightWorld,inv);
+    const float spread=1.09f+wreckPose.charge*0.14f;
+    runner.Expect(detach>=0.055f && detach<0.070f &&
+        distance({released.m[3][0],released.m[3][1],released.m[3][2]},{struckSide*spread,0,0})>0.20f &&
+        std::abs(EvaluateTwinShieldDroneDestructionFlight(wreckPose,0.050f).roll)>0.45f,
+        "A primary kill must visibly recoil and separate the struck shield within 100ms: detach="+std::to_string(detach)+
+        " separation="+std::to_string(distance({released.m[3][0],released.m[3][1],released.m[3][2]},{struckSide*spread,0,0}))+
+        " roll="+std::to_string(EvaluateTwinShieldDroneDestructionFlight(wreckPose,0.050f).roll));
+    auto atDetach=captured;atDetach.age=detach;
+    const auto releaseBurst=atDetach.Evaluate({1,0,0},{0,1,0});
+    runner.Expect(releaseBurst.fireCount==6 && releaseBurst.fire[0].opacity>0.35f &&
+        releaseBurst.fire[0].radius>captured.size*0.80f,
+        "Armor release must occur during the expanded core burst, before the flame dissipates");
+    for(int fps:{30,60,120}) {
+        RailPrimaryKillPresentation clock;
+        clock.Enqueue(feedback);
+        clock.Update(0); clock.Update(-1); clock.Update((std::numeric_limits<float>::quiet_NaN)());
+        runner.Expect(clock.Kills().front().age==0,"Pause and invalid time must freeze kill presentation");
+        int frames=0;
+        while(clock.Visible() && frames<fps) {clock.Update(1.0f/fps);++frames;}
+        runner.Expect(std::abs(float(frames)/fps-RailPrimaryKill::Lifetime)<1.01f/fps &&
+            !clock.Enqueue(feedback),"The strike must expire consistently without replaying a consumed kill");
+    }
+    for(uint64_t id=1000;id<1032;++id) {auto event=feedback;event.shotId=id;presentation.Enqueue(event);}
+    runner.Expect(presentation.Kills().size()==RailPrimaryKillPresentation::Capacity,
+        "Simultaneous primary kills must keep a bounded presentation budget");
+    presentation.Reset();
+    runner.Expect(!presentation.Visible() && presentation.NewCount()==0 && presentation.Enqueue(feedback),
+        "Retry/title reset must clear both visuals and shot history for the new run");
+    std::filesystem::create_directories("logs");
+    std::ofstream preview("logs/rail_primary_kill_preview.csv");
+    preview<<"age,kind,sx,sy,sz,ex,ey,ez,width,opacity,flash,cx,cy,cz\n";
+    for(float age:{0.0f,0.035f,0.080f,0.130f,0.210f}) {
+        auto sample=captured;sample.age=age;
+        const auto frame=sample.Evaluate({1,0,0},{0,1,0});
+        for(size_t i=0;i<frame.count;++i) {
+            const auto& s=frame.strokes[i];
+            preview<<age<<','<<int(s.kind)<<','<<s.start.x<<','<<s.start.y<<','<<s.start.z<<','
+                <<s.end.x<<','<<s.end.y<<','<<s.end.z<<','<<s.width<<','<<s.opacity<<','<<frame.flash<<','
+                <<frame.center.x<<','<<frame.center.y<<','<<frame.center.z<<'\n';
+        }
+    }
+    std::ofstream burstPreview("logs/rail_primary_core_burst_preview.csv");
+    burstPreview<<"age,kind,x,y,z,radius,aspect,rotation,opacity,phase,variant\n";
+    for(float age:{0.0f,0.020f,0.040f,0.065f,0.100f,0.150f,0.300f,0.500f}) {
+        auto sample=captured;sample.age=age;
+        const auto frame=sample.Evaluate({1,0,0},{0,1,0});
+        const auto write=[&](const auto& p,const char* kind) {
+            burstPreview<<age<<','<<kind<<','<<p.center.x<<','<<p.center.y<<','<<p.center.z<<','<<p.radius<<','
+                <<p.aspect<<','<<p.rotation<<','<<p.opacity<<','<<p.phase<<','<<p.variant<<'\n';
+        };
+        for(size_t i=0;i<frame.fireCount;++i) write(frame.fire[i],"fire");
+        for(size_t i=0;i<frame.smokeCount;++i) write(frame.smoke[i],"smoke");
+    }
+}
+
+void TestRailPulseShotPresentation(RegressionRunner& runner) {
+    for(int fps : {30,60,120}) {
+        RailPulseShotPresentation pulses;
+        CourseCollisionSystem collision;
+        CourseSpawnRuntime runtime;
+        RailAimState aim{};
+        aim.valid=true; aim.worldRayOrigin={0,4,0}; aim.worldRayDirection={0,0,1};
+        CourseCollisionFrameInput input{};
+        input.deltaTime=1.0f/fps; input.worldAim=&aim;
+        input.weapon.triggerHeld=true;
+        uint32_t fired=0;
+        bool everyShot=true;
+        for(int frame=0;frame<fps*2;++frame) {
+            pulses.Update(input.deltaTime);
+            const auto stats=collision.Update(runtime,input);
+            fired+=stats.playerShotsFired;
+            everyShot &= collision.PlayerShotTraces().size()==stats.playerShotsFired;
+            for(const auto& trace:collision.PlayerShotTraces())
+                everyShot &= pulses.Enqueue(trace.shotId,{0,4,3.4f},trace.end,trace.presentationAge);
+        }
+        runner.Expect(fired==24 && everyShot && pulses.Visible() && pulses.Shots().size()<=4,
+            "Held primary fire must present every authorized pulse at the existing cadence across 30/60/120fps");
+        const auto before=pulses.Shots().back();
+        pulses.Update(0); pulses.Update(-1); pulses.Update((std::numeric_limits<float>::quiet_NaN)());
+        runner.Expect(pulses.Shots().back().age==before.age && pulses.Shots().back().Head().z==before.Head().z,
+            "Pulse travel, fade and muzzle flash must freeze with gameplay time");
+        pulses.Update(0.01f);
+        const auto& after=pulses.Shots().back();
+        const auto head=after.Head(),tail=after.Tail();
+        runner.Expect(head.z>before.Head().z && head.z<=after.end.z && tail.z>=after.start.z &&
+            head.z-tail.z<=RailPulseShot::TrailLength+0.001f,
+            "The primary tracer must advance as a short world-space dash and never extend through its contact point");
+        input.weapon.enabled=false;
+        const auto blocked=collision.Update(runtime,input);
+        runner.Expect(!blocked.playerShotsFired && collision.PlayerShotTraces().empty(),
+            "Lock/UI suppression must not emit stale primary traces from the previous frame");
+        pulses.Update(1.0f);
+        runner.Expect(!pulses.Visible(),"Primary tracers must expire after firing stops");
+        for(uint64_t id=1000;id<1100;++id) pulses.Enqueue(id,{0,4,0},{0,4,90});
+        runner.Expect(pulses.Shots().size()==RailPulseShotPresentation::Capacity &&
+            !pulses.Enqueue(1099,{0,4,0},{0,4,90}) && !pulses.Enqueue(2000,{},{}) &&
+            !pulses.Enqueue(2001,{},{0,0,(std::numeric_limits<float>::infinity)()}),
+            "Rapid-fire presentation must remain bounded and reject duplicate or invalid geometry");
+        pulses.Reset();
+        runner.Expect(!pulses.Visible(),"Retry/title return must clear every primary tracer");
+    }
+}
+
 void TestRailWorldShotRouting(RegressionRunner& runner) {
     RailPath rail;
     rail.SetControlPoints({
@@ -26222,6 +26416,62 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
                 EnemyProjectileVisualState::Unavailable,
         "projectile visual telemetry should expose a configuration that would make live hostile fire unavailable");
 
+    // Exercise the production sphere backend with the same accepted projectile
+    // presentation used for interception, not a separate cosmetic simulation.
+    EnemyProjectileVfxRenderer orbs;
+    runner.Expect(orbs.LoadDirectory(EnemyProjectileVfxRenderer::DefaultDirectory(),&directoryError),
+        "Orange energy sphere bindings must load from packaged resources");
+    for(const char* id:{"enemy_direct_readable","enemy_predictive","enemy_predictive_fast",
+        "enemy_assault_magenta_slow","enemy_sniper_predictive","enemy_turret_spread"}) {
+        const auto* binding=orbs.FindVisual(id);
+        runner.Expect(binding && binding->style==EnemyProjectileVisualStyle::Orb &&
+            binding->haloColor.x>binding->haloColor.y*3 && binding->haloColor.z<0.05f &&
+            binding->trailLengthInRadii<=3 && binding->pulseAmplitude==0,
+            std::string("Ordinary attack must resolve a stable orange core sphere with a short tail: ")+id);
+    }
+    EnemyProjectilePresentationFrame orbPresentation;
+    auto orbProjectile=projectile;
+    orbProjectile.definitionId="enemy_predictive";
+    orbProjectile.trajectory=EnemyProjectileTrajectory::Predictive;
+    orbPresentation.projectiles.push_back(orbProjectile);
+    auto orbInput=renderInput;
+    orbInput.presentation=&orbPresentation;
+    orbInput.settings.orbSpritesEnabled=true;
+    orbs.Update(orbInput);
+    const auto sphere=orbs.Frame().proxies.front();
+    runner.Expect(orbs.Frame().spriteBackedProjectiles==1 && orbs.Frame().productionSubmittedProjectiles==1 &&
+        orbs.Frame().unavailableProjectiles==0 && sphere.spriteBacked && !sphere.effectBacked &&
+        sphere.visualState==EnemyProjectileVisualState::ProductionSpriteReady &&
+        sphere.coreEffectInstanceId==0 && sphere.haloEffectInstanceId==0 && sphere.shootDownEligible &&
+        sphere.coreDiameterPixels>=19.9f && sphere.worldPosition.z==orbProjectile.worldPosition.z &&
+        std::abs(sphere.trailStart.z-sphere.worldPosition.z-sphere.coreRadius*3)<0.0001f &&
+        orbPresentation.projectiles.front().collisionRadius==projectile.collisionRadius,
+        "Native orange spheres must retain interception authority and readable size without duplicate effect instances or debug markers");
+    orbInput.elapsedTime+=0.8f;
+    orbs.Update(orbInput);
+    const auto flowing=orbs.Frame().proxies.front();
+    runner.Expect(flowing.orbAnimationUvY!=sphere.orbAnimationUvY && flowing.orbAnimationUvY>=0 && flowing.orbAnimationUvY<2048 &&
+        flowing.coreRadius==sphere.coreRadius && flowing.trailStart.z==sphere.trailStart.z,
+        "Only internal energy may flow: the target silhouette and physical trajectory must not pulse");
+    orbInput.deltaTime=0;
+    orbs.Update(orbInput);
+    runner.Expect(orbs.Frame().proxies.front().orbAnimationUvY==flowing.orbAnimationUvY,
+        "A paused gameplay clock must also freeze the sphere's internal flow");
+    orbInput.settings.orbSpritesEnabled=false;
+    orbInput.settings.productionPrimitivesEnabled=true;
+    orbs.Update(orbInput);
+    runner.Expect(orbs.Frame().spriteBackedProjectiles==0 && orbs.Frame().fallbackProjectiles==1 &&
+        orbs.Frame().proxies.front().visualState==EnemyProjectileVisualState::ProductionFallbackReady,
+        "A host without the sphere shader backend must retain the visible primitive fallback");
+    orbInput.settings.orbSpritesEnabled=true;
+    orbInput.settings.maximumVisibleProjectiles=2;
+    for(uint64_t id=102;id<112;++id) {auto p=orbProjectile;p.projectileId=id;orbPresentation.projectiles.push_back(p);}
+    orbs.Update(orbInput);
+    runner.Expect(orbs.Frame().spriteBackedProjectiles==2 && orbs.Frame().droppedByBudget==9,
+        "The new sphere backend must obey the existing projectile presentation budget");
+    orbs.Reset();
+    runner.Expect(orbs.Frame().proxies.empty(),"Retry/title reset must clear every native enemy sphere");
+
     RailPath rail;
     rail.SetControlPoints({
         {{0.0f, 0.0f, 0.0f}, 18.0f, 32.0f},
@@ -26747,7 +26997,7 @@ void TestRailLockVolleyArrival(RegressionRunner& runner) {
         for(int i=0;i<2;++i) {
             CourseEnemyActorDesc desc; desc.meshId="twin_shield_hull";
             desc.spawnDistance=70.0f+8.0f*i;desc.lateralOffset=i?6.0f:-5.0f;
-            desc.verticalOffset=8;desc.hitPoints=20;desc.firstShotDelay=10;desc.lifetime=30;
+            desc.verticalOffset=8;desc.hitPoints=i?60.0f:20.0f;desc.firstShotDelay=10;desc.lifetime=30;
             runner.Expect(runtime.SpawnEnemyActor(desc),"Lock-laser target must spawn");
             RailLockToken token;token.target.actorId=runtime.Enemies().back().actorId;
             token.target.generationId=token.target.actorId;tokens.push_back(token);
@@ -26757,7 +27007,7 @@ void TestRailLockVolleyArrival(RegressionRunner& runner) {
         RailLockVolley volley;RailLockSettings settings;
         const Vector3 muzzle{0,4,4};
         runner.Expect(volley.Enqueue(tokens,weapons,muzzle,rail,runtime,settings)==2 &&
-            runtime.Enemies()[0].desc.hitPoints==20 && runtime.Enemies()[1].desc.hitPoints==20 && !volley.Visible(),
+            runtime.Enemies()[0].desc.hitPoints==20 && runtime.Enemies()[1].desc.hitPoints==60 && !volley.Visible() && volley.Contacts().empty(),
             "Releasing a lock volley must authorize travel without instantly damaging its targets");
         runner.Expect(volley.Enqueue(tokens,weapons,muzzle,rail,runtime,settings)==0,
             "The same authorized shot IDs cannot create duplicate in-flight lasers");
@@ -26772,6 +27022,7 @@ void TestRailLockVolleyArrival(RegressionRunner& runner) {
             distance(volley.Lasers().front().Curve(0),muzzle)<0.0001f,
             "The rendered curve must originate at the gun and follow the moving target to its endpoint");
         int impacts=0,completed=0;std::set<uint64_t> ids;bool synchronized=true;
+        bool contactSynchronized=true,sawNormal=false,sawKill=false;
         for(int frame=0;frame<fps*2;++frame) {
             volley.Update(1.0f/fps,muzzle,rail,runtime,collision,nullptr);
             for(const auto& hit:volley.Hits()) {
@@ -26779,16 +27030,32 @@ void TestRailLockVolleyArrival(RegressionRunner& runner) {
                 const auto laser=std::find_if(volley.Lasers().begin(),volley.Lasers().end(),[&](const auto& l){return l.weapon.shotId==hit.shotId;});
                 synchronized &= laser!=volley.Lasers().end() && laser->resolved && laser->Progress()==1 &&
                     distance(laser->position,laser->end)<0.0001f;
+                const auto contact=std::find_if(volley.Contacts().begin(),volley.Contacts().end(),
+                    [&](const auto& c){return c.shotId==hit.shotId;});
+                contactSynchronized &= contact!=volley.Contacts().end() && contact->age==0 &&
+                    contact->actorId==hit.targetActorId && contact->destroyed==hit.destroyed &&
+                    laser!=volley.Lasers().end() && distance(contact->position,laser->end)<0.0001f;
+                sawNormal |= !hit.destroyed;sawKill |= hit.destroyed;
+                const auto& feedback=collision.LastWeaponFeedbackResult();
+                contactSynchronized &= feedback.accepted && feedback.event.lockOnContact && !feedback.vfxSpawned;
             }
             for(const auto& result:volley.Completed()) {
                 ++completed;runner.Expect(result.tokens==2 && result.hits==2 && result.maxLocks==8,
                     "Volley score must receive one aggregate result from real arrivals");
             }
+            if(!volley.Contacts().empty()) {
+                const float age=volley.Contacts().front().age;
+                volley.Update(0,muzzle,rail,runtime,collision,nullptr);
+                contactSynchronized &= volley.Contacts().front().age==age;
+            }
         }
         const auto events=runtime.EnemyCombat().ConsumeEvents();
         runner.Expect(impacts==2 && ids.size()==2 && completed==1 && synchronized && !volley.Visible() &&
-            std::count_if(events.begin(),events.end(),[](const auto& e){return e.kind==EnemyCombatEventKind::Defeated;})==2,
-            "Every frame rate must produce exactly two synchronized arrivals and defeats, one score result and no lingering ribbons");
+            std::count_if(events.begin(),events.end(),[](const auto& e){return e.kind==EnemyCombatEventKind::Defeated;})==1,
+            "Every frame rate must produce two synchronized arrivals, one real defeat, one score result and no lingering ribbons");
+        runner.Expect(contactSynchronized && sawNormal && sawKill && volley.Contacts().empty() &&
+            runtime.Enemies()[1].desc.hitPoints==30 && runtime.VfxCues().empty(),
+            "Normal and lethal lock contacts must start once at the real arrival, freeze on pause and expire without the old ring");
         volley.Reset();
         runner.Expect(volley.Lasers().empty() && volley.Hits().empty() && volley.Completed().empty(),
             "Retry must discard all pending travel, damage and score");
@@ -26806,7 +27073,7 @@ void TestRailLockVolleyArrival(RegressionRunner& runner) {
     runtime.SpawnEnemyActor(desc);
     volley.Update(0.1f,{0,4,0},rail,runtime,collision,nullptr);
     runner.Expect(volley.Hits().empty() && runtime.Enemies().back().desc.hitPoints==20 &&
-        volley.Completed().size()==1 && volley.Completed().front().hits==0,
+        volley.Completed().size()==1 && volley.Completed().front().hits==0 && volley.Contacts().empty(),
         "A destroyed target must cancel damage without borrowing the next actor or awarding a hit");
     const float stoppedProgress=volley.Lasers().front().Progress();
     volley.Update(0.05f,{0,4,0},rail,runtime,collision,nullptr);
@@ -26844,18 +27111,45 @@ void TestTwinShieldDroneCoreBreak(RegressionRunner& runner) {
     };
     const auto impact=EvaluateTwinShieldDroneKillFlash(pose,0);
     const auto hot=EvaluateTwinShieldDroneKillFlash(pose,0.04f);
-    const auto tail=EvaluateTwinShieldDroneKillFlash(pose,0.13f);
+    const auto tail=EvaluateTwinShieldDroneKillFlash(pose,0.21f);
     runner.Expect(impact.count==1 && count(impact,TwinShieldKillStrokeKind::Cut)==1 &&
         hot.count<=hot.strokes.size() && count(hot,TwinShieldKillStrokeKind::Cut)==1 &&
-        count(hot,TwinShieldKillStrokeKind::Arc)==12 && count(tail,TwinShieldKillStrokeKind::Cut)==0 &&
+        count(hot,TwinShieldKillStrokeKind::Arc)==0 && count(tail,TwinShieldKillStrokeKind::Cut)==0 &&
         count(tail,TwinShieldKillStrokeKind::Arc)>0 && count(tail,TwinShieldKillStrokeKind::Spark)>0 &&
-        EvaluateTwinShieldDroneKillFlash(pose,0.23f).count==0,
-        "A lethal core cut must appear immediately, give way to small connection arcs/fragments, and finish before wing detachment");
+        EvaluateTwinShieldDroneKillFlash(pose,TwinShieldDroneKillFlash::Lifetime).count==0,
+        "A lethal core cut must lead immediately, then hand over to connection arcs without replaying the initial strike");
     runner.Expect(length(subtract(hot.strokes[0].end,hot.strokes[0].start))>5 &&
         length(subtract(hot.strokes[0].end,hot.strokes[0].start))<6.6f &&
-        hot.strokes[0].width<0.20f &&
+        hot.strokes[0].width>0.20f && hot.strokes[0].width<0.28f &&
         hot.strokes[0].opacity>hot.strokes[1].opacity,
-        "The cut must stay a thin aircraft-sized accent, brighter than the secondary arcs");
+        "The thicker cut must remain aircraft-sized and brighter than the secondary fragments");
+    for(int fps:{30,60,120}) {
+        int brightFrames=0;bool dischargeAfterCut=false,ordered=true;
+        for(int frame=0;frame<=int(float(fps)*0.34f);++frame) {
+            const float age=float(frame)/float(fps);
+            const auto flash=EvaluateTwinShieldDroneKillFlash(pose,age);
+            for(size_t index=0;index<flash.count;++index) {
+                const auto& stroke=flash.strokes[index];
+                if(stroke.kind==TwinShieldKillStrokeKind::Cut && stroke.opacity>0.25f) ++brightFrames;
+                if(stroke.kind==TwinShieldKillStrokeKind::Arc) {
+                    ordered &= age>=TwinShieldDroneKillFlash::ArcBegin;
+                    dischargeAfterCut |= age>TwinShieldDroneKillFlash::CutLifetime;
+                }
+            }
+        }
+        runner.Expect(ordered && brightFrames>=fps/10 && dischargeAfterCut,
+            "At 30/60/120 Hz the strike must remain readable before discharge, which must continue after the cut fades");
+    }
+    auto detachedPose=pose;detachedPose.destructionAge=0.28f;
+    const auto detached=EvaluateTwinShieldDroneBreakup(detachedPose);
+    const auto discharge=EvaluateTwinShieldDroneKillFlash(pose,0.28f);
+    const auto& left=detached.leftWorld;
+    const Vector3 leftJoint{left.m[3][0]+0.06f*left.m[0][0]-0.96f*left.m[2][0],
+        left.m[3][1]+0.06f*left.m[0][1]-0.96f*left.m[2][1],
+        left.m[3][2]+0.06f*left.m[0][2]-0.96f*left.m[2][2]};
+    runner.Expect(count(discharge,TwinShieldKillStrokeKind::Arc)==12 &&
+        length(subtract(discharge.strokes[5].end,leftJoint))<0.001f,
+        "Late discharge must follow the rendered shield joint as it separates, rather than ending at the old intact pose");
     const auto body=EvaluateTwinShieldDroneDestructionBody(pose,0.04f);
     const Vector3 core{body.m[3][0]-1.02f*body.m[2][0],body.m[3][1]-1.02f*body.m[2][1],body.m[3][2]-1.02f*body.m[2][2]};
     runner.Expect(length(subtract(core,hot.core))<0.001f &&
@@ -26914,14 +27208,137 @@ void TestTwinShieldDroneCoreBreak(RegressionRunner& runner) {
         "Pause must freeze the core cut instead of consuming its short lifetime");
     input.gameplayActive=true;input.deltaTime=0.12f;bridge.Update(input);
     runner.Expect(count(EvaluateTwinShieldDroneKillFlash(bridge.Frame().destructionBursts.front().frozenPose,0.12f),
-        TwinShieldKillStrokeKind::Cut)==0 && bridge.Frame().audioCues.empty(),
-        "Resuming must finish the cut naturally without another fracture cue");
-    input.deltaTime=0.14f;bridge.Update(input);
+        TwinShieldKillStrokeKind::Cut)==1 && bridge.Frame().audioCues.empty(),
+        "Resuming must retain the longer cut without another fracture cue");
+    input.deltaTime=0.22f;bridge.Update(input);
     runner.Expect(bridge.Frame().destructionBursts.size()==1 &&
         EvaluateTwinShieldDroneKillFlash(bridge.Frame().destructionBursts.front().frozenPose,
             bridge.Frame().destructionBursts.front().age).count==0,
         "The core accent must be gone while the existing aircraft breakup and dive continue");
     bridge.Reset();runner.Expect(bridge.Frame().destructionBursts.empty(),"Retry must clear the world kill accent immediately");
+
+    // Exercise the real arrival boundary with an authored, moving drone pose.
+    // The native contact must share the Defeated event's first visible frame.
+    for(float amount:{5.0f,100.0f}) {
+        CourseSpawnRuntime targets;targets.SpawnEnemyActor(BuildRailReadyDrone(0));
+        auto target=actor;target.actorId=targets.Enemies().front().actorId;
+        target.weaponMount.dronePose.flightVelocity=pose.destructionDrift;
+        target.weaponMount.dronePose.hasFlightVelocity=true;
+        RestoreEnemyFixture(runner,targets,target);targets.EnemyCombat().ConsumeEvents();
+        CourseCollisionSystem contactsCollision;RailLockVolley volley;RailLockSettings settings;
+        RailLockToken token;token.target.actorId=target.actorId;
+        WeaponShot shot;shot.shotId=95000+uint64_t(amount);shot.damage=amount;shot.range=140;
+        shot.damageType=WeaponDamageType::Energy;
+        const Vector3 muzzle{4,10,0};
+        runner.Expect(volley.Enqueue(std::span(&token,1),std::span(&shot,1),muzzle,rail,targets,settings)==1,
+            "Moving drone contact fixture must launch one real lock laser");
+        for(int step=0;step<60 && volley.Contacts().empty();++step)
+            volley.Update(1.0f/60,muzzle,rail,targets,contactsCollision,nullptr);
+        EnemyCombatPresentationBridge contactBridge;EnemyCombatPresentationInput contactInput;
+        auto arrivalEvents=targets.EnemyCombat().ConsumeEvents();
+        contactInput.runtime=&targets;contactInput.railPath=&rail;contactInput.events=arrivalEvents;
+        contactInput.deltaTime=0;contactBridge.Update(contactInput);
+        const bool lethal=amount>50;
+        runner.Expect(volley.Contacts().size()==1 && volley.Contacts().front().age==0 &&
+            volley.Contacts().front().destroyed==lethal &&
+            std::abs(volley.Contacts().front().size-2.0f)<0.001f &&
+            length(subtract(volley.Contacts().front().drift,pose.destructionDrift))<0.001f &&
+            targets.Enemies().front().combatState.hitFlash<0.20f &&
+            contactBridge.Frame().destructionBursts.size()==size_t(lethal) &&
+            (!lethal || (contactBridge.Frame().destructionBursts.front().age==0 &&
+                EvaluateTwinShieldDroneKillFlash(contactBridge.Frame().destructionBursts.front().frozenPose,0).count>0)),
+            "The first contact frame must retain the captured scale/motion and start a lethal cut at age zero without a full-body wash");
+        const auto arrivalProfile=volley.Contacts().front().Presentation();
+        runner.Expect(arrivalProfile.pierceOpacity>=0.70f && arrivalProfile.pierceExtent>volley.Contacts().front().size*1.4f,
+            "Every confirmed lock contact, including a nonlethal one, must begin with a readable penetrating flash");
+        if(lethal) {
+            const auto captured=volley.Contacts().front();
+            runner.Expect(captured.hasWreckPose && !captured.wreckPose.primaryDestruction && captured.Debris().count==0,
+                "A lethal lock arrival must freeze its actual wreck pose, with metal release delayed until after impact");
+            auto impactSample=captured;impactSample.age=0.04f;
+            auto ruptureSample=captured;ruptureSample.age=0.10f;
+            auto aftermathSample=captured;aftermathSample.age=0.45f;
+            auto pierceTail=captured;pierceTail.age=0.12f;
+            runner.Expect(arrivalProfile.shockOpacity>=0.60f && impactSample.Presentation().pierceOpacity>0.99f &&
+                impactSample.Presentation().pierceExtent>captured.size*2.5f && pierceTail.Presentation().pierceOpacity<0.30f &&
+                aftermathSample.Presentation().pierceOpacity==0 && aftermathSample.Presentation().jetOpacity==0,
+                "Kill accents must exceed the shield span immediately, hold their peak across the first frames and yield to breakup");
+            for(int fps:{30,60,120}) {
+                int brightFrames=0;
+                for(int frame=0;frame<fps/4;++frame) {auto sample=captured;sample.age=float(frame)/fps;
+                    brightFrames+=sample.Presentation().pierceOpacity>0.90f?1:0;}
+                runner.Expect(brightFrames>=2,"The penetrating kill accent must remain visible for multiple frames at 30/60/120Hz");
+            }
+            runner.Expect(impactSample.Presentation().shockOpacity>0.5f && impactSample.Presentation().ruptureOpacity==0 &&
+                ruptureSample.Presentation().ruptureOpacity>0.5f && aftermathSample.Presentation().burstOpacity==0 &&
+                aftermathSample.Presentation().shockOpacity==0 && aftermathSample.Presentation().ruptureOpacity==0 &&
+                aftermathSample.Debris().count>0,
+                "SF arrival must lead the orange core rupture, then clear while glowing metal carries the aftermath");
+            const auto core=EvaluateTwinShieldDroneKillFlash(contactBridge.Frame().destructionBursts.front().frozenPose,0.10f).core;
+            runner.Expect(length(subtract(core,captured.CenterAt(0.10f)))<0.001f,
+                "Impact sheets must share the actual sensor's recoil pose with the rendered destruction and discharge");
+            auto release=captured;
+            const float side=TwinShieldDestructionSide(release.wreckPose);
+            release.age=TwinShieldDroneDetachAge(release.wreckPose,side);
+            auto releasedPose=release.wreckPose;releasedPose.destructionAge=release.age;
+            const auto breakup=EvaluateTwinShieldDroneBreakup(releasedPose);
+            const auto& shield=side<0?breakup.leftWorld:breakup.rightWorld;
+            const Vector3 joint{shield.m[3][0]-side*0.06f*shield.m[0][0]-0.96f*shield.m[2][0],
+                shield.m[3][1]-side*0.06f*shield.m[0][1]-0.96f*shield.m[2][1],
+                shield.m[3][2]-side*0.06f*shield.m[0][2]-0.96f*shield.m[2][2]};
+            const auto shards=release.Debris();
+            runner.Expect(shards.count==5 && length(subtract(shards.fragments[shards.count-1].position,joint))<0.001f,
+                "First armor fragments must leave the actual shield joint on its release frame: count="+
+                std::to_string(shards.count)+" error="+std::to_string(shards.count?length(subtract(shards.fragments[shards.count-1].position,joint)):-1.0f));
+            bool validDebris=true;
+            for(int frame=0;frame<101;++frame) {
+                auto sample=captured;sample.age=float(frame)*captured.Duration()/100;
+                const auto debris=sample.Debris();
+                validDebris &= debris.count<=debris.fragments.size();
+                for(size_t i=0;i<debris.count;++i) {
+                    const auto& chip=debris.fragments[i];
+                    validDebris &= std::isfinite(chip.position.x) && std::isfinite(chip.position.y) &&
+                        std::isfinite(chip.position.z) && chip.opacity>=0 && chip.opacity<=1 && chip.heat>=0 && chip.heat<=1;
+                }
+            }
+            auto expired=captured;expired.age=expired.Duration();
+            auto normal=captured;normal.destroyed=false;
+            runner.Expect(validDebris && expired.Debris().count==0 && normal.Debris().count==0,
+                "Metal must stay bounded and finite, expire with the contact, and never turn a nonlethal hit into destruction");
+            std::filesystem::create_directories("logs");
+            std::ofstream preview("logs/rail_lock_sf_debris_preview.csv");
+            preview<<"age,x,y,z,tx,ty,tz,radius,opacity,heat\n";
+            for(float age:{0.10f,0.28f,0.40f,0.55f,0.70f}) {
+                auto sample=captured;sample.age=age;
+                const auto debris=sample.Debris();
+                for(size_t i=0;i<debris.count;++i) {const auto& p=debris.fragments[i];
+                    preview<<age<<','<<p.position.x<<','<<p.position.y<<','<<p.position.z<<','
+                        <<p.tail.x<<','<<p.tail.y<<','<<p.tail.z<<','<<p.radius<<','<<p.opacity<<','<<p.heat<<'\n';}
+            }
+        } else runner.Expect(volley.Contacts().front().Debris().count==0,
+            "A real nonlethal lock arrival must retain the existing short hit without armor debris");
+        volley.Update(0.16f,muzzle,rail,targets,contactsCollision,nullptr);
+        runner.Expect(volley.Lasers().empty() && volley.Contacts().size()==1 && volley.Visible(),
+            "Contact sparks must survive the laser tail and a lethal actor's invalid target handle");
+        const float healthAfterArrival=targets.Enemies().front().desc.hitPoints;
+        volley.Update(0.10f,muzzle,rail,targets,contactsCollision,nullptr);
+        runner.Expect(volley.Contacts().size()==size_t(lethal) && volley.Visible()==lethal &&
+            targets.Enemies().front().desc.hitPoints==healthAfterArrival && volley.Hits().empty(),
+            "Only lethal impacts may retain their longer fragment tail, without applying another hit to the destroyed actor");
+        if(lethal) {
+            const auto before=volley.Contacts().front().Presentation();
+            const auto debrisBefore=volley.Contacts().front().Debris();
+            const float frozen=volley.Contacts().front().age;
+            volley.Update(0,muzzle,rail,targets,contactsCollision,nullptr);
+            runner.Expect(volley.Contacts().front().age==frozen &&
+                volley.Contacts().front().Presentation().shockPhase==before.shockPhase &&
+                volley.Contacts().front().Debris().count==debrisBefore.count &&
+                length(subtract(volley.Contacts().front().Debris().fragments[0].position,debrisBefore.fragments[0].position))<0.0001f,
+                "Pause must freeze the dissolve/shock front as well as the debris clock");
+        }
+        volley.Reset();runner.Expect(volley.Contacts().empty() && !volley.Visible(),
+            "Retry must clear the remaining contact sparks immediately");
+    }
 }
 
 void TestRailLockReticlePresentation(RegressionRunner& runner) {
@@ -26947,6 +27364,18 @@ void TestRailLockReticlePresentation(RegressionRunner& runner) {
     runner.Expect(tracked.center.x==740 && tracked.center.y==340 && tracked.capture==0 &&
         tracked.halfExtent.x==held.halfExtent.x,
         "Tracking a held target must update its centre without replaying the capture animation");
+    const auto releaseStart=BuildRailReleasedReticleVisual(token,0,1,0.92f);
+    const auto releaseMiddle=BuildRailReleasedReticleVisual(token,0.06f,1,0.92f);
+    runner.Expect(releaseStart.visible && releaseStart.capture==0 &&
+        std::abs(releaseStart.halfExtent.x-held.halfExtent.x)<0.001f &&
+        releaseMiddle.halfExtent.x>releaseStart.halfExtent.x && releaseMiddle.ink.w<releaseStart.ink.w &&
+        !BuildRailReleasedReticleVisual(token,RailLockReticleVisual::ReleaseDuration,1,0.92f).visible,
+        "Release must open from the held jaw pose and fade out without replaying capture or leaving a persistent marker");
+    runner.Expect(std::all_of(held.segments.begin(),held.segments.begin()+held.segmentCount,
+        [](const auto& segment){return segment.highlight==0;}) &&
+        std::all_of(releaseMiddle.segments.begin(),releaseMiddle.segments.begin()+releaseMiddle.segmentCount,
+        [](const auto& segment){return segment.highlight==0;}),
+        "Capture glints must not continue during hold or restart when a laser is released");
     for(float scale:{0.55f,0.82f,1.0f,1.97f}) {
         const auto cursor=BuildRailAimReticleVisual({400,300},true,scale,0.92f);
         const auto marker=BuildRailConfirmedReticleVisual(token,2,scale,0.92f,18*scale);
@@ -27013,6 +27442,32 @@ void TestRailLockReticlePresentation(RegressionRunner& runner) {
     resolver.Reset();frame={};
     runner.Expect(!BuildRailLockCaptureSound(frame,2,800,0.016f).play,
         "Retry/reset must not replay a retained confirmation cue");
+
+    // Geometry from the production layout for inspecting capture/hold/release
+    // on dark and bright backgrounds without requiring a gameplay capture.
+    std::filesystem::create_directories("logs");
+    std::ofstream preview("logs/lock_clamp_layout.csv",std::ios::trunc);
+    preview<<"state,stroke,edgeWidth,r,g,b,a,er,eg,eb,ea,x0,y0,x1,y1,opacity,width,highlight,ordinalX,ordinalY\n";
+    auto sample=token;sample.acquiredScreenPosition={0,0};
+    const std::array<RailLockReticleVisual,6> states{{
+        BuildRailConfirmedReticleVisual(sample,1,1,0.92f,18),
+        BuildRailConfirmedReticleVisual(sample,1.055f,1,0.92f,18),
+        BuildRailConfirmedReticleVisual(sample,1.10f,1,0.92f,18),
+        BuildRailConfirmedReticleVisual(sample,1.20f,1,0.92f,18),
+        BuildRailReleasedReticleVisual(sample,0,1,0.92f,18),
+        BuildRailReleasedReticleVisual(sample,0.06f,1,0.92f,18)}};
+    for(size_t state=0;state<states.size();++state) {
+        const auto& visual=states[state];
+        for(size_t i=0;i<visual.segmentCount;++i) {
+            const auto& segment=visual.segments[i];
+            preview<<state<<','<<visual.stroke<<','<<visual.edgeWidth<<','
+                <<visual.ink.x<<','<<visual.ink.y<<','<<visual.ink.z<<','<<visual.ink.w<<','
+                <<visual.edge.x<<','<<visual.edge.y<<','<<visual.edge.z<<','<<visual.edge.w<<','
+                <<segment.start.x<<','<<segment.start.y<<','<<segment.end.x<<','<<segment.end.y<<','
+                <<segment.opacity<<','<<segment.strokeScale<<','<<segment.highlight<<','
+                <<visual.ordinalPosition.x<<','<<visual.ordinalPosition.y<<'\n';
+        }
+    }
 }
 
 void TestTwinShieldDroneDestruction(RegressionRunner& runner) {
@@ -27040,6 +27495,7 @@ void TestTwinShieldDroneDestruction(RegressionRunner& runner) {
     CourseCollisionSystem collision;
     WeaponHitRequest hit;
     hit.shotId=93001; hit.targetActorId=actor.actorId; hit.hitKind=RailAimHitKind::Enemy;
+    hit.lockOnContact=true; // Retain coverage of the slower lock-laser crash path.
     hit.damageType=WeaponDamageType::Energy; hit.baseDamage=100;
     hit.rayOrigin={3,8,0}; hit.rayDirection={0,0,1}; hit.hitPoint={3,8,70}; hit.hitNormal={0,0,-1}; hit.hitDistance=70;
     const auto damage=collision.ApplyWeaponHit(runtime,nullptr,hit);
@@ -27065,11 +27521,11 @@ void TestTwinShieldDroneDestruction(RegressionRunner& runner) {
     const auto initial=EvaluateTwinShieldDroneBreakup(pose);
     pose.destructionAge=0.08f;
     const auto glow=EvaluateTwinShieldDroneBreakup(pose);
-    runner.Expect(glow.coreGain>initial.coreGain*3 && glow.coreOpacity==1 &&
+    runner.Expect(glow.coreGain>initial.coreGain*1.5f && glow.coreGain<initial.coreGain+8 && glow.coreOpacity==1 &&
         glow.bodyWorld.m[3][2]>initial.bodyWorld.m[3][2]+0.05f &&
         glow.bodyWorld.m[3][1]>initial.bodyWorld.m[3][1]-0.15f &&
         pose.destructionImpulse.z>0,
-        "The lethal contact must produce a visible recoil along the incoming shot before lift is lost");
+        "The localized core pulse must support the SF impact without a white wash, and recoil must precede lift loss");
     const float spread=1.09f+pose.charge*0.14f;
     const auto leftAttached=Multiply(glow.leftWorld,inverse(glow.bodyWorld));
     const auto rightAttached=Multiply(glow.rightWorld,inverse(glow.bodyWorld));
@@ -33463,6 +33919,33 @@ void TestRailTitleGroundFire(RegressionRunner& runner) {
 }
 
 void TestTwinShieldEnemyAssets(RegressionRunner& runner) {
+    // Exercise the shader's world-to-part packing through banked, translated,
+    // scaled transforms: a contact shadow must not slide across a flying part.
+    for (float side : {-1.0f, 0.0f, 1.0f}) {
+        auto world = MakeAffineMatrix(Vector3{1.8f, 2.1f, 1.6f},
+            Vector3{0.27f, side * 1.2f, -0.31f}, Vector3{73.0f + side, 15.0f, -96.0f});
+        Material material{};
+        material.specularMode = 10;
+        material.color = {1.0f, 1.0f, 1.0f, 0.6f};
+        material.padding2[0] = 0.18f;
+        SetTwinShieldDroneContactShading(material, Transpose(Inverse(world)), side, 0.0f, 0.8f);
+        for (const Vector3 local : {Vector3{0.0f, 0.0f, -0.72f}, Vector3{0.78f, -0.1f, 0.0f}, Vector3{-0.27f, -1.1f, 0.15f}}) {
+            const Vector4 point{
+                local.x*world.m[0][0]+local.y*world.m[1][0]+local.z*world.m[2][0]+world.m[3][0],
+                local.x*world.m[0][1]+local.y*world.m[1][1]+local.z*world.m[2][1]+world.m[3][1],
+                local.x*world.m[0][2]+local.y*world.m[1][2]+local.z*world.m[2][2]+world.m[3][2], 1.0f};
+            const float expected[] = {local.x, local.y, local.z};
+            for (int axis = 0; axis < 3; ++axis) {
+                const float* column = material.padding2 + 1 + axis * 4;
+                const float recovered = point.x*column[0]+point.y*column[1]+point.z*column[2]+column[3];
+                runner.Expect(std::abs(recovered - expected[axis]) < 0.0001f,
+                    "Drone contact shading must remain attached in the shader's local space during banking and flight");
+            }
+        }
+        runner.Expect(material.specularMode == 10 && material.color.w == 0.6f && material.padding2[0] == 0.18f &&
+            material.padding2[13] == side && material.padding2[14] == 0.0f && material.padding2[15] == 0.8f,
+            "Each shield must bind independent attachment visibility without changing alpha or hit flash");
+    }
     const std::string directory="Resources/enemies/TwinShieldDrone";
     size_t assembledTriangles=0;
     for (const char* file : {"TwinShieldHull.obj","TwinShieldPanel.obj","TwinShieldCore.obj","TwinShieldDrone.obj"}) {
@@ -34296,12 +34779,24 @@ void TestRailTransitionDemo(RegressionRunner& runner) {
         runner.Expect(!demo.ButtonVisible() && !demo.RequestReturn(),"Title must not accept a demo return request");
         for(int cycle=0;cycle<2;++cycle) {
             demo.BeginGameplay();
-            for(int i=0;i<fps*2;++i) demo.Update(1.0f/fps,false);
-            runner.Expect(!demo.ButtonVisible(),"The return delay must begin after the gameplay entry gate opens");
+            RailTitleGameplayEntry entry;
+            entry.Begin();
             int frames=0;
-            while(!demo.ButtonVisible() && frames<fps*4) {demo.Update(1.0f/fps,true);++frames;}
-            runner.Expect(std::abs(float(frames)/fps-RailTransitionDemo::ButtonDelay)<1.01f/fps,
-                "The central return button must appear after the configured playable delay at every frame rate");
+            bool earlyButton=false;
+            while(entry.Frame().active && frames<fps*8) {
+                demo.Update(1.0f/fps,!entry.Frame().active);
+                earlyButton |= demo.ButtonVisible() || demo.RequestReturn();
+                entry.Update(1.0f/fps);
+                ++frames;
+            }
+            runner.Expect(!earlyButton && !demo.ButtonVisible() &&
+                std::abs(float(frames)/fps-RailTitleGameplayEntry::GoEnd)<1.01f/fps,
+                "The demo must show the complete READY, flyby, turn, GO and camera release before stopping");
+            demo.Update(1.0f/fps,!entry.Frame().active);
+            runner.Expect(demo.ButtonVisible() && demo.ButtonOpacity()>0.0f,
+                "The replay button must appear immediately after startup completes, including on a second replay");
+            demo.Update(0.0f,false);
+            runner.Expect(demo.ButtonVisible(),"A held demo button must remain available without advancing the paused scene");
             demo.Update(-1,true);demo.Update((std::numeric_limits<float>::quiet_NaN)(),true);
             runner.Expect(demo.RequestReturn() && !demo.RequestReturn() && !demo.ButtonVisible() && !demo.NeedsTitleSwap(),
                 "One return activation must hide the button and reject duplicate/early world switches");
@@ -34355,15 +34850,18 @@ void TestRailReadyDroneSalvo(RegressionRunner& runner) {
     RailWorldRaycastInput terrain;
     terrain.railPath=&rail; terrain.terrainSettings=&settings; terrain.terrainEdits=&course.terrainEditLayer;
     int terrainQueries=0;
+    std::ofstream shotReview("logs/ready_shot_near_miss.csv",std::ios::trunc);
+    shotReview<<"fps,shot,launchTime,originX,originY,originZ,targetX,targetY,targetZ,passSide,passHeight,passTime\n";
     const RailReadyDroneSalvo::WallTrace trace=[&](Vector3 origin,float d,uint32_t i,Vector3& point,Vector3& normal) {
         ++terrainQueries;
-        return RailReadyDroneSalvo::TraceLeftWall(terrain,origin,d,i,point,normal);
+        return RailReadyDroneSalvo::TraceVehicleNearMiss(terrain,origin,d,i,point,normal);
     };
     for(int fps:{30,60,120}) {
         terrainQueries=0;
         RailReadyDroneSalvo salvo;
         int launches=0,impacts=0;
-        bool safe=true,leftWall=true,beforeGo=true,aligned=true,uniformSpeed=true;
+        std::array<bool,2> reviewed{};
+        bool safe=true,realContact=true,nearVehicle=true,beforeGo=true,aligned=true,uniformSpeed=true;
         for(int f=0;f<=fps*6;++f) {
             const float t=float(f)/fps, d=RailTitleScene::Speed*t;
             salvo.Update(t,d,rail,1.65f,trace);
@@ -34394,9 +34892,32 @@ void TestRailReadyDroneSalvo(RegressionRunner& runner) {
                 ray.worldRayDirection={delta.x/distance,delta.y/distance,delta.z/distance}; ray.maxDistance=distance+1;
                 auto check=terrain; check.aim=&ray; check.playerDistance=launchDistance;
                 const auto hit=RailWorldRaycast::Query(check);
-                leftWall &= hit.hit && hit.kind==RailAimHitKind::ProceduralTerrain && std::abs(hit.distance-distance)<0.25f;
-                const auto frame=rail.Evaluate(launchDistance+45+8*float(shot.id-1));
-                leftWall &= hit.normal.x*frame.right.x+hit.normal.y*frame.right.y+hit.normal.z*frame.right.z>0.15f;
+                realContact &= hit.hit && hit.kind==RailAimHitKind::ProceduralTerrain && std::abs(hit.distance-distance)<0.25f;
+                // Find the actual pass of the moving vehicle's transverse
+                // plane, rather than merely checking that damage is disabled.
+                const auto relative=[&](float u) {
+                    const auto cart=rail.Evaluate(launchDistance+RailTitleScene::Speed*shot.duration*u);
+                    const Vector3 point{shot.origin.x+delta.x*u,shot.origin.y+delta.y*u,shot.origin.z+delta.z*u};
+                    const Vector3 error{point.x-cart.position.x,point.y-cart.position.y,point.z-cart.position.z};
+                    return Vector3{error.x*cart.right.x+error.y*cart.right.y+error.z*cart.right.z,
+                        error.x*cart.up.x+error.y*cart.up.y+error.z*cart.up.z,
+                        error.x*cart.tangent.x+error.y*cart.tangent.y+error.z*cart.tangent.z};
+                };
+                float low=0,high=1;
+                nearVehicle &= relative(low).z<0 && relative(high).z>0;
+                for(int i=0;i<20;++i) {
+                    const float middle=(low+high)*0.5f;
+                    if(relative(middle).z<0) low=middle;else high=middle;
+                }
+                const auto pass=relative((low+high)*0.5f);
+                nearVehicle &= std::abs(pass.x)>5.8f && std::abs(pass.x)<8.0f &&
+                    pass.y>3.5f && pass.y<4.8f && std::abs(pass.z)<0.01f;
+                if(!reviewed[shot.id-1]) {
+                    reviewed[shot.id-1]=true;
+                    shotReview<<fps<<','<<shot.id<<','<<shotTime<<','<<shot.origin.x<<','<<shot.origin.y<<','
+                        <<shot.origin.z<<','<<shot.target.x<<','<<shot.target.y<<','<<shot.target.z<<','
+                        <<pass.x<<','<<pass.y<<','<<shot.duration*(low+high)*0.5f<<'\n';
+                }
             }
             // Frozen presentation time cannot replay sound or produce another projectile.
             const auto count=salvo.Shots().size();
@@ -34404,9 +34925,13 @@ void TestRailReadyDroneSalvo(RegressionRunner& runner) {
             runner.Expect(salvo.Cues().empty() && salvo.Shots().size()==count,
                 "Pausing READY must not duplicate firing or impact events");
         }
-        runner.Expect(launches==2 && impacts==2 && safe && leftWall && beforeGo && aligned && uniformSpeed &&
+        runner.Expect(launches==2 && impacts==2 && safe && realContact && nearVehicle && beforeGo && aligned && uniformSpeed &&
             terrainQueries<=4 && !salvo.Visible(),
-            "At every frame rate two READY shots must leave their aimed gun lips at fixed speed, clear the cart, hit real left walls and use bounded terrain queries");
+            "READY aimed near misses must reach first terrain with bounded queries: fps="+std::to_string(fps)+
+            " launches="+std::to_string(launches)+" impacts="+std::to_string(impacts)+
+            " safe="+std::to_string(safe)+" contact="+std::to_string(realContact)+
+            " near="+std::to_string(nearVehicle)+" aligned="+std::to_string(aligned)+
+            " speed="+std::to_string(uniformSpeed));
         salvo.Reset();
         const float t=RailReadyDroneSalvo::ShotTimes[0];
         salvo.Update(t,t*RailTitleScene::Speed,rail,1.65f,trace);
@@ -34431,6 +34956,227 @@ void TestRailReadyDroneSalvo(RegressionRunner& runner) {
     crossing.duration=0.1f;
     runner.Expect(!RailReadyDroneSalvo::ClearsVehicle(crossing,rail,20),
         "A cinematic bullet crossing the cart must be rejected even though it has no damage component");
+}
+
+void TestRailReadyDronePair(RegressionRunner& runner) {
+    const auto sub=[](Vector3 a,Vector3 b) {return Vector3{a.x-b.x,a.y-b.y,a.z-b.z};};
+    const auto dot=[](Vector3 a,Vector3 b) {return a.x*b.x+a.y*b.y+a.z*b.z;};
+    const auto length=[&](Vector3 v) {return std::sqrt(dot(v,v));};
+    CourseAsset course;course.railPoints={{{0,0,0}},{{0,0,300}}};
+    CourseCameraKey rig;rig.backDistance=28;rig.verticalOffset=12;
+    rig.lookAheadDistance=30;rig.fovY=0.94f;course.cameraKeys.push_back(rig);
+    RailPath rail;rail.SetControlPoints(course.railPoints);
+    std::ofstream review("logs/ready_drone_pair.csv",std::ios::trunc);
+    review<<"time,actor,lateral,vertical,forward,screenX,screenY,depth\n";
+    for(int fps:{30,60,120}) {
+        CourseSpawnRuntime runtime;
+        std::array<uint32_t,kRailReadyDroneCount> ids{};
+        for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+            runner.Expect(runtime.SpawnEnemyActor(BuildRailReadyDrone(0,i)),"Both READY aircraft must spawn as real combat actors");
+            ids[i]=runtime.Enemies().back().actorId;
+        }
+        RailTitleGameplayEntry entry;entry.Begin();RailCameraDirector director;
+        std::array<float,kRailReadyDroneCount> passes{-1,-1};
+        float minimumSeparation=1000;
+        bool framed=true,safe=true,paused=true;
+        std::string firstUnframed;
+        while(entry.Frame().blockingGameplay) {
+            entry.Update(1.0f/fps);
+            const float t=entry.Elapsed(),d=t*RailTitleScene::Speed;
+            std::array<Vector3,kRailReadyDroneCount> positions{};
+            for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+                const auto f=EvaluateRailReadyDroneFlight(t,rail,d,RailTitleScene::Speed,i);
+                runtime.SetEnemyStartupFlight(ids[i],d,f.forward,f.lateral,f.vertical,f.rotation,
+                    entry.Frame().goStarted,RailTitleScene::Speed);
+                positions[i]=BuildRailReadyDronePose(rail,d+f.forward,f.lateral,f.vertical,f.rotation,1.65f).position;
+                if(passes[i]<0 && f.forward>=0) passes[i]=t;
+                safe &= std::abs(f.forward)>7 || std::abs(f.lateral)>4.4f || f.vertical>6.8f;
+                if(t<RailTitleGameplayEntry::WingmanReadyBegin && i==1)
+                    paused &= f.forward==-80.0f;
+            }
+            minimumSeparation=(std::min)(minimumSeparation,length(sub(positions[0],positions[1])));
+            CourseEnemyFireSafetyFrameInput safety;safety.playerDistance=d;
+            safety.cameraAllowsEnemyFire=false;runtime.Update(0,safety);
+            paused &= runtime.ActiveBulletCount()==0 && runtime.Enemies()[0].age==0 && runtime.Enemies()[1].age==0;
+            const auto shot=EvaluateRailReadyCameraShot(t);
+            RailCameraDirectorFrameInput camera;camera.course=&course;camera.railPath=&rail;
+            camera.spawnRuntime=&runtime;camera.distance=d;camera.deltaTime=1.0f/fps;
+            camera.titleHandoffWeight=entry.Frame().cameraHandoffWeight;
+            camera.titleHandoffRig=RailTitleScene::DepartureCameraRig();
+            camera.startupCameraWeight=shot.weight;camera.startupCameraFocusBlend=shot.focusBlend;
+            camera.startupCameraFovY=shot.fovY;camera.startupCameraEyeOffset=shot.eyeOffset;
+            camera.startupCameraDroneOffset=shot.droneOffset;camera.startupCameraDroneId=ids[0];
+            camera.startupCameraWingmanOffset=shot.wingmanOffset;camera.startupCameraWingmanId=ids[1];
+            camera.viewportWidth=1600;camera.viewportHeight=900;camera.vehicleFramingActive=true;
+            for(size_t j=0;j<8;++j) camera.vehicleBoundsCorners[j]={
+                (j&1)?3.5f:-3.5f,(j&2)?4.0f:0.0f,d+((j&4)?4.0f:-4.0f)};
+            const auto view=director.Evaluate(camera);
+            const auto right=Normalize(Vector3{view.up.y*view.forward.z-view.up.z*view.forward.y,
+                view.up.z*view.forward.x-view.up.x*view.forward.z,
+                view.up.x*view.forward.y-view.up.y*view.forward.x});
+            const auto up=Normalize(Vector3{view.forward.y*right.z-view.forward.z*right.y,
+                view.forward.z*right.x-view.forward.x*right.z,
+                view.forward.x*right.y-view.forward.y*right.x});
+            for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+                const auto delta=sub(positions[i],view.position);const float depth=dot(delta,view.forward);
+                const float tangent=std::tan(view.fovY*0.5f);
+                const float x=0.5f+dot(delta,right)/(depth*tangent*(16.0f/9.0f))*0.5f;
+                const float y=0.5f-dot(delta,up)/(depth*tangent)*0.5f;
+                if(fps==60) {
+                    const auto& a=runtime.Enemies()[i];
+                    review<<t<<','<<i<<','<<a.desc.lateralOffset<<','<<a.desc.verticalOffset<<','
+                        <<a.desc.spawnDistance-d<<','<<x<<','<<y<<','<<depth<<'\n';
+                }
+                if(t>=0.95f && t<=3.40f) {
+                    const bool readable=depth>0 && x>0.04f && x<0.96f && y>0.03f && y<0.83f;
+                    if(!readable && firstUnframed.empty()) firstUnframed=" t="+std::to_string(t)+
+                        " aircraft="+std::to_string(i)+" xy="+std::to_string(x)+","+std::to_string(y);
+                    framed &= readable;
+                }
+            }
+        }
+        runner.Expect(ids[0]!=ids[1] && passes[1]>passes[0]+0.12f && minimumSeparation>6 && safe && paused,
+            "Two READY drones must pass at distinct times, stay separated and clear the cart while combat remains frozen; gap="+
+            std::to_string(minimumSeparation));
+        runner.Expect(framed,"The lead-biased camera must leave both staggered silhouettes inside the frame"+firstUnframed);
+        runner.Expect(runtime.ActiveEnemyCount()==2 && !runtime.Enemies()[0].startupFlightControlled &&
+            !runtime.Enemies()[1].startupFlightControlled && !entry.Frame().enemyFireAllowed,
+            "GO must release both existing actors into combat together while preserving the initial fire hold");
+        for(const auto& actor:runtime.Enemies()) {
+            auto preview=actor;AdvanceEnemyBehaviorMovement(preview,0,entry.Elapsed()*RailTitleScene::Speed,RailTitleScene::Speed);
+            runner.Expect(std::abs(preview.desc.lateralOffset-actor.desc.lateralOffset)<0.001f &&
+                std::abs(preview.desc.verticalOffset-actor.desc.verticalOffset)<0.001f &&
+                std::abs(preview.desc.distanceOffset-actor.desc.distanceOffset)<0.001f && actor.desc.localRotation.y==0,
+                "Each aircraft must hand its own hover anchor to gameplay without teleporting or reversing its nose");
+        }
+        runtime.Reset();entry.Reset();
+        runner.Expect(runtime.ActiveEnemyCount()==0 && !entry.Frame().active,
+            "Returning to title must discard both cinematic actors before replay");
+    }
+    RailPath curved;curved.SetControlPoints({{{-18,4,-120}},{{-8,7,-40}},{{20,12,45}},{{5,5,130}}});
+    for(float t=3.34f;t<4.43f;t+=1.0f/60.0f) {
+        constexpr float h=0.002f;
+        const auto position=[&](float time) {
+            const auto f=EvaluateRailReadyDroneFlight(time,1);
+            return BuildRailReadyDronePose(curved,time*RailTitleScene::Speed+f.forward,f.lateral,f.vertical,f.rotation,1.65f).position;
+        };
+        const auto direction=Normalize(sub(position(t+h),position(t-h)));
+        const auto f=EvaluateRailReadyDroneFlight(t,curved,t*RailTitleScene::Speed,RailTitleScene::Speed,1);
+        const auto pose=BuildRailReadyDronePose(curved,t*RailTitleScene::Speed+f.forward,f.lateral,f.vertical,f.rotation,1.65f);
+        const auto world=BuildTwinShieldDroneWorldMatrix(pose);
+        runner.Expect(-world.m[2][0]*direction.x-world.m[2][1]*direction.y-world.m[2][2]*direction.z>0.999f &&
+            f.rotation.z>0,"The companion must bank into its opposite turn with its rendered nose following the curved world-space flight");
+    }
+
+    // Compare the complete rendered envelopes with the ordinary chase shot,
+    // including the real course and the first playable frames after GO.
+    std::ofstream framingReview("logs/ready_forward_camera.csv",std::ios::trunc);
+    framingReview<<"course,fps,time,actor,minX,minY,maxX,maxY,height,ordinaryHeight,eyeX,eyeY,eyeZ,fov\n";
+    for(int courseIndex:{0,1}) for(int fps:{30,60,120}) {
+        CourseAsset shotCourse=course;
+        if(courseIndex==1) {
+            std::string error;
+            runner.Expect(shotCourse.LoadFromFile("Resources/courses/CanyonAssaultRoute01.course",&error),
+                "Forward READY camera must validate on the production course");
+        }
+        RailPath shotRail;shotCourse.ApplyToRailPath(shotRail);
+        CourseSpawnRuntime runtime;std::array<uint32_t,kRailReadyDroneCount> ids{};
+        for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+            runtime.SpawnEnemyActor(BuildRailReadyDrone(0,i));ids[i]=runtime.Enemies().back().actorId;
+        }
+        RailCameraDirector director,ordinary;
+        bool released=false,envelopesVisible=true,continuous=true,vehicleSafe=true;
+        float minimumMagnification=100;
+        RailCameraDirectorFrame previous;bool hasPrevious=false;
+        std::string firstBadEnvelope;
+        for(int frame=0;frame<=int(std::ceil(RailTitleGameplayEntry::GoEnd*fps));++frame) {
+            const float t=float(frame)/fps,d=t*RailTitleScene::Speed;
+            if(!released) {
+                for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+                    const auto f=EvaluateRailReadyDroneFlight(t,shotRail,d,RailTitleScene::Speed,i);
+                    runtime.SetEnemyStartupFlight(ids[i],d,f.forward,f.lateral,f.vertical,f.rotation,
+                        t>=RailTitleGameplayEntry::Duration,RailTitleScene::Speed);
+                }
+                released=t>=RailTitleGameplayEntry::Duration;
+            }
+            CourseEnemyFireSafetyFrameInput safety;safety.playerDistance=d;safety.railPath=&shotRail;
+            safety.cameraAllowsEnemyFire=false;
+            runtime.Update(released?1.0f/fps:0.0f,safety);
+            const auto shot=EvaluateRailReadyCameraShot(t);
+            RailCameraDirectorFrameInput input;input.course=&shotCourse;input.railPath=&shotRail;
+            input.section=shotCourse.FindSection(d);input.spawnRuntime=&runtime;input.distance=d;
+            input.deltaTime=1.0f/fps;input.viewportWidth=1600;input.viewportHeight=900;
+            input.startupCameraWeight=shot.weight;input.startupCameraFocusBlend=shot.focusBlend;
+            input.startupCameraFovY=shot.fovY;input.startupCameraEyeOffset=shot.eyeOffset;
+            input.startupCameraDroneId=ids[0];input.startupCameraDroneOffset=shot.droneOffset;
+            input.startupCameraWingmanId=ids[1];input.startupCameraWingmanOffset=shot.wingmanOffset;
+            input.vehicleFramingActive=true;
+            const auto sample=shotRail.Evaluate(d);
+            for(size_t j=0;j<8;++j) {
+                const float x=(j&1)?3.5f:-3.5f,y=(j&2)?4.0f:0.0f,z=(j&4)?4.0f:-4.0f;
+                input.vehicleBoundsCorners[j]={sample.position.x+sample.right.x*x+sample.up.x*y+sample.tangent.x*z,
+                    sample.position.y+sample.right.y*x+sample.up.y*y+sample.tangent.y*z,
+                    sample.position.z+sample.right.z*x+sample.up.z*y+sample.tangent.z*z};
+            }
+            const auto view=director.Evaluate(input);
+            auto normalInput=input;if(t>=RailTitleGameplayEntry::CameraSettleEnd) normalInput.startupCameraWeight=0;
+            const auto normal=ordinary.Evaluate(normalInput);
+            if(hasPrevious && t>=RailTitleGameplayEntry::CameraSettleEnd) {
+                continuous &= length(sub(view.position,previous.position))<90.0f/fps &&
+                    std::abs(view.fovY-previous.fovY)<1.1f/fps && dot(view.forward,previous.forward)>0.99f;
+            }
+            if(t>=RailTitleGameplayEntry::CameraSettleEnd) vehicleSafe &= view.vehicleFramingSafe;
+            previous=view;hasPrevious=true;
+            if(t<RailTitleGameplayEntry::DroneTurnBegin || t>4.46f) continue;
+            for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+                const auto& actor=runtime.Enemies()[i];
+                const auto pose=BuildRailReadyDronePose(shotRail,actor.desc.spawnDistance+actor.desc.distanceOffset,
+                    actor.desc.lateralOffset,actor.desc.verticalOffset,actor.desc.localRotation,actor.desc.radius);
+                const auto world=BuildTwinShieldDroneWorldMatrix(pose);
+                const auto bounds=[&](const RailCameraDirectorFrame& camera) {
+                    const auto right=Normalize(Vector3{camera.up.y*camera.forward.z-camera.up.z*camera.forward.y,
+                        camera.up.z*camera.forward.x-camera.up.x*camera.forward.z,
+                        camera.up.x*camera.forward.y-camera.up.y*camera.forward.x});
+                    const auto up=Normalize(Vector3{camera.forward.y*right.z-camera.forward.z*right.y,
+                        camera.forward.z*right.x-camera.forward.x*right.z,
+                        camera.forward.x*right.y-camera.forward.y*right.x});
+                    Vector4 box{100,100,-100,-100};
+                    for(int k=0;k<8;++k) {
+                        const Vector3 local{(k&1)?1.5f:-1.5f,(k&2)?1.65f:-1.65f,(k&4)?1.1f:-1.1f};
+                        const Vector3 p{local.x*world.m[0][0]+local.y*world.m[1][0]+local.z*world.m[2][0]+world.m[3][0],
+                            local.x*world.m[0][1]+local.y*world.m[1][1]+local.z*world.m[2][1]+world.m[3][1],
+                            local.x*world.m[0][2]+local.y*world.m[1][2]+local.z*world.m[2][2]+world.m[3][2]};
+                        const auto delta=sub(p,camera.position);const float depth=dot(delta,camera.forward);
+                        const float tanY=std::tan(camera.fovY*0.5f);
+                        const float x=0.5f+dot(delta,right)/(depth*tanY*(16.0f/9.0f))*0.5f;
+                        const float y=0.5f-dot(delta,up)/(depth*tanY)*0.5f;
+                        box.x=(std::min)(box.x,x);box.y=(std::min)(box.y,y);
+                        box.z=(std::max)(box.z,x);box.w=(std::max)(box.w,y);
+                    }
+                    return box;
+                };
+                const auto box=bounds(view),normalBox=bounds(normal);
+                const float height=box.w-box.y,normalHeight=normalBox.w-normalBox.y;
+                minimumMagnification=(std::min)(minimumMagnification,height/normalHeight);
+                const bool fits=box.x>0.06f && box.z<0.94f && box.y>0.10f && box.w<0.80f;
+                if(!fits && firstBadEnvelope.empty()) firstBadEnvelope=" course="+std::to_string(courseIndex)+
+                    " t="+std::to_string(t)+" actor="+std::to_string(i)+" box="+std::to_string(box.x)+","+
+                    std::to_string(box.y)+","+std::to_string(box.z)+","+std::to_string(box.w);
+                envelopesVisible &= fits;
+                if(fps==60) framingReview<<courseIndex<<','<<fps<<','<<t<<','<<i<<','<<box.x<<','<<box.y<<','
+                    <<box.z<<','<<box.w<<','<<height<<','<<normalHeight<<','<<view.position.x<<','
+                    <<view.position.y<<','<<view.position.z<<','<<view.fovY<<'\n';
+            }
+        }
+        runner.Expect(envelopesVisible && minimumMagnification>1.20f,
+            "The entire banking silhouettes must stay visible and larger than ordinary chase framing; ratio="+
+            std::to_string(minimumMagnification)+firstBadEnvelope);
+        runner.Expect(continuous && vehicleSafe,
+            "The close forward hold and post-GO handoff must keep the cart framed without position, direction or lens cuts");
+        runner.Expect(RailTitleGameplayEntry::CameraReleaseEnd<RailTitleGameplayEntry::EnemyFireBegin &&
+            EvaluateRailReadyCameraShot(RailTitleGameplayEntry::CameraReleaseEnd).weight==0,
+            "Ordinary camera ownership must be restored before the first enemy attack can begin");
+    }
 }
 
 void TestRailTitleGameplayEntry(RegressionRunner& runner) {
@@ -34760,14 +35506,14 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             const auto actual=director.Evaluate(camera);
             if(time>=RailTitleGameplayEntry::CameraSettleEnd &&
                     time<=RailTitleGameplayEntry::DroneTurnBegin) {
-                runner.Expect(shot.weight==0.0f && std::cos(flight.rotation.y)<-0.98f &&
+                runner.Expect(shot.weight==1.0f && std::cos(flight.rotation.y)<-0.98f &&
                     actual.forward.z>0.85f,
-                    "The forward camera must settle while the drone is still facing along travel, before its turnaround begins");
+                    "The close forward camera must settle while the drone is still facing along travel, before its turnaround begins");
             }
             if(time>RailTitleGameplayEntry::DroneTurnBegin && time<RailTitleGameplayEntry::DroneTurnEnd)
-                runner.Expect(shot.weight==0.0f && flight.forward>34.0f &&
+                runner.Expect(shot.weight==1.0f && actual.forward.z>0.85f && flight.forward>34.0f &&
                     std::abs(flight.rotation.z)>0.0f,
-                    "The forward-view drone must move through a banked arc rather than overlap the camera orbit or spin in place");
+                    "The close forward shot must hold through the banked arc after the camera orbit has finished");
             if(hasPrevious) runner.Expect(separation(actual.position,previous.position)<200.0f/fps &&
                 std::abs(actual.fovY-previous.fovY)<1.1f/fps,
                 "READY pursuit must orbit continuously without a position or FOV cut");
@@ -34808,8 +35554,9 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
             previous=actual; hasPrevious=true;
         }
         runner.Expect(lookedBehind && lookedForward && subjectsReadable &&
-            EvaluateRailReadyCameraShot(entry.Elapsed()).weight==0.0f,
-            "READY must show the approaching rear drone with the cart below, track the pass, and restore the forward camera before GO"+firstUnreadable);
+            EvaluateRailReadyCameraShot(entry.Elapsed()).weight>0.0f &&
+            EvaluateRailReadyCameraShot(RailTitleGameplayEntry::CameraReleaseEnd).weight==0.0f,
+            "READY must show the rear pursuit and moving turn, then release its close forward shot smoothly across GO"+firstUnreadable);
     }
 
     const auto farFlight=EvaluateRailReadyDroneFlight(0.64f);
@@ -35602,6 +36349,7 @@ int RunEditorCoreRegressionTests() {
         {"drone core cut and connection arcs", [&]() { TestTwinShieldDroneCoreBreak(runner); }},
         {"twin shield drone staged destruction", [&]() { TestTwinShieldDroneDestruction(runner); }},
         {"READY harmless drone wall salvo", [&]() { TestRailReadyDroneSalvo(runner); }},
+        {"READY staggered drone pair and handoff", [&]() { TestRailReadyDronePair(runner); }},
         {"title gameplay camera audio and HUD startup", [&]() { TestRailTitleGameplayEntry(runner); }},
         {"transition demo return and replay", [&]() { TestRailTransitionDemo(runner); }},
         {"Sunfall shadowed atmosphere graph and exposure", [&]() { TestSunfallAtmosphere(runner); }},
@@ -35864,6 +36612,8 @@ int RunEditorCoreRegressionTests() {
               TestTerrainCollisionBvh(runner);
               ValidateProductionTerrainBvh(runner);
           }},
+         {"primary shot kill strike and feedback", [&]() { TestRailPrimaryKillPresentation(runner); }},
+         {"rail pulse rapid fire presentation", [&]() { TestRailPulseShotPresentation(runner); }},
          {"rail world shot routing", [&]() { TestRailWorldShotRouting(runner); }},
          {"weapon damage reception", [&]() { TestWeaponDamageReception(runner); }},
          {"enemy combat state machine", [&]() { TestEnemyCombatStateMachine(runner); }},

@@ -44,14 +44,16 @@ still clears actors. Completed-Wave checkpoints restore surviving drones.
 First attacks get a small admission priority boost so
 surviving repeat attackers do not starve new arrivals. Dedicated spire
 single-pass encounters and rear chaser behavior retain
-their choreography. In cave gameplay, mode 10 uses a cool upper-side GGX key,
-weaker warm lower-side bounce and hemisphere ambient. The stronger key and
-steel-blue edge reflection separate the hull/shields from brown cave rock while
-retaining face shading and mapped roughness. Broad ambient/edge terms use the
-geometric normal to avoid turning texture scratches into a glowing outline.
-An additional soft frontal GGX source and cool metal ambient reveal the sensor
-housing and broad shield faces when the enemy occupies few screen pixels.
-Title shading is unchanged.
+their choreography. In cave gameplay, mode 10 retains neutral rock-bounce fill
+and opening light, with a stronger oblique upper-side GGX key to distinguish
+front, side and bevel faces at gameplay distance. Small authored contact
+occlusion volumes shade shield inner faces/mounts, hull joints, the sensor
+recess and downward faces. They use each part's world-to-model transform packed
+in the existing material slots, so shading follows banking and detached parts.
+Each shield's mounting shadow weakens with charge spread and fades after its
+own detachment time; this adds no terrain raycasts, textures or draw calls.
+Contact visibility is bounded to retain the readable ambient floor. Core
+emission, hit flashes, outdoor and title shading retain their existing paths.
 
 `EnemyFormationSystem` adds stable identity-derived hover homes after authored
 formation cohesion. Independent forward-hover drones use only 5 percent of the
@@ -112,3 +114,63 @@ title uses the shared GPU particle pool only for muzzle flashes and wheel dust,
 so new GPU emitters cannot reset the impact cloud or ballistic grains.
 Starting stops new fire; in-flight shots finish and all visuals clear before the
 blackout handoff. No gameplay spawn, damage or collision actor is created.
+
+Ordinary primary-shot kills use `RailPrimaryKillPresentation`: a white core
+ruptures into six staggered, irregular orange-red lobes over the first 0.17 s.
+The struck shield releases at 55–67 ms while the blast is still expanding.
+A single restrained glint replaces the former large crossed slash. Directed
+fragments, delayed alpha-blended soot and the existing falling wreck carry the
+aftermath. Released material retains its world emission position rather than
+following the falling sensor. Smoke finishes within 0.72 s; all state shares
+the gameplay clock and clears on retry/title return. Six fire lobes and five
+smoke puffs per kill, with at most sixteen live kills, bound the extra work.
+`TitleTracer.PS.hlsl` UV30 supplies the original turbulent hot-to-cool burst;
+the sorted, depth-tested `TitleDust` pass supplies smoke. The generated 240 ms
+core blast sound includes the metal break at 60 ms. Lock-on kill presentation,
+damage, collision and the later ground-impact explosion remain independent.
+
+Ordinary hostile shots now share the drone's orange core palette: a round
+plasma mass with broad flowing channels, a ragged white-hot seam, broken bright
+edge arcs, a red density edge and a three-radius orange tail. The former smooth
+Lambert sphere and circular white highlight are omitted to avoid a plastic-ball
+appearance at gameplay size. Direct/predictive, assault and turret visual bindings use the orb
+style; their existing projectile IDs and physical trajectories are unchanged.
+`EnemyProjectileVfxRenderer` exposes a native sphere backend only when the host
+provides both world shader passes. `AppRunLoop` draws the solid silhouette in
+the sorted alpha/depth-tested `TitleDust` pass (UV2000) and the compact glow/
+tail in `TitleTracer` (UV32), with flowing edge light at UV34. The 64-step internal flow uses gameplay time;
+the body radius does not pulse. The existing pixel readability policy and
+shoot-down authority still determine visibility and interception separately.
+Native orbs skip duplicate particle instances and debug circles/diamonds/
+brackets. Hosts without this backend retain the visible primitive fallback.
+The title and READY salvo use the same sphere/tail shaders, and world effects
+remain visible when the gameplay HUD is hidden. Homing missiles and boss arcs
+retain their distinct styles. Retry/title reset clears the native proxies.
+
+Lethal lock-laser arrivals use an original SF impact sequence: a compact white/
+cyan contact, an oblique eroding shock sheet (TitleTracer UV36), then an orange
+core rupture. The frozen accepted wreck pose anchors the light to the actual
+sensor. The old long cut and early radial sparks are suppressed for these
+contacts; connection arcs and the existing shield/fall choreography continue.
+Core brightness fades sooner to retain the impact sheet and metal silhouette.
+Four core chips lead twelve armor chips emitted at the first shield's detach
+time from its rendered joint. Released fragments use fixed world origins,
+inherited velocity, drag and gravity; tumbling faceted metal (TitleDust UV4000)
+outlives its short cooling luminous trail. Lethal contacts last at most 0.84 s;
+nonlethal hits retain their 0.25 s impact and emit no armor debris. Each contact
+has at most sixteen chips, with a shared 160-chip rendering budget and a
+simultaneous-contact brightness cap. One evaluation supplies both solid and
+glowing passes. Pause and reset share the authoritative volley clock, and
+damage remains committed once at the rendered laser arrival. No third-party
+asset files or additional per-particle collision queries are required.
+
+Lock arrivals also carry a tapered white/cyan penetrating spear (UV38) and two
+unequal short energy jets. Ordinary hits retain a short 90 ms accent; kills
+hold the strong spear through 40 ms and decay by 145 ms. The killing spear and
+shock sheet extend beyond the shields, with a bounded reference-resolution
+minimum footprint so distant contacts do not collapse into a tiny core dot.
+The torn sheet is present on the first arrival frame and hands over to the
+larger orange rupture and slightly longer cooling fragment trails. Brightness
+normalization counts the whole 160 ms peak window across simultaneous hits.
+Traveling lock lasers have a thicker core and concentrate light near arrival;
+their old head glow stops once resolved so the contact owns the visible point.

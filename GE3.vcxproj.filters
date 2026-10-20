@@ -1996,6 +1996,9 @@
     </ClInclude>
     <ClInclude Include="application\course\RailTitleScene.h" />
     <ClInclude Include="application\course\TwinShieldDronePose.h" />
+    <ClInclude Include="application\course\TwinShieldDroneShading.h" />
+    <ClInclude Include="application\course\RailPulseShotPresentation.h" />
+    <ClInclude Include="application\course\RailPrimaryKillPresentation.h" />
     <ClInclude Include="application\course\TwinShieldDroneKillFlash.h" />
     <ClInclude Include="application\course\RailShooterHudRenderer.h">
       <Filter>ヘッダー ファイル\application\course</Filter>

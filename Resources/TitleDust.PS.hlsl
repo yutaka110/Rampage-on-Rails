@@ -14,6 +14,44 @@ float Fbm(float2 p) {
     return Noise(p)*0.5f+Noise(p*2.07f+7.1f)*0.28f+Noise(p*4.13f+17.3f)*0.15f+Noise(p*8.3f)*0.07f;
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=4000.0f) {
+        float2 p=float2((input.texcoord.x-4000.5f)*2,input.texcoord.y*2-1);
+        float edge=max(abs(p.x)*0.82f+abs(p.y)*0.36f,abs(p.y)*0.94f)+0.12f*(p.x+p.y);
+        float facet=step(p.y,p.x*0.45f-0.12f);
+        float bevel=exp(-pow(edge-0.78f,2)*150)*0.6f;
+        float3 color=input.color.rgb*(0.55f+facet*0.80f)+float3(0.35f,0.29f,0.19f)*bevel;
+        return float4(color,(1-smoothstep(0.84f,1.0f,edge))*input.color.a);
+    }
+    if(input.texcoord.x>=2000.0f) {
+        // Dense plasma, not a lit plastic sphere. Broad dark channels and a
+        // torn hot seam remain visible at the actual 14-20px target size.
+        float2 p=float2((input.texcoord.x-2000.5f)*2.0f,frac(input.texcoord.y*0.5f)*4.0f-1.0f);
+        float r=length(p);
+        float packed=floor(input.texcoord.y*0.5f);
+        float clock=fmod(packed,64.0f)/64.0f*6.2831853f;
+        float seed=floor(packed/64.0f)*1.713f;
+        float angle=seed*0.7f+0.14f*sin(clock);
+        float2 q=float2(p.x*cos(angle)-p.y*sin(angle),p.x*sin(angle)+p.y*cos(angle));
+        float2 drift=float2(cos(clock+seed),sin(clock+seed));
+        float coarse=Noise(q*2.6f+drift*0.65f+seed);
+        float fine=Noise(q*5.7f-drift*0.45f+seed*1.3f);
+        float swirl=q.y+0.24f*sin(q.x*3.8f+clock+seed)+(coarse-0.5f)*0.24f;
+        float ribbon=exp(-swirl*swirl*28.0f)*(1-smoothstep(0.50f,0.95f,abs(q.x)));
+        float density=saturate(coarse*0.95f+fine*0.30f+(1-r)*0.16f);
+        float3 color=lerp(float3(0.14f,0.012f,0.003f),input.color.rgb*(0.55f+1.25f*density),smoothstep(0.23f,0.80f,density));
+        color+=float3(1.2f,0.42f,0.025f)*ribbon*(0.3f+0.7f*coarse);
+        // Small ragged slit instead of the former perfectly round white dot.
+        float hot=exp(-swirl*swirl*210.0f)*(1-smoothstep(0.16f,0.48f,abs(q.x)));
+        hot*=smoothstep(0.30f,0.60f,coarse+fine*0.25f);
+        color=lerp(color,float3(3.5f,2.5f,0.95f),hot);
+        // A red density edge anchors the aimable body on bright backgrounds.
+        // The additive pass supplies broken flowing arcs over this edge.
+        float rim=smoothstep(0.82f,0.98f,r);
+        color=lerp(color,float3(0.09f,0.010f,0.003f),rim*0.83f);
+        float aa=max(fwidth(r)*1.15f,0.012f);
+        float coverage=1-smoothstep(1-aa,1+aa,r);
+        return float4(color,input.color.a*coverage);
+    }
     // Even UV offsets carry a stable puff seed without another vertex stream.
     float seed=floor(input.texcoord.x*0.5f)*2.0f;
     float2 uv=float2(input.texcoord.x-seed,input.texcoord.y);

@@ -21,6 +21,9 @@ struct EnemyProjectileVfxRendererSettings final {
     // optional enhancement and must never be the only visible representation.
     bool productionPrimitivesEnabled = true;
     bool fallbackPrimitivesEnabled = true;
+    // Enable only when the host submits the shaded sphere/tail world passes.
+    // Editors without that backend retain the primitive/effect fallback.
+    bool orbSpritesEnabled = false;
     size_t maximumVisibleProjectiles = 256;
     size_t maximumLifecycleBursts = 64;
     float maximumDrawDistance = 900.0f;
@@ -31,6 +34,7 @@ struct EnemyProjectileVfxRendererSettings final {
 };
 
 enum class EnemyProjectileVisualState : unsigned char {
+    ProductionSpriteReady,
     ProductionEffectReady,
     ProductionFallbackReady,
     Unavailable,
@@ -55,6 +59,7 @@ struct EnemyProjectileVfxProxy final {
     float coreDiameterPixels = 0.0f;
     float haloDiameterPixels = 0.0f;
     float approachNormalized = 0.0f;
+    float orbAnimationUvY = 0.0f;
     uint32_t coreEffectInstanceId = 0;
     uint32_t haloEffectInstanceId = 0;
     bool threat = false;
@@ -62,6 +67,7 @@ struct EnemyProjectileVfxProxy final {
     bool readabilityBoosted = false;
     bool readabilityLimitReached = false;
     bool effectBacked = false;
+    bool spriteBacked = false;
     EnemyProjectileVisualState visualState =
         EnemyProjectileVisualState::Unavailable;
 };
@@ -90,6 +96,7 @@ struct EnemyProjectileVfxRenderFrame final {
     std::vector<EnemyProjectileVfxProxy> proxies;
     std::vector<EnemyProjectileLifecycleVfxProxy> lifecycleBursts;
     uint32_t effectBackedProjectiles = 0;
+    uint32_t spriteBackedProjectiles = 0;
     uint32_t fallbackProjectiles = 0;
     uint32_t productionSubmittedProjectiles = 0;
     uint32_t unavailableProjectiles = 0;

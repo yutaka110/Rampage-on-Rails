@@ -2,6 +2,8 @@
   "schema": 1,
   "description": "Explicit rail runtime assets. Update deliberately; excludes classroom models/audio and authoring sources. Rights review remains separate.",
   "files": [
+    "audio/rail_pulse_fire.wav",
+    "audio/rail_primary_kill.wav",
     "course_meshes/TitleLandscape/TitleTunnel.README.md",
     "course_meshes/TitleLandscape/title_sandstone.bmp",
     "course_meshes/TitleLandscape/title_sandstone.bmp.meta",

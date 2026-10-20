@@ -78,6 +78,14 @@ struct CourseCollisionFrameStats {
     float playerDamage = 0.0f;
 };
 
+// One endpoint per accepted primary shot, including catch-up salvos. Tracers
+// must not reuse the final shot's endpoint or create extra damage requests.
+struct CoursePlayerShotTrace final {
+    uint64_t shotId = 0;
+    Vector3 end{};
+    float presentationAge = 0.0f;
+};
+
 class CourseCollisionSystem {
 public:
     CourseCollisionSystem();
@@ -131,6 +139,7 @@ public:
     }
     const WeaponFeedbackSystem& WeaponFeedback() const { return weaponFeedbackSystem_; }
     const WeaponFireResult& LastWeaponFireResult() const { return lastWeaponFireResult_; }
+    const std::vector<CoursePlayerShotTrace>& PlayerShotTraces() const { return playerShotTraces_; }
     const EnemyProjectileShootDownSystem& ProjectileShootDown() const noexcept {
         return projectileShootDownSystem_;
     }
@@ -186,6 +195,7 @@ private:
     DamageResult lastDamageResult_{};
     WeaponFeedbackDispatchResult lastWeaponFeedbackResult_{};
     WeaponFireResult lastWeaponFireResult_{};
+    std::vector<CoursePlayerShotTrace> playerShotTraces_;
     WeaponDefinitionRegistry weaponDefinitionRegistry_{};
     WeaponFireSystem weaponFireSystem_{};
     WeaponFeedbackSystem weaponFeedbackSystem_{};

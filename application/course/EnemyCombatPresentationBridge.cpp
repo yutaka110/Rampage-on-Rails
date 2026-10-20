@@ -712,6 +712,7 @@ void EnemyCombatPresentationBridge::Update(
                                 pose.scale={size*actor->desc.localScale.x,size*actor->desc.localScale.y,size*actor->desc.localScale.z};
                             }
                             const auto sample=input.railPath->Evaluate(actor->desc.spawnDistance+actor->desc.distanceOffset);
+                            pose.primaryDestruction=actor->defeatedPose.primaryDestruction;
                             pose.destructionAge=0; pose.destructionSeed=actor->actorId;
                             if(pose.destructionHitSide==0)
                                 ConfigureTwinShieldDroneDestructionHit(pose,pose.position,{},actor->actorId);

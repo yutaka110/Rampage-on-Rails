@@ -294,7 +294,9 @@ bool EnemyCombatSystem::SubmitDamageResultActors(std::span<CourseEnemyActor> act
     EnemyCombatRuntimeState& state = actor->combatState;
     state.currentHitPoints = (std::max)(0.0f, damageResult.remainingHitPoints);
     state.lastDamageShotId = damageResult.shotId;
-    state.hitFlash = 1.0f;
+    // The lock laser owns a short, localized contact flash. A full-body white
+    // wash would hide both the metal faces and the subsequent core cut.
+    state.hitFlash = feedbackEvent && feedbackEvent->lockOnContact ? 0.18f : 1.0f;
     actor->desc.hitPoints = state.currentHitPoints;
     const HitFeedbackKind feedbackKind = feedbackEvent != nullptr
         ? feedbackEvent->feedbackKind
@@ -309,6 +311,8 @@ bool EnemyCombatSystem::SubmitDamageResultActors(std::span<CourseEnemyActor> act
             state.phase != EnemyCombatPhase::Retired) {
             EnterPhase(*actor, EnemyCombatPhase::Dying,
                 EnemyCombatEventKind::Defeated, false);
+            actor->defeatedPose.primaryDestruction=feedbackEvent && !feedbackEvent->lockOnContact &&
+                feedbackEvent->damageType==WeaponDamageType::Energy;
             if(actor->hasDefeatedPose && feedbackEvent) {
                 ConfigureTwinShieldDroneDestructionHit(actor->defeatedPose,
                     feedbackEvent->worldPosition,feedbackEvent->incomingDirection,actor->actorId);

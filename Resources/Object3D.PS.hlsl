@@ -12,10 +12,10 @@ struct Material
     float environmentCoefficient;
     int32_t specularMode;
     float pad_; // Mode 8: gameplay/title exposure ratio; otherwise padding.
-    float4 caveSurface; // Mode 15: diffuse colour and linear roughness.
-    float4 caveResponse; // Mode 15: metalness, contact visibility, continuous rail flag, reserved.
-    float4 railLightingOrigin; // Mode 15 rail: world centre and baked course distance.
-    float3 railLightingAxis; // Course-distance gradient along the baked chord.
+    float4 caveSurface; // Mode 15: colour/roughness; mode 10: world-to-part X column.
+    float4 caveResponse; // Mode 15: response; mode 10: world-to-part Y column.
+    float4 railLightingOrigin; // Mode 15: rail origin/distance; mode 10: world-to-part Z column.
+    float3 railLightingAxis; // Mode 15: rail gradient; mode 10: shield side, left/right attachment.
 };
 
 struct DirectionalLight
@@ -139,6 +139,40 @@ static float3 DroneDirect(float3 base, float metal, float rough, float3 N, float
     float3 F = lerp(float3(0.04f,0.04f,0.04f),base,metal);
     F += (1.0f-F)*pow(1.0f-vh,5.0f);
     return ((1.0f-F)*(1.0f-metal)*base/3.14159265f + D*G*F/max(4.0f*nv*max(nl,0.001f),0.001f))*radiance*nl;
+}
+
+// Small authored ambient occlusion volumes, not scene raycasts or a screen-space
+// outline. Positions are runtime left-handed model coordinates (front is -Z).
+static float DroneContactVisibility(float3 worldPosition, float3 shapeN)
+{
+    if (dot(gMaterial.caveSurface.xyz, gMaterial.caveSurface.xyz) < 1e-8f) return 1.0f;
+    float4 p = float4(worldPosition, 1.0f);
+    float3 local = float3(dot(p, gMaterial.caveSurface), dot(p, gMaterial.caveResponse),
+        dot(p, gMaterial.railLightingOrigin));
+    float3 localN = SafeNormalize(float3(
+        dot(shapeN, SafeNormalize(gMaterial.caveSurface.xyz)),
+        dot(shapeN, SafeNormalize(gMaterial.caveResponse.xyz)),
+        dot(shapeN, SafeNormalize(gMaterial.railLightingOrigin.xyz))));
+    float side = gMaterial.railLightingAxis.x;
+    float attachment = side < -0.5f || (abs(side) < 0.5f && local.x < 0.0f)
+        ? gMaterial.railLightingAxis.y : gMaterial.railLightingAxis.z;
+    float shade = 0.10f * smoothstep(0.05f, 0.85f, -localN.y);
+    if (abs(side) > 0.5f) {
+        // The inner thickness and rear mounting pad sit close to the hull.
+        float mount = 1.0f - smoothstep(0.22f, 0.58f, abs(local.y + 0.04f));
+        float inner = saturate(-side * localN.x);
+        float rear = smoothstep(-0.08f, 0.15f, local.z);
+        shade += attachment * mount * (0.20f * inner + 0.16f * rear);
+    } else {
+        float joint = (1.0f - smoothstep(0.12f, 0.34f, abs(abs(local.x) - 0.78f))) *
+            (1.0f - smoothstep(0.18f, 0.46f, abs(local.y + 0.10f))) *
+            (1.0f - smoothstep(0.22f, 0.48f, abs(local.z)));
+        float radius = length(local.xy);
+        float recess = smoothstep(0.16f, 0.23f, radius) *
+            (1.0f - smoothstep(0.34f, 0.44f, radius)) * smoothstep(0.48f, 0.63f, -local.z);
+        shade += 0.23f * joint * attachment + 0.16f * recess;
+    }
+    return max(0.68f, 1.0f - shade);
 }
 
 static float CartSurfaceNoise(float2 p)
@@ -306,12 +340,14 @@ PixelShaderOutput main(VertexShaderOutput input)
         }
         [branch] if (caveAmount > 0.001f) {
             float3 shapeN = SafeNormalize(input.normal);
-            float3 caveLit = CaveSubjectLighting(baseRgb, metal, rough, N, shapeN, V, input.worldPosition, 1.0f);
-            // Retain shield volume at combat distance without the former
-            // bright frontal wash. Sensor and hit flashes remain independent.
+            float contact = DroneContactVisibility(input.worldPosition, shapeN);
+            float3 caveLit = CaveSubjectLighting(baseRgb, metal, rough, N, shapeN, V, input.worldPosition, contact);
+            // Preserve the readable ambient floor. A higher, oblique soft key
+            // separates bevels/front/side instead of adding a frontal wash.
             float3 right = SafeNormalize(cross(float3(0,1,0), V));
-            float3 fill = SafeNormalize(V * 0.45f + right * 0.65f + float3(0,0.85f,0));
-            caveLit += DroneDirect(baseRgb, metal, max(rough, 0.55f), N, V, fill, float3(0.90f,1.00f,1.08f));
+            float3 key = SafeNormalize(V * 0.65f + right * 0.85f + float3(0,1.30f,0));
+            caveLit += DroneDirect(baseRgb, metal, max(rough, 0.48f), N, V, key,
+                float3(1.90f,2.10f,2.20f) * lerp(0.78f, 1.0f, contact));
             lit = lerp(lit, caveLit, caveAmount);
         }
         lit = lerp(lit,float3(1.4f,1.15f,0.80f),saturate(gMaterial.pad_)*0.85f);

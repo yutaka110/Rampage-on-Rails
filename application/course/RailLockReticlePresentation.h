@@ -10,10 +10,10 @@
 // an ordinal. Neither visual changes aim, lock eligibility or firing timing.
 struct RailReticleSegment final {
     Vector2 start{},end{};
-    float opacity=1.0f,strokeScale=1.0f;
+    float opacity=1.0f,strokeScale=1.0f,highlight=0.0f;
 };
 struct RailLockReticleVisual final {
-    static constexpr float CaptureDuration=0.15f;
+    static constexpr float CaptureDuration=0.15f, ReleaseDuration=0.12f;
     std::array<RailReticleSegment,40> segments{};
     size_t segmentCount=0;
     Vector2 center{},halfExtent{},ordinalPosition{};
@@ -59,57 +59,69 @@ inline RailLockReticleVisual BuildRailConfirmedReticleVisual(const RailLockToken
     const float pulse=(std::max)(0.0f,1.0f-age/RailLockReticleVisual::CaptureDuration);
     const float settle=pulse*pulse*pulse;
     const float rest=(std::clamp)((std::max)(23.0f*scale,bodyRadiusPixels*1.12f+5.0f*scale),23.0f*scale,60.0f*scale);
-    const float radius=rest+12.0f*scale*settle;
-    auto result=BuildRailReticleCorners(token.acquiredScreenPosition,{radius*1.12f,radius},
+    auto result=BuildRailReticleCorners(token.acquiredScreenPosition,{rest*1.12f+14.0f*scale*settle,rest+3.0f*scale*settle},
         8.0f*scale,scale,opacity);
     if(!result.visible) return result;
     result.segmentCount=0;
-    const auto append=[&](Vector2 a,Vector2 b,float alpha=1.0f,float width=1.0f) {
+    const auto append=[&](Vector2 a,Vector2 b,float alpha=1.0f,float width=1.0f,float highlight=0.0f) {
         if(result.segmentCount<result.segments.size())
-            result.segments[result.segmentCount++]={a,b,alpha,width};
+            result.segments[result.segmentCount++]={a,b,alpha,width,highlight};
     };
-    const auto point=[&](float x,float y) {return Vector2{result.center.x+x,result.center.y+y};};
     const float rx=result.halfExtent.x,ry=result.halfExtent.y;
-    // Four open, chamfered clamps. The bevel echoes the drone's armour; the
-    // centre and middle of each edge stay clear even with eight stored locks.
-    const float bevel=4.0f*scale,leg=7.0f*scale;
-    for(float sx:{-1.0f,1.0f}) for(float sy:{-1.0f,1.0f}) {
-        const auto a=point(sx*(rx-bevel-leg),sy*ry);
-        const auto b=point(sx*(rx-bevel),sy*ry);
-        const auto c=point(sx*rx,sy*(ry-bevel));
-        const auto d=point(sx*rx,sy*(ry-bevel-leg));
-        append(a,b);append(b,c);append(c,d);
-    }
-    // Small inward jaws remain outside the silhouette, with a single inward
-    // snap on acquisition. They never oscillate while the target is held.
+    // Two shield-like jaws slide inward and untwist as independent rigid
+    // pieces. Their small centre notches face the drone without masking it.
     for(float side:{-1.0f,1.0f}) {
-        const float tip=side*(rx+(4.0f+5.0f*settle)*scale);
-        const float back=tip+side*4.0f*scale;
-        append(point(back,-3.0f*scale),point(tip,0),0.76f,0.85f);
-        append(point(tip,0),point(back,3.0f*scale),0.76f,0.85f);
-    }
-    for(float side:{-1.0f,1.0f})
-        append(point(-2.0f*scale,side*(ry+4.0f*scale)),
-            point(2.0f*scale,side*(ry+4.0f*scale)),0.50f,0.75f);
-    // Two short opposed arcs sweep inward once and disappear before hold.
-    // No complete ring, rotating hold animation or target-centre flash.
-    if(pulse>0.001f) {
-        constexpr float pi=3.14159265358979323846f;
-        const float arcRadius=radius+(7.0f+9.0f*settle)*scale;
-        for(float side:{0.0f,1.0f}) for(int i=0;i<8;++i) {
-            const float angle=side*pi-0.36f+0.32f*settle+0.72f*float(i)/8.0f;
-            const float next=angle+0.72f/8.0f;
-            append(point(std::cos(angle)*arcRadius*1.12f,std::sin(angle)*arcRadius),
-                point(std::cos(next)*arcRadius*1.12f,std::sin(next)*arcRadius),
-                pulse*0.65f,0.7f);
+        const float angle=side*0.16f*settle,c=std::cos(angle),s=std::sin(angle);
+        const auto point=[&](float x,float y) {
+            const float dx=side*x;
+            return Vector2{result.center.x+side*rx+c*dx-s*y,result.center.y+s*dx+c*y};
+        };
+        const std::array<Vector2,10> jaw{{{-10*scale,-ry},{-4*scale,-ry},{0,-ry+4*scale},
+            {0,-6*scale},{-3*scale,-3*scale},{-3*scale,3*scale},{0,6*scale},
+            {0,ry-4*scale},{-4*scale,ry},{-10*scale,ry}}};
+        for(size_t i=1;i<jaw.size();++i) {
+            float highlight=0;
+            if(age>=0.035f && age<0.12f) {
+                const float sweep=-1+2*(age-0.035f)/0.085f;
+                const float delta=(jaw[i-1].y+jaw[i].y)/(2*ry)-sweep;
+                highlight=std::exp(-delta*delta/0.055f)*std::sin((age-0.035f)/0.085f*3.14159265f);
+            }
+            append(point(jaw[i-1].x,jaw[i-1].y),point(jaw[i].x,jaw[i].y),1,1,highlight);
         }
+        append(point(4*scale,-ry*0.38f),point(4*scale,ry*0.38f),0.38f,0.75f);
     }
     result.capture=pulse;
-    result.ink={0.20f+0.80f*pulse,0.94f+0.06f*pulse,1.0f,
+    result.ink={0.20f+0.55f*pulse,0.94f+0.06f*pulse,1.0f,
         (0.88f+0.12f*pulse)*(std::clamp)(opacity,0.0f,1.0f)};
     result.stroke=(1.6f+0.4f*pulse)*scale;
-    result.ordinalPosition={result.center.x+result.halfExtent.x-1.0f*scale,
-        result.center.y-result.halfExtent.y-11.0f*scale};
+    result.ordinalPosition={result.center.x+result.halfExtent.x-4.0f*scale,
+        result.center.y-result.halfExtent.y-10.0f*scale};
+    return result;
+}
+
+// Authorized lasers own this brief opening/fade, so input release never needs
+// another HUD history, wall-clock timer, target lookup or damage request.
+inline RailLockReticleVisual BuildRailReleasedReticleVisual(const RailLockToken& token,
+        float age,float scale,float opacity,float bodyRadiusPixels=0) {
+    if(!std::isfinite(age) || age<0 || age>=RailLockReticleVisual::ReleaseDuration) return {};
+    auto result=BuildRailConfirmedReticleVisual(token,token.acquiredTime+RailLockReticleVisual::CaptureDuration,
+        scale,opacity,bodyRadiusPixels);
+    if(!result.visible) return result;
+    scale=(std::clamp)(scale,0.5f,2.0f);
+    const float t=age/RailLockReticleVisual::ReleaseDuration,ease=1-(1-t)*(1-t);
+    const auto open=[&](Vector2 point,float side) {
+        const Vector2 pivot{result.center.x+side*result.halfExtent.x,result.center.y};
+        const float angle=-side*0.10f*ease,c=std::cos(angle),s=std::sin(angle);
+        const float dx=point.x-pivot.x,dy=point.y-pivot.y;
+        return Vector2{pivot.x+side*6*scale*ease+c*dx-s*dy,pivot.y+s*dx+c*dy};
+    };
+    for(size_t i=0;i<result.segmentCount;++i) {
+        auto& segment=result.segments[i];
+        const float side=(segment.start.x+segment.end.x)*0.5f<result.center.x?-1.0f:1.0f;
+        segment.start=open(segment.start,side);segment.end=open(segment.end,side);segment.highlight=0;
+    }
+    result.capture=0;result.ink.w*=(1-t)*(1-t);result.edge.w*=(1-t)*(1-t);
+    result.halfExtent.x+=6*scale*ease;
     return result;
 }
 
