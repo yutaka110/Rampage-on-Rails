@@ -14,6 +14,7 @@ vehicle.endStopTolerance=0.02
 vehicle.maximumHitPoints=250.0
 vehicle.allowDerail=false
 speedPolicy.enabled=true
+speedPolicy.normalSpeedScale=1.35
 speedPolicy.minSpeed=10.0
 speedPolicy.maxSpeed=64.0
 speedPolicy.cruiseMultiplier=1.0

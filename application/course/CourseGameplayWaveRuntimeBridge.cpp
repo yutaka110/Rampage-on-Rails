@@ -7,8 +7,10 @@
 
 bool CourseGameplayWaveRuntimeSettings::Validate(std::string* errorMessage) const {
     return gameplay::settings::Result(
-        maximumStateTransitionsPerFrame > 0 && maximumStateTransitionsPerFrame <= 65536,
-        errorMessage, "Wave transition budget must be between 1 and 65536.");
+        maximumStateTransitionsPerFrame > 0 && maximumStateTransitionsPerFrame <= 65536 &&
+        std::isfinite(earlyClearRecoverySeconds) && earlyClearRecoverySeconds >= 0.0f &&
+        std::isfinite(maximumEarlyAdvanceDistance) && maximumEarlyAdvanceDistance >= 0.0f,
+        errorMessage, "Wave transition budget must be 1..65536 and early-clear timing/distance finite and non-negative.");
 }
 
 bool CourseGameplayWaveRuntimeBridge::Configure(
@@ -51,6 +53,8 @@ void CourseGameplayWaveRuntimeBridge::Unbind() {
     wavePhases_.clear();
     actorPhases_.clear();
     waveActiveSeconds_.clear();
+    waveDistanceOffsets_.clear();
+    clearRecoverySeconds_ = 0.0f;
     signaledEventIds_.clear();
     forcedWaveIndices_.clear();
     events_.clear();
@@ -82,6 +86,7 @@ void CourseGameplayWaveRuntimeBridge::Update(
     playerDistance_ = (std::clamp)(input.playerDistance, 0.0f, program_->railLength);
     ReconcileDefeatedActors();
     UpdateActiveWaves((std::max)(0.0f, input.deltaTime));
+    UpdateEarlyClearAdvance(input);
     UpdatePrewarmAndActivation();
     // Zero-member and event-completed forced chains are allowed, but bounded
     // so malformed content can never stall a gameplay frame.
@@ -134,6 +139,8 @@ CourseGameplayWaveRuntimeBridge::CaptureCheckpoint() const {
     checkpoint.playerDistance = playerDistance_;
     checkpoint.wavePhases = wavePhases_;
     checkpoint.waveActiveSeconds = waveActiveSeconds_;
+    checkpoint.waveDistanceOffsets = waveDistanceOffsets_;
+    checkpoint.clearRecoverySeconds = clearRecoverySeconds_;
     checkpoint.signaledEventIds.assign(
         signaledEventIds_.begin(), signaledEventIds_.end());
     std::sort(checkpoint.signaledEventIds.begin(), checkpoint.signaledEventIds.end());
@@ -158,9 +165,20 @@ bool CourseGameplayWaveRuntimeBridge::RestoreCheckpoint(
         }
         return false;
     }
+    if ((!checkpoint.waveDistanceOffsets.empty() &&
+         checkpoint.waveDistanceOffsets.size() != program_->waves.size()) ||
+        !std::isfinite(checkpoint.clearRecoverySeconds) || checkpoint.clearRecoverySeconds < 0.0f ||
+        std::any_of(checkpoint.waveDistanceOffsets.begin(), checkpoint.waveDistanceOffsets.end(),
+            [this](float offset) { return !std::isfinite(offset) || std::abs(offset) > program_->railLength; })) {
+        if (errorMessage) *errorMessage = "Invalid early-clear Wave checkpoint.";
+        return false;
+    }
     RemoveOwnedActors();
     wavePhases_ = checkpoint.wavePhases;
     waveActiveSeconds_ = checkpoint.waveActiveSeconds;
+    waveDistanceOffsets_ = checkpoint.waveDistanceOffsets.empty()
+        ? std::vector<float>(program_->waves.size(), 0.0f) : checkpoint.waveDistanceOffsets;
+    clearRecoverySeconds_ = checkpoint.clearRecoverySeconds;
     actorPhases_.assign(program_->actors.size(), CourseGameplayActorPhase::Dormant);
     signaledEventIds_.clear();
     signaledEventIds_.insert(
@@ -209,6 +227,8 @@ void CourseGameplayWaveRuntimeBridge::InitializeState(float startDistance) {
     }
     actorPhases_.assign(program_->actors.size(), CourseGameplayActorPhase::Dormant);
     waveActiveSeconds_.assign(program_->waves.size(), 0.0f);
+    waveDistanceOffsets_.assign(program_->waves.size(), 0.0f);
+    clearRecoverySeconds_ = 0.0f;
     signaledEventIds_.clear();
     forcedWaveIndices_.clear();
     events_.clear();
@@ -288,6 +308,52 @@ void CourseGameplayWaveRuntimeBridge::UpdateActiveWaves(float deltaTime) {
     for (const std::size_t index : completed) CompleteWave(index);
 }
 
+float CourseGameplayWaveRuntimeBridge::EffectiveTriggerDistance(std::string_view guid) const {
+    const auto* wave = program_ ? program_->FindWave(guid) : nullptr;
+    if (!wave) return -1.0f;
+    return wave->triggerRailDistance + waveDistanceOffsets_[wave - program_->waves.data()];
+}
+
+CourseGameplayWavePhase CourseGameplayWaveRuntimeBridge::Phase(std::string_view guid) const {
+    const auto* wave = program_ ? program_->FindWave(guid) : nullptr;
+    return wave ? wavePhases_[wave - program_->waves.data()] : CourseGameplayWavePhase::Disabled;
+}
+
+void CourseGameplayWaveRuntimeBridge::UpdateEarlyClearAdvance(const CourseGameplayWaveFrameInput& input) {
+    // Combat truth includes surviving intro drones, in-flight rounds and warnings.
+    // A zero-delta frame (pause/READY/result) preserves the recovery clock.
+    if (!std::isfinite(input.deltaTime) || input.deltaTime <= 0.0f) return;
+    if (!settings_.earlyClearAdvanceEnabled || !input.allowEarlyAdvance ||
+        !input.combatClearConfirmed ||
+        std::any_of(wavePhases_.begin(), wavePhases_.end(),
+            [](auto phase) { return phase == CourseGameplayWavePhase::Active; }) ||
+        std::none_of(wavePhases_.begin(), wavePhases_.end(),
+            [](auto phase) { return phase == CourseGameplayWavePhase::Completed; })) {
+        clearRecoverySeconds_ = 0.0f;
+        return;
+    }
+    clearRecoverySeconds_ += (std::min)(input.deltaTime, 0.25f);
+    if (clearRecoverySeconds_ < settings_.earlyClearRecoverySeconds) return;
+    std::size_t candidate = program_->waves.size();
+    for (std::size_t i = 0; i < wavePhases_.size(); ++i) {
+        const auto phase = wavePhases_[i];
+        if (phase != CourseGameplayWavePhase::Pending && phase != CourseGameplayWavePhase::Prewarming &&
+            phase != CourseGameplayWavePhase::Blocked) continue;
+        const auto& wave = program_->waves[i];
+        if (candidate == program_->waves.size() ||
+            wave.triggerRailDistance < program_->waves[candidate].triggerRailDistance) candidate = i;
+    }
+    if (candidate == program_->waves.size()) return;
+    const auto& wave = program_->waves[candidate];
+    if (wave.completionCondition != CourseWaveCompletionCondition::AllEnemiesDefeated) return;
+    const float authoredDistance = wave.triggerRailDistance;
+    if (playerDistance_ >= authoredDistance ||
+        playerDistance_ < authoredDistance - settings_.maximumEarlyAdvanceDistance) return;
+    // Preserve the formation's authored forward spacing and lateral/height offsets.
+    waveDistanceOffsets_[candidate] = playerDistance_ - authoredDistance;
+    forcedWaveIndices_.insert(candidate);
+}
+
 void CourseGameplayWaveRuntimeBridge::UpdatePrewarmAndActivation() {
     for (std::size_t index = 0; index < wavePhases_.size(); ++index) {
         CourseGameplayWavePhase& phase = wavePhases_[index];
@@ -317,6 +383,15 @@ void CourseGameplayWaveRuntimeBridge::UpdatePrewarmAndActivation() {
 
 bool CourseGameplayWaveRuntimeBridge::CanActivateWave(std::size_t index) const {
     const CourseRuntimeWaveNode& wave = program_->waves[index];
+    if (settings_.earlyClearAdvanceEnabled && wave.executionPolicy == CourseWaveExecutionPolicy::Exclusive) {
+        bool previousBattle = false;
+        for (std::size_t previous = 0; previous < index; ++previous) {
+            if (wavePhases_[previous] == CourseGameplayWavePhase::Disabled) continue;
+            if (wavePhases_[previous] != CourseGameplayWavePhase::Completed) return false;
+            previousBattle = true;
+        }
+        if (previousBattle && clearRecoverySeconds_ < settings_.earlyClearRecoverySeconds) return false;
+    }
     if (wave.executionPolicy == CourseWaveExecutionPolicy::Parallel) return true;
     if (wave.executionPolicy == CourseWaveExecutionPolicy::Sequential) {
         for (std::size_t previous = index; previous > 0; --previous) {
@@ -353,6 +428,10 @@ void CourseGameplayWaveRuntimeBridge::ActivateWave(std::size_t index) {
     }
     wavePhases_[index] = CourseGameplayWavePhase::Active;
     waveActiveSeconds_[index] = 0.0f;
+    if (settings_.earlyClearAdvanceEnabled) {
+        waveDistanceOffsets_[index] = playerDistance_ - program_->waves[index].triggerRailDistance;
+        clearRecoverySeconds_ = 0.0f;
+    }
     for (const uint32_t actorIndex : program_->waves[index].actorIndices) {
         if (actorPhases_[actorIndex] != CourseGameplayActorPhase::Defeated &&
             actorPhases_[actorIndex] != CourseGameplayActorPhase::Retired) {
@@ -381,6 +460,8 @@ void CourseGameplayWaveRuntimeBridge::SpawnActor(uint32_t actorIndex) {
     const CourseRuntimeActorRecord& record = program_->actors[actorIndex];
     if (!RuntimeContains(record.placementGuid)) {
         CourseEnemyActorDesc desc = record.actor;
+        desc.spawnDistance = (std::clamp)(desc.spawnDistance + waveDistanceOffsets_[record.waveIndex],
+            0.0f, program_->railLength);
         desc.previewOnly = false;
         desc.suppressFire = false;
         runtime_->SpawnEnemyActor(std::move(desc));

@@ -16,6 +16,9 @@ class EngineContext {
 public:
     bool Initialize(HWND hwnd, UINT width, UINT height, bool enableDebugLayer = true);
     void Shutdown();
+    // Call only after GPU work using the previous depth resource has completed.
+    // Descriptor slots remain stable for all scene and post-process consumers.
+    bool ResizeSceneDepth(UINT width, UINT height);
 
     core::Device& GetDevice() { return dev_; }
     graphics::SwapChain& GetSwapChain() { return swapChain_; }

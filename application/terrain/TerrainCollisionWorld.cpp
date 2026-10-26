@@ -50,7 +50,7 @@ struct Bounds {
         return true;
     }
 };
-struct Triangle { Vector3 a{},edge1{},edge2{}; Bounds bounds{}; };
+struct Triangle { Vector3 a{},edge1{},edge2{}; Bounds bounds{}; float openingA=0,openingB=0,openingC=0; };
 struct Node { Bounds bounds{}; uint32_t first=0,count=0,right=0; };
 struct Chunk {
     int index=0;
@@ -80,7 +80,7 @@ struct Chunk {
         nodes[index].first=left; nodes[index].right=right;
         return index;
     }
-    void Cast(Vector3 origin,Vector3 direction,TerrainCollisionWorld::Hit& best) const {
+    void Cast(Vector3 origin,Vector3 direction,TerrainCollisionWorld::Hit& best,bool respectVisualOpenings) const {
         if (nodes.empty()) return;
         // Median splits have depth < 32 for the fixed-resolution chunk.
         std::array<uint32_t,64> stack{}; uint32_t size=1; stack[0]=0;
@@ -105,6 +105,9 @@ struct Chunk {
                 if (v< -0.00001f || u+v>1.00001f) continue;
                 const float distance=Dot(t.edge2,q)*inverse;
                 if (distance<0 || distance>best.distance) continue;
+                // Cached vertex masks match the visible surface's clipped
+                // opening threshold. No procedural field evaluation per ray.
+                if(respectVisualOpenings && t.openingA*(1-u-v)+t.openingB*u+t.openingC*v>=0.42f) continue;
                 Vector3 normal=Cross(t.edge1,t.edge2);
                 const float length=std::sqrt(Dot(normal,normal));
                 if (length<1.0e-8f) continue;
@@ -155,6 +158,7 @@ std::shared_ptr<const Chunk> BuildChunk(const std::shared_ptr<Source>& source,in
     const uint32_t rings=static_cast<uint32_t>(std::ceil((chunk->end-chunk->start)/kRingStep));
     TerrainVolumeField field(source->rail,source->settings,&source->edits,&source->preview);
     std::vector<Vector3> vertices; vertices.reserve((rings+1)*(kRadialSegments+1));
+    std::vector<float> openings;openings.reserve((rings+1)*(kRadialSegments+1));
     for (uint32_t s=0;s<=rings;++s) {
         if (source->cancelled) return nullptr;
         const float distance=s==rings?chunk->end:chunk->start+static_cast<float>(s)*kRingStep;
@@ -162,11 +166,13 @@ std::shared_ptr<const Chunk> BuildChunk(const std::shared_ptr<Source>& source,in
         for (uint32_t a=0;a<=kRadialSegments;++a) {
             const float angle=a==kRadialSegments?0.0f:kTau*static_cast<float>(a)/kRadialSegments;
             vertices.push_back(field.CollisionSurfacePoint(distance,angle,sample));
+            openings.push_back(field.OpeningMask(distance,angle));
         }
     }
     chunk->triangles.reserve(rings*kRadialSegments*2);
     auto triangle=[&](uint32_t a,uint32_t b,uint32_t c) {
         Triangle t{}; t.a=vertices[a]; t.edge1=Sub(vertices[b],t.a); t.edge2=Sub(vertices[c],t.a);
+        t.openingA=openings[a];t.openingB=openings[b];t.openingC=openings[c];
         t.bounds.Include(t.a); t.bounds.Include(vertices[b]); t.bounds.Include(vertices[c]);
         chunk->triangles.push_back(t);
     };
@@ -238,7 +244,7 @@ void TerrainCollisionWorld::Update(const RailPath& rail,const TerrainGenerationS
     focusDistance=(std::clamp)(focusDistance,0.0f,rail.Length());
     const int last=static_cast<int>((std::max)(rail.Length()-0.001f,0.0f)/kChunkLength);
     const int firstWanted=(std::max)(0,static_cast<int>((focusDistance-192.0f)/kChunkLength));
-    const int lastWanted=(std::min)(last,static_cast<int>((focusDistance+256.0f)/kChunkLength));
+    const int lastWanted=(std::min)(last,static_cast<int>((focusDistance+384.0f)/kChunkLength));
     // Bound memory even during a camera jump. Old workers are allowed to finish
     // without blocking the update; their results outside the window are pruned.
     std::erase_if(impl_->chunks,[&](const auto& c){return c->index<firstWanted || c->index>lastWanted;});
@@ -270,7 +276,7 @@ void TerrainCollisionWorld::BuildSynchronously(const RailPath& rail,const Terrai
     }
 }
 TerrainCollisionWorld::Hit TerrainCollisionWorld::Query(const Vector3& origin,const Vector3& direction,
-    float maxDistance,float searchStart,float searchEnd) const {
+    float maxDistance,float searchStart,float searchEnd,bool respectVisualOpenings) const {
     Hit hit{};
     const auto finite=[](Vector3 v){return std::isfinite(v.x)&&std::isfinite(v.y)&&std::isfinite(v.z);};
     if (!impl_->source || !finite(origin) || !finite(direction) || std::abs(Dot(direction,direction)-1.0f)>0.001f ||
@@ -282,7 +288,7 @@ TerrainCollisionWorld::Hit TerrainCollisionWorld::Query(const Vector3& origin,co
     for (int index=first;index<=last;++index) if (!impl_->Has(index)) return hit;
     hit.available=true; hit.distance=maxDistance;
     for (const auto& chunk:impl_->chunks) if (chunk->index>=first && chunk->index<=last)
-        chunk->Cast(origin,direction,hit);
+        chunk->Cast(origin,direction,hit,respectVisualOpenings);
     return hit;
 }
 TerrainCollisionWorld::Stats TerrainCollisionWorld::GetStats() const {

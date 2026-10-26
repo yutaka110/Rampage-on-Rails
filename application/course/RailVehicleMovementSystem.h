@@ -84,6 +84,9 @@ struct RailVehicleRuntimeState final {
 };
 
 struct RailVehicleMovementInput final {
+    // Opens bounded speed headroom only while the shared boost policy requests
+    // it. Curvature, braking and collision slowdowns still own safety.
+    float manualBoostMultiplier = 1.0f;
     float deltaTime = 0.0f;
     float requestedSpeed = 0.0f;
     bool movementEnabled = true;
@@ -134,7 +137,7 @@ public:
 
 private:
     void EvaluatePose(const RailPath& railPath);
-    float ComputeSafeSpeed(const RailPath& railPath);
+    float ComputeSafeSpeed(const RailPath& railPath, float speedCeiling);
     void UpdateMounts();
 
     RailVehicleDefinition definition_{};

@@ -1,4 +1,5 @@
 #include "RailRideMotionEnvelope.h"
+#include "RailManualBoost.h"
 
 #include <algorithm>
 #include <cmath>
@@ -45,16 +46,24 @@ const RailRideMotionEnvelopeFrame& RailRideMotionEnvelope::Evaluate(
 
     const RailVehicleDefinition& definition = *input.vehicleDefinition;
     const RailRideDirectorFrame& ride = *input.ride;
+    const float boost = RailManualBoost::ClampMultiplier(input.manualBoostMultiplier);
+    // The normal cap is unchanged; only an authorized boost opens headroom.
+    const float speedCeiling = definition.maximumSpeed * boost;
+    const float normalScale = std::isfinite(input.normalSpeedScale)
+        ? (std::clamp)(input.normalSpeedScale, 0.5f, 2.0f) : 1.0f;
+    next.normalRequestedSpeed = (std::clamp)(ride.requestedSpeed * normalScale,
+        0.0f, definition.maximumSpeed);
+    next.manualBoostMultiplier = boost;
     next.sourceRideRevision = ride.revision;
     next.sourceRequestedSpeed = (std::clamp)(
-        ride.requestedSpeed, 0.0f, definition.maximumSpeed);
+        RailManualBoost::RequestedSpeed(next.normalRequestedSpeed, boost), 0.0f, speedCeiling);
     next.requestedSpeed = next.sourceRequestedSpeed;
-    next.cornerSafeSpeed = definition.maximumSpeed;
+    next.cornerSafeSpeed = speedCeiling;
     next.accelerationLimit = definition.acceleration;
     next.brakingLimit = definition.serviceBrakeDeceleration;
     next.jerkLimit = 10000.0f;
-    next.active = ride.active;
-    if (!ride.active) {
+    next.active = ride.active || boost > 1.00001f || std::abs(normalScale-1.0f) > 0.00001f;
+    if (!next.active) {
         frame_ = next;
         return frame_;
     }
@@ -67,6 +76,9 @@ const RailRideMotionEnvelopeFrame& RailRideMotionEnvelope::Evaluate(
     next.jerkLimit = blend > 0.0001f
         ? (std::min)(10000.0f, ride.maximumJerk / blend)
         : 10000.0f;
+    const float boostBlend = (boost - 1.0f) / RailManualBoost::SpeedGain;
+    next.accelerationLimit *= Lerp(1.0f, RailManualBoost::AccelerationMultiplier, boostBlend);
+    if (boost > 1.00001f) next.jerkLimit = (std::min)(next.jerkLimit, RailManualBoost::MaximumJerk);
     if (input.railPath != nullptr && input.railPath->Length() > 0.0f) {
         const float distance = input.vehicleState != nullptr
             ? input.vehicleState->distance : ride.distance;
@@ -77,8 +89,8 @@ const RailRideMotionEnvelopeFrame& RailRideMotionEnvelope::Evaluate(
                 definition.maximumLateralAcceleration /
                 next.anticipatedCurvature) * ride.cornerSpeedScale;
             next.cornerSafeSpeed = Lerp(
-                definition.maximumSpeed,
-                (std::clamp)(rawSafeSpeed, 0.0f, definition.maximumSpeed),
+                speedCeiling,
+                (std::clamp)(rawSafeSpeed, 0.0f, speedCeiling),
                 blend);
             next.requestedSpeed = (std::min)(
                 next.sourceRequestedSpeed, next.cornerSafeSpeed);

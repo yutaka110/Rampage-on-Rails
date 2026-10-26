@@ -1254,8 +1254,8 @@ void RailTransitionDemo::Update(float deltaTime, bool startupComplete) {
         if(transitionTime_>=double(RevealDuration)) phase_=Phase::Title;
     }
 }
-bool RailTransitionDemo::RequestReturn() {
-    if(!ButtonVisible()) return false;
+bool RailTransitionDemo::RequestReturn(bool fromResult) {
+    if(Returning() || (!fromResult && !ButtonVisible())) return false;
     phase_=Phase::Covering; transitionTime_=0.0; travelDeltaTime_=0.0f;
     return true;
 }

@@ -209,6 +209,8 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                     break;
                 }
                 const auto damage=collision.ApplyWeaponHit(runtime,course,request);
+                if(damage.destroyed && damage.hitKind==RailAimHitKind::Enemy)
+                    for(auto& batch:batches_) if(batch.id==laser.volley) {++batch.defeats;break;}
                 laser.hit=damage.damageApplied;
                 if(laser.hit) {
                     hits_.push_back(damage);
@@ -235,7 +237,7 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
             break;
         }
     }
-    for(const auto& batch:batches_) if(batch.pending==0) completed_.push_back({batch.tokens,batch.hits,batch.maxLocks});
+    for(const auto& batch:batches_) if(batch.pending==0) completed_.push_back({batch.tokens,batch.hits,batch.maxLocks,batch.defeats});
     std::erase_if(batches_,[](const auto& b){return b.pending==0;});
     std::erase_if(lasers_,[](const auto& s){return s.resolved && s.age-s.endedAge>=0.14f;});
 }

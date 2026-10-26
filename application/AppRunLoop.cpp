@@ -1,9 +1,11 @@
-﻿#include "AppRunLoop.h"
+﻿#include "course/RailShortCourse.h"
+#include "AppRunLoop.h"
 #include "AppLogFile.h"
 #include "diagnostics/DronePerformanceProfile.h"
 #include "course/RailWorldRaycast.h"
 #include "course/RailLockReticlePresentation.h"
 #include "course/TwinShieldDroneKillFlash.h"
+#include "course/RailTurretGeometry.h"
 
 #include <DirectXMath.h>
 #include <algorithm>
@@ -23,6 +25,7 @@
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <ctime>
 #include <utility>
 
@@ -1537,6 +1540,7 @@ AppRunLoop::AppRunLoop(
     railLockReleaseSound_=audio_.CreateTone("rail-lock-release",620.0f,0.095f,0.30f);
     railPulseFireSound_=audio_.LoadWave("Resources/audio/rail_pulse_fire.wav");
     railPrimaryKillSound_=audio_.LoadWave("Resources/audio/rail_primary_kill.wav");
+    railBoostIgnitionSound_=audio_.LoadWave("Resources/audio/rail_boost_ignition.wav");
     railTitleReticleBootSound_ = audio_.CreateTone("rail-reticle-boot",920.0f,0.045f,0.20f);
     railTitleGaugesBootSound_ = audio_.CreateTone("rail-gauges-boot",1240.0f,0.065f,0.18f);
     railReadySound_ = audio_.LoadWave("Resources/audio/rail_ready.wav");
@@ -1650,6 +1654,7 @@ AppRunLoop::AppRunLoop(
         SetWindowTextW(hwnd_, L"\u30ec\u30fc\u30eb\u3067\u3042\u3070\u30ec\u30fc\u30eb");
         railDefenseUiProofEnabled_ = railDefenseUiProofVariant_ !=
             CombatLoopDefenseUiProofVariant::Disabled;
+        railShooterCoursePath_=ResolveRailCoursePathFromCommandLine();
         const bool combatLoopExpansionEnabled =
             ResolveCombatLoopExpansionModeFromCommandLine();
         if (combatLoopExpansionEnabled ||
@@ -1726,6 +1731,7 @@ AppRunLoop::AppRunLoop(
         std::string presetError;
         terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
         LoadRailShooterCourse();
+        if(IsRailShortCourse(railShooterCoursePath_)) runtimeState_.terrain.previewDistance=160.0f;
         ApplyRailShooterCourse();
         // Optional direct entry for checking a distant section of the course.
         const uint32_t sunfallPreviewDistance=ReadEnvironmentUInt("GE3_SUNFALL_PREVIEW_DISTANCE",0);
@@ -1861,14 +1867,15 @@ bool AppRunLoop::ApplyRailVehicleControlPreset(
     }
 
     if (preserveRuntimeState && previousVehicle.initialized) {
+        const float maximumRestoredSpeed = asset->vehicle.maximumSpeed * RailManualBoost::MaximumMultiplier;
         RailVehicleRuntimeState restored = previousVehicle;
         restored.vehicleId = asset->vehicle.vehicleId;
         restored.speed = (std::clamp)(
-            restored.speed, 0.0f, asset->vehicle.maximumSpeed);
+            restored.speed, 0.0f, maximumRestoredSpeed);
         restored.requestedSpeed = (std::clamp)(
-            restored.requestedSpeed, 0.0f, asset->vehicle.maximumSpeed);
+            restored.requestedSpeed, 0.0f, maximumRestoredSpeed);
         restored.safeSpeed = (std::clamp)(
-            restored.safeSpeed, 0.0f, asset->vehicle.maximumSpeed);
+            restored.safeSpeed, 0.0f, maximumRestoredSpeed);
         const float previousHealthRatio = previousDefinition.maximumHitPoints > 0.0f
             ? (std::clamp)(
                 previousVehicle.hitPoints / previousDefinition.maximumHitPoints,
@@ -1936,6 +1943,18 @@ void AppRunLoop::ApplyRailShooterCourse() {
         railShooterCourse_.BuildFallbackCanyon(runtimeState_.terrain.settings.corridorRadius);
     }
     railShooterCourse_.ApplyToRailPath(railPath_);
+    railEnemyIngressRoutes_.clear();
+    if(IsRailShortCourse(railShooterCoursePath_))
+        railEnemyIngressRoutes_=BuildRailEnemyIngressRoutes(railShooterCourse_,railPath_,runtimeState_.terrain.settings);
+    std::vector<TerrainGroundSupportRequest> batteryGroundRequests;
+    for(const auto& battery:railShooterEventDispatcher_.GroundBatteryPlacements(railShooterCourse_)) {
+        auto anchor=railPath_.Evaluate(battery.spawnDistance+battery.distanceOffset);
+        anchor.position.x+=anchor.right.x*battery.lateralOffset;
+        anchor.position.y+=anchor.right.y*battery.lateralOffset;
+        anchor.position.z+=anchor.right.z*battery.lateralOffset;
+        batteryGroundRequests.push_back({anchor,battery.radius*RailTurret::ForMesh(battery.meshId).halfFootprint});
+    }
+    terrainChunkManager_.SetGroundSupportRequests(std::move(batteryGroundRequests));
     railShooterTrackDefinition_ = CourseRailTrackDefinitionAsset::MineCartDefaults();
     const std::string trackAssetId = railShooterCourse_.railTrackAssetId.empty()
         ? std::string{"mine_cart_standard"}
@@ -1956,8 +1975,12 @@ void AppRunLoop::ApplyRailShooterCourse() {
         railShooterTrackLoadStatus_ = "Loaded " + railShooterTrackDefinition_.assetId;
     }
     railShooterCourseRuntime_.Bind(&railShooterCourse_);
+    railShooterCourseRuntime_.SetTraversalEndDistance(IsRailShortCourse(railShooterCoursePath_)
+        ? ShortRunFinishDistance(railPath_.Length()) : -1.0f);
     railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
     railShooterSpawnRuntime_.Reset();
+    if(IsRailShortCourse(railShooterCoursePath_))
+        railShooterEventDispatcher_.PlaceGroundBatteries(railShooterCourse_,railShooterSpawnRuntime_);
 
     const uint64_t sourceHash = ComputeCourseAssetSourceHash(railShooterCourse_);
     const std::string runtimeProgramPath =
@@ -1999,6 +2022,8 @@ void AppRunLoop::ApplyRailShooterCourse() {
     }
     if (railShooterRuntimeProgram_.sourceFingerprint != 0) {
         std::string gameplayWaveError;
+        railShooterGameplayWaveBridge_.Configure(IsRailShortCourse(railShooterCoursePath_)
+            ? ShortRunWaveSettings() : CourseGameplayWaveRuntimeSettings{});
         if (!railShooterGameplayWaveBridge_.Bind(
                 &railShooterRuntimeProgram_,
                 &railShooterSpawnRuntime_,
@@ -2050,7 +2075,7 @@ void AppRunLoop::ApplyRailShooterCourse() {
     std::string trackBakeError;
     if (!railShooterTrackMeshBake_.Bake(
             railShooterTrackDefinition_, railPath_, &trackBakeError,
-            railShooterCoursePath_=="Resources/courses/CanyonAssaultRoute01.course"?160.0f:0.0f)) {
+            UsesCanyonPresentation(railShooterCoursePath_)?160.0f:0.0f)) {
         railShooterTrackLoadStatus_ = "Track bake failed: " + trackBakeError;
         OutputDebugStringA(("[CourseRailTrack] " + railShooterTrackLoadStatus_ + "\n").c_str());
     } else {
@@ -2136,14 +2161,15 @@ void AppRunLoop::ApplyRailShooterCourse() {
         railAimAssistAppliedPresetId_.clear();
     }
     railShooterCheckpointSystem_.Reset(&railShooterCourse_, runtimeState_.terrain.previewDistance);
-    GameSessionDefinition sessionDefinition = GameSessionDefinition::RailShooterDefaults();
+    GameSessionDefinition sessionDefinition = IsRailShortCourse(railShooterCoursePath_)
+        ? ShortRunSessionDefinition() : GameSessionDefinition::RailShooterDefaults();
     if (!railShooterCourse_.name.empty()) {
         sessionDefinition.sessionId = railShooterCourse_.name;
     }
     std::string sessionError;
     if (!railShooterGameSession_.Initialize(
             sessionDefinition,
-            railPath_.Length(),
+            IsRailShortCourse(railShooterCoursePath_) ? ShortRunFinishDistance(railPath_.Length()) : railPath_.Length(),
             &sessionError)) {
         OutputDebugStringA(("[GameSession] Initialize failed: " + sessionError + "\n").c_str());
     } else if (railShooterInitialized_ &&
@@ -2331,6 +2357,7 @@ bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
 }
 
 void AppRunLoop::TeleportRailShooterCourse(float distance) {
+    editorViewportCamera_.InvalidateInspection();
     const float railLength = railPath_.Length();
     const float clampedDistance = railLength > 0.0f
         ? (std::clamp)(distance, 0.0f, railLength)
@@ -2339,6 +2366,8 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     railShooterCourseRuntime_.Reset(clampedDistance);
     railShooterDistance_ = railShooterCourseRuntime_.Distance();
     railShooterSpawnRuntime_.Reset();
+    if(IsRailShortCourse(railShooterCoursePath_))
+        railShooterEventDispatcher_.PlaceGroundBatteries(railShooterCourse_,railShooterSpawnRuntime_);
     railShooterGameplayWaveBridge_.Reset(clampedDistance);
     railEnemyAttackTelegraphSystem_.Reset();
     StopRailEnemyAttackFeedback();
@@ -3239,6 +3268,8 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
         static_cast<int>(kRailHudAtlasHeight),
         "The native HUD font region must fit inside the shared atlas");
     std::vector<int> submissionJapaneseCodepoints{
+        // Complete-run results and navigation.
+        0x304B,0x304C,0x304D,0x304E,0x304F,0x3057,0x305B,0x305F,0x3067,0x306A,0x306B,0x306E,0x307E,0x3089,0x308A,0x308B,0x3092,0x3093,0x30A4,0x30BF,0x30C8,0x30EB,0x4E45,0x4E86,0x4EFB,0x4F53,0x518D,0x521D,0x5236,0x52D9,0x5305,0x533A,0x56F2,0x5931,0x5B8C,0x6226,0x623B,0x6311,0x6557,0x6642,0x6700,0x7834,0x7A81,0x8010,0x8ECA,0x904E,0x958B,0x9593,0x9650,
         // Title: レールであばレール (で is already in the HUD set below).
         0x3042, 0x3070, 0x30EB, 0x30EC, 0x30FC, 0x529B,
         0x306B, 0x30BF, 0x30A4, 0x30C8, // タイトルに戻る (remaining glyphs are below).
@@ -4196,6 +4227,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
     hudRenderInput.definition = &railShooterHudDefinition_;
     hudRenderInput.presentation = &railShooterHudPresentation_.Frame();
+    hudRenderInput.resultSession=&railShooterGameSession_.State();
+    hudRenderInput.shortRun=IsRailShortCourse(railShooterCoursePath_);
+    hudRenderInput.bossVisible=hudRenderInput.shortRun && railMothershipBattle_.Current().battleActive;
+    hudRenderInput.bossHealth=railMothershipBattle_.Current().battleHealth;
+    hudRenderInput.miniBossParts=railMothershipBattle_.Current().partsBattle;
+    hudRenderInput.miniBossPartHealth=railMothershipBattle_.Current().partHealth;
+    hudRenderInput.encounterScore=&railEncounterPerformanceScoreSystem_.State();
     hudRenderInput.viewportWidth = hudWidth;
     hudRenderInput.viewportHeight = hudHeight;
     hudRenderInput.showTitleScreen = railTitleScreenVisible_;
@@ -4286,6 +4324,11 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     defensePromptInput.settings = railShooterDefensePromptRendererSettings_;
     railShooterDefensePromptRenderer_.Update(defensePromptInput);
     emitHudCommands(railShooterDefensePromptRenderer_.Frame().commands);
+    if(!railTitleScreenVisible_) {
+        const float carrierHudAlpha=1.0f-0.90f*railMothershipReveal_.Current().heroWeight;
+        for(uint32_t index=0;index<railLockOnHudAtlasVertexCount_;++index)
+            railLockOnHudAtlasMappedVertices_[index].color.w*=carrierHudAlpha;
+    }
 
     if(railTransitionDemoEnabled_ && railTransitionDemo_.ButtonVisible() &&
         !imguiLayer_.WantsDeveloperDiagnostics()) {
@@ -4317,7 +4360,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         [](const auto& p){return p.spriteBacked;});
     const bool hudVisible=imguiLayer_.EditorViewportOverlay().LayerVisible(editor::EditorViewportOverlayLayerId::GameplayHud);
     if(!hudVisible) railLockOnHudAtlasVertexCount_=0;
-    const bool hasWorldEffects=hasEnemyOrbs || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || !wrecks.empty();
+    const bool hasWorldEffects=hasEnemyOrbs || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     if (hasWorldEffects) {
         // Suppress every gameplay overlay, including the reticle built above.
         if (railTitleScreenVisible_) railLockOnHudAtlasVertexCount_ = 0;
@@ -4520,6 +4563,14 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 billboards.push_back({puff.center,h,v,{0.25f,0.23f,0.21f,puff.opacity*gain},
                     600.0f+2.0f*float(puff.variant),kill.CoreAt(0.025f),
                     (1-rail_primary_kill_detail::Ramp(kill.age,0.065f,0.19f))*0.18f*gain});
+            }
+        }
+        if(!railTitleScreenVisible_) {
+            const auto& boost=railBoostVfx_.Frame();
+            for(size_t i=0;i<boost.dustCount;++i) {
+                const auto& puff=boost.dust[i];
+                billboards.push_back({puff.center,Scale(right,puff.radius*1.6f),Scale(up,puff.radius*0.65f),
+                    {0.48f,0.40f,0.30f,puff.opacity},1000.0f+2.0f*float(puff.seed)});
             }
         }
         const Vector3 eye=frameState_.cameraWorldPosition;
@@ -4939,6 +4990,60 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 const float radius=0.36f+0.16f*TwinShieldDestructionSmooth(head,0.78f,1.0f);
                 glowQuad(laser.position,Scale(right,radius),Scale(up,radius),16.0f,{0.30f,0.95f,2.0f,opacity*0.70f});
                 glowQuad(laser.position,Scale(right,radius*0.32f),Scale(up,radius*0.32f),16.0f,{1.80f,2.30f,2.70f,opacity});
+            }
+        }
+        // Append boost last so combat hits and shootable projectiles retain
+        // vertex priority. World depth occludes both the plume and air streaks.
+        if(!railTitleScreenVisible_) {
+            const auto& boost=railBoostVfx_.Frame();
+            for(size_t i=0;i<boost.ribbonCount;++i) {
+                const auto& ribbon=boost.ribbons[i];
+                const auto center=Scale(Add(ribbon.head,ribbon.tail),0.5f);
+                const auto delta=Add(ribbon.head,Scale(ribbon.tail,-1));
+                float opacity=ribbon.opacity;
+                if(!ribbon.propulsion) {
+                    const auto& m=frameState_.viewProjectionMatrix.m;
+                    const float w=center.x*m[0][3]+center.y*m[1][3]+center.z*m[2][3]+m[3][3];
+                    if(w<0.75f) continue;
+                    const float x=(center.x*m[0][0]+center.y*m[1][0]+center.z*m[2][0]+m[3][0])/w;
+                    const float y=(center.x*m[0][1]+center.y*m[1][1]+center.z*m[2][1]+m[3][1])/w;
+                    const float edge=(std::max)(std::abs(x)/0.48f,std::abs(y-0.05f)/0.48f);
+                    opacity*=(std::clamp)((edge-1)*2,0.0f,1.0f);
+                    if(opacity<0.002f) continue;
+                }
+                const auto across=NormalizeOr(Cross(NormalizeOr(delta,up),
+                    NormalizeOr(Add(eye,Scale(center,-1)),right)),right);
+                float width=ribbon.width;
+                if(!ribbon.propulsion) {
+                    const auto& m=frameState_.viewProjectionMatrix.m;
+                    const float w=center.x*m[0][3]+center.y*m[1][3]+center.z*m[2][3]+m[3][3];
+                    const float pixelWorld=2*w/((std::max)(0.001f,std::abs(frameState_.projMatrix.m[1][1]))*float(hudHeight));
+                    width=(std::max)(width,pixelWorld*0.55f);
+                }
+                glowQuad(center,Scale(delta,0.5f),Scale(across,width),
+                    ribbon.propulsion?40.0f:42.0f,
+                    ribbon.propulsion?Vector4{0.32f,1.25f,1.85f,opacity}:Vector4{0.74f,0.80f,0.82f,opacity},
+                    ribbon.propulsion?boost.animationUvY:0.0f);
+                if(ribbon.propulsion) {
+                    glowQuad(center,Scale(delta,0.5f),Scale(across,width*1.45f),40.0f,
+                        {0.10f,0.55f,1.25f,opacity*0.16f},boost.animationUvY);
+                    // A compact white core reaches the physical aperture;
+                    // the broader blue envelope carries the turbulent tail.
+                    const auto coreTail=Add(ribbon.head,Scale(delta,-0.48f));
+                    glowQuad(Scale(Add(ribbon.head,coreTail),0.5f),Scale(Add(ribbon.head,Scale(coreTail,-1)),0.5f),
+                        Scale(across,width*0.42f),40.0f,{1.4f,2.35f,3.0f,opacity*0.82f},boost.animationUvY);
+                    glowQuad(ribbon.head,Scale(boost.exhaustRight,0.28f),Scale(boost.exhaustUp,0.20f),16.0f,
+                        {2.4f,3.1f,3.5f,opacity});
+                    if(boost.ignition>0.005f) {
+                        // One brief flare driven by the controller's onset,
+                        // followed by the sustained jet rather than a loop.
+                        const float burst=boost.ignition;
+                        glowQuad(ribbon.head,Scale(right,0.65f+burst*0.55f),Scale(up,0.42f+burst*0.32f),16.0f,
+                            {2.8f,3.6f,4.0f,burst*0.85f});
+                        glowQuad(ribbon.head,Scale(boost.exhaustRight,1.0f),Scale(boost.exhaustUp,0.065f),38.0f,
+                            {0.8f,2.0f,3.2f,burst*0.75f});
+                    }
+                }
             }
         }
         railTitleTracerVertexCount_=railTitleDustVertexCount_-dustCount;
@@ -5665,6 +5770,7 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
             speedFrame.zoneMultiplier,
             speedFrame.eventMultiplier);
         ImGui::DragFloat("Min Speed", &speedSettings.minSpeed, 0.25f, 1.0f, 80.0f, "%.2f");
+        ImGui::DragFloat("Normal Speed Scale", &speedSettings.normalSpeedScale, 0.01f, 0.5f, 2.0f, "%.2fx");
         ImGui::DragFloat("Max Speed", &speedSettings.maxSpeed, 0.25f, 8.0f, 160.0f, "%.2f");
         ImGui::DragFloat("Cruise Mult", &speedSettings.cruiseMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
         ImGui::DragFloat("Combat Mult", &speedSettings.combatMultiplier, 0.01f, 0.25f, 2.0f, "%.2f");
@@ -5677,6 +5783,8 @@ void AppRunLoop::DrawRailLockOnDebugPanel() {
         ImGui::DragFloat("Event Slow Mult", &speedSettings.eventSlowMultiplier, 0.01f, 0.25f, 1.0f, "%.2f");
         ImGui::DragFloat("Event Boost Mult", &speedSettings.eventBoostMultiplier, 0.01f, 1.0f, 2.0f, "%.2f");
         ImGui::DragFloat("Event Blend Duration", &speedSettings.eventBlendDuration, 0.01f, 0.05f, 5.0f, "%.2f");
+        ImGui::Text("Manual boost [hold E / L3]: %.0f%%, unlimited",
+            railShooterSpeedDirector_.ManualBoost().Blend() * 100.0f);
 
         speedSettings.minSpeed = (std::max)(1.0f, speedSettings.minSpeed);
         speedSettings.maxSpeed = (std::max)(speedSettings.minSpeed, speedSettings.maxSpeed);
@@ -6714,6 +6822,12 @@ void AppRunLoop::LogRailShooterRuntimeDiagnostics(const char* reason) {
          << " effectCylinders=" << vfxFrame.cylinderQueue.size()
          << " courseMeshVisible=" << scene_.CourseMeshes().VisibleCount()
          << " terrainChunks=" << terrainChunkManager_.RenderChunks().size()
+         << " viewportEye=(" << frameState_.cameraWorldPosition.x << ","
+         << frameState_.cameraWorldPosition.y << "," << frameState_.cameraWorldPosition.z << ")"
+         << " gameEye=(" << runtimeState_.camera.transform.translate.x << ","
+         << runtimeState_.camera.transform.translate.y << "," << runtimeState_.camera.transform.translate.z << ")"
+         << " clip=(" << runtimeState_.camera.nearZ << "," << runtimeState_.camera.farZ << ")"
+         << " courseFrozen=" << runtimeState_.terrain.freezeCourseRuntime
          << " terrainDebris=" << debrisStats.debrisInstanceCount
          << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount
          << " cascadeShadow=" << (runtimeState_.terrain.cascadeShadowEnabled ? 1 : 0)
@@ -7070,7 +7184,7 @@ void AppRunLoop::EnterRailShooterScene() {
     }
     railEnemyAttackTelegraphSystem_.Reset();
     StopRailEnemyAttackFeedback();
-    railShooterLockOnSystem_.Reset(); railLockVolley_.Reset(); railPulseShots_.Reset(); railPrimaryKills_.Reset();
+    railShooterLockOnSystem_.Reset(); railLockVolley_.Reset(); railPulseShots_.Reset(); railPrimaryKills_.Reset(); railBoostVfx_.Reset(); audio_.Stop(railBoostIgnitionSound_);
     railShooterSpeedDirector_.Reset();
     railShooterRideDirector_.Reset();
     railShooterTrackFeedbackDirector_.Reset();
@@ -7203,11 +7317,39 @@ bool AppRunLoop::HandleTitleScreenMessage(
     return message != WM_MOUSEMOVE;
 }
 
+void AppRunLoop::BeginRailGameplayEntry() {
+    railTitleGameplayEntry_.Begin();
+    railReadyDroneActorIds_ = {};
+    railReadyDroneSalvo_.Reset();
+    railMothershipReveal_.Reset();
+    railMothershipBattle_.Reset();
+    for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
+        if(!railShooterSpawnRuntime_.SpawnEnemyActor(BuildRailReadyDrone(railShooterDistance_,i))) continue;
+        railReadyDroneActorIds_[i] = railShooterSpawnRuntime_.Enemies().back().actorId;
+        const auto flight=EvaluateRailReadyDroneFlight(0.0f,i);
+        (void)railShooterSpawnRuntime_.SetEnemyStartupFlight(railReadyDroneActorIds_[i],
+            railShooterDistance_,flight.forward,flight.lateral,flight.vertical,flight.rotation);
+    }
+}
+
+void AppRunLoop::RestartRailRun() {
+    StopRailEnemyAttackFeedback();
+    StopGameSessionPresentation();
+    runtimeState_.terrain.previewDistance=UsesCanyonPresentation(railShooterCoursePath_)?160.0f:0.0f;
+    railShooterInitialized_=false;
+    ApplyRailShooterCourse();
+    EnterRailShooterScene();
+    BeginRailGameplayEntry();
+    railShooterHasLastUpdateTime_=false;
+    for(int key=0;key<256;++key) previousKeyDown_[key]=(GetAsyncKeyState(key)&0x8000)!=0;
+    previousLeftMouseDown_=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+}
+
 void AppRunLoop::ReturnToDemoTitle() {
     if(!railTransitionDemo_.NeedsTitleSwap()) return;
     StopRailEnemyAttackFeedback();
     ClearShowcaseEffects();
-    railTitleDustIds_.clear(); railPulseShots_.Reset(); railPrimaryKills_.Reset();
+    railTitleDustIds_.clear(); railPulseShots_.Reset(); railPrimaryKills_.Reset(); railBoostVfx_.Reset(); audio_.Stop(railBoostIgnitionSound_);
     runtimeState_.terrain.previewDistance=0.0f;
     railShooterInitialized_=false;
     ApplyRailShooterCourse();
@@ -7243,6 +7385,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railTransitionDemo_.Update(focused ? dt : 0.0f,
             !railTitleScreenVisible_ && !railTitleGameplayEntry_.Frame().active);
         if(railTransitionDemo_.NeedsTitleSwap()) ReturnToDemoTitle();
+        if(railResultReturnActive_ && railTitleScreenVisible_ && !railTransitionDemo_.Returning()) {
+            railTransitionDemoEnabled_=false;
+            railResultReturnActive_=false;
+        }
     }
     if(railTransitionDemoEnabled_ && !railTitleScreenVisible_ &&
         (railTransitionDemo_.ButtonVisible() || railTransitionDemo_.Returning())) {
@@ -7277,16 +7423,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     bool titleHandoffThisFrame=false;
     if (railTitleScreenVisible_ && railTitleScene_.ReadyForGameplay()) {
         railTitleScreenVisible_ = false;
-        railTitleGameplayEntry_.Begin();
-        railReadyDroneActorIds_ = {};
-        railReadyDroneSalvo_.Reset();
-        for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
-            if(!railShooterSpawnRuntime_.SpawnEnemyActor(BuildRailReadyDrone(railShooterDistance_,i))) continue;
-            railReadyDroneActorIds_[i] = railShooterSpawnRuntime_.Enemies().back().actorId;
-            const auto flight=EvaluateRailReadyDroneFlight(0.0f,i);
-            (void)railShooterSpawnRuntime_.SetEnemyStartupFlight(railReadyDroneActorIds_[i],
-                railShooterDistance_,flight.forward,flight.lateral,flight.vertical,flight.rotation);
-        }
+        BeginRailGameplayEntry();
         if(railTransitionDemoEnabled_) railTransitionDemo_.BeginGameplay();
         titleHandoffThisFrame=true;
         runtimeState_.terrain.enabled = railTitleSavedTerrainEnabled_;
@@ -7307,6 +7444,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         previousLeftMouseDown_=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
     }
     if (railTitleScreenVisible_) {
+        editorViewportCamera_.InvalidateInspection();
         if (!railTitleHasLastUpdate_) {
             railTitleSavedTerrainEnabled_ = runtimeState_.terrain.enabled;
             // Gameplay fog/AO use a different depth range. Save and restore
@@ -7449,11 +7587,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool wasTitleStartupBlocked = railTitleGameplayEntry_.Frame().blockingGameplay;
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
     const bool coursePreviewOwnsRail = coursePreviewSimulationSystem_.IsActive();
+    const bool cameraSectionPreview = coursePreviewOwnsRail && imguiLayer_.CameraSectionPreviewActive();
     const bool coursePreviewAdvancing =
         coursePreviewOwnsRail && coursePreviewSimulationSystem_.IsPlaying() &&
-        editorRuntimeAdvance && !runtimeState_.terrain.freezeCourseRuntime;
+        (editorRuntimeAdvance || cameraSectionPreview) && !runtimeState_.terrain.freezeCourseRuntime;
     if (coursePreviewAdvancing) {
-        coursePreviewSimulationSystem_.Tick(kFallbackGameplayDeltaTime);
+        coursePreviewSimulationSystem_.Tick(kFallbackGameplayDeltaTime,
+            cameraSectionPreview ? imguiLayer_.CameraSectionPreviewEndDistance() : -1.0f);
     }
     const bool coursePreviewFrozen =
         runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance ||
@@ -7637,6 +7777,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
 
     RailSpeedDirectorFrameInput speedInput{};
+    railShooterSpeedDirector_.SetManualBoostInput(
+        playerKeyDown('E') || railAimGamepad.boostHeld,
+        playerInputEnabled && mountedMovementActive && !titleEntryBlocked &&
+        entryFrame.enemyFireAllowed && playerKeyboardAllowed);
     speedInput.course = &railShooterCourse_;
     speedInput.railPath = &railPath_;
     speedInput.section = railShooterCourseRuntime_.CurrentSection();
@@ -7655,6 +7799,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     envelopeInput.vehicleState = &railShooterVehicleMovement_.State();
     envelopeInput.ride = &rideFrame;
     envelopeInput.railPath = &railPath_;
+    envelopeInput.normalSpeedScale = railShooterSpeedDirector_.Settings().normalSpeedScale;
+    envelopeInput.manualBoostMultiplier = railShooterSpeedDirector_.ManualBoost().SpeedMultiplier();
     const RailRideMotionEnvelopeFrame& motionEnvelope =
         railShooterRideMotionEnvelope_.Evaluate(envelopeInput);
     RailVehicleMovementInput vehicleInput{};
@@ -7664,6 +7810,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         : motionEnvelope.requestedSpeed;
     vehicleInput.movementEnabled = railTravelDeltaTime > 0.0f;
     vehicleInput.motionEnvelopeActive = motionEnvelope.active;
+    vehicleInput.manualBoostMultiplier = motionEnvelope.manualBoostMultiplier;
     vehicleInput.accelerationLimit = motionEnvelope.accelerationLimit;
     vehicleInput.brakingLimit = motionEnvelope.brakingLimit;
     vehicleInput.jerkLimit = motionEnvelope.jerkLimit;
@@ -7671,6 +7818,19 @@ void AppRunLoop::UpdateRailShooterFrame() {
     vehicleInput.railPath = &railPath_;
     const RailVehicleMovementFrame& vehicleFrame =
         railShooterVehicleMovement_.Update(vehicleInput);
+    const float manualBoostStrength = railShooterSpeedDirector_.ManualBoost().PresentationStrength(
+        vehicleFrame.state.speed, motionEnvelope.normalRequestedSpeed);
+    // Ignition anticipates the speed ramp, but never promises acceleration
+    // when a curve, authored stop or collision is already holding us back.
+    const bool boostCanAccelerate = vehicleFrame.state.impactSlowdownRemainingSeconds <= 0.0f &&
+        motionEnvelope.requestedSpeed > vehicleFrame.state.speed + 0.03f;
+    const float manualBoostIgnition = boostCanAccelerate
+        ? railShooterSpeedDirector_.ManualBoost().IgnitionPulse() : 0.0f;
+    if (gameplayDeltaTime > 0.0f && manualBoostIgnition > 0.0f &&
+        railShooterSpeedDirector_.ManualBoost().StartedThisFrame()) {
+        audio_.Stop(railBoostIgnitionSound_);
+        (void)audio_.PlaySpatial(railBoostIgnitionSound_, 0.24f, 0.0f, 1.0f);
+    }
     RailTrackFeedbackInput trackFeedbackInput{};
     trackFeedbackInput.course = &railShooterCourse_;
     trackFeedbackInput.previousDistance = vehicleFrame.state.previousDistance;
@@ -7695,6 +7855,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     std::vector<CourseEventMarker> triggeredEvents = railTitleGameplayEntry_.DispatchCourseEvents(
         vehicleFrame.triggeredEvents,!titleEntryBlocked && gameplayDeltaTime>0.0f);
     railShooterDistance_ = vehicleFrame.state.distance;
+    const auto& carrierTerrain=runtimeState_.terrain.settings;
+    const float carrierOutdoorEnd=carrierTerrain.openCanyonStartDistance+
+        carrierTerrain.openCanyonTransitionLength;
+    railMothershipReveal_.Update(gameplayDeltaTime,railShooterDistance_,carrierOutdoorEnd,
+        railPath_,IsRailShortCourse(railShooterCoursePath_) && !entryFrame.blockingGameplay);
 
     if(railReadyDroneActorIds_[0]!=0 && entryFrame.active) {
         railReadyDroneSalvo_.Update(railTitleGameplayEntry_.Elapsed(),railShooterDistance_,railPath_,1.65f,
@@ -7844,6 +8009,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     rideDynamicsInput.ride = &rideFrame;
     rideDynamicsInput.trackFeedback = &trackFeedbackFrame;
     rideDynamicsInput.deltaTime = railTravelDeltaTime;
+    rideDynamicsInput.manualBoostStrength = manualBoostStrength;
+    rideDynamicsInput.manualBoostIgnition = manualBoostIgnition;
     rideDynamicsInput.settings = railShooterVehicleRideDynamicsSettings_;
     const RailVehicleRideDynamicsFrame& rideDynamicsFrame =
         railShooterVehicleRideDynamics_.Update(rideDynamicsInput);
@@ -7887,7 +8054,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     evasionPresentationInput.evasion = &mountedEvasionFrame;
     evasionPresentationInput.combatMount = &combatMountFrame;
     evasionPresentationInput.deltaTime = gameplayDeltaTime;
-    evasionPresentationInput.gameplayVisible = !coursePreviewOwnsRail;
+    evasionPresentationInput.gameplayVisible = !coursePreviewOwnsRail || cameraSectionPreview;
     evasionPresentationInput.settings =
         railShooterMountedEvasionPresentationSettings_;
     railShooterMountedEvasionPresentation_.Update(
@@ -7939,6 +8106,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInertiaInput.rideDynamics = &rideDynamicsFrame;
     cameraInertiaInput.ride = &rideFrame;
     cameraInertiaInput.deltaTime = railTravelDeltaTime;
+    cameraInertiaInput.manualBoostStrength = manualBoostStrength;
+    cameraInertiaInput.manualBoostIgnition = manualBoostIgnition;
     cameraInertiaInput.gameplayActive = !coursePreviewOwnsRail;
     cameraInertiaInput.aimFocusActive =
         railShooterLockOnSystem_.Reticle().aimFeelActive;
@@ -7949,6 +8118,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         CourseGameplayWaveFrameInput waveInput{};
         waveInput.deltaTime = gameplayDeltaTime;
         waveInput.playerDistance = railShooterDistance_;
+        waveInput.combatClearConfirmed = railEnemyEncounterReadabilityDirector_.Frame().truth.safeToResolveSession;
+        waveInput.allowEarlyAdvance = ShortRunAllowsEarlyWave(railShooterDistance_) &&
+            (!IsRailShortCourse(railShooterCoursePath_) || railShooterDistance_<carrierOutdoorEnd-180.0f ||
+             railShooterDistance_>=carrierOutdoorEnd+20.0f);
         waveInput.signaledEventIds.reserve(triggeredEvents.size());
         for (const CourseEventMarker& event : triggeredEvents) {
             if (!event.id.empty()) waveInput.signaledEventIds.push_back(event.id);
@@ -7965,6 +8138,32 @@ void AppRunLoop::UpdateRailShooterFrame() {
     encounterInput.deltaTime = gameplayDeltaTime;
     encounterInput.currentDistance = railShooterDistance_;
     encounterInput.triggeredEvents = triggeredEvents;
+    if(IsRailShortCourse(railShooterCoursePath_))
+        std::erase_if(encounterInput.triggeredEvents,[](const auto& event){return event.payload=="route:turret";});
+    encounterInput.adaptivePatrolsAllowed = IsRailShortCourse(railShooterCoursePath_) &&
+        ShortRunAllowsAdaptivePatrol(railShooterDistance_) && !coursePreviewOwnsRail &&
+        !titleEntryBlocked && entryFrame.enemyFireAllowed &&
+        !railMothershipReveal_.Current().introductionActive &&
+        (!railShooterGameSession_.IsInitialized() || railShooterGameSession_.State().gameplaySimulationEnabled);
+    encounterInput.primaryEncounterDue = ShortRunPrimaryEncounterDue(
+        railShooterGameplayWaveBridge_, railShooterDistance_, vehicleFrame.state.speed);
+    encounterInput.roleMixingAllowed = encounterInput.adaptivePatrolsAllowed;
+    encounterInput.readability = &railEnemyEncounterReadabilityDirector_.Frame();
+    encounterInput.minimumTargetForwardDistance = railShooterLockOnSystem_.Settings().minForwardDistance;
+    encounterInput.maximumTargetForwardDistance = railShooterLockOnSystem_.Settings().maxForwardDistance;
+    RailAimState encounterAvailabilityAim{};
+    encounterAvailabilityAim.worldRayOrigin = railShooterCameraDirector_.LastFrame().gameplayPosition;
+    RailWorldRaycastInput encounterAvailabilityQuery{};
+    encounterAvailabilityQuery.aim = &encounterAvailabilityAim;
+    encounterAvailabilityQuery.spawnRuntime = &railShooterSpawnRuntime_;
+    encounterAvailabilityQuery.railPath = &railPath_;
+    encounterAvailabilityQuery.course = &railShooterCourse_;
+    encounterAvailabilityQuery.terrainSettings = &runtimeState_.terrain.settings;
+    encounterAvailabilityQuery.terrainEdits = &railShooterCourse_.terrainEditLayer;
+    encounterAvailabilityQuery.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    encounterAvailabilityQuery.terrainCollision = &terrainCollisionWorld_;
+    encounterAvailabilityQuery.playerDistance = railShooterDistance_;
+    encounterInput.visibilityQuery = &encounterAvailabilityQuery;
     if (railShooterGameplayWaveBridge_.IsBound() &&
         !railShooterRuntimeProgram_.waves.empty()) {
         // First-class WaveDefinitions replace only the legacy EnemyWaveAsset
@@ -8017,8 +8216,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterSpawnRuntime_,
         railShooterDistance_);
 
+    if(IsRailShortCourse(railShooterCoursePath_) && gameplayDeltaTime>0.0f &&
+        railShooterDistance_>=carrierOutdoorEnd+20.0f && !coursePreviewOwnsRail)
+        railShooterSpawnRuntime_.StageCarrierDeployments(railShooterDistance_,railMothershipReveal_.Current());
+
     EnemyEncounterPacingInput pacingInput{};
     pacingInput.course = &railShooterCourse_;
+    pacingInput.waveRuntime = &railShooterGameplayWaveBridge_;
     pacingInput.runtime = &railShooterSpawnRuntime_;
     // Readability is intentionally the completed previous-frame contract.
     // This avoids ordering cycles with projection/telegraph presentation.
@@ -8071,6 +8275,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
 
     const RailCameraDirectorFrame& previousCameraSafetyFrame = railShooterCameraDirector_.LastFrame();
     CourseEnemyFireSafetyFrameInput fireSafetyInput{};
+    fireSafetyInput.ingressRoutes=railEnemyIngressRoutes_;
     RailTravelPredictionInput travelPredictionInput;
     travelPredictionInput.vehicle = &railShooterVehicleMovement_;
     travelPredictionInput.speedDirector = &railShooterSpeedDirector_;
@@ -8082,9 +8287,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
         fireSafetyInput.travelPredictionInput = &travelPredictionInput;
     fireSafetyInput.presentationSettings = &railEnemyCombatPresentationSettings_;
     fireSafetyInput.readability = &railEnemyEncounterReadabilityDirector_;
-    fireSafetyInput.cameraAllowsEnemyFire = !titleEntryBlocked && entryFrame.enemyFireAllowed && previousCameraSafetyFrame.allowEnemyFire;
+    fireSafetyInput.cameraAllowsEnemyFire = !titleEntryBlocked && entryFrame.enemyFireAllowed &&
+        !railMothershipReveal_.Current().introductionActive && previousCameraSafetyFrame.allowEnemyFire;
     fireSafetyInput.cameraStableForAiming = previousCameraSafetyFrame.stableForAiming;
     fireSafetyInput.cameraHardTransition = previousCameraSafetyFrame.hardTransition;
+    fireSafetyInput.playerSpeed = vehicleFrame.state.speed;
     fireSafetyInput.playerDistance = railShooterDistance_;
     fireSafetyInput.playerLateralOffset = railShooterPlayerLateralOffset_;
     fireSafetyInput.playerVerticalOffset = railShooterPlayerVerticalOffset_;
@@ -8099,7 +8306,22 @@ void AppRunLoop::UpdateRailShooterFrame() {
     fireSafetyInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
     fireSafetyInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
     fireSafetyInput.terrainCollision = &terrainCollisionWorld_;
+    fireSafetyInput.groundSupportQuery=[this](const RailPathSample& anchor,float footprint,float& height) {
+        return terrainChunkManager_.QueryGroundSupport(anchor,footprint,height);
+    };
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput);
+    if(IsRailShortCourse(railShooterCoursePath_)) {
+        railMothershipBattle_.Update(railMothershipReveal_.Current(),railShooterSpawnRuntime_,
+            railShooterGameplayWaveBridge_.Phase(RailMothership::BossWaveId),railPath_,
+            railShooterDistance_,gameplayDeltaTime);
+        for(const auto& position:railMothershipBattle_.Explosions()) {
+            CourseVfxCueDesc explosion;explosion.id="carrier_chain_explosion";
+            explosion.effectName="ice_impact";explosion.hasWorldPosition=true;explosion.worldPosition=position;
+            explosion.radius=14;explosion.lifetime=2.0f;explosion.color={1.0f,0.44f,0.10f,1};
+            railShooterSpawnRuntime_.SpawnVfxCue(std::move(explosion));
+            (void)audio_.PlaySpatial(railEnemyProjectileImpactSound_,0.32f,0,0.65f);
+        }
+    }
     railEnemyAttackDefenseValidation_.Update(railShooterSpawnRuntime_);
     editorPatrolRuntimeWorld_.Update(gameplayDeltaTime);
     CourseCollisionFrameInput collisionInput{};
@@ -8118,6 +8340,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
         : (dodgeFrame.invulnerable
             ? dodgeFrame.state.invulnerabilityRemainingSeconds
             : 0.0f);
+    if(railMothershipReveal_.Current().introductionActive)
+        collisionInput.player.invulnerabilityTime=(std::max)(collisionInput.player.invulnerabilityTime,0.20f);
     collisionInput.player.dodgeActive =
         combatMountFrame.valid
         ? mountedDefenseFrame.state.active
@@ -8194,11 +8418,23 @@ void AppRunLoop::UpdateRailShooterFrame() {
     gRailPerfFrame.visualPresetMs = ElapsedMs(visualPresetStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterVisualPresets");
 
+    // A paused scrub is a static evaluation, not a zero-dt continuation of
+    // the previous position. Moving playback retains the director's history.
+    if (cameraSectionPreview && (!cameraSectionPreviewWasActive_ ||
+        !coursePreviewSimulationSystem_.IsPlaying() ||
+        railShooterDistance_ < cameraSectionPreviewLastDistance_ ||
+        std::abs(railShooterDistance_ - cameraSectionPreviewLastDistance_) > 30.0f))
+        railShooterCameraDirector_.Reset();
+    cameraSectionPreviewWasActive_ = cameraSectionPreview;
+    cameraSectionPreviewLastDistance_ = railShooterDistance_;
     RailCameraDirectorFrameInput cameraInput{};
     cameraInput.course = &railShooterCourse_;
     cameraInput.railPath = &railPath_;
     cameraInput.section = railShooterCourseRuntime_.CurrentSection();
     cameraInput.distance = railShooterDistance_;
+    cameraInput.mothershipCameraWeight=railMothershipReveal_.Current().cameraWeight;
+    cameraInput.mothershipHeroWeight=railMothershipReveal_.Current().heroWeight;
+    cameraInput.mothershipCameraSubject=railMothershipReveal_.Current().cameraSubject;
     cameraInput.titleHandoffWeight = entryFrame.cameraHandoffWeight;
     cameraInput.titleHandoffRig = RailTitleScene::DepartureCameraRig();
     if(entryFrame.active && railReadyDroneActorIds_[0]!=0) {
@@ -8234,7 +8470,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInput.viewportHeight = metrics.height;
     cameraInput.nearClipDistance = runtimeState_.camera.nearZ;
     const RailVehicleRenderFrame& vehicleCameraBounds = railShooterVehicleRenderer_.Frame();
-    cameraInput.vehicleFramingActive = vehicleCameraBounds.visible && !coursePreviewOwnsRail;
+    cameraInput.vehicleFramingActive = vehicleCameraBounds.visible && (!coursePreviewOwnsRail || cameraSectionPreview);
     if (cameraInput.vehicleFramingActive) {
         // Include the raised safety trim above the collision body. Transform
         // the envelope with the rendered pose so banking/suspension count too.
@@ -8298,6 +8534,21 @@ void AppRunLoop::UpdateRailShooterFrame() {
         encounterCompositionFrame.fovOffsetRadians;
     cameraInput.authoredEncounterBackDistanceOffset =
         encounterCompositionFrame.backDistanceOffset;
+    if (cameraSectionPreview) {
+        // A camera-authoring preview owns the shot, independently of live
+        // startup/encounter state. Actor placement still uses the preview snapshot.
+        cameraInput.section = railShooterCourse_.FindSection(railShooterDistance_);
+        cameraInput.titleHandoffWeight = cameraInput.startupCameraWeight = 0;
+        cameraInput.mothershipCameraWeight = cameraInput.mothershipHeroWeight = 0;
+        cameraInput.preferredCinematicShotId.clear();
+        cameraInput.preferredCinematicShotWeight = 0;
+        cameraInput.authoredEncounterCompositionActive = false;
+        cameraInput.lockHeld = cameraInput.lockPressed = cameraInput.lockReleased = false;
+        cameraInput.lockAimFeelActive = false;
+        cameraInput.reticleVelocity = {};
+        cameraInput.lockTokenCount = 0;
+        cameraInput.lockTokens = nullptr;
+    }
     const RailCameraDirectorFrame directedCamera =
         railShooterCameraDirector_.Evaluate(cameraInput);
     if (gameplayDeltaTime > 0.0f) {
@@ -8349,7 +8600,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     telegraphInput.viewportWidth = metrics.width;
     telegraphInput.viewportHeight = metrics.height;
     telegraphInput.settings = railEnemyAttackTelegraphSettings_;
-    telegraphInput.cameraAllowsAttack = !titleEntryBlocked && entryFrame.enemyFireAllowed && directedCamera.allowEnemyFire &&
+    telegraphInput.cameraAllowsAttack = !titleEntryBlocked && entryFrame.enemyFireAllowed &&
+        !railMothershipReveal_.Current().introductionActive && directedCamera.allowEnemyFire &&
         directedCamera.stableForAiming && !directedCamera.hardTransition;
     railEnemyAttackTelegraphSystem_.Update(telegraphInput);
     EnemyAttackLaneTelegraphRenderInput laneTelegraphInput{};
@@ -8360,7 +8612,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         (!railShooterGameSession_.IsInitialized() ||
          railShooterGameSession_.State().gameplaySimulationEnabled);
     laneTelegraphInput.openingPresentation =
-        railShooterCoursePath_ == "Resources/courses/CanyonAssaultRoute01.course" &&
+        UsesCanyonPresentation(railShooterCoursePath_) &&
         railShooterDistance_ < 180.0f;
     laneTelegraphInput.elapsedTime = railShooterGameSession_.IsInitialized()
         ? railShooterGameSession_.State().gameplayElapsedSeconds
@@ -8502,6 +8754,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     lockOnInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
     lockOnInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
     lockOnInput.gameplayCameraPosition = directedCamera.gameplayPosition;
+    lockOnInput.viewRelativeTargeting = directedCamera.viewRelativeTargeting;
+    lockOnInput.viewForward = directedCamera.gameplayForward;
     lockOnInput.aimRayMaxDistance = (std::max)(
         baseWeapon.range,
         railShooterLockOnSystem_.Settings().maxForwardDistance);
@@ -8557,8 +8811,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterCombatFeelSystem_.ApplyLockOnRelease(result.tokens,result.hits,result.maxLocks);
     if(!railLockVolley_.Hits().empty()) {
         const auto& feedback=railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
-        railShooterCameraDirector_.AddFeedbackImpulse((std::min)(feedback.cameraShake,0.42f),
-            -0.003f*feedback.intensity,0.0015f*feedback.intensity);
+        railShooterCameraDirector_.AddFeedbackImpulse((std::min)(feedback.cameraShake,0.22f),
+            -0.0015f*(std::min)(feedback.intensity,1.5f),0.0005f*(std::min)(feedback.intensity,1.5f));
     }
 
     const bool lockModeActive = railShooterLockOnSystem_.Reticle().lockHeld;
@@ -8659,6 +8913,19 @@ void AppRunLoop::UpdateRailShooterFrame() {
     railShooterVehicleRenderer_.Update(vehicleRenderInput);
     wheelPresentationInput.collisionFeedback = &railShooterVehicleCollisionFeedback_.Frame();
     railShooterWheelContactPresentation_.Update(wheelPresentationInput);
+    RailBoostPresentationInput boostVfxInput;
+    boostVfxInput.deltaTime=gameplayDeltaTime;
+    boostVfxInput.gameplayActive=playerInputEnabled && !titleEntryBlocked && mountedMovementActive;
+    boostVfxInput.distance=railShooterVehicleMovement_.State().distance;
+    boostVfxInput.speed=railShooterVehicleMovement_.State().speed;
+    boostVfxInput.strength=manualBoostStrength;
+    boostVfxInput.ignition=manualBoostIgnition;
+    boostVfxInput.bodyWorld=railShooterVehicleRenderer_.Frame().worldMatrix;
+    boostVfxInput.ground=trackContactFrame.valid?trackContactFrame.contactCentroid:vehicleFrame.state.position;
+    boostVfxInput.forward=trackContactFrame.valid?trackContactFrame.forward:vehicleFrame.state.forward;
+    boostVfxInput.right=trackContactFrame.valid?trackContactFrame.right:vehicleFrame.state.right;
+    boostVfxInput.up=trackContactFrame.valid?trackContactFrame.up:vehicleFrame.state.up;
+    railBoostVfx_.Update(boostVfxInput);
     const RailVehicleCollisionFeedbackFrame& collisionFeedback =
         railShooterVehicleCollisionFeedback_.Frame();
     if (collisionFeedback.slowdown.valid) {
@@ -8822,6 +9089,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
     encounterScoreInput.damageResults =
         railShooterCollisionSystem_.PlayerDamageResults();
     encounterScoreInput.gameplayActive = grazeInput.gameplayActive;
+    encounterScoreInput.showcasesEnabled = IsRailShortCourse(railShooterCoursePath_);
+    encounterScoreInput.deltaTime = gameplayDeltaTime;
+    encounterScoreInput.runtime = &railShooterSpawnRuntime_;
+    encounterScoreInput.weaponFeedback = &railShooterCollisionSystem_.WeaponFeedback();
+    encounterScoreInput.lockVolleys = railLockVolley_.Completed();
+    encounterScoreInput.shootDownResults = railShooterCollisionSystem_.ProjectileShootDown().Frame().results;
     railEncounterPerformanceScoreSystem_.Update(
         encounterScoreInput,
         railEncounterPerformanceScoreSettings_);
@@ -8923,6 +9196,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
              railEncounterPerformanceScoreSystem_.ResultsThisFrame()) {
             if (!result.accepted || result.scoreAwarded == 0) continue;
             const char* source = "encounter_enemy_defeat";
+            if (result.kind==EncounterPerformanceScoreKind::LockSweep ||
+                result.kind==EncounterPerformanceScoreKind::BatteryBreak ||
+                result.kind==EncounterPerformanceScoreKind::ProjectileIntercept) {
+                source=ToString(result.kind);
+                (void)audio_.PlaySpatial(railLockFullSound_,0.12f,0.0f,
+                    result.kind==EncounterPerformanceScoreKind::ProjectileIntercept?1.12f:1.0f);
+            }
             if (result.kind == EncounterPerformanceScoreKind::CleanClear) {
                 source = result.fullSweep
                     ? "encounter_clean_clear_full_sweep"
@@ -8951,6 +9231,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         sessionInput.combatClearConfirmed =
             railEnemyEncounterReadabilityDirector_.Frame()
                 .truth.safeToResolveSession;
+        if(IsRailShortCourse(railShooterCoursePath_) &&
+            railMothershipBattle_.Current().battleDefeated && railMothershipBattle_.Current().visible)
+            sessionInput.combatClearConfirmed=false;
         if (railShooterGameplayWaveBridge_.IsBound()) {
             sessionInput.completedMandatoryWaves =
                 railShooterGameplayWaveBridge_.Stats().completedWaves;
@@ -8981,7 +9264,35 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 (void)railShooterGameSession_.Pause();
             }
         }
-        if (retryRequested && railShooterRetryCoordinator_.CanRetry()) {
+        RailRunResultAction resultAction=RailRunResultAction::None;
+        if(!titleEntryBlocked && sessionKeyboardAllowed && IsRunResult(railShooterGameSession_.State())) {
+            if(retryRequested) resultAction=RailRunResultAction::Restart;
+            else if(WasKeyPressed('C') && railShooterRetryCoordinator_.CanRetry()) resultAction=RailRunResultAction::Checkpoint;
+            else if(WasKeyPressed('T')) resultAction=RailRunResultAction::Title;
+            else if(WasKeyPressed(VK_LBUTTON)) {
+                POINT cursor{},renderPoint{};uint32_t renderWidth=0,renderHeight=0;
+                if(GetCursorPos(&cursor) && (hwnd_==nullptr || ScreenToClient(hwnd_,&cursor)) &&
+                    ResolveEditorViewportClientPoint(cursor,renderPoint,renderWidth,renderHeight))
+                    resultAction=HitRunResult(float(renderPoint.x),float(renderPoint.y),float(renderWidth),float(renderHeight),
+                        railShooterRetryCoordinator_.CanRetry());
+            }
+        }
+        if(resultAction==RailRunResultAction::Restart) {
+            RestartRailRun();
+            return;
+        }
+        if(resultAction==RailRunResultAction::Title) {
+            railTransitionDemo_.BeginGameplay();
+            if(railTransitionDemo_.RequestReturn(true)) {
+                railResultReturnActive_=true;
+                railTransitionDemoEnabled_=true;
+                railTransitionDemoHasLastUpdate_=false;
+            }
+            return;
+        }
+        const bool checkpointRequested=resultAction==RailRunResultAction::Checkpoint ||
+            (railShooterGameSession_.State().phase==GameSessionPhase::Defeat && retryRequested);
+        if (checkpointRequested && railShooterRetryCoordinator_.CanRetry()) {
             std::string retryError;
             const GameSessionRetryResult retry =
                 railShooterRetryCoordinator_.Retry(&retryError);
@@ -9024,7 +9335,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 railShooterRideDirector_.Reset();
                 railShooterTrackFeedbackDirector_.Reset();
                 railShooterRideMotionEnvelope_.Reset();
-                railPulseShots_.Reset(); railPrimaryKills_.Reset();
+                railPulseShots_.Reset(); railPrimaryKills_.Reset(); railBoostVfx_.Reset(); audio_.Stop(railBoostIgnitionSound_);
                 OutputDebugStringA(("[GameSessionRetry] " + retry.message + "\n").c_str());
             } else {
                 OutputDebugStringA(("[GameSessionRetry] " + retryError + "\n").c_str());
@@ -9151,13 +9462,29 @@ void AppRunLoop::UpdateRailShooterFrame() {
         const editor::EditorPlaySessionViewportMode viewportMode =
             playSession.ViewportMode();
         const bool activeSession = playSession.IsActive();
-        const bool useEditorInspectionCamera =
+        auto& composition = imguiLayer_.CameraComposition();
+        composition.Update(imguiLayer_.EditorViewportCameraFrameInput(),
+            runtimeState_.camera.transform, runtimeState_.camera.fovY,
+            aspectRatio, runtimeState_.camera.nearZ, runtimeState_.camera.farZ,
+            railPath_.Evaluate(railShooterDistance_),
+            cameraSectionPreview && !coursePreviewSimulationSystem_.IsPlaying() && !activeSession);
+        if (composition.Ready()) {
+            runtimeState_.cameraWorldPosition = composition.Camera().WorldPosition();
+            frameState_.viewMatrix = composition.ViewMatrix();
+            frameState_.projMatrix = composition.Camera().ProjectionMatrix();
+            frameState_.viewProjectionMatrix = composition.ViewProjectionMatrix();
+            frameState_.cameraWorldPosition = composition.Camera().WorldPosition();
+            scene_.UpdateCameraWorldPosition(composition.Camera().WorldPosition());
+        }
+        const bool useEditorInspectionCamera = !composition.Active() && !cameraSectionPreview && (
             (activeSession && playSession.UsesEditorFreeCamera()) ||
-            (!activeSession && runtimeState_.terrain.freezeCourseRuntime);
+            (!activeSession && runtimeState_.terrain.freezeCourseRuntime));
         const bool viewportModeChanged =
             viewportMode != lastEditorViewportMode_ ||
             playSession.SessionSerial() != lastEditorViewportSessionSerial_;
 
+        editorViewportCamera_.SyncInspection(
+            useEditorInspectionCamera, runtimeState_.camera.transform, viewportModeChanged);
         if (useEditorInspectionCamera) {
             editor::EditorViewportCameraSettings cameraSettings{};
             cameraSettings.moveSpeed =
@@ -9178,10 +9505,6 @@ void AppRunLoop::UpdateRailShooterFrame() {
                     runtimeState_.camera.nearZ,
                     runtimeState_.camera.farZ);
             } else {
-                if (viewportModeChanged) {
-                    editorViewportCamera_.SetTransform(
-                        runtimeState_.camera.transform);
-                }
                 editorViewportCamera_.SetLens(
                     runtimeState_.camera.fovY,
                     aspectRatio,
@@ -9903,6 +10226,9 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
         &terrain.previewEditLayer,
         terrain.previewDistance,
         frameState_.viewProjectionMatrix);
+    // Resolve fixed foundations as soon as their terrain streams in, before
+    // encounter admission. LOD replacement must not postpone their reveal.
+    terrainChunkManager_.PrepareGroundSupport();
 
     scene_.debugDraw.BeginFrame();
     if constexpr (!app::kRuntimeAuthoringEnabled) {
@@ -10283,10 +10609,12 @@ void AppRunLoop::StopRailEnemyAttackFeedback() {
     railEnemyAttackLaneTelegraphRenderer_.Reset(&vfxEngine_.Runtime());
 }
 
-void AppRunLoop::UpdateRailRollingAudio(float deltaTime,float targetGain,float tunnelBlend) {
+void AppRunLoop::UpdateRailRollingAudio(float deltaTime,float targetGain,float tunnelBlend,float targetPitch) {
     const float dt=std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,0.05f):0.0f;
     targetGain=(std::clamp)(targetGain,0.0f,1.0f);
     railTitleAudioGain_+=(targetGain-railTitleAudioGain_)*(1.0f-std::exp(-8.0f*dt));
+    targetPitch = (std::clamp)(targetPitch, 0.8f, 1.3f);
+    railTitleAudioPitch_ += (targetPitch-railTitleAudioPitch_)*(1.0f-std::exp(-10.0f*dt));
     // Start dry and reverberant copies together at zero gain. Their buffers
     // have identical lengths, so crossfading never resets the rail rhythm.
     if(targetGain>0.0f && !railTitleAmbiencePlaying_ && railTitleAmbience_.IsValid())
@@ -10294,8 +10622,8 @@ void AppRunLoop::UpdateRailRollingAudio(float deltaTime,float targetGain,float t
     if(targetGain>0.0f && !railTitleTunnelAmbiencePlaying_ && railTitleTunnelAmbience_.IsValid())
         railTitleTunnelAmbiencePlaying_=audio_.PlaySpatial(railTitleTunnelAmbience_,0.0f,0.0f,1.0f,true);
     const float wet=railTitleTunnelAmbiencePlaying_?(std::clamp)(tunnelBlend,0.0f,1.0f)*0.72f:0.0f;
-    audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*(1.0f-wet),1.0f);
-    audio_.SetPlayback(railTitleTunnelAmbience_,railTitleAudioGain_*wet,1.0f);
+    audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*(1.0f-wet),railTitleAudioPitch_);
+    audio_.SetPlayback(railTitleTunnelAmbience_,railTitleAudioGain_*wet,railTitleAudioPitch_);
     if(targetGain==0.0f && railTitleAudioGain_<0.001f) {
         audio_.Stop(railTitleAmbience_);audio_.Stop(railTitleTunnelAmbience_);
         railTitleAmbiencePlaying_=railTitleTunnelAmbiencePlaying_=false;
@@ -10317,8 +10645,8 @@ void AppRunLoop::UpdateRailSandTransitionAudio(bool active,float age,bool focuse
     const float tunnelBlend=railTitleScreenVisible_ ? railTitleScene_.TunnelShade() :
         entry.blockingGameplay ? 1.0f-entry.rollingHandoff*0.85f : 0.15f;
     const float wet=railTitleTunnelAmbiencePlaying_ ? tunnelBlend*0.72f : 0.0f;
-    audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*duck*(1.0f-wet),1.0f);
-    audio_.SetPlayback(railTitleTunnelAmbience_,railTitleAudioGain_*duck*wet,1.0f);
+    audio_.SetPlayback(railTitleAmbience_,railTitleAudioGain_*duck*(1.0f-wet),railTitleAudioPitch_);
+    audio_.SetPlayback(railTitleTunnelAmbience_,railTitleAudioGain_*duck*wet,railTitleAudioPitch_);
 }
 
 void AppRunLoop::StopRailSandTransitionAudio() {
@@ -10334,18 +10662,23 @@ void AppRunLoop::DispatchRailVehicleAudio(float deltaTime,float realDeltaTime) {
     input.listenerPosition = frameState_.cameraWorldPosition;
     input.listenerRight = railShooterVehicleMovement_.State().right;
     input.settings = railShooterVehicleAudioSettings_;
+    input.manualBoostStrength = railShooterSpeedDirector_.ManualBoost().PresentationStrength(
+        railShooterVehicleMovement_.State().speed,
+        railShooterRideMotionEnvelope_.Frame().normalRequestedSpeed);
     railShooterVehicleAudioBridge_.Update(input);
 
     const RailVehicleAudioFrame& audioFrame =
         railShooterVehicleAudioBridge_.Frame();
     const auto& entry=railTitleGameplayEntry_.Frame();
     const float movingGain=audioFrame.rolling?input.settings.masterVolume*
-        audioFrame.distanceAttenuation*(0.14f+input.presentation->speedNormalized*0.24f):0.0f;
+        audioFrame.distanceAttenuation*(0.14f+input.presentation->speedNormalized*0.24f)*
+        audioFrame.rollingLoopGain:0.0f;
     const float targetGain=!input.settings.enabled?0.0f:entry.blockingGameplay?
         0.34f+((std::max)(0.20f,movingGain)-0.34f)*entry.rollingHandoff:deltaTime>0.0f?movingGain:0.0f;
     const bool focused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
     UpdateRailRollingAudio(realDeltaTime,focused?targetGain:0.0f,
-        entry.blockingGameplay?1.0f-entry.rollingHandoff*0.85f:0.15f);
+        entry.blockingGameplay?1.0f-entry.rollingHandoff*0.85f:0.15f,
+        entry.blockingGameplay?1.0f:audioFrame.rollingLoopPitch);
     if(!focused || deltaTime<=0.0f) return;
     for (size_t index = 0; index < audioFrame.cueCount; ++index) {
         const RailVehicleAudioCue& cue = audioFrame.cues[index];
@@ -10932,18 +11265,23 @@ void AppRunLoop::StopGameSessionPresentation() {
     railLockVolley_.Reset();
     railPulseShots_.Reset();
     railPrimaryKills_.Reset();
+    railBoostVfx_.Reset();
     audio_.Stop(railPulseFireSound_);
     audio_.Stop(railPrimaryKillSound_);
+    audio_.Stop(railBoostIgnitionSound_);
     audio_.Stop(railLockAcquireSound_); audio_.Stop(railLockFullSound_); audio_.Stop(railLockReleaseSound_);
     railTitleGameplayEntry_.Reset();
     railReadyDroneActorIds_ = {};
     railReadyDroneSalvo_.Reset();
+    railMothershipReveal_.Reset();
+    railMothershipBattle_.Reset();
     audio_.Stop(railReadySound_); audio_.Stop(railGoSound_);
     audio_.Stop(railDroneFlybySound_);
     audio_.Stop(railDroneWingmanFlybySound_);
     audio_.Stop(railTitleAmbience_);audio_.Stop(railTitleTunnelAmbience_);
     railTitleAmbiencePlaying_=railTitleTunnelAmbiencePlaying_=false;
     railTitleAudioGain_=0.0f;
+    railTitleAudioPitch_=1.0f;
     if (railSessionVibrationController_ != UINT32_MAX) {
         (void)AppGamepadInput::SetVibration(
             railSessionVibrationController_, 0.0f, 0.0f);
@@ -11039,6 +11377,49 @@ void AppRunLoop::ProcessPostProcessShowcaseShortcuts() {
     if (randomPressed) {
         toggleSinglePass("Random");
     }
+}
+
+bool AppRunLoop::CourseObjectEditSnapshot::HasSameObjects(
+    const CourseObjectEditSnapshot& other) const {
+    const auto vectorKey = [](const Vector3& value) {
+        return std::tie(value.x, value.y, value.z);
+    };
+    const auto sameTerrain = [&vectorKey](
+        const CourseTerrainPlacement& a, const CourseTerrainPlacement& b) {
+        const auto key = [&vectorKey](const CourseTerrainPlacement& value) {
+            return std::tuple{
+                value.distance, value.layer, value.id, value.meshId,
+                value.lateralOffset, value.verticalOffset, value.forwardOffset,
+                vectorKey(value.scale), vectorKey(value.rotation),
+                value.collisionMode, value.renderPriority,
+                value.cullBehindDistance, value.cullAheadDistance,
+                value.editorGuid, value.editorVisible, value.editorLocked};
+        };
+        return key(a) == key(b);
+    };
+    const auto sameRock = [&vectorKey](const CourseRockCluster& a, const CourseRockCluster& b) {
+        const auto key = [&vectorKey](const CourseRockCluster& value) {
+            return std::tuple{
+                value.distance, value.id, value.meshId, value.anchor, value.type,
+                value.count, value.minScale, value.maxScale,
+                vectorKey(value.spread), vectorKey(value.rotation), value.clearLaneRadius,
+                value.cullBehindDistance, value.cullAheadDistance,
+                value.editorGuid, value.editorVisible, value.editorLocked};
+        };
+        return key(a) == key(b) && std::equal(
+            a.instanceOverrides.begin(), a.instanceOverrides.end(),
+            b.instanceOverrides.begin(), b.instanceOverrides.end(),
+            [&vectorKey](const auto& left, const auto& right) {
+                return left.index == right.index &&
+                    vectorKey(left.localOffset) == vectorKey(right.localOffset) &&
+                    vectorKey(left.scale) == vectorKey(right.scale) &&
+                    vectorKey(left.rotation) == vectorKey(right.rotation);
+            });
+    };
+    return std::equal(terrainPlacements.begin(), terrainPlacements.end(),
+               other.terrainPlacements.begin(), other.terrainPlacements.end(), sameTerrain) &&
+        std::equal(rockClusters.begin(), rockClusters.end(),
+            other.rockClusters.begin(), other.rockClusters.end(), sameRock);
 }
 
 AppRunLoop::CourseObjectEditSnapshot AppRunLoop::CaptureCourseObjectSnapshot() const {
@@ -11622,6 +12003,17 @@ void AppRunLoop::CommitCourseObjectHistoryIfNeeded() {
     constexpr size_t kMaxCourseObjectUndo = 96;
     const CourseObjectEditSnapshot beforeSnapshot = courseObjectHistoryBaseline_;
     const CourseObjectEditSnapshot afterSnapshot = CaptureCourseObjectSnapshot();
+    if (!courseObjectTransactions_.HasStagedPropertyDelta() &&
+        beforeSnapshot.HasSameObjects(afterSnapshot)) {
+        // Sequencer edits already own a command transaction. Their shared refresh
+        // revision must not cover that command with an empty terrain/rock snapshot,
+        // or clear its redo history after undo. Selection alone is not an edit.
+        courseObjectHistoryBaseline_ = afterSnapshot;
+        courseObjectHistoryRevision_ = editor.courseObjectEditRevision;
+        editor.courseObjectUndoDepth = static_cast<uint32_t>(courseObjectUndoStack_.size());
+        editor.courseObjectRedoDepth = static_cast<uint32_t>(courseObjectRedoStack_.size());
+        return;
+    }
     courseObjectUndoStack_.push_back(courseObjectHistoryBaseline_);
     if (courseObjectUndoStack_.size() > kMaxCourseObjectUndo) {
         courseObjectUndoStack_.erase(courseObjectUndoStack_.begin());
@@ -12996,6 +13388,23 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     };
     imguiLayer_.RefreshEditorViewportRenderTargetLayout();
     ApplyEditorViewportRenderTargetForRender();
+    // Scene color follows the editor viewport size. Depth must use the same
+    // dimensions, otherwise normalized depth reads sample the unused clear
+    // region and Sunfall treats foreground geometry as uncovered sky.
+    const auto sceneDepthMetrics = ResolveRenderViewportMetrics(
+        imguiLayer_.EditorViewportRenderTargetState(), windowWidth_, windowHeight_);
+    auto* currentSceneDepth = engineContext_.GetDepthStencil();
+    const auto currentDepthDesc = currentSceneDepth ? currentSceneDepth->GetDesc() : D3D12_RESOURCE_DESC{};
+    if (currentDepthDesc.Width != sceneDepthMetrics.width ||
+        currentDepthDesc.Height != sceneDepthMetrics.height) {
+        if (!frameCoordinator_.FlushGpu() ||
+            !engineContext_.ResizeSceneDepth(sceneDepthMetrics.width, sceneDepthMetrics.height)) {
+            OutputDebugStringA("[SceneDepth] Failed to resize depth to the render viewport.\n");
+            closeImguiFrameOnAbort();
+            return;
+        }
+        sceneDepthState_ = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    }
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterBeginFrameSystems");
 
     UINT backBufferIndex = swapChain_.CurrentIndex();
@@ -13084,8 +13493,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         frameState_.projMatrix,
         enemyCombatPresentation,
         enemyEncounterReadability, nullptr,
-        railShooterCoursePath_ == "Resources/courses/CanyonAssaultRoute01.course" &&
-            railShooterCourseRuntime_.Distance() < 180.0f);
+        UsesCanyonPresentation(railShooterCoursePath_) &&
+            railShooterCourseRuntime_.Distance() < 180.0f,
+        IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr);
     gRailPerfFrame.syncCourseMeshMs = ElapsedMs(syncCourseMeshStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSyncCourseMeshes");
 
@@ -13231,8 +13641,16 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             railTitleScene_.SceneryDistance(),railTitleScene_.SceneryPath(),frameState_.viewMatrix,frameState_.projMatrix,nullptr,nullptr,
             &railTitleScene_.Pursuer());
     } else {
+    auto cameraVehicleFrame = railShooterVehicleRenderer_.Frame();
+    auto cameraOccupantFrame = railShooterOccupantActor_.Frame();
+    if (imguiLayer_.CameraComposition().Active()
+            ? imguiLayer_.CameraComposition().HideVehicle()
+            : railShooterCameraDirector_.LastFrame().hideVehicle) {
+        cameraVehicleFrame.visible = false;
+        cameraOccupantFrame.visible = false;
+    }
     scene_.SyncRailVehicleRenderFrame(
-        railShooterVehicleRenderer_.Frame(),
+        cameraVehicleFrame,
         frameState_.viewMatrix,
         frameState_.projMatrix);
     scene_.SyncCourseRailTrackRenderer(
@@ -13242,7 +13660,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         frameState_.viewMatrix,
         frameState_.projMatrix);
     scene_.SyncRailVehicleOccupantActorFrame(
-        railShooterOccupantActor_.Frame(),
+        cameraOccupantFrame,
         frameState_.viewMatrix,
         frameState_.projMatrix);
     scene_.SyncCourseMeshRenderQueue(
@@ -13254,8 +13672,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         frameState_.projMatrix,
         enemyCombatPresentation,
         enemyEncounterReadability, nullptr,
-        railShooterCoursePath_ == "Resources/courses/CanyonAssaultRoute01.course" &&
-            railShooterCourseRuntime_.Distance() < 180.0f);
+        UsesCanyonPresentation(railShooterCoursePath_) &&
+            railShooterCourseRuntime_.Distance() < 180.0f,
+        IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr);
 
     ProcessCourseObjectViewportEditing();
     ProcessIceProjectileMouseLaunch();
@@ -13308,6 +13727,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     if(scene_.mappedCamera) scene_.mappedCamera->sunfallSky={graphContext.sunfallActive ? 1.0f : 0.0f,
         graphContext.sunfallOutdoorBlend,(std::clamp)(runtimeState_.sunfall.skyFill,0.0f,2.0f),0};
     if (!railTitleScreenVisible_ && scene_.mappedCamera) {
+        if(IsRailShooterSceneActive()) scene_.mappedCamera->railBoostLights=railBoostVfx_.Frame().lights;
         // SyncRuntimeState clears this transient world-space contact light each frame.
         float strongest=0.0f;
         for(const auto& impact:railReadyDroneSalvo_.Impacts()) if(impact.active) {
@@ -13328,7 +13748,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             scene_.mappedCamera->caveRailForward = {sample.tangent.x, sample.tangent.y, sample.tangent.z, 0};
             scene_.mappedCamera->caveOpenings = caveOpeningLighting_.Update(railPath_, atmosphereTerrain,
                 railShooterDistance_, &railShooterCourse_.terrainEditLayer, &runtimeState_.terrain.previewEditLayer,
-                railShooterCoursePath_ == "Resources/courses/CanyonAssaultRoute01.course");
+                UsesCanyonPresentation(railShooterCoursePath_));
         }
     }
     graphContext.sunfallExposure=sunfallExposure_.Update(frameState_.deltaTime,
@@ -13376,6 +13796,32 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             (std::clamp)(0.5f-point.y*0.5f,0.04f,0.96f)};
         return true;
     };
+    if (IsRailShooterSceneActive() && !railTitleScreenVisible_ &&
+        !railTitleGameplayEntry_.Frame().blockingGameplay &&
+        railShooterVehicleMovement_.State().movementEnabled &&
+        !graphContext.HasRailFilmBurnPresentation()) {
+        const auto& boost=railBoostVfx_.Frame();
+        graphContext.railBoostBlurStrength=boost.strength;
+        graphContext.railBoostIgnitionShock=boost.ignitionShock;
+        // Lens response follows the actual, suspension-adjusted exhaust roots.
+        // Off-screen/behind-camera roots contribute no clamped edge flare.
+        for(size_t source=0;source<2 && source<boost.ribbonCount;++source) {
+            const auto root=boost.ribbons[source].head;
+            const auto& m=frameState_.viewProjectionMatrix.m;
+            const float w=root.x*m[0][3]+root.y*m[1][3]+root.z*m[2][3]+m[3][3];
+            if(!std::isfinite(w) || w<=0.1f || !boost.ribbons[source].propulsion) continue;
+            const auto clip=TransformCoord(root,frameState_.viewProjectionMatrix);
+            if(!std::isfinite(clip.x+clip.y+clip.z) || clip.z<0 || clip.z>1) continue;
+            const Vector2 uv={clip.x*0.5f+0.5f,0.5f-clip.y*0.5f};
+            const float edge=(std::min)({uv.x,1-uv.x,uv.y,1-uv.y});
+            graphContext.railBoostLensSources[source]=uv;
+            graphContext.railBoostLensVisibility[source]=rail_boost_detail::Smooth(edge/0.06f);
+        }
+        Vector2 focus;
+        if (projectPresentationPoint(railPath_.Evaluate(railShooterDistance_+70.0f).position,focus))
+            graphContext.railBoostBlurFocus={(std::clamp)(focus.x,0.35f,0.65f),
+                (std::clamp)(focus.y,0.28f,0.52f)};
+    }
     if(railTitleScreenVisible_ || graphContext.railFilmBurnProgress>0.0f) {
         const auto& path=railTitleScreenVisible_?railTitleScene_.Path():railPath_;
         const float distance=railTitleScreenVisible_?railTitleScene_.Distance():railShooterDistance_;

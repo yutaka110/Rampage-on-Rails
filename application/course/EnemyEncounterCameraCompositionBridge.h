@@ -48,6 +48,9 @@ public:
 private:
     EnemyEncounterCameraCompositionFrame frame_{};
     float blend_ = 0.0f;
+    Vector3 focusOffset_{0,2,42};
+    float previousDistance_ = 0.0f;
+    bool hasRailHistory_ = false;
     uint64_t revision_ = 0;
 };
 

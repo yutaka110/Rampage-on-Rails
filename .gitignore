@@ -393,6 +393,17 @@ vcpkg_installed/
 *.pptx
 *.inspect.ndjson
 
+# Local builds, test runs, runtime copies, captures, and editor session state.
+# Authored game assets live in Resources/; reusable generators live in tools/.
+# Already tracked files are unaffected by ignore rules.
+/generated/
+
+# Presentation authoring scratch data and exported school presentation media.
+# Keep these locally; share selected final files separately when needed.
+# The tracked presentation_build/ authoring scripts remain versioned.
+/.presentation-build/
+/deliverables/
+
 # Machine-local editor crash recovery state
 .editor/autosave/
 .editor/recovery/

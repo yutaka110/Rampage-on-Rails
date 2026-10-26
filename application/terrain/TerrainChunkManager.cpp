@@ -1171,7 +1171,7 @@ void AppendOpenCanyonDistantMesaClusterSide(
         if (openBlend <= 0.04f) {
             continue;
         }
-        const RailPathSample sample = railPath.Evaluate(distance);
+        const RailPathSample sample = railPath.EvaluateExtended(distance);
         const float alongNoise =
             SignedNoise(sideSeed + 101u, static_cast<int32_t>(cluster), static_cast<int32_t>(layerIndex)) * 0.5f +
             SignedNoise(sideSeed + 103u, static_cast<int32_t>(cluster / 2u), 2) * 0.5f;
@@ -1211,7 +1211,7 @@ void AppendOpenCanyonDistantMesaClusterSide(
             horizonShelfLayer ? 0.20f : 0.72f);
 
         if (!horizonShelfLayer && Hash01(clusterSeed + 43u) < 0.74f) {
-            const RailPathSample capSample = railPath.Evaluate(distance + (Hash01(clusterSeed + 47u) - 0.5f) * settings.chunkLength * 0.28f);
+            const RailPathSample capSample = railPath.EvaluateExtended(distance + (Hash01(clusterSeed + 47u) - 0.5f) * settings.chunkLength * 0.28f);
             AppendDistantMesaBlock(
                 mesh,
                 capSample,
@@ -1290,7 +1290,7 @@ void AppendOpenCanyonMegaCliffWall(
         const float bite = (std::clamp)((biteNoise + broadCollapse * 0.42f + 0.10f) / 1.20f, 0.0f, 1.0f);
 
         distances[x] = d;
-        samples[x] = railPath.Evaluate(d);
+        samples[x] = railPath.EvaluateExtended(d);
         laterals[x] =
             baseLateral +
             longNoise * lateralWobble -
@@ -1522,7 +1522,7 @@ void AppendOpenCanyonSideVeil(
             alongSpan * u +
             SignedNoise(seed + 23u, static_cast<int32_t>(x), static_cast<int32_t>(layerIndex)) * settings.chunkLength * 0.10f;
         distances[x] = d;
-        samples[x] = railPath.Evaluate(d);
+        samples[x] = railPath.EvaluateExtended(d);
         const float openBlend = volumeField.OpenCanyonBlend(d);
         const float edgeFade = std::sin(u * 3.14159265359f);
         const float broad =
@@ -1679,7 +1679,7 @@ void AppendErodedArchFloorGuide(
                 chunk.startDistance,
                 chunk.endDistance,
                 tu);
-            const RailPathSample sample = railPath.Evaluate(d);
+            const RailPathSample sample = railPath.EvaluateExtended(d);
             const int32_t noiseX = static_cast<int32_t>(std::floor(d * 0.045f));
             const float width =
                 settings.corridorRadius * (0.74f + std::sin(d * 0.013f) * 0.06f);
@@ -1733,7 +1733,7 @@ void AppendConnectedCanyonRidges(
         const float side = sideIndex == 0 ? -1.0f : 1.0f;
         const uint32_t seed = settings.seed + 51101u + sideIndex * 2333u;
         const auto point = [&](float distance, float heightT, uint32_t layer) {
-            const auto sample = railPath.Evaluate(distance);
+            const auto sample = railPath.EvaluateExtended(distance);
             const float blend = volumeField.OpenCanyonBlend(distance);
             const float l = static_cast<float>(layer);
             const float broad = SmoothSignedNoise(seed, distance * 0.007f, l * 2.3f);
@@ -1769,8 +1769,8 @@ void AppendConnectedCanyonRidges(
                     const auto du = Subtract(point(d + 0.15f, v, layer), point(d - 0.15f, v, layer));
                     const auto dv = Subtract(point(d, (std::min)(1.0f, v + 0.005f), layer),
                         point(d, (std::max)(0.0f, v - 0.005f), layer));
-                    auto normal = NormalizeOr(Cross(du, dv), Scale(railPath.Evaluate(d).right, -side));
-                    if (Dot(normal, Scale(railPath.Evaluate(d).right, -side)) < 0) normal = Scale(normal, -1);
+                    auto normal = NormalizeOr(Cross(du, dv), Scale(railPath.EvaluateExtended(d).right, -side));
+                    if (Dot(normal, Scale(railPath.EvaluateExtended(d).right, -side)) < 0) normal = Scale(normal, -1);
                     PushVertex(mesh, p, normal, {d * 0.0036f, v * 3.4f},
                         0.12f + (1.0f - v) * 0.22f, 0.34f + layer * 0.09f);
                 }
@@ -1790,7 +1790,7 @@ void AppendConnectedCanyonRidges(
         const auto crownPoint = [&](float d, float t) {
             const auto inner = point(d, 1.0f, 0);
             const auto outer = point(d, 1.0f, 1);
-            const auto sample = railPath.Evaluate(d);
+            const auto sample = railPath.EvaluateExtended(d);
             const float weathering = std::sin(t * 3.14159265359f) * settings.wallHeight *
                 (0.08f + SmoothSignedNoise(seed + 53u, d * 0.035f, t * 4.0f) * 0.06f);
             return Add(Add(Scale(inner, 1.0f - t), Scale(outer, t)), Scale(sample.up, weathering));
@@ -1803,7 +1803,7 @@ void AppendConnectedCanyonRidges(
                 VertexData top = inner;
                 const float d = col == kColumns ? chunk.endDistance :
                     std::lerp(chunk.startDistance, chunk.endDistance, static_cast<float>(col) / kColumns);
-                const auto sample = railPath.Evaluate(d);
+                const auto sample = railPath.EvaluateExtended(d);
                 const auto p = crownPoint(d, t);
                 top.position = {p.x, p.y, p.z, 1.0f};
                 const auto du = Subtract(crownPoint(d + 0.15f, t), crownPoint(d - 0.15f, t));
@@ -2269,7 +2269,7 @@ void AppendRockScatterAsset(
     float distanceT) {
     Vector3 surfaceNormal{};
     const Vector3 surface = volumeField.SurfacePoint(distance, angle, &surfaceNormal);
-    const RailPathSample sample = railPath.Evaluate(distance);
+    const RailPathSample sample = railPath.EvaluateExtended(distance);
     const Vector3 inward = NormalizeOr(Scale(surfaceNormal, -1.0f), sample.up);
     Vector3 axisB = NormalizeOr(Cross(inward, sample.tangent), sample.right);
     Vector3 axisA = NormalizeOr(Cross(axisB, inward), sample.tangent);
@@ -3581,7 +3581,7 @@ std::vector<TerrainDebrisInstance> BuildFloorDebrisInstances(
         const float t =
             (static_cast<float>(group) + 0.25f + Hash01(groupSeed + 3u) * 0.50f) /
             static_cast<float>((std::max)(pebbleGroups, 1u));
-        const RailPathSample sample = railPath.Evaluate(
+        const RailPathSample sample = railPath.EvaluateExtended(
             chunk.startDistance + (chunk.endDistance - chunk.startDistance) * std::clamp(t, 0.0f, 1.0f));
         const float sideSign = Hash01(groupSeed + 7u) < 0.5f ? -1.0f : 1.0f;
         const bool wallBiased = Hash01(groupSeed + 11u) < 0.80f;
@@ -3723,7 +3723,7 @@ TerrainCpuMesh BuildChunkMesh(
         if (localOpenBlend > 0.34f && Hash01(seed + 71u) < localOpenBlend * 0.94f) {
             continue;
         }
-        const RailPathSample sample = railPath.Evaluate(distance);
+        const RailPathSample sample = railPath.EvaluateExtended(distance);
         const float side = Hash01(seed + 5u) < 0.5f ? -1.0f : 1.0f;
         AppendRockPillar(mesh, sample, settings, seed, side, t);
     }
@@ -3741,7 +3741,7 @@ TerrainCpuMesh BuildChunkMesh(
         const float t = (static_cast<float>(i) + Hash01(seed + 5u)) /
             static_cast<float>((std::max)(outcropCount, 1u));
         const float distance=chunk.startDistance + (chunk.endDistance - chunk.startDistance) * std::clamp(t, 0.0f, 1.0f);
-        const RailPathSample sample = railPath.Evaluate(distance);
+        const RailPathSample sample = railPath.EvaluateExtended(distance);
         const float side = Hash01(seed + 11u) < 0.5f ? -1.0f : 1.0f;
         const bool ceiling = Hash01(seed + 17u) < 0.42f;
         if(ceiling && volumeField.OpeningMask(distance,1.57079632679f)>0.40f) continue;
@@ -3783,7 +3783,7 @@ TerrainCpuMesh BuildChunkMesh(
         const uint32_t seed = chunk.seed + 2003u + i * 173u;
         const float t = 0.28f + Hash01(seed + 9u) * 0.44f;
         if(volumeField.OpenCanyonBlend(std::lerp(chunk.startDistance,chunk.endDistance,t))>0.35f) continue;
-        const RailPathSample sample = railPath.Evaluate(
+        const RailPathSample sample = railPath.EvaluateExtended(
             chunk.startDistance + (chunk.endDistance - chunk.startDistance) * t);
         AppendOneSidedCliffOverhang(mesh, sample, settings, seed, t);
     }
@@ -3981,6 +3981,13 @@ TerrainChunkCpuBuild BuildTerrainChunkCpu(
     if (stopToken.stop_requested()) {
         build.cancelled = true;
         return build;
+    }
+    // Keep only upward/downward support faces, independent of render winding.
+    for(size_t i=0;i+2<mesh.indices.size();i+=3) {
+        const auto va=mesh.vertices[mesh.indices[i]].position,vb=mesh.vertices[mesh.indices[i+1]].position,vc=mesh.vertices[mesh.indices[i+2]].position;
+        const Vector3 a{va.x,va.y,va.z},b{vb.x,vb.y,vb.z},c{vc.x,vc.y,vc.z};
+        const auto n=Cross(Subtract(b,a),Subtract(c,a));
+        if(n.y*n.y>0.30f*Dot(n,n)) build.groundTriangles.push_back({a,b,c});
     }
     build.vertices = std::move(mesh.vertices);
     build.indices = std::move(mesh.indices);
@@ -4376,7 +4383,7 @@ void AppendVolumeDebugDraw(
         return;
     }
 
-    const RailPathSample sample = railPath.Evaluate(distance);
+    const RailPathSample sample = railPath.EvaluateExtended(distance);
     const float lateralRadius = (std::max)(settings.canyonHalfWidth, settings.corridorRadius + 4.0f) * 1.25f;
     const float verticalRadius = (std::max)(settings.wallHeight, settings.corridorRadius + 4.0f) * 1.25f;
     constexpr int32_t kGrid = 12;
@@ -4436,6 +4443,7 @@ void TerrainChunkManager::Update(
     TrimRetiredRenderChunks();
 
     if (railPath.Length() <= 0.0f || settings.chunkLength <= 0.0f) {
+        groundSupportCache_.Invalidate();
         for (TerrainChunkBuildJob& job : pendingBuildJobs_) {
             job.stopSource.request_stop();
         }
@@ -4461,6 +4469,9 @@ void TerrainChunkManager::Update(
         (static_cast<uint64_t>(editLayer != nullptr ? editLayer->Revision() : 0u) << 32u) |
         static_cast<uint64_t>(previewLayer != nullptr ? previewLayer->Revision() : 0u);
     const bool editRevisionChanged = editRevision != cachedEditRevision_;
+    if (settingsHash != chunkCacheSettingsHash_ || editRevisionChanged) {
+        groundSupportCache_.Invalidate();
+    }
     const auto editHashForRange = [&](float begin, float end) {
         const uint64_t authored = editLayer != nullptr
             ? editLayer->ContentHashForRange(begin, end) : 0ull;
@@ -4562,7 +4573,7 @@ void TerrainChunkManager::Update(
         for (uint32_t i = 0; i < candidateCount; ++i) {
             const float t = (static_cast<float>(i) + Hash01(chunk.seed + i * 19u)) /
                 static_cast<float>(candidateCount);
-            RailPathSample sample = railPath.Evaluate(startDistance + settings.chunkLength * t);
+            RailPathSample sample = railPath.EvaluateExtended(startDistance + settings.chunkLength * t);
             const float side = Hash01(chunk.seed + i * 37u) < 0.5f ? -1.0f : 1.0f;
             const float lateral = settings.canyonHalfWidth +
                 Hash01(chunk.seed + i * 53u) * settings.noiseStrength;
@@ -4595,7 +4606,7 @@ void TerrainChunkManager::Update(
             Hash01(chunk.seed + 503u) < settings.dustZoneDensity ? 1u : 0u;
         for (uint32_t i = 0; i < dustZoneCount; ++i) {
             const float t = 0.2f + Hash01(chunk.seed + i * 211u + 17u) * 0.6f;
-            RailPathSample sample = railPath.Evaluate(startDistance + settings.chunkLength * t);
+            RailPathSample sample = railPath.EvaluateExtended(startDistance + settings.chunkLength * t);
             const float side = Hash01(chunk.seed + i * 229u + 23u) < 0.5f ? -1.0f : 1.0f;
             TerrainVfxZone zone{};
             zone.radius = settings.corridorRadius * (0.38f + Hash01(chunk.seed + i * 241u) * 0.28f);
@@ -4653,8 +4664,8 @@ void TerrainChunkManager::AppendDebugDraw(
 
     for (const TerrainChunkDebugInfo& chunk : chunks_) {
         if (authoring.showChunks) {
-            const RailPathSample start = railPath.Evaluate(chunk.startDistance);
-            const RailPathSample end = railPath.Evaluate(chunk.endDistance);
+            const RailPathSample start = railPath.EvaluateExtended(chunk.startDistance);
+            const RailPathSample end = railPath.EvaluateExtended(chunk.endDistance);
             const float w = settings.canyonHalfWidth;
             const float h = settings.wallHeight;
             debugDraw.AddLine(
@@ -4673,7 +4684,7 @@ void TerrainChunkManager::AppendDebugDraw(
 
         if (authoring.showCorridor) {
             const RailPathSample middle =
-                railPath.Evaluate((chunk.startDistance + chunk.endDistance) * 0.5f);
+                railPath.EvaluateExtended((chunk.startDistance + chunk.endDistance) * 0.5f);
             debugDraw.AddCircle(
                 middle.position,
                 middle.right,
@@ -4708,7 +4719,7 @@ void TerrainChunkManager::AppendDebugDraw(
         if (authoring.showVfxZones) {
             for (const TerrainVfxZone& zone : chunk.vfxZones) {
                 debugDraw.AddPoint(zone.position, 0.9f + zone.intensity, dustColor);
-                const RailPathSample sample = railPath.Evaluate((chunk.startDistance + chunk.endDistance) * 0.5f);
+                const RailPathSample sample = railPath.EvaluateExtended((chunk.startDistance + chunk.endDistance) * 0.5f);
                 debugDraw.AddCircle(zone.position, sample.right, sample.tangent, zone.radius, dustColor, 24);
             }
         }
@@ -4782,7 +4793,9 @@ void TerrainChunkManager::RebuildRenderChunks(
         renderChunk.endDistance = build.endDistance;
         renderChunk.seed = build.seed;
         renderChunk.lodTier = build.lodTier;
+        renderChunk.settingsHash = build.settingsHash;
         renderChunk.editHash = build.editHash;
+        renderChunk.groundTriangles=std::move(build.groundTriangles);
         uploadedVertices += static_cast<uint32_t>((std::min)(build.vertices.size(), static_cast<size_t>(UINT32_MAX)));
         uploadedIndices += static_cast<uint32_t>((std::min)(build.indices.size(), static_cast<size_t>(UINT32_MAX)));
         uploadedDebris += static_cast<uint32_t>((std::min)(build.debrisInstances.size(), static_cast<size_t>(UINT32_MAX)));
@@ -5526,4 +5539,113 @@ bool TerrainChunkManager::HasMatchingRenderChunks() const {
         }
     }
     return true;
+}
+
+
+bool TraceTerrainGroundSupport(std::span<const TerrainGroundTriangle> triangles,
+        const RailPathSample& anchor,float lateral,float forward,float& outHeight) {
+    const Vector3 origin=Add(anchor.position,Add(Scale(anchor.right,lateral),
+        Add(Scale(anchor.tangent,forward),Scale(anchor.up,30.0f))));
+    const Vector3 direction=Scale(anchor.up,-1.0f);
+    bool hit=false;float nearest=100.0f;
+    for(const auto& triangle:triangles) {
+        const auto e1=Subtract(triangle.b,triangle.a),e2=Subtract(triangle.c,triangle.a);
+        const auto n=Cross(e1,e2);
+        if(std::abs(Dot(n,anchor.up))<std::sqrt(Dot(n,n))*0.55f) continue;
+        const auto p=Cross(direction,e2);const float det=Dot(e1,p);
+        if(std::abs(det)<0.000001f) continue;
+        const auto s=Subtract(origin,triangle.a);const float u=Dot(s,p)/det;
+        if(u<0 || u>1) continue;
+        const auto q=Cross(s,e1);const float v=Dot(direction,q)/det;
+        if(v<0 || u+v>1) continue;
+        const float distance=Dot(e2,q)/det;
+        if(distance>=0 && distance<nearest) { nearest=distance;hit=true; }
+    }
+    if(hit) outHeight=30.0f-nearest;
+    return hit;
+}
+
+namespace {
+bool QueryResidentGroundSupport(std::span<const TerrainRenderChunk> chunks,
+        const RailPathSample& anchor,float halfFootprint,float& outHeight) {
+    float highest=-1000.0f;
+    for(float x:{-halfFootprint,0.0f,halfFootprint}) for(float z:{-halfFootprint,0.0f,halfFootprint}) {
+        bool supported=false;float top=-1000;
+        for(const auto& chunk:chunks) {
+            if(anchor.distance+halfFootprint+2<chunk.startDistance || anchor.distance-halfFootprint-2>chunk.endDistance) continue;
+            float height=0;
+            if(TraceTerrainGroundSupport(chunk.groundTriangles,anchor,x,z,height)) {supported=true;top=(std::max)(top,height);}
+        }
+        if(!supported) return false;
+        highest=(std::max)(highest,top);
+    }
+    outHeight=highest;return true;
+}
+}
+
+void TerrainGroundSupportCache::SetRequests(std::vector<TerrainGroundSupportRequest> requests) {
+    entries_.clear();
+    // This is a placement cache, not an unbounded copy of streamed terrain.
+    for(const auto& request:requests) {
+        if(entries_.size()>=32) break;
+        if(std::isfinite(request.halfFootprint) && request.halfFootprint>0 &&
+            std::isfinite(request.anchor.distance)) entries_.push_back({request});
+    }
+}
+
+void TerrainGroundSupportCache::Invalidate() {
+    for(auto& entry:entries_) {entry.ready=false;entry.attempted=false;}
+}
+
+void TerrainGroundSupportCache::Prepare(std::span<const TerrainRenderChunk> chunks,
+        std::span<const TerrainChunkDebugInfo> requested,uint32_t settingsHash) {
+    for(auto& entry:entries_) if(!entry.ready) {
+        // Retained GPU chunks may still show the pre-edit surface. Do not
+        // cache that surface as the new foundation while replacements build.
+        bool current=true;uint64_t signature=0;
+        for(const auto& chunk:chunks) {
+            const float distance=entry.request.anchor.distance,foot=entry.request.halfFootprint;
+            if(distance+foot+2<chunk.startDistance || distance-foot-2>chunk.endDistance) continue;
+            const auto request=std::find_if(requested.begin(),requested.end(),[&](const auto& wanted) {
+                return std::abs(wanted.startDistance-chunk.startDistance)<0.001f &&
+                    std::abs(wanted.endDistance-chunk.endDistance)<0.001f;
+            });
+            if((settingsHash && chunk.settingsHash!=settingsHash) ||
+                (!requested.empty() && (request==requested.end() ||
+                    request->seed!=chunk.seed || request->editHash!=chunk.editHash))) {current=false;break;}
+            signature^=uint64_t(reinterpret_cast<uintptr_t>(chunk.groundTriangles.data()))+
+                0x9e3779b97f4a7c15ull+(signature<<6)+(signature>>2)+chunk.groundTriangles.size();
+        }
+        if(!current || (entry.attempted && signature==entry.attemptedSurfaceSignature)) continue;
+        entry.attempted=true;entry.attemptedSurfaceSignature=signature;
+        entry.ready=QueryResidentGroundSupport(chunks,entry.request.anchor,
+            entry.request.halfFootprint,entry.height);
+    }
+}
+
+bool TerrainGroundSupportCache::Query(const RailPathSample& anchor,float halfFootprint,float& height) const {
+    const auto same=[](Vector3 a,Vector3 b) {
+        return std::abs(a.x-b.x)<0.0001f && std::abs(a.y-b.y)<0.0001f && std::abs(a.z-b.z)<0.0001f;
+    };
+    for(const auto& entry:entries_) if(entry.ready &&
+        std::abs(entry.request.halfFootprint-halfFootprint)<0.0001f &&
+        std::abs(entry.request.anchor.distance-anchor.distance)<0.0001f &&
+        same(entry.request.anchor.position,anchor.position) && same(entry.request.anchor.up,anchor.up) &&
+        same(entry.request.anchor.right,anchor.right) && same(entry.request.anchor.tangent,anchor.tangent)) {
+        height=entry.height;return true;
+    }
+    return false;
+}
+
+void TerrainChunkManager::SetGroundSupportRequests(std::vector<TerrainGroundSupportRequest> requests) {
+    groundSupportCache_.SetRequests(std::move(requests));
+}
+
+void TerrainChunkManager::PrepareGroundSupport() {
+    groundSupportCache_.Prepare(renderChunks_,chunks_,chunkCacheSettingsHash_);
+}
+
+bool TerrainChunkManager::QueryGroundSupport(const RailPathSample& anchor,float halfFootprint,float& height) const {
+    return groundSupportCache_.Query(anchor,halfFootprint,height) ||
+        QueryResidentGroundSupport(renderChunks_,anchor,halfFootprint,height);
 }

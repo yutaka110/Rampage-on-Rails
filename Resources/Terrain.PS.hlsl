@@ -1252,6 +1252,12 @@ PixelShaderOutput main(VertexShaderOutput input)
     float3 rimTint = lerp(float3(1.08f, 0.94f, 0.78f), float3(0.72f, 0.84f, 1.02f), saturate(wetCanyonMask * 0.72f + backlightRimBoost * 0.18f));
     lit += gDirectionalLight.color.rgb * rimTint * rim * gDirectionalLight.intensity;
 
+    [unroll] for(int source=0;source<2;++source) {
+        float3 boostDirection;
+        float3 boostEnergy=RailBoostRadiance(input.worldPosition,source,boostDirection);
+        lit+=rockColor*boostEnergy*saturate(dot(normal,boostDirection))*0.35f;
+    }
+
     // READY contact light shares the actual wall position used by sparks and dust.
     if (!titleLandscape && titleRailImpact.w > 0.0f) {
         lit += rockColor * TitleImpactRadiance(input.worldPosition) *

@@ -59,6 +59,11 @@ public:
         const CourseOverviewMapSnapService* snapping);
     void SetActive(bool active);
     void SetMode(CourseOverviewMapEditMode mode);
+    void SetEditableKinds(bool rail, bool encounters) {
+        if (editableRail_ != rail || editableEncounters_ != encounters) Cancel();
+        editableRail_ = rail;
+        editableEncounters_ = encounters;
+    }
     bool SetSettings(CourseOverviewMapEditSettings settings, std::string* errorMessage = nullptr);
     void Tick(const CourseOverviewMapEditInput& input);
     void Cancel(std::string message = {});
@@ -94,6 +99,8 @@ private:
     CourseEnemyPlacement originalEnemy_{};
     CourseWaveDefinition originalWave_{};
     float dragDepth_ = 0.0f;
+    bool editableRail_ = true;
+    bool editableEncounters_ = true;
     uint64_t expectedRevision_ = 0;
 };
 

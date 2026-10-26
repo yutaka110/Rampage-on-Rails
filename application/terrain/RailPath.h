@@ -41,7 +41,10 @@ public:
     void BuildDefaultCanyonPath(float corridorRadius);
     void SetControlPoints(std::vector<RailPathControlPoint> points);
 
+    // Open course sampling: never wrap a terminal pose to the course start.
     RailPathSample Evaluate(float distance) const;
+    // Scenery and camera look-ahead continue along the endpoint tangent.
+    RailPathSample EvaluateExtended(float distance) const;
     std::vector<Vector3> SamplePolyline(float startDistance, float endDistance, float step) const;
 
     float Length() const { return totalLength_; }

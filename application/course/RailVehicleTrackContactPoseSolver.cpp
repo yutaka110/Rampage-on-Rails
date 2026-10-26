@@ -77,9 +77,7 @@ const RailVehicleTrackContactPoseFrame& RailVehicleTrackContactPoseSolver::Solve
     next.frontDistance = (std::clamp)(input.state->distance+halfWheelbase, 0.0f, railLength);
     next.clampedAtRailStart = next.rearDistance <= 0.0f;
     next.clampedAtRailEnd = next.frontDistance >= railLength;
-    // RailPath::Evaluate intentionally wraps Length() to zero for looping
-    // consumers. A vehicle on an open authored course must instead keep its
-    // wheel contacts at the final rail head.
+    // Wheel contacts stay on the authored open rail, including its endpoint.
     const auto evaluateOpenRail = [input, railLength](float distance) {
         const float sampleDistance = distance >= railLength
             ? std::nextafter(railLength, 0.0f)

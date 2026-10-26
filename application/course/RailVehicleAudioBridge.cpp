@@ -55,6 +55,10 @@ void RailVehicleAudioBridge::Update(const RailVehicleAudioInput& input) {
     const float master = (std::clamp)(input.settings.masterVolume, 0.0f, 1.0f);
     const float speed = (std::clamp)(presentation.speedNormalized, 0.0f, 1.0f);
     const bool moving = speed > 0.015f;
+    const float boost = std::isfinite(input.manualBoostStrength)
+        ? (std::clamp)(input.manualBoostStrength, 0.0f, 1.0f) : 0.0f;
+    frame_.rollingLoopPitch = 1.0f + 0.26f * boost;
+    frame_.rollingLoopGain = 1.0f + 0.40f * boost;
 
     if (moving) {
         rollingAccumulator_ += deltaTime;
@@ -71,7 +75,7 @@ void RailVehicleAudioBridge::Update(const RailVehicleAudioInput& input) {
             PushCue(
                 RailVehicleAudioCueKind::RollingPulse,
                 master * attenuation * presentation.rollingAudioVolume * 0.42f,
-                presentation.rollingAudioPitch,
+                presentation.rollingAudioPitch * frame_.rollingLoopPitch,
                 pan);
         }
     } else {

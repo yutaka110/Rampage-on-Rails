@@ -17,6 +17,22 @@ cbuffer Camera : register(b2)
     float4 caveRailOrigin; // world position and course distance
     float4 caveRailForward;
     float4 caveRange; // outdoor start, transition length, outdoor strength, enabled
+    float4 railBoostLights[2]; // world exhaust source + transient intensity
+}
+
+// Finite six-unit support avoids washing the cave in blue. Inactive sources
+// exit before distance/normal/BRDF work; no scene or terrain queries are needed.
+static float3 RailBoostRadiance(float3 worldPosition,int source,out float3 direction)
+{
+    float4 light=railBoostLights[source];
+    direction=float3(0,1,0);
+    [branch] if(light.w<=0.0f) return 0.0f;
+    float3 delta=light.xyz-worldPosition;
+    float distanceSquared=dot(delta,delta);
+    [branch] if(distanceSquared>=36.0f) return 0.0f;
+    direction=delta*rsqrt(max(distanceSquared,0.01f));
+    float cutoff=saturate(1.0f-distanceSquared/36.0f);
+    return float3(0.22f,1.60f,3.40f)*light.w*cutoff*cutoff/(1.0f+distanceSquared*0.42f);
 }
 
 static float TitleCaveExposure()

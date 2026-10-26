@@ -189,7 +189,7 @@ public:
     static constexpr float RevealDuration = 1.29f;
     void BeginGameplay();
     void Update(float deltaTime, bool startupComplete);
-    bool RequestReturn();
+    bool RequestReturn(bool fromResult=false);
     bool NeedsTitleSwap() const;
     void CommitTitleSwap();
     bool Returning() const;

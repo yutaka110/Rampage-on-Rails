@@ -20,6 +20,7 @@
 #include "ModelLoaderAssimp.h"
 #include "course/RailVehicleOccupantActor.h"
 #include "course/RailVehicleRenderer.h"
+#include "course/RailBoostPresentation.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -1225,6 +1226,16 @@ namespace {
             // rail-contact transforms and rotation.
             AppendCartBeveledBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f},0.035f);
             AppendCartBeveledBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f},0.035f);
+            // Hollow side-sill housings: four closed beveled strips per
+            // nozzle leave the rear aperture open for the rooted boost jet.
+            for(float side:{-1.0f,1.0f}) {
+                const auto root=RailBoostExhaust::Root(side);
+                const float x=root.x, y=root.y, z=root.z;
+                AppendCartBeveledBox(model,{x-0.40f,y-0.32f,z},{x+0.40f,y-0.20f,z+1.15f},0.025f);
+                AppendCartBeveledBox(model,{x-0.40f,y+0.20f,z},{x+0.40f,y+0.32f,z+1.15f},0.025f);
+                AppendCartBeveledBox(model,{x-0.40f,y-0.22f,z},{x-0.28f,y+0.22f,z+1.15f},0.025f);
+                AppendCartBeveledBox(model,{x+0.28f,y-0.22f,z},{x+0.40f,y+0.22f,z+1.15f},0.025f);
+            }
         });
         appendPart("safety_trim", 2, [&]() {
             AppendCartBeveledBox(model, {-2.31f, 1.55f, -3.26f}, {-1.72f, 1.88f, 3.26f},0.035f);
@@ -2752,6 +2763,7 @@ bool AppSceneResources::Initialize(
         {"courseOrganicRock", "Resources/course_meshes/materials/organic_rock_albedo.bmp"},
         {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
+        {"siegeTurret", "Resources/enemies/SiegeTurret/SiegeTurret.bmp"},
         {"courseVistaRock", "Resources/course_meshes/materials/vista_rock_albedo.bmp"},
         {"titleSandstone", "Resources/course_meshes/TitleLandscape/title_sandstone.bmp"},
         {"titleCaveRock", "Resources/terrain/Rocks016_1K-JPG/Rocks016.png"},
@@ -3169,8 +3181,14 @@ bool AppSceneResources::Initialize(
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
+    registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
+    registerCourseMesh("siege_turret_head", "Resources/enemies/SiegeTurretHead", "SiegeTurretHead.obj", "siegeTurret");
+    registerCourseMesh("siege_turret", "Resources/enemies/SiegeTurret", "SiegeTurret.obj", "siegeTurret");
     registerCourseMesh("combat_turret_base", "Resources/enemies/CombatTurretBase", "CombatTurretBase.obj", "default");
     registerCourseMesh("combat_turret_head", "Resources/enemies/CombatTurretHead", "CombatTurretHead.obj", "default");
+    registerCourseMesh("carrier_hull", "Resources/enemies/MothershipBlockout", "MothershipHull.obj", "default");
+    registerCourseMesh("mothership_core", "Resources/enemies/MothershipBlockout", "MothershipReactor.obj", "default");
+    registerCourseMesh("carrier_box", "Resources/enemies/MothershipBlockout", "MothershipBox.obj", "default");
     registerCourseMesh("twin_shield_hull", "Resources/enemies/TwinShieldDrone", "TwinShieldHull.obj", "default");
     registerCourseMesh("twin_shield_panel", "Resources/enemies/TwinShieldDrone", "TwinShieldPanel.obj", "default");
     registerCourseMesh("twin_shield_core", "Resources/enemies/TwinShieldDrone", "TwinShieldCore.obj", "default");
@@ -3788,6 +3806,7 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     mappedCamera->titleSubject.w = 0.0f;
     mappedCamera->titleLightSweep = {};
     mappedCamera->titleRailImpact = {};
+    mappedCamera->railBoostLights = {};
 }
 
 SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {
@@ -3845,7 +3864,8 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     const EnemyCombatPresentationBridge* enemyPresentation,
     const EnemyEncounterReadabilityDirector* enemyReadability,
     const TwinShieldDronePose* titlePursuer,
-    bool includeStartupRearScenery) {
+    bool includeStartupRearScenery,
+    const RailMothership::Frame* mothership) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3870,6 +3890,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         enemyPresentation,
         enemyReadability,
         includeStartupRearScenery);
+    if (mothership) courseMeshRenderQueue.AppendMothership(*mothership,bindings,viewMatrix,projMatrix);
     if (titlePursuer) courseMeshRenderQueue.AppendTwinShieldDrone(*titlePursuer,bindings,viewMatrix,projMatrix);
 }
 

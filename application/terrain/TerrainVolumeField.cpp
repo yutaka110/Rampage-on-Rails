@@ -402,7 +402,7 @@ Vector3 TerrainVolumeField::SurfacePoint(
     float distance,
     float angle,
     Vector3* outNormal) const {
-    const RailPathSample pathSample = railPath_.Evaluate(distance);
+    const RailPathSample pathSample = railPath_.EvaluateExtended(distance);
     const float openCanyonBlend = OpenCanyonBlend(distance);
     const float lateralRadius =
         (std::max)(settings_.canyonHalfWidth, settings_.corridorRadius + 4.0f) *
@@ -473,7 +473,7 @@ Vector3 TerrainVolumeField::EstimateNormal(float distance, float lateral, float 
         SampleLocal(distance, lateral - e, vertical).sdf;
     const float sy = SampleLocal(distance, lateral, vertical + e).sdf -
         SampleLocal(distance, lateral, vertical - e).sdf;
-    const RailPathSample sample = railPath_.Evaluate(distance);
+    const RailPathSample sample = railPath_.EvaluateExtended(distance);
     return NormalizeOr(
         Add(Scale(sample.right, sx), Scale(sample.up, sy)),
         sample.up);

@@ -88,6 +88,12 @@ bool EditorViewportCameraController::SetSettings(
     return true;
 }
 
+void EditorViewportCameraController::SyncInspection(
+    bool active, const Transform& source, bool sourceChanged) {
+    if (active && (!inspectionActive_ || sourceChanged)) SetTransform(source);
+    inspectionActive_ = active;
+}
+
 void EditorViewportCameraController::Update(const EditorViewportCameraInput& input) {
     if (!initialized_ || !input.captureActive) return;
 

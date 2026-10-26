@@ -110,6 +110,11 @@ EnemyCombatDefinition ResolveEnemyCombatDefinition(
                     definition.attackCommitSeconds);
         }
     }
+    if (RailMothership::IsCombatActor(actorDescription.actorAssetId)) {
+        definition.pauseAttackDuringHitReact = false;
+        definition.hitReactSeconds = 0.04f;
+        definition.spawnDurationSeconds = 0.65f;
+    }
     std::string validationError;
     if (!definition.Validate(&validationError)) {
         definition = EnemyCombatDefinition::LegacyCompatible();
@@ -142,7 +147,7 @@ void EnemyCombatSystem::InitializeActor(CourseEnemyActor& actor) {
             actor.combatDefinition.telegraphLeadSeconds);
     }
     ApplyPhaseGates(actor);
-    QueueEvent(actor, EnemyCombatEventKind::Spawned);
+    if(actor.desc.stationaryActivationDistance<0) QueueEvent(actor, EnemyCombatEventKind::Spawned);
 }
 
 void EnemyCombatSystem::Update(CourseSpawnRuntime& runtime,
@@ -166,6 +171,7 @@ void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors, float d
     frameStats_ = {};
 
     for (CourseEnemyActor& actor : actors) {
+        if(actor.stationaryDormant) continue;
         if (!actor.combatState.initialized) {
             InitializeActor(actor);
         }
@@ -323,6 +329,11 @@ bool EnemyCombatSystem::SubmitDamageResultActors(std::span<CourseEnemyActor> act
                 damageResult.shotId, damageResult.appliedDamage, feedbackKind);
             state.defeatEventPublished = true;
         }
+    } else if (RailMothership::IsCombatActor(actor->desc.actorAssetId)) {
+        // Armour flashes on impact, but rapid primary hits never reset its
+        // warning or cooldown. Damage and the defeat event remain authoritative.
+        QueueEvent(*actor, EnemyCombatEventKind::HitReacted,
+            damageResult.shotId, damageResult.appliedDamage, feedbackKind);
     } else {
         state.resumePhase = EnemyCombatPhase::Recovering;
         EnterPhase(*actor, EnemyCombatPhase::HitReact,

@@ -26,6 +26,9 @@ bool RailSpeedDirectorSettings::Validate(std::string* errorMessage) const {
         if (errorMessage != nullptr) *errorMessage = message;
         return false;
     };
+    if (!FiniteInRange(normalSpeedScale, 0.5f, 2.0f)) {
+        return reject("Normal travel speed scale must be between 0.5 and 2.0.");
+    }
     if (!FiniteInRange(minSpeed, 0.0f, 1000.0f) ||
         !FiniteInRange(maxSpeed, minSpeed, 1000.0f)) {
         return reject("Rail speed policy min/max speed is invalid.");
@@ -88,6 +91,7 @@ bool RailSpeedDirector::Configure(
 }
 
 void RailSpeedDirector::Reset() {
+    manualBoost_.Reset();
     eventSlowTimer_ = 0.0f;
     eventBoostTimer_ = 0.0f;
     lastFrame_ = {};
@@ -125,6 +129,7 @@ RailSpeedDirectorFrame RailSpeedDirector::Evaluate(const RailSpeedDirectorFrameI
     }
 
     const float dt = (std::max)(0.0f, input.deltaTime);
+    manualBoost_.Update(dt);
     const RailPathSample sample = input.railPath->Evaluate(input.distance);
     frame.baseSpeed = (std::max)(settings_.minSpeed, sample.speed);
     frame.mode = ResolveMode(input.rideProfile, input.section);

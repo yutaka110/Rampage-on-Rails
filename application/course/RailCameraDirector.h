@@ -185,6 +185,10 @@ struct RailCameraDirectorFrameInput {
     float titleHandoffWeight = 0.0f;
     CourseCameraKey titleHandoffRig{};
     // Gated READY flyby, resolved before the existing framing/collision passes.
+    // Cave-exit carrier introduction, released smoothly into the combat view.
+    float mothershipCameraWeight = 0.0f;
+    float mothershipHeroWeight = 0.0f;
+    Vector3 mothershipCameraSubject{};
     float startupCameraWeight = 0.0f;
     float startupCameraFocusBlend = 0.0f;
     float startupCameraFovY = 0.98f;
@@ -244,6 +248,10 @@ struct RailCameraDirectorFrameInput {
 };
 
 struct RailCameraDirectorFrame {
+    CourseCameraViewDefinition authoredView{};
+    float authoredViewWeight = 0.0f;
+    bool hideVehicle = false;
+    bool viewRelativeTargeting = false;
     float vehicleFramingPullback = 0.0f;
     float vehicleFramingLift = 0.0f;
     float vehicleScreenTop = 1.0f;

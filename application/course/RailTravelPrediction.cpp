@@ -67,10 +67,13 @@ std::shared_ptr<const RailTravelPrediction> BuildRailTravelPrediction(
         envelopeInput.vehicleState = &vehicle.State();
         envelopeInput.ride = &ride;
         envelopeInput.railPath = input.railPath;
+        envelopeInput.normalSpeedScale = speedDirector.Settings().normalSpeedScale;
+        envelopeInput.manualBoostMultiplier = speedDirector.ManualBoost().SpeedMultiplier();
         const auto& motion = envelope.Evaluate(envelopeInput);
         RailVehicleMovementInput movement;
         movement.deltaTime = dt;
         movement.requestedSpeed = motion.requestedSpeed;
+        movement.manualBoostMultiplier = motion.manualBoostMultiplier;
         movement.movementEnabled = vehicle.State().movementEnabled;
         movement.emergencyBrake = vehicle.State().emergencyBraking;
         movement.motionEnvelopeActive = motion.active;

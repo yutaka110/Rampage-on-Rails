@@ -1,4 +1,7 @@
 #include "RailShooterHudRenderer.h"
+#include "RailShortCourse.h"
+#include "EncounterPerformanceScoreSystem.h"
+#include <cmath>
 
 #include <algorithm>
 #include <string_view>
@@ -81,6 +84,41 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         rect(x, y, w * (std::clamp)(value, 0.0f, 1.0f), h, color);
     };
 
+    if(!input.showTitleScreen && input.resultSession && IsRunResult(*input.resultSession)) {
+        const auto& result=*input.resultSession;
+        const float s=(std::min)(width/1600.0f,height/900.0f);
+        const float cx=width*0.5f,cy=height*0.5f;
+        const auto center=RailShooterHudTextAlignment::Center;
+        const Vector4 accent=result.outcome==GameSessionOutcome::Victory ?
+            Vector4{0.35f,0.94f,0.80f,1}:Vector4{1.0f,0.47f,0.28f,1};
+        const Vector4 white{1,0.98f,0.93f,1},muted{0.75f,0.79f,0.80f,1};
+        // Put essential actions first in the draw budget; no combat HUD or
+        // startup opacity can suppress the result screen's navigation.
+        rect(0,0,width,height,{0.012f,0.018f,0.025f,0.65f});
+        rect(cx-320*s,cy-250*s,640*s,500*s,{0.018f,0.026f,0.033f,0.96f});
+        rect(cx-320*s,cy-250*s,640*s,3*s,accent);
+        for(int i=0;i<3;++i) {
+            const bool enabled=i!=1 || result.canRetry;
+            const auto button=RunResultButton(width,height,i);
+            rect(button.x,button.y,button.width,button.height,
+                enabled?Vector4{0.075f,0.11f,0.13f,1}:Vector4{0.035f,0.045f,0.05f,1});
+            const std::string labels[]={Utf8(u8"最初から再挑戦  [ ENTER / R ]"),
+                result.canRetry?Utf8(u8"区間から再開  [ C ]"):Utf8(u8"区間から再開できません"),Utf8(u8"タイトルに戻る  [ T ]")};
+            text(labels[i],cx,button.y+33*s,0.90f*s,enabled?white:muted,center);
+        }
+        text(result.outcome==GameSessionOutcome::Victory?Utf8(u8"任務完了"):Utf8(u8"任務失敗"),
+            cx,cy-181*s,1.75f*s,accent,center);
+        std::string reason=result.outcome==GameSessionOutcome::Victory?Utf8(u8"包囲を突破しました"):
+            (result.endReason==GameSessionEndReason::TimeExpired?Utf8(u8"制限時間を過ぎました"):Utf8(u8"車体の耐久がなくなりました"));
+        text(reason,cx,cy-144*s,0.78f*s,muted,center);
+        text("SCORE   "+std::to_string(result.score),cx,cy-82*s,1.18f*s,white,center);
+        text("MAX CHAIN   "+std::to_string(result.maximumCombo),cx,cy-43*s,0.86f*s,white,center);
+        const int seconds=int((std::max)(0.0f,result.gameplayElapsedSeconds));
+        text("RUN TIME   "+std::to_string(seconds/60)+":"+(seconds%60<10?"0":"")+std::to_string(seconds%60)+
+            "    HP   "+std::to_string(int(std::ceil(result.playerHealth))),cx,cy-6*s,0.80f*s,muted,center);
+        next.visible=!next.commands.empty(); frame_=std::move(next); return;
+    }
+
     if (input.showTitleScreen) {
         const float s = (std::min)(width / 1600.0f, height / 900.0f);
         const float left = (width-1600.0f*s)*0.5f;
@@ -152,7 +190,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
                 u8"右クリック長押し : ロックオン",
                 u8"右クリックを離す : 一斉発射",
                 u8"WASD : 移動    SHIFT / SPACE : 回避",
-                u8"P : 一時停止"};
+                u8"E 長押し : 加速    P : 一時停止"};
             for(int i=0;i<5;++i) text(Utf8(lines[i]),x,top+(546+i*46)*s,0.80f*s,white);
             text(Utf8(u8"ENTER / ESC / CLICK : 戻る"),x,top+809*s,0.77f*s,accent);
         }
@@ -173,6 +211,26 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         return;
     }
 
+    if(input.bossVisible && input.miniBossParts && !input.startCueActive) {
+        const float w=540*scale,x=(width-w)*0.5f,y=height-158*scale;
+        const auto center=RailShooterHudTextAlignment::Center;
+        const int left=int(input.miniBossPartHealth[0]>0)+int(input.miniBossPartHealth[1]>0);
+        text(Utf8(u8"母艦の武装を破壊  残り ")+std::to_string(left)+"/2",width*0.5f,y,
+            0.70f*scale,{1,0.88f,0.62f,opacity},center);
+        for(int i=0;i<2;++i) {
+            const float px=x+i*280*scale;
+            const bool alive=input.miniBossPartHealth[i]>0;
+            text((i==0?Utf8(u8"連射砲台"):Utf8(u8"重砲"))+(alive?"":Utf8(u8" 破壊済み")),
+                px,y+22*scale,0.65f*scale,alive?Vector4{0.85f,0.93f,1,opacity}:Vector4{0.5f,0.6f,0.6f,opacity});
+            bar(px,y+29*scale,250*scale,6*scale,input.miniBossPartHealth[i],
+                i==0?Vector4{0.2f,0.8f,1,opacity}:Vector4{1,0.48f,0.16f,opacity},{0.1f,0.12f,0.14f,opacity});
+        }
+    } else if(input.bossVisible && !input.startCueActive) {
+        const float w=580*scale,x=(width-w)*0.5f,y=height-110*scale;
+        rect(x-12*scale,y-28*scale,w+24*scale,61*scale,{0.012f,0.018f,0.024f,0.86f*opacity});
+        text("CARRIER / REACTOR",width*0.5f,y-6*scale,0.68f*scale,{1,0.82f,0.56f,opacity},RailShooterHudTextAlignment::Center);
+        bar(x,y+5*scale,w,8*scale,input.bossHealth,{1,0.43f,0.16f,opacity},{0.16f,0.12f,0.10f,opacity});
+    }
     const Vector4 panel = WithOpacity(definition.panelColor, opacity);
     const Vector4 textColor = WithOpacity(definition.textColor, opacity);
     const Vector4 muted = WithOpacity(definition.mutedColor, opacity);
@@ -274,6 +332,26 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         }
         if(hud.grazeChain>0) text(hud.grazeText,x,safe+174*scale,
             0.58f*scale,primary,center);
+        if(input.shortRun && !input.startCueActive && input.resultSession &&
+            input.resultSession->phase==GameSessionPhase::Playing && input.encounterScore &&
+            input.encounterScore->showcaseSecondsRemaining>0) {
+            const auto& success=*input.encounterScore;
+            std::string label;Vector4 accent=primary;
+            switch(success.showcaseKind) {
+            case EncounterPerformanceScoreKind::LockSweep: label=Utf8(u8"一斉撃破");break;
+            case EncounterPerformanceScoreKind::BatteryBreak: label=Utf8(u8"砲台制圧");accent=warning;break;
+            case EncounterPerformanceScoreKind::ProjectileIntercept: label=Utf8(u8"連続迎撃");break;
+            default:break;
+            }
+            if(!label.empty()) {
+                const float a=opacity*(std::min)(1.0f,success.showcaseSecondsRemaining/0.25f);
+                const float y=safe+(200+4*(1-a))*scale;
+                plate(x-128*scale,y,256*scale,35*scale,{0.015f,0.025f,0.032f,a*0.82f});
+                rect(x-128*scale,y,2*scale,35*scale,{accent.x,accent.y,accent.z,a});
+                const auto message=label+"  x"+std::to_string(success.showcaseCount)+"  +"+std::to_string(success.showcaseScore);
+                ink(message,x,y+24*scale,0.73f*scale,{accent.x,accent.y,accent.z,a},center);
+            }
+        }
     }
     if(definition.showWeapon) {
         // Lock readiness is anchored below combat, separate from enemy markers.
@@ -325,9 +403,20 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         if(!hud.bannerDetail.empty()) ink(hud.bannerDetail,width*0.5f,y+50*scale,
             0.69f*scale,{1,0.98f,0.91f,a},center);
     }
+    if(input.shortRun && input.resultSession && !input.startCueActive &&
+        input.resultSession->phase==GameSessionPhase::Playing) {
+        const float distance=input.resultSession->courseDistance;
+        const int stage=distance<380?0:distance<680?1:distance<950?2:distance<1120?3:4;
+        const char* stages[]={"FIRST CONTACT / LMB","LOCK BURST / HOLD RMB","INTERCEPT / SHOOT ORBS","BOOST RUN / HOLD E","FINAL PURSUIT"};
+        const int remaining=int((std::max)(0.0f,120.0f-input.resultSession->attemptElapsedSeconds));
+        text(std::to_string(stage+1)+" / 5   "+stages[stage],safe,height-90*responsive,0.64f*responsive,textColor);
+        text("TIME  "+std::to_string(remaining),safe,height-64*responsive,0.58f*responsive,muted);
+        if(distance>=input.resultSession->courseLength-2.0f && !input.resultSession->combatClearConfirmed)
+            text("CLEAR REMAINING HOSTILES",width*0.5f,height*0.24f,0.85f*responsive,warning,center);
+    }
     // Keep compact reminders at the edge, not a permanent panel across combat.
     if(width>=960) {
-        text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   P : 一時停止"),
+        text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   E : 加速   P : 一時停止"),
             width*0.5f,height-10*responsive,0.50f*responsive,muted,center);
     }
     for(size_t index=0;index<next.commands.size();++index) {

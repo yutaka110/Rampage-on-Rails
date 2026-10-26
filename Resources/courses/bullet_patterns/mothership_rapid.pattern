@@ -1,0 +1,3 @@
+# Two light rounds. Defeat this part to reduce interception frequency.
+pattern|mothership_rapid|Carrier Rapid Pair|twin|2|1.1|0|0.42|6|5|0.15|0.75|1|1
+projectile|enemy_mothership_rapid

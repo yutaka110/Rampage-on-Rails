@@ -41,6 +41,8 @@ struct RailVehicleRideDynamicsInput final {
     const RailRideDirectorFrame* ride = nullptr;
     const RailTrackFeedbackFrame* trackFeedback = nullptr;
     float deltaTime = 0.0f;
+    float manualBoostStrength = 0.0f;
+    float manualBoostIgnition = 0.0f;
     RailVehicleRideDynamicsSettings settings{};
 };
 

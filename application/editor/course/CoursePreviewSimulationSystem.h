@@ -135,7 +135,7 @@ public:
     bool Restart(bool playImmediately = true, std::string* errorMessage = nullptr);
     bool Seek(float distance, std::string* errorMessage = nullptr);
     bool Step(std::string* errorMessage = nullptr);
-    void Tick(float deltaTime);
+    void Tick(float deltaTime, float stopDistance = -1.0f);
 
     bool MarkEnemyDefeated(std::string_view placementGuid, bool defeated = true);
     uint32_t DefeatActiveEnemies();
@@ -165,7 +165,7 @@ public:
 private:
     void InitializeRuntimeState();
     bool RebuildAtDistance(float distance, std::string* errorMessage);
-    void AdvanceFixed(float deltaTime, bool emitEvents);
+    void AdvanceFixed(float deltaTime, bool emitEvents, float stopDistance = -1.0f);
     void UpdatePrewarmAndActivation(bool emitEvents);
     void UpdateActiveState(float deltaTime, bool emitEvents);
     bool CanActivateWave(std::size_t index) const;

@@ -26,6 +26,10 @@ public:
         float verticalOffset,
         CourseSpawnRuntime& spawnRuntime,
         std::string* errorMessage = nullptr);
+    // Resolve authored fixed positions before their combat events fire.
+    // This creates no actors and reserves no encounter/attack slots.
+    std::vector<CourseEnemyActorDesc> GroundBatteryPlacements(const CourseAsset& course);
+    void PlaceGroundBatteries(const CourseAsset& course, CourseSpawnRuntime& runtime);
 
 private:
     const EnemyWaveAsset* LoadEnemyWave(const std::string& id);

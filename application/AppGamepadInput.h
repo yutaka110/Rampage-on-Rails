@@ -21,6 +21,7 @@ struct AppGamepadFrame {
     bool toggleHelpPressed = false;
     bool leftShoulderPressed = false;
     bool rightShoulderPressed = false;
+    bool boostHeld = false;
 };
 
 class AppGamepadInput final {

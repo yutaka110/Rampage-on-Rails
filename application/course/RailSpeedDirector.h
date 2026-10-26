@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "CourseAsset.h"
+#include "RailManualBoost.h"
 #include "../terrain/RailPath.h"
 
 enum class RailSpeedZoneMode {
@@ -19,6 +20,8 @@ enum class RailSpeedZoneMode {
 
 struct RailSpeedDirectorSettings {
     bool enabled = true;
+    // Applied by the shared motion envelope after authored ride overrides.
+    float normalSpeedScale = 1.0f;
     float minSpeed = 10.0f;
     float maxSpeed = 64.0f;
     float cruiseMultiplier = 1.0f;
@@ -67,6 +70,8 @@ public:
         bool preservePolicyState = false,
         std::string* errorMessage = nullptr);
     void Reset();
+    void SetManualBoostInput(bool held, bool enabled) { manualBoost_.SetInput(held, enabled); }
+    const RailManualBoost& ManualBoost() const { return manualBoost_; }
     void NotifyCourseEvents(const std::vector<CourseEventMarker>& events);
     RailSpeedDirectorFrame Evaluate(const RailSpeedDirectorFrameInput& input);
 
@@ -80,6 +85,7 @@ private:
     float MultiplierForMode(RailSpeedZoneMode mode) const;
 
     RailSpeedDirectorSettings settings_{};
+    RailManualBoost manualBoost_{};
     RailSpeedDirectorFrame lastFrame_{};
     float eventSlowTimer_ = 0.0f;
     float eventBoostTimer_ = 0.0f;

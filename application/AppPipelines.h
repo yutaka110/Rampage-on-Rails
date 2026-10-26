@@ -32,6 +32,7 @@ public:
     ID3D12RootSignature* GetTerrainDebrisCullRootSignature() const { return terrainDebrisCullRootSignature_.Get(); }
 
     ID3D12PipelineState* GetMainPSO() const { return mainPso_.Get(); }
+    ID3D12PipelineState* GetRailBoostMaskPSO() const { return railBoostMaskPso_.Get(); }
     ID3D12PipelineState* GetTerrainPSO() const { return terrainPso_.Get(); }
     ID3D12PipelineState* GetTerrainWireframePSO() const { return terrainWireframePso_.Get(); }
     ID3D12PipelineState* GetTerrainShadowPSO() const { return terrainShadowPso_.Get(); }
@@ -138,6 +139,7 @@ private:
     // PSO
     Microsoft::WRL::ComPtr<ID3D12PipelineState> mainPso_;      // 元の graphicsPipelineState
     Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainPso_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> railBoostMaskPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainWireframePso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainShadowPso_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> terrainDebrisPso_;
@@ -216,6 +218,7 @@ private:
     Microsoft::WRL::ComPtr<IDxcBlob> vs_;
     Microsoft::WRL::ComPtr<IDxcBlob> skinnedVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> ps_;
+    Microsoft::WRL::ComPtr<IDxcBlob> railBoostMaskPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> terrainPs_;
     Microsoft::WRL::ComPtr<IDxcBlob> terrainShadowVs_;
     Microsoft::WRL::ComPtr<IDxcBlob> terrainDebrisVs_;

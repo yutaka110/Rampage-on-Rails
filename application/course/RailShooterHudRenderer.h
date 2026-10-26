@@ -5,7 +5,10 @@
 #include <vector>
 
 #include "RailShooterHudDefinitionAsset.h"
+#include "GameSessionSystem.h"
 #include "RailShooterHudPresentationBridge.h"
+
+struct EncounterPerformanceScoreRuntimeState;
 
 enum class RailShooterHudDrawCommandKind : uint8_t {
     Rectangle,
@@ -58,6 +61,13 @@ struct RailShooterHudRenderInput final {
     float readyOpacity = 0.0f, readyProgress = 0.0f, goOpacity = 0.0f;
     bool startCueActive = false;
     Vector2 titleTransitionFocus{0.5f,0.4f};
+    const GameSessionRuntimeState* resultSession=nullptr;
+    bool shortRun=false;
+    bool bossVisible=false;
+    float bossHealth=1.0f;
+    const EncounterPerformanceScoreRuntimeState* encounterScore=nullptr;
+    bool miniBossParts=false;
+    std::array<float,2> miniBossPartHealth{};
 };
 
 struct RailShooterHudRenderFrame final {

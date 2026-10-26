@@ -1,4 +1,5 @@
 #include "RailVehicleMovementSystem.h"
+#include "RailManualBoost.h"
 
 #include <algorithm>
 #include <cmath>
@@ -142,7 +143,7 @@ bool RailVehicleMovementSystem::RestoreState(
         !Finite(restored.impactSpeedMultiplier) ||
         !Finite(restored.impactSlowdownRemainingSeconds) ||
         restored.distance < 0.0f ||
-        restored.speed < 0.0f || restored.speed > definition_.maximumSpeed + 0.001f ||
+        restored.speed < 0.0f || restored.speed > definition_.maximumSpeed * RailManualBoost::MaximumMultiplier + 0.001f ||
         restored.impactSpeedMultiplier <= 0.0f ||
         restored.impactSpeedMultiplier > 1.0f ||
         restored.impactSlowdownRemainingSeconds < 0.0f ||
@@ -221,13 +222,21 @@ const RailVehicleMovementFrame& RailVehicleMovementSystem::Update(
         input.emergencyBrake && !state_.emergencyBraking;
     state_.movementEnabled = input.movementEnabled;
     state_.emergencyBraking = input.emergencyBrake;
+    const float speedCeiling = definition_.maximumSpeed * RailManualBoost::ClampMultiplier(input.manualBoostMultiplier);
     state_.requestedSpeed = Finite(input.requestedSpeed)
-        ? (std::clamp)(input.requestedSpeed, 0.0f, definition_.maximumSpeed)
+        ? (std::clamp)(input.requestedSpeed, 0.0f, speedCeiling)
         : 0.0f;
-    state_.safeSpeed = ComputeSafeSpeed(railPath);
+    state_.safeSpeed = ComputeSafeSpeed(railPath, speedCeiling);
     float targetSpeed = input.movementEnabled
         ? (std::min)(state_.requestedSpeed, state_.safeSpeed)
         : 0.0f;
+    const float travelEnd = input.courseRuntime->TraversalEndDistance(railPath);
+    if (travelEnd < railPath.Length()) {
+        const float remaining = (std::max)(0.0f, travelEnd - state_.distance);
+        const float approachSpeed = remaining <= definition_.endStopTolerance ? 0.0f
+            : std::sqrt(2.0f * definition_.serviceBrakeDeceleration * remaining);
+        targetSpeed = (std::min)(targetSpeed, approachSpeed);
+    }
     const bool impactSlowdownActive =
         state_.impactSlowdownRemainingSeconds > 0.0f;
     if (impactSlowdownActive) {
@@ -258,7 +267,7 @@ const RailVehicleMovementFrame& RailVehicleMovementSystem::Update(
         const float candidate = (std::clamp)(
             state_.speed + constrainedAcceleration * deltaTime,
             0.0f,
-            definition_.maximumSpeed);
+            (std::max)(previousSpeed, speedCeiling));
         if (targetSpeed > state_.speed + 0.0001f) {
             state_.speed = (std::clamp)(candidate, state_.speed, targetSpeed);
         } else if (targetSpeed < state_.speed - 0.0001f) {
@@ -284,9 +293,9 @@ const RailVehicleMovementFrame& RailVehicleMovementSystem::Update(
     frame_.traveledDistance = state_.distance - state_.previousDistance;
     const bool wasAtEnd = state_.atCourseEnd;
     state_.atCourseEnd =
-        state_.distance >= railPath.Length() - definition_.endStopTolerance;
+        state_.distance >= travelEnd - definition_.endStopTolerance;
     if (state_.atCourseEnd) {
-        state_.distance = railPath.Length();
+        // Keep CourseRuntime and vehicle authority at the same terminal distance.
         state_.speed = 0.0f;
         state_.acceleration = 0.0f;
     }
@@ -307,7 +316,7 @@ const RailVehicleMovementFrame& RailVehicleMovementSystem::Update(
     return frame_;
 }
 
-float RailVehicleMovementSystem::ComputeSafeSpeed(const RailPath& railPath) {
+float RailVehicleMovementSystem::ComputeSafeSpeed(const RailPath& railPath, float speedCeiling) {
     const float lookAhead = (std::max)(0.1f, definition_.curvatureLookAheadDistance);
     const RailPathSample before = railPath.Evaluate(
         (std::max)(0.0f, state_.distance - lookAhead * 0.5f));
@@ -319,10 +328,10 @@ float RailVehicleMovementSystem::ComputeSafeSpeed(const RailPath& railPath) {
     const Vector3 turn = Cross(before.tangent, after.tangent);
     state_.signedCurvature = state_.curvature *
         (Dot(turn, before.up) < 0.0f ? -1.0f : 1.0f);
-    if (state_.curvature <= 0.00001f) return definition_.maximumSpeed;
+    if (state_.curvature <= 0.00001f) return speedCeiling;
     const float curveSpeed = std::sqrt(
         definition_.maximumLateralAcceleration / state_.curvature);
-    return (std::clamp)(curveSpeed, 0.0f, definition_.maximumSpeed);
+    return (std::clamp)(curveSpeed, 0.0f, speedCeiling);
 }
 
 void RailVehicleMovementSystem::EvaluatePose(const RailPath& railPath) {

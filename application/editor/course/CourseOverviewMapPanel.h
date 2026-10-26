@@ -20,8 +20,13 @@
 #include "CourseRailSketchTool.h"
 #include "CourseRailStrokePreviewRenderer.h"
 #include "../EditorAssetSelection.h"
+#include "CourseMapCameraEditTool.h"
+#include "CourseCameraShotDetailsPanel.h"
+#include "../EditorCommandRegistry.h"
 
 namespace editor {
+
+enum class CourseMapEditCategory { All, Course, Encounters };
 
 struct CourseOverviewMapPanelContext final {
     CourseRailEditorController* rail = nullptr;
@@ -53,6 +58,17 @@ struct CourseOverviewMapPanelContext final {
     CourseMapHybridCartographyCompositor* hybridCompositor = nullptr;
     CourseMapSceneVisualizationPipeline* sceneVisualization = nullptr;
     const EditorScene* scene = nullptr;
+    CourseCameraShotDetailsPanel* cameraPanel = nullptr;
+    CourseCameraShotDetailsPanelContext cameraContext{};
+    uint64_t gamePreviewTexture = 0;
+    float gamePreviewAspect = 16.0f/9.0f;
+    EditorCommandRegistry* commands = nullptr;
+    // Populated only by the dedicated camera workspace, not the ordinary map.
+    CourseMapCameraEditTool* cameraTool = nullptr;
+    bool cameraEditing = false;
+    CourseMapEditCategory editCategory = CourseMapEditCategory::All;
+    std::function<bool()> courseDirty;
+    CourseMapCameraRangeTool* cameraRangeTool = nullptr;
 };
 
 void DrawCourseOverviewMapPanel(

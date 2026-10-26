@@ -21,6 +21,32 @@ void ImpactCoordinates(float2 uv,float baseX,out float2 p,out float phase,out fl
     p=float2((uv.x-baseX-0.5f)*2.0f,frac(uv.y*0.5f)*4.0f-1.0f);
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>41.5f) {
+        // Thin world-space near-ground streak, with no round projectile head.
+        float u=saturate(input.texcoord.x-42),v=input.texcoord.y*2-1;
+        float ends=smoothstep(0,0.18f,u)*(1-smoothstep(0.72f,1,u));
+        return float4(input.color.rgb,exp(-v*v*7)*ends*input.color.a);
+    }
+    if(input.texcoord.x>39.5f) {
+        // Original turbulent underbody plume: anchored hot root, longitudinal
+        // fibers and a broken fading tail. Simulation time pauses with play.
+        float u=saturate(input.texcoord.x-40);
+        float across=frac(input.texcoord.y*0.5f)*4-1;
+        float clock=fmod(floor(input.texcoord.y*0.5f),64)/64*6.2831853f;
+        float wave=sin(u*19-clock*4)*0.075f+sin(u*31+clock*3)*0.035f;
+        float noise=ImpactNoise(float2(u*17+cos(clock)*3,across*4+sin(clock)*2));
+        // The head is finite-width and luminous all the way to the metal
+        // lip. Only the tail breaks up; the root must never dissolve away.
+        float width=lerp(0.85f,0.52f,u);
+        float edge=exp(-pow((across+wave)/width,2)*4);
+        float core=exp(-pow((across-wave*0.5f)/width,2)*38);
+        float tail=smoothstep(0,0.30f,u);
+        float diamonds=0.80f+0.20f*pow(0.5f+0.5f*cos(u*35-clock*2),4);
+        float root=exp(-pow((u-0.88f)/0.17f,2));
+        float fibers=lerp(0.55f+0.45f*noise,1.0f,smoothstep(0.70f,1.0f,u));
+        float3 color=lerp(input.color.rgb,float3(2.8f,3.0f,3.1f),core*(0.28f+u*0.55f));
+        return float4(color,(edge*0.52f+core*(0.48f+root*0.20f))*tail*fibers*diamonds*input.color.a);
+    }
     if(input.texcoord.x>37.5f) {
         // A concentrated spear of light with ragged secondary filaments.
         // Tapered ends and empty shoulders keep the enemy silhouette visible.

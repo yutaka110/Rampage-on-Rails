@@ -200,17 +200,25 @@ bool CoursePreviewSimulationSystem::Step(std::string* errorMessage) {
     return true;
 }
 
-void CoursePreviewSimulationSystem::Tick(float deltaTime) {
+void CoursePreviewSimulationSystem::Tick(float deltaTime, float stopDistance) {
     if (!IsPlaying() || !hasSnapshot_ || !std::isfinite(deltaTime) || deltaTime < 0.0f) return;
+    const bool bounded = std::isfinite(stopDistance) && stopDistance >= 0;
+    const float end = bounded ? (std::min)(stopDistance, railPath_.Length()) : railPath_.Length();
+    if (bounded && frame_.distance >= end) {
+        Pause(); accumulator_ = 0; RefreshFrame(); return;
+    }
     const float fixedStep = (std::clamp)(settings_.fixedStepSeconds, 1.0f / 240.0f, 0.25f);
     const float playbackRate = (std::clamp)(settings_.playbackRate, 0.05f, 8.0f);
     accumulator_ += (std::clamp)(deltaTime, 0.0f, 0.25f) * playbackRate;
     const uint32_t maximumSubsteps = (std::clamp)(settings_.maximumSubsteps, 1u, 64u);
     uint32_t steps = 0;
     while (accumulator_ + 0.000001f >= fixedStep && steps < maximumSubsteps && IsPlaying()) {
-        AdvanceFixed(fixedStep, true);
+        AdvanceFixed(fixedStep, true, bounded ? end : -1.0f);
         accumulator_ -= fixedStep;
         ++steps;
+        if (bounded && frame_.distance >= end) {
+            Pause(); accumulator_ = 0;
+        }
     }
     if (steps == maximumSubsteps && accumulator_ >= fixedStep) {
         accumulator_ = std::fmod(accumulator_, fixedStep);
@@ -344,18 +352,18 @@ bool CoursePreviewSimulationSystem::RebuildAtDistance(
     return true;
 }
 
-void CoursePreviewSimulationSystem::AdvanceFixed(float deltaTime, bool emitEvents) {
+void CoursePreviewSimulationSystem::AdvanceFixed(float deltaTime, bool emitEvents, float stopDistance) {
     if (!hasSnapshot_ || frame_.playback == CoursePreviewPlaybackState::Completed) return;
     const float dt = (std::max)(0.0f, deltaTime);
     UpdateActiveState(dt, emitEvents);
     frame_.elapsedSeconds += dt;
     frame_.currentSpeed = ResolveTravelSpeed();
-    frame_.distance = (std::min)(
-        railPath_.Length(), frame_.distance + frame_.currentSpeed * dt);
+    const float travelEnd = stopDistance >= 0 ? (std::min)(stopDistance, railPath_.Length()) : railPath_.Length();
+    frame_.distance = (std::min)(travelEnd, frame_.distance + frame_.currentSpeed * dt);
     UpdatePrewarmAndActivation(emitEvents);
     UpdateActiveState(0.0f, emitEvents);
 
-    if (frame_.distance + 0.0001f >= railPath_.Length()) {
+    if (stopDistance < 0 && frame_.distance + 0.0001f >= railPath_.Length()) {
         if (settings_.loop) {
             InitializeRuntimeState();
             frame_.playback = CoursePreviewPlaybackState::Playing;

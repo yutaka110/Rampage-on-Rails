@@ -45,6 +45,7 @@ void AppFrameGraphBuilder::Build(
     const std::string finalPostOutput =
         postExecutionPlan.finalOutputResource.empty() ? "SceneColor" : postExecutionPlan.finalOutputResource;
     AppSceneRenderPipeline{}.RegisterPasses(ctx);
+    AppSceneRenderPipeline{}.RegisterRailBoostProtectionPass(ctx);
     if (registerVfxPasses) {
         registerVfxPasses(ctx);
     }

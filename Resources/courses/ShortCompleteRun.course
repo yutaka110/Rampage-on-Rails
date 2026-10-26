@@ -1,0 +1,190 @@
+# Rail shooter course DSL
+# editor-schema:13
+# row format:
+# course|name
+# rail_track|assetId
+# rail|x|y|z|corridorRadius|speed|editorGuid|tangentMode|inX|inY|inZ|outX|outY|outZ
+# rail_anchor|ownerGuid|segmentGuid|normalizedT|lateralOffset|verticalOffset|forwardOffset
+# camera|distance|backDistance|verticalOffset|lateralOffset|lookAheadDistance|lookUpOffset|lookForwardOffset|fovDeg|rollDeg|editorGuid|editorVisible|editorLocked
+# section|start|end|name|category
+# ride_profile|editorGuid|start|end|displayName|speedMode|speedMultiplier|targetSpeedOverride|accelerationScale|brakingScale|maximumJerk|cornerEntryLookAheadDistance|cornerSpeedScale|turnAnticipationDistance|visualBankScale|maximumVisualBankDegrees|blendIn|blendOut|cameraShotId|enabled|editorVisible|editorLocked
+# ride_speed_beat|editorGuid|start|end|displayName|type|speedMultiplier|targetSpeedOverride|accelerationScale|brakingScale|maximumJerk|blendIn|blendOut|priority|enabled|editorVisible|editorLocked
+# rail_ride_event|editorGuid|start|end|displayName|type|bankMode|bankDegrees|rumbleAmplitude|rumbleFrequencyHz|suspensionAmplitude|cameraShake|cameraFovKick|cameraRollKickDegrees|hapticLow|hapticHigh|speedInfluence|blendIn|blendOut|priority|audioCueId|vfxCueId|triggerOncePerRun|enabled|editorVisible|editorLocked
+# terrain|distance|layer|id|meshId|lateralOffset|verticalOffset|forwardOffset|scaleX|scaleY|scaleZ|pitchDeg|yawDeg|rollDeg|collisionMode|renderPriority|cullBehind|cullAhead|editorGuid|editorVisible|editorLocked
+# terrain_brush|strokeGuid|stampGuid|operation|distance|angleRad|radius|surfaceRadius|strength|hardness|materialLayer
+# rock_cluster|distance|id|meshId|anchor|type|count|minScale|maxScale|spreadX|spreadY|spreadZ|clearLaneRadius|cullBehind|cullAhead|rotX|rotY|rotZ|instanceOverrides|editorGuid|editorVisible|editorLocked
+# lighting|distance|id|blendDistance|sunR|sunG|sunB|sunIntensity|sunDirX|sunDirY|sunDirZ|clearR|clearG|clearB|fogR|fogG|fogB|fogIntensity|fogStart|fogEnd|fogDensity|backlitFogLift|openingGlow|silhouette|lowFog|coolHaze
+# camera_shot_preset|id|mode|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake
+# camera_blend_asset|id|blendIn|blendOut|curve|weightScale
+# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale|viewMode|eyeX|eyeY|eyeZ|yawDeg|pitchDeg|viewFovDeg|hideVehicle|priority
+# terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill
+# cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes
+# wave|editorGuid|displayName|triggerRailDistance|prewarmDistance|timeoutSeconds|completionCondition|executionPolicy|nextWaveGuid|triggerEventId|enabled|editorVisible|editorLocked
+# encounter_beat|editorGuid|encounterId|displayName|waveGuid|triggerRailDistance|endRailDistance|prewarmDistance|establishMin|establishMax|threatenMin|threatenMax|attackMin|attackMax|recoverySeconds|resolveTimeout|requiredReadableRatio|maxConcurrentAttackers|maxThreatBudget|cameraShotId|cameraWeight|cameraFocusWeight|cameraFovOffsetDeg|cameraBackOffset|priority|exitSurvivors|requireCombatTruth|enabled|editorVisible|editorLocked
+# enemy_placement|editorGuid|actorAssetId|bulletPatternOverrideId|waveGroupGuid|segmentGuid|normalizedT|lateralOffset|verticalOffset|forwardOffset|pitchDeg|yawDeg|rollDeg|scaleX|scaleY|scaleZ|activationLeadDistance|enabled|editorVisible|editorLocked
+# event|distance|type|id|payload|editorGuid|editorVisible|editorLocked
+
+course|Canyon Breakout - Short Run
+
+rail_track|mine_cart_standard
+
+# Main camera/terrain rail. Distances are arc-length evaluated by RailPath.
+rail|-18.000|4.000|-120.000|20.000|12.000|canyon-rail-p00|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-8.000|7.000|-40.000|18.000|12.000|canyon-rail-p01|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|20.000|12.000|45.000|16.000|13.000|canyon-rail-p02|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|5.000|5.000|130.000|15.000|13.000|canyon-rail-p03|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-34.000|16.000|220.000|17.000|14.000|canyon-rail-p04|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-6.000|28.000|320.000|21.000|15.000|canyon-rail-p05|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|40.000|18.000|430.000|18.000|16.000|canyon-rail-p06|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|18.000|8.000|540.000|16.000|16.000|canyon-rail-p07|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-22.000|14.000|650.000|19.000|17.000|canyon-rail-p08|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|18.000|760.000|22.000|18.000|canyon-rail-p09|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|36.000|26.000|910.000|20.000|18.000|canyon-rail-p10|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-18.000|10.000|1060.000|14.000|19.000|canyon-rail-p11|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-54.000|8.000|1210.000|15.000|18.000|canyon-rail-p12|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-54.000|8.000|1760.000|18.000|18.000|short-rail-exit|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-54.000|8.000|2060.000|18.000|18.000|short-rail-scenery-tail|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|70.000|140.000|2240.000|32.000|23.000|short-rail-ridge-crest|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|185.000|12.000|2440.000|38.000|28.000|short-rail-ridge-drop|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|60.000|113.700|2650.000|48.000|24.000|short-rail-ridge-left|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-50.000|24.000|2860.000|64.000|22.000|short-rail-ridge-right|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|24.000|3080.000|70.000|20.000|short-rail-boss-straight|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|24.000|3450.000|70.000|20.000|short-rail-boss-exit|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|0.000|24.000|3800.000|70.000|20.000|short-rail-extended-tail|0|0.000|0.000|0.000|0.000|0.000|0.000
+
+# Camera keys define the cinematic rail rig.
+camera|0.000|24.000|7.000|0.000|64.000|2.000|8.000|54.000|0.000|7fce5ae5378e24cb05ee19ede15a779b|1|0
+camera|120.000|22.000|6.000|0.000|60.000|2.000|10.000|52.000|0.000|6f1e600a2629957909493b5c0c450b89|1|0
+camera|240.000|20.000|6.000|-2.000|58.000|2.000|10.000|50.000|-3.000|9281a8c28b4d367ddc1cd98c5faed60d|1|0
+camera|420.000|18.000|5.000|4.000|54.000|1.000|12.000|49.000|4.000|cd6fdacb7583235a1c689ca662bb7cea|1|0
+camera|610.000|17.000|5.000|-4.000|56.000|1.000|12.000|51.000|-5.000|3e44fbc6cb7049088b3902cd16916598|1|0
+camera|720.000|21.000|8.000|0.000|46.000|0.000|14.000|61.000|0.000|583b3602f15b04ef4fc2629f36de2cff|1|0
+camera|930.000|22.000|8.000|0.000|50.000|1.000|14.000|63.000|-2.000|bc68fcafc2974fd1816ab42084a75b3e|1|0
+camera|980.000|20.000|7.000|-5.000|72.000|4.000|18.000|62.000|-7.000|1e58c1f3868f14aa61ce0c31e2b6caba|1|0
+camera|1280.000|24.000|7.000|4.000|64.000|3.000|10.000|50.000|5.000|83ff51a13afd34db4cc8d454443513ab|1|0
+camera|1980.000|24.000|8.000|0.000|60.000|1.000|12.000|56.000|0.000|short-cam-climb|1|0
+camera|2390.000|22.000|9.000|0.000|68.000|0.000|13.000|62.000|0.000|short-cam-drop|1|0
+camera|2740.000|25.000|9.000|0.000|65.000|1.000|13.000|59.000|0.000|short-cam-s-bend|1|0
+camera|3360.000|27.000|8.000|0.000|72.000|7.000|13.000|56.000|0.000|short-cam-boss|1|0
+
+section|0.000|380.000|FIRST CONTACT|Tutorial Combat
+section|380.000|680.000|LOCK BURST|Combat
+section|680.000|950.000|INTERCEPT|Combat
+section|950.000|1120.000|BOOST RUN|High Speed
+section|1120.000|1950.000|FINAL PURSUIT|Combat
+section|1950.000|2450.000|RIDGE CLIMB|High Speed
+section|2450.000|3350.000|CANYON DIVE|High Speed
+section|3350.000|3850.000|CARRIER ASSAULT|Combat
+
+# Authored ride intent: speed policy, turn anticipation, banking, and camera shot.
+ride_profile|short-ride-0|0.000|380.000|FIRST CONTACT|Combat|1.000|14.000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|14.000|18.000|-|1|1|0
+ride_profile|short-ride-1|380.000|680.000|LOCK BURST|Combat|1.000|14.000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|14.000|18.000|-|1|1|0
+ride_profile|short-ride-2|680.000|950.000|INTERCEPT|Combat|1.000|14.000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|14.000|18.000|-|1|1|0
+ride_profile|short-ride-3|950.000|1120.000|BOOST RUN|HighSpeed|1.000|22.000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|14.000|18.000|-|1|1|0
+ride_profile|short-ride-4|1120.000|1950.000|FINAL PURSUIT|Combat|1.000|16.000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|14.000|18.000|-|1|1|0
+ride_profile|short-ride-climb|1950.000|2450.000|RIDGE CLIMB|HighSpeed|1.000|23.000|0.850|1.000|105.000|42.000|1.000|40.000|0.850|14.000|14.000|18.000|-|1|1|0
+ride_profile|short-ride-dive|2450.000|3350.000|CANYON DIVE|HighSpeed|1.000|27.000|1.000|1.100|120.000|48.000|1.000|42.000|0.850|14.000|14.000|18.000|-|1|1|0
+ride_profile|short-ride-boss|3350.000|3850.000|CARRIER ASSAULT|Combat|1.000|18.000|0.850|1.100|100.000|42.000|1.000|35.000|0.900|14.000|14.000|18.000|-|1|1|0
+
+# Distance-authored speed rhythm layered over the active Ride Profile.
+
+# Local authored track feel layered over curve-derived Ride Profile dynamics.
+
+# Layered course terrain: gameplay collision, hero landmarks, and vista background.
+terrain|15.000|hero_landmark|intro_left_silhouette_wall|curved_canyon_wall|-48.000|11.000|72.000|9.000|26.000|30.000|0.000|16.000|-7.000|none|12|80.000|260.000|2d6369e9ab380c5bc13a6d34986319ab|1|0
+terrain|40.000|vista_background|intro_far_hole_wall_left|vista_hole_wall|46.000|58.000|980.000|58.000|46.000|5.000|0.000|10.000|2.000|none|0|260.000|820.000|53bd9fee62bafe1cf7c1476ec85b902c|1|0
+terrain|55.000|hero_landmark|intro_right_silhouette_wall|curved_canyon_wall|50.000|12.000|105.000|8.000|24.000|32.000|0.000|-14.000|6.000|none|12|90.000|280.000|7c050a2de61385168f6a8e7c8eca8926|1|0
+terrain|155.000|vista_background|intro_mist_spire_stack|root_spire_column|78.000|62.000|1060.000|16.000|60.000|6.000|0.000|-8.000|-3.000|none|0|260.000|860.000|cc90d58f752a9d15e051d803661391c5|1|0
+terrain|430.000|hero_landmark|crossfire_left_curved_wall|curved_canyon_wall|-32.000|10.000|70.000|7.000|18.000|18.000|0.000|12.000|-8.000|none|10|140.000|180.000|33a013dc651040981b20a20928b24148|1|0
+terrain|520.000|hero_landmark|crossfire_right_curved_wall|curved_canyon_wall|34.000|12.000|80.000|7.000|20.000|20.000|0.000|-10.000|8.000|none|10|140.000|180.000|3a6ac3292e7b5ac2b7b0f65079310272|1|0
+
+# Rock clusters compose debris as attached, hero, falling, or vista groups instead of loose floating rocks.
+
+# Distance-driven cinematic lighting and fog presets.
+lighting|0.000|intro_backlit_mist|0.000|1.000|0.680|0.500|2.150|-0.500|-0.420|0.760|0.080|0.070|0.070|0.400|0.360|0.340|0.320|260.000|1850.000|0.110|0.220|0.300|0.650|0.120|0.080
+lighting|180.000|first_contact_readability|80.000|1.000|0.680|0.460|2.200|-0.420|-0.500|0.740|0.120|0.110|0.100|0.450|0.390|0.360|0.420|170.000|1320.000|0.200|0.240|0.320|0.680|0.200|0.160
+lighting|420.000|crossfire_side_rim|120.000|1.000|0.620|0.400|3.100|-0.680|-0.360|0.620|0.160|0.140|0.140|0.440|0.340|0.300|0.440|150.000|1080.000|0.230|0.500|0.820|0.820|0.200|0.160
+
+# Camera shot presets are reusable additive shot shapes.
+
+# Camera blend assets define distance blends and easing for shot presets.
+
+# Cinematic shot accents are additive over the base camera rail.
+camera_shot|200.000|400.000|camera_view_1||20.000|20.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|-|-|1.000|3|0.000|6.000|-7.000|0.000|0.000|50.000|0|0
+camera_shot|218.505|318.505|camera_view_2||20.000|20.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|-|-|1.000|2|0.000|7.000|14.000|180.000|0.000|60.000|0|0
+camera_shot|440.000|560.000|sample_first_person||20.000|20.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|-|-|1.000|1|0.000|5.800|0.800|0.000|0.000|60.000|1|11
+camera_shot|760.000|880.000|sample_rear_view||30.000|30.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|-|-|1.000|2|0.000|7.000|14.000|180.000|0.000|60.000|0|11
+camera_shot|1120.000|1240.000|sample_close_up||20.000|20.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|-|-|1.000|4|2.195|8.024|-9.073|-4.197|-8.152|50.000|0|11
+camera_shot|1149.088|1230.243|camera_view_3||12.240|12.240|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|-|-|1.000|4|3.651|9.951|-9.954|-10.665|-4.945|50.000|0|20
+camera_shot|2312.749|2659.563|camera_view_4||20.000|20.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|0.000|-|-|1.000|4|12.148|18.000|-28.000|-36.733|-12.000|68.176|0|0
+
+# Terrain material presets drive authored rock color and detail by distance.
+terrain_material|0.000|intro_wet_organic_rock|0.000|0.460|0.390|0.350|0.640|1.220|1.280|1.160|0.120|1.480|1.180|0.720|1.480|1.340|1.280|0.320
+terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|0.740|0.700|1.020|0.920|0.090|0.850|0.500|0.420|1.120|1.020|0.920|0.200
+
+# Cinematic shot sets bind landmarks, camera, lighting, fog, and material into authored distance shots.
+
+event|390.000|enemy_wave|route_patrol_left|route:single|short-route-0390|1|0
+event|1140.000|enemy_wave|short_turret_left|route:turret|short-ground-battery-left|1|0
+event|1410.000|enemy_wave|short_turret_right|route:turret|short-ground-battery-right|1|0
+event|1785.000|enemy_wave|route_sniper_right|route:single|short-route-1785|1|0
+event|1920.000|enemy_wave|route_patrol_left|route:single|short-route-1920|1|0
+event|2060.000|enemy_wave|route_turret_left|route:turret|short-route-2060|1|0
+event|2210.000|enemy_wave|route_patrol_high|route:single|short-route-2210|1|0
+event|2360.000|enemy_wave|route_turret_right|route:turret|short-route-2360|1|0
+event|2530.000|enemy_wave|route_sniper_left|route:single|short-route-2530|1|0
+event|2690.000|enemy_wave|route_patrol_left|route:single|short-route-2690|1|0
+event|2840.000|enemy_wave|route_turret_left|route:turret|short-route-2840|1|0
+event|3100.000|enemy_wave|route_scout_sniper_pair|route:pair|short-route-3100|1|0
+
+# First-class encounter waves referenced by persistent enemy placements.
+wave|short_fire|FIRE|260.000000|30.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+wave|short_lock|LOCK|445.000000|30.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+wave|short_intercept|INTERCEPT|745.000000|30.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+wave|short_finale|FINALE|1150.000000|30.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+wave|short-exit-guard|EXIT GUARD|1530.000000|30.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+wave|short-mothership|CARRIER WEAPON PARTS|3350.000000|30.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+
+# Authored encounter rhythm layered over stable Wave membership.
+encounter_beat|short-beat-fire|short-fire|FIRE|short_fire|260.000000|365.000000|30.000000|0.450000|1.000000|0.800000|1.500000|1.500000|9.000000|0.800000|3.000000|0.720000|1|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+encounter_beat|short-beat-lock|short-lock|LOCK|short_lock|445.000000|645.000000|30.000000|0.450000|1.000000|0.800000|1.500000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+encounter_beat|short-beat-intercept|short-intercept|INTERCEPT|short_intercept|745.000000|920.000000|30.000000|0.450000|1.000000|0.800000|1.500000|1.500000|9.000000|0.800000|3.000000|0.720000|1|1.200000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+encounter_beat|short-beat-finale|short-finale|FINALE|short_finale|1150.000000|1350.000000|30.000000|0.450000|1.000000|0.800000|1.500000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+encounter_beat|short-beat-exit|short-exit|EXIT GUARD|short-exit-guard|1530.000000|1870.000000|30.000000|0.450000|1.000000|0.800000|1.500000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+encounter_beat|short-beat-boss|short-carrier|CARRIER ASSAULT|short-mothership|3350.000000|3800.000000|30.000000|0.750000|1.200000|1.000000|1.800000|2.000000|10.000000|1.000000|4.000000|0.650000|1|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+
+# Persistent enemy instances anchored to rail topology.
+enemy_placement|short_fire-member-0|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|-8.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_fire-member-1|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|0.000000|9.000000|8.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_fire-member-2|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|8.000000|5.000000|2.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_fire-member-3|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|2.000000|3.000000|18.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_lock-member-0|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|-10.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_lock-member-1|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|-2.000000|8.000000|4.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_lock-member-2|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|7.000000|4.000000|8.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_lock-member-3|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|-7.000000|11.000000|15.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_lock-member-4|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|3.000000|12.000000|19.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_lock-member-5|short_sniper|sniper_predictive_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|11.000000|8.000000|23.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_intercept-member-0|short_scout|assault_magenta_single|short_intercept|bfb823d6a6e9c907fd0ab7ec279316b7|0.880243|-9.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_intercept-member-1|short_scout|assault_magenta_single|short_intercept|bfb823d6a6e9c907fd0ab7ec279316b7|0.880243|-3.000000|9.000000|6.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_intercept-member-2|short_scout|assault_magenta_single|short_intercept|bfb823d6a6e9c907fd0ab7ec279316b7|0.880243|4.000000|3.000000|12.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_intercept-member-3|short_scout|assault_magenta_single|short_intercept|bfb823d6a6e9c907fd0ab7ec279316b7|0.880243|9.000000|8.000000|16.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_intercept-member-4|short_interceptor|short_intercept_fan|short_intercept|bfb823d6a6e9c907fd0ab7ec279316b7|0.880243|-7.000000|7.000000|-5.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_intercept-member-5|short_sniper|sniper_predictive_single|short_intercept|bfb823d6a6e9c907fd0ab7ec279316b7|0.880243|8.000000|13.000000|24.000000|0.000000|0.000000|0.000000|1.080000|1.080000|1.080000|75.000000|1|1|0
+enemy_placement|short_finale-member-0|short_scout|assault_magenta_single|short_finale|70ea47d11b2c836139d0e237a4e8ed91|0.762359|-9.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_finale-member-1|short_scout|assault_magenta_single|short_finale|70ea47d11b2c836139d0e237a4e8ed91|0.762359|-3.000000|10.000000|6.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_finale-member-2|short_scout|assault_magenta_single|short_finale|70ea47d11b2c836139d0e237a4e8ed91|0.762359|4.000000|3.000000|12.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_finale-member-3|short_scout|assault_magenta_single|short_finale|70ea47d11b2c836139d0e237a4e8ed91|0.762359|9.000000|8.000000|16.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_finale-member-4|short_interceptor|combat_expansion_homing_single|short_finale|70ea47d11b2c836139d0e237a4e8ed91|0.762359|-12.000000|12.000000|-5.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short_finale-member-5|short_interceptor|combat_expansion_homing_single|short_finale|70ea47d11b2c836139d0e237a4e8ed91|0.762359|12.000000|12.000000|23.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short-exit-guard-member-0|short_scout|assault_magenta_single|short-exit-guard|bce46202b35aa23f32f5a09cfb71058f|0.337836|-9.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short-exit-guard-member-1|short_scout|assault_magenta_single|short-exit-guard|bce46202b35aa23f32f5a09cfb71058f|0.337836|-3.000000|10.000000|6.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short-exit-guard-member-2|short_scout|assault_magenta_single|short-exit-guard|bce46202b35aa23f32f5a09cfb71058f|0.337836|4.000000|3.000000|12.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short-exit-guard-member-3|short_scout|assault_magenta_single|short-exit-guard|bce46202b35aa23f32f5a09cfb71058f|0.337836|9.000000|8.000000|16.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short-exit-guard-member-4|short_interceptor|combat_expansion_homing_single|short-exit-guard|bce46202b35aa23f32f5a09cfb71058f|0.337836|-12.000000|12.000000|-5.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short-exit-guard-member-5|short_interceptor|combat_expansion_homing_single|short-exit-guard|bce46202b35aa23f32f5a09cfb71058f|0.337836|12.000000|12.000000|23.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|75.000000|1|1|0
+enemy_placement|short-exit-guard-member-6|short_sniper|sniper_predictive_single|short-exit-guard|bce46202b35aa23f32f5a09cfb71058f|0.337836|-6.000000|15.000000|31.000000|0.000000|0.000000|0.000000|1.080000|1.080000|1.080000|75.000000|1|1|0
+enemy_placement|short-exit-guard-member-7|short_sniper|sniper_predictive_single|short-exit-guard|bce46202b35aa23f32f5a09cfb71058f|0.337836|6.000000|15.000000|39.000000|0.000000|0.000000|0.000000|1.080000|1.080000|1.080000|75.000000|1|1|0
+enemy_placement|short-mothership-rapid|short_mothership_rapid|mothership_rapid|short-mothership|30482f5b7d510764518ca36f7f8d7af4|0.943000|-20.000000|18.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|180.000000|1|1|0
+enemy_placement|short-mothership-heavy|short_mothership_heavy|mothership_heavy|short-mothership|30482f5b7d510764518ca36f7f8d7af4|0.943000|20.000000|18.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|180.000000|1|1|0
+
+# Non-destructive procedural Terrain sculpt and paint strokes.

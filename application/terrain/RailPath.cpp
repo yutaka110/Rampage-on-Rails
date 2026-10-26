@@ -157,11 +157,11 @@ RailPathSample RailPath::Evaluate(float distance) const {
         return sample;
     }
 
-    const float wrappedDistance = std::fmod((std::max)(0.0f, distance), totalLength_);
+    const float clampedDistance = (std::clamp)(distance, 0.0f, totalLength_);
     const auto it = std::upper_bound(
         cumulativeLengths_.begin(),
         cumulativeLengths_.end(),
-        wrappedDistance);
+        clampedDistance);
     uint32_t segmentIndex = 0;
     if (it != cumulativeLengths_.begin()) {
         segmentIndex = static_cast<uint32_t>((it - cumulativeLengths_.begin()) - 1);
@@ -171,7 +171,7 @@ RailPathSample RailPath::Evaluate(float distance) const {
     const float segmentStart = cumulativeLengths_[segmentIndex];
     const float segmentEnd = cumulativeLengths_[segmentIndex + 1];
     const float segmentLength = (std::max)(segmentEnd - segmentStart, 0.001f);
-    const float t = (wrappedDistance - segmentStart) / segmentLength;
+    const float t = (clampedDistance - segmentStart) / segmentLength;
 
     sample.position = EvaluateSegment(segmentIndex, t);
     sample.tangent = EvaluateSegmentTangent(segmentIndex, t);
@@ -179,7 +179,17 @@ RailPathSample RailPath::Evaluate(float distance) const {
     sample.up = NormalizeOr(Cross(sample.tangent, sample.right), {0.0f, 1.0f, 0.0f});
     sample.corridorRadius = EvaluateRadius(segmentIndex, t);
     sample.speed = EvaluateSpeed(segmentIndex, t);
-    sample.distance = wrappedDistance;
+    sample.distance = clampedDistance;
+    return sample;
+}
+
+RailPathSample RailPath::EvaluateExtended(float distance) const {
+    RailPathSample sample = Evaluate(distance);
+    if (controlPoints_.size() > 1 && totalLength_ > 0.0f && std::isfinite(distance)) {
+        const float extension = distance - sample.distance;
+        sample.position = Add(sample.position, Scale(sample.tangent, extension));
+        sample.distance = distance;
+    }
     return sample;
 }
 

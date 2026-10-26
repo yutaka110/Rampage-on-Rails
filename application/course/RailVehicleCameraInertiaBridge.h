@@ -40,6 +40,8 @@ struct RailVehicleCameraInertiaInput final {
     float deltaTime = 0.0f;
     bool gameplayActive = true;
     bool aimFocusActive = false;
+    float manualBoostStrength = 0.0f;
+    float manualBoostIgnition = 0.0f;
     RailVehicleCameraInertiaSettings settings{};
 };
 

@@ -1,4 +1,5 @@
-﻿#include "EnemyCombatPresentationBridge.h"
+#include "RailTurretGeometry.h"
+#include "EnemyCombatPresentationBridge.h"
 
 #include "CourseSpawnRuntime.h"
 #include "EnemyEncounterReadabilityDirector.h"
@@ -419,6 +420,27 @@ void ApplyProceduralAnimation(
             output.coreColor.w, settings.minimumSpawnAlpha);
         output.visible = true;
     }
+    if(actor.carrierDeployment.initialized && !actor.carrierDeployment.finished) {
+        output.visible=actor.carrierDeployment.elapsed>=actor.carrierDeployment.delay;
+        output.materialColor.w=output.coreColor.w=output.visible ? 1.0f : 0.0f;
+        output.scaleMultiplier=1.0f;
+        output.bodyScale={1,1,1};
+        output.forwardOffset=output.lateralOffset=output.verticalOffset=0.0f;
+        output.rotationOffset={};
+    }
+    if((actor.terrainIngress.waiting || actor.terrainIngress.initialized) && !actor.terrainIngress.finished) {
+        output.visible=!actor.terrainIngress.waiting && actor.terrainIngress.elapsed>=actor.terrainIngress.delay;
+        output.materialColor={1,1,1,output.visible?1.0f:0.0f};output.coreColor.w=output.materialColor.w;
+        output.scaleMultiplier=1;output.bodyScale={1,1,1};
+        output.forwardOffset=output.lateralOffset=output.verticalOffset=0;output.rotationOffset={};
+    }
+    if(actor.terrainIngress.finished && state.phase!=EnemyCombatPhase::Dying &&
+            state.phase!=EnemyCombatPhase::Retired && state.phase!=EnemyCombatPhase::HitReact) {
+        const auto& entry=actor.terrainIngress;
+        const float blend=SmoothStep((entry.elapsed-entry.delay-entry.duration)/0.30f);
+        output.rotationOffset=Scale(output.rotationOffset,blend);
+        output.forwardOffset*=blend;output.lateralOffset*=blend;output.verticalOffset*=blend;
+    }
 }
 
 struct SpatialMix final {
@@ -524,7 +546,7 @@ void EnemyCombatPresentationBridge::Update(
         if (!actor.combatState.initialized) continue;
         EnemyCombatActorPresentation output{};
         ApplyProceduralAnimation(output, actor, input.settings);
-        if (actor.desc.meshId == "combat_turret") {
+        if (RailTurret::IsMesh(actor.desc.meshId)) {
             output.turret = true;
             const auto sample = input.railPath->Evaluate(actor.desc.spawnDistance+actor.desc.distanceOffset);
             const Vector3 local = actor.targetingState.turretAimDirection;
@@ -549,7 +571,8 @@ void EnemyCombatPresentationBridge::Update(
                 output.rotationOffset = {};
                 output.bodyScale = {1,1,1};
                 output.scaleMultiplier = 1;
-                output.materialColor = {0.85f,0.91f,1.0f,output.materialColor.w};
+                output.materialColor = {0.85f,0.91f,1.0f,1.0f};
+                output.visible=true;
             }
         }
         frame_.actors.push_back(output);
@@ -571,6 +594,8 @@ void EnemyCombatPresentationBridge::Update(
         for (const EnemyCombatEvent* event : prioritized) {
             const CourseEnemyActor* actor = FindEnemy(*input.runtime, event->actorId);
             if (actor == nullptr) continue;
+            if((actor->terrainIngress.waiting || actor->terrainIngress.initialized) &&
+                (event->kind==EnemyCombatEventKind::Spawned || event->kind==EnemyCombatEventKind::Engaged)) continue;
             if(event->kind==EnemyCombatEventKind::Defeated &&
                 std::any_of(frame_.destructionBursts.begin(),frame_.destructionBursts.end(),
                     [&](const auto& burst) {return burst.actorId==event->actorId;})) continue;
@@ -774,7 +799,7 @@ void EnemyCombatPresentationBridge::Update(
                     vfx.worldPosition = Add(
                         mix.position,
                         Scale(sample.tangent, -actor->desc.radius * 0.88f));
-                    if (actor->desc.meshId == "combat_turret") {
+                    if (RailTurret::IsMesh(actor->desc.meshId)) {
                         const Vector3 muzzle = ResolveTurretMuzzleRailPosition(*actor,0);
                         const auto muzzleSample = input.railPath->Evaluate(muzzle.z);
                         vfx.worldPosition = Add(muzzleSample.position,
@@ -790,7 +815,7 @@ void EnemyCombatPresentationBridge::Update(
                 } else if (chargeVfx) {
                     // Turrets use a continuous, cancellable muzzle glow. A
                     // detached one-shot charging particle could outlive defeat.
-                    if (actor->desc.meshId == "combat_turret" ||
+                    if (RailTurret::IsMesh(actor->desc.meshId) ||
                         actor->behaviorDefinition.choreographedAttackPass) continue;
                     vfx.cueId = "enemy_combat_charge";
                     vfx.effectName = "enemy_charge_pulse";

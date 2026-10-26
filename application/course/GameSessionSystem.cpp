@@ -543,7 +543,8 @@ GameSessionEndReason GameSessionSystem::DefeatReason(
     if (state_.playerHealth <= 0.0f) return GameSessionEndReason::PlayerDestroyed;
     if (state_.objectiveFailed) return GameSessionEndReason::ObjectiveFailed;
     if (definition_.timeLimitSeconds > 0.0f &&
-        state_.gameplayElapsedSeconds >= definition_.timeLimitSeconds) {
+        (definition_.timeLimitPerAttempt ? state_.attemptElapsedSeconds : state_.gameplayElapsedSeconds)
+            >= definition_.timeLimitSeconds) {
         return GameSessionEndReason::TimeExpired;
     }
     return GameSessionEndReason::None;

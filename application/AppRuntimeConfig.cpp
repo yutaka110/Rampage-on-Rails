@@ -1,4 +1,5 @@
 #include "AppRuntimeConfig.h"
+#include "course/RailShortCourse.h"
 
 #include "AppRuntimeState.h"
 #include "AppVfxRuntimeState.h"
@@ -566,4 +567,16 @@ void ApplyEnvironmentRuntimeConfig(AppVfxRuntimeState& runtimeState) {
     if (HasEnvironmentVariable("GE3_BEAM_DEDICATED_NO_AUTO_FALLBACK")) {
         runtimeState.enableBeamDedicatedAutoFallback = false;
     }
+}
+
+std::string ParseRailCourseArguments(int count,const wchar_t* const* args) {
+    for(int i=1;args && i<count;++i) if(args[i] && std::wstring_view(args[i])==L"--full-course")
+        return "Resources/courses/CanyonAssaultRoute01.course";
+    return RailShortCoursePath;
+}
+std::string ResolveRailCoursePathFromCommandLine() {
+    int count=0; auto* args=CommandLineToArgvW(GetCommandLineW(),&count);
+    auto path=ParseRailCourseArguments(count,args);
+    if(args) LocalFree(args);
+    return path;
 }

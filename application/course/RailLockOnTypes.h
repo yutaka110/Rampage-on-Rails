@@ -45,6 +45,8 @@ struct RailLockAnchor {
     float lineOfSightBlockT = 0.0f;
     uint32_t lineOfSightOccluderActorId = 0;
     int maxStack = 1;
+    // Zero preserves single-capture behavior. Boss sockets opt into timed stacking.
+    float stackAcquireIntervalSeconds = 0.0f;
     bool lineOfSightBlocked = false;
 };
 

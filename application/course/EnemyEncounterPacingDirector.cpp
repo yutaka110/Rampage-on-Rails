@@ -5,11 +5,13 @@
 #include <utility>
 
 #include "CourseAsset.h"
+#include "CourseGameplayWaveRuntimeBridge.h"
 #include "CourseSpawnRuntime.h"
 #include "EnemyEncounterReadabilityDirector.h"
 
 namespace {
 bool IsLivingActor(const CourseEnemyActor& actor) noexcept {
+    if(actor.stationaryDormant) return false;
     if (actor.entranceExitState.exitComplete ||
         actor.entranceExitState.phase == EnemyEntranceExitPhase::Exited) {
         return false;
@@ -53,6 +55,11 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
     }
 
     CourseSpawnRuntime& runtime = *input.runtime;
+    const auto effectiveTrigger = [&input](const EnemyEncounterBeatDefinition& definition) {
+        const float distance = input.waveRuntime
+            ? input.waveRuntime->EffectiveTriggerDistance(definition.waveGuid) : -1.0f;
+        return distance >= 0.0f ? distance : definition.triggerRailDistance;
+    };
     const auto hasPendingConfiguredBeat =
         [this, &input](std::string_view waveGuid) {
             return !waveGuid.empty() && std::any_of(
@@ -71,8 +78,12 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
              input.course->encounterBeats) {
             if (!definition.enabled ||
                 completedBeatGuids_.contains(definition.editorGuid) ||
+                (input.waveRuntime && input.waveRuntime->Settings().earlyClearAdvanceEnabled &&
+                 input.waveRuntime->Program() && input.waveRuntime->Program()->FindWave(definition.waveGuid) &&
+                 input.waveRuntime->Phase(definition.waveGuid) != CourseGameplayWavePhase::Active) ||
+                (input.waveRuntime && input.waveRuntime->Phase(definition.waveGuid) == CourseGameplayWavePhase::Completed) ||
                 input.currentDistance + definition.prewarmDistance + 0.001f <
-                    definition.triggerRailDistance) {
+                    effectiveTrigger(definition)) {
                 continue;
             }
             if (selected == nullptr || definition.priority > selected->priority ||
@@ -95,7 +106,10 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
         return frame_;
     }
 
-    const EnemyEncounterBeatDefinition& definition = *activeDefinition_;
+    EnemyEncounterBeatDefinition definition = *activeDefinition_;
+    const float shiftedTrigger = effectiveTrigger(definition);
+    definition.endRailDistance += shiftedTrigger - definition.triggerRailDistance;
+    definition.triggerRailDistance = shiftedTrigger;
     next.active = true;
     next.activeBeatGuid = definition.editorGuid;
     next.encounterId = definition.encounterId;
@@ -168,7 +182,12 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
         next.readableRatio + 0.0001f >= definition.requiredReadableRatio;
     const bool triggerReached =
         input.currentDistance + 0.001f >= definition.triggerRailDistance;
-    if (input.currentDistance >= definition.endRailDistance &&
+    const bool waveAlreadyCleared = input.waveRuntime &&
+        input.waveRuntime->Phase(definition.waveGuid) == CourseGameplayWavePhase::Completed;
+    const bool livingPersistentBoss=std::any_of(runtime.Enemies().begin(),runtime.Enemies().end(),
+        [&](const auto& actor) { return MatchesWave(actor,definition) && IsLivingActor(actor) &&
+            actor.HoldsCombatPositionUntilResolved() && actor.behaviorDefinition.archetype==EnemyBehaviorArchetype::Boss; });
+    if (((input.currentDistance >= definition.endRailDistance && !livingPersistentBoss) || waveAlreadyCleared) &&
         (next.phase == EnemyEncounterBeatPhase::Establish ||
          next.phase == EnemyEncounterBeatPhase::Threaten ||
          next.phase == EnemyEncounterBeatPhase::Attack)) {
@@ -206,8 +225,8 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
         break;
     case EnemyEncounterBeatPhase::Recovery:
         if (next.phaseElapsedSeconds >= definition.recoverySeconds) {
-            EnterPhase(EnemyEncounterBeatPhase::ExitResolve, next,
-                "recovery complete");
+            EnterPhase(livingPersistentBoss ? EnemyEncounterBeatPhase::Threaten : EnemyEncounterBeatPhase::ExitResolve, next,
+                livingPersistentBoss ? "living boss begins its next warning cycle" : "recovery complete");
         }
         break;
     case EnemyEncounterBeatPhase::ExitResolve: {

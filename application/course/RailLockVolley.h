@@ -23,7 +23,7 @@ struct RailLockLaser final {
     float Opacity() const;
     Vector3 Curve(float progress) const;
 };
-struct RailLockVolleyResult final { uint32_t tokens=0,hits=0,maxLocks=0; };
+struct RailLockVolleyResult final { uint32_t tokens=0,hits=0,maxLocks=0,defeats=0; };
 
 // A confirmed arrival, independent of the laser tail and actor retirement.
 // All clocks use gameplay dt, so pause and retry behave like the actual shot.
@@ -76,7 +76,7 @@ public:
     static bool TargetPosition(RailLockTargetHandle target,const RailPath& rail,
         const CourseSpawnRuntime& runtime,Vector3& position);
 private:
-    struct Batch {uint64_t id=0;uint32_t tokens=0,pending=0,hits=0,maxLocks=0;};
+    struct Batch {uint64_t id=0;uint32_t tokens=0,pending=0,hits=0,maxLocks=0,defeats=0;};
     std::vector<RailLockLaser> lasers_;
     std::vector<RailLockContact> contacts_;
     std::vector<Batch> batches_;

@@ -1,0 +1,7 @@
+# A lone patrol; persists until defeated, never expires merely because time elapsed.
+actor|route_scout|Canyon Patrol Drone|twin_shield_hull|1.15|18|120|0.8|0.75|0.65|1|assault_magenta_single
+combat|3.4|0.6|40|assault_magenta_single
+movement|1
+behavior|assault|0.30|0.25|0.30|1.2|3.4|0.5|0.6|2.3|1.1|0.21|true
+engagement_band|true|40|58|80|16|2.2|40|10
+attack_pass|false|0.35|0.90|0.30

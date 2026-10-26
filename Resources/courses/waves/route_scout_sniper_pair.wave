@@ -1,0 +1,5 @@
+wave|route_scout_sniper_pair|Scout And Precision Ambush
+deployment|high
+formation|authored|dive|forward|1|8|3|5|2|0.4|1.35|0.7|20|20|0.65|30|0
+unitAsset|scout_screen|route_scout|assault_magenta_single|76|-10|5|0|1.15|120|0.8|0.75|0.65|1
+unitAsset|precision_cover|route_sniper|sniper_predictive_single|82|10|11|0|1.5|120|0.95|0.64|0.24|1

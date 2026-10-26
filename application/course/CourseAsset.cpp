@@ -467,6 +467,45 @@ void SortCourseData(CourseAsset& asset) {
 }
 } // namespace
 
+const char* ToCourseCameraViewModeString(CourseCameraViewMode mode) {
+    switch (mode) {
+    case CourseCameraViewMode::Inherit: return "Follow / Existing Shot";
+    case CourseCameraViewMode::FirstPerson: return "First Person";
+    case CourseCameraViewMode::Rear: return "Rear View";
+    case CourseCameraViewMode::CloseUp: return "Close Up";
+    case CourseCameraViewMode::Custom: return "Custom Composition";
+    }
+    return "Invalid";
+}
+
+CourseCameraViewDefinition CourseCameraViewDefinition::Preset(CourseCameraViewMode mode) {
+    CourseCameraViewDefinition view;
+    view.mode = mode;
+    if (mode == CourseCameraViewMode::FirstPerson) view.hideVehicle = true;
+    if (mode == CourseCameraViewMode::Rear) {
+        view.positionOffset = {0, 7, 14};
+        view.yaw = kPi;
+    }
+    if (mode == CourseCameraViewMode::CloseUp || mode == CourseCameraViewMode::Custom) {
+        view.positionOffset = {0, 6, -7};
+        view.fovY = DegreesToRadians(50);
+    }
+    return view;
+}
+
+bool CourseCameraViewDefinition::Validate(std::string* errorMessage) const {
+    const bool valid = mode >= CourseCameraViewMode::Inherit && mode <= CourseCameraViewMode::Custom &&
+        std::isfinite(positionOffset.x) && std::abs(positionOffset.x) <= 1000 &&
+        std::isfinite(positionOffset.y) && std::abs(positionOffset.y) <= 1000 &&
+        std::isfinite(positionOffset.z) && std::abs(positionOffset.z) <= 1000 &&
+        std::isfinite(yaw) && std::abs(yaw) <= kPi * 2.01f &&
+        std::isfinite(pitch) && std::abs(pitch) <= DegreesToRadians(85) &&
+        std::isfinite(fovY) && fovY >= DegreesToRadians(15) && fovY <= DegreesToRadians(110) &&
+        priority >= -1000 && priority <= 1000;
+    if (errorMessage) *errorMessage = valid ? "" : "Invalid camera view pose, angle, FOV or priority.";
+    return valid;
+}
+
 const char* ToCourseTerrainLayerString(CourseTerrainLayer layer) {
     switch (layer) {
     case CourseTerrainLayer::GameplayCollision:
@@ -1164,6 +1203,35 @@ bool CourseAsset::LoadFromString(const std::string& text, std::string* errorMess
             shot.presetId = parts.size() >= 17 ? parts[16] : std::string{};
             shot.blendAssetId = parts.size() >= 18 ? parts[17] : std::string{};
             shot.weightScale = ParseFloatOr(parts, 18, shot.weightScale);
+            // Optional v2 suffix; old course rows keep the inherited camera.
+            if (parts.size() > 19) {
+                if (parts.size() != 28 ||
+                    (parts[19] != "0" && parts[19] != "1" && parts[19] != "2" && parts[19] != "3" && parts[19] != "4") ||
+                    (parts[26] != "0" && parts[26] != "1")) {
+                    if (errorMessage) *errorMessage = "Malformed camera view suffix at line " + std::to_string(lineNumber);
+                    return false;
+                }
+                shot.view.mode = static_cast<CourseCameraViewMode>(std::stoi(parts[19]));
+                float values[7]{};
+                for (size_t i=0; i<7; ++i) {
+                    const size_t column = i < 6 ? 20+i : 27;
+                    if (!ParseFloat(parts[column], values[i]) || !std::isfinite(values[i])) {
+                        if (errorMessage) *errorMessage = "Invalid camera view number at line " + std::to_string(lineNumber);
+                        return false;
+                    }
+                }
+                shot.view.positionOffset = {values[0],values[1],values[2]};
+                shot.view.yaw = DegreesToRadians(values[3]);
+                shot.view.pitch = DegreesToRadians(values[4]);
+                shot.view.fovY = DegreesToRadians(values[5]);
+                if (values[6] < -1000 || values[6] > 1000 || std::floor(values[6]) != values[6]) {
+                    if (errorMessage) *errorMessage = "Invalid camera view priority.";
+                    return false;
+                }
+                shot.view.hideVehicle = parts[26] == "1";
+                shot.view.priority = static_cast<int>(values[6]);
+                if (!shot.view.Validate(errorMessage)) return false;
+            }
             loaded.cinematicCameraShots.push_back(shot);
         } else if (kind == "terrain_material") {
             if (parts.size() < 19) {
@@ -1275,6 +1343,8 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
     CourseAsset saved = *this;
     saved.SortForRuntime();
     if (!saved.terrainEditLayer.Validate(errorMessage)) return false;
+    for (const auto& shot : saved.cinematicCameraShots)
+        if (!shot.view.Validate(errorMessage)) return false;
     for (const CourseRideProfileDefinition& profile : saved.rideProfiles) {
         if (!profile.Validate(errorMessage)) return false;
     }
@@ -1354,7 +1424,7 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
     file << "# lighting|distance|id|blendDistance|sunR|sunG|sunB|sunIntensity|sunDirX|sunDirY|sunDirZ|clearR|clearG|clearB|fogR|fogG|fogB|fogIntensity|fogStart|fogEnd|fogDensity|backlitFogLift|openingGlow|silhouette|lowFog|coolHaze\n";
     file << "# camera_shot_preset|id|mode|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake\n";
     file << "# camera_blend_asset|id|blendIn|blendOut|curve|weightScale\n";
-    file << "# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale\n";
+    file << "# camera_shot|start|end|id|mode|blendIn|blendOut|backOffset|upOffset|sideOffset|lookAheadOffset|lookUpOffset|lookForwardOffset|fovOffsetDeg|rollOffsetDeg|shake|presetId|blendAssetId|weightScale|viewMode|eyeX|eyeY|eyeZ|yawDeg|pitchDeg|viewFovDeg|hideVehicle|priority\n";
     file << "# terrain_material|distance|id|blendDistance|baseR|baseG|baseB|brightness|noise|strata|breakup|specular|rim|backlight|floorShadow|detailNormal|microDetail|cavityAo|skyFill\n";
     file << "# cinematic_shot_set|start|end|id|label|heroLandmarksCsv|vistaLandmarksCsv|lightingId|cameraShotId|terrainMaterialId|fogMood|compositionNotes\n";
     file << "# wave|editorGuid|displayName|triggerRailDistance|prewarmDistance|timeoutSeconds|completionCondition|executionPolicy|nextWaveGuid|triggerEventId|enabled|editorVisible|editorLocked\n";
@@ -1626,7 +1696,15 @@ bool CourseAsset::SaveToString(std::string* text, std::string* errorMessage) con
              << shot.shakeAmount << '|'
              << (shot.presetId.empty() ? "-" : shot.presetId) << '|'
              << (shot.blendAssetId.empty() ? "-" : shot.blendAssetId) << '|'
-             << shot.weightScale << "\n";
+             << shot.weightScale << '|'
+             << static_cast<int>(shot.view.mode) << '|'
+             << shot.view.positionOffset.x << '|' << shot.view.positionOffset.y << '|'
+             << shot.view.positionOffset.z << '|'
+             << RadiansToDegrees(shot.view.yaw) << '|'
+             << RadiansToDegrees(shot.view.pitch) << '|'
+             << RadiansToDegrees(shot.view.fovY) << '|'
+             << (shot.view.hideVehicle ? 1 : 0) << '|'
+             << shot.view.priority << "\n";
     }
 
     file << "\n# Terrain material presets drive authored rock color and detail by distance.\n";
@@ -1884,7 +1962,8 @@ CourseCameraShotState CourseAsset::EvaluateCinematicCameraShot(
         const CourseCameraBlendAsset* blendAsset = FindCameraBlendAsset(*this, shot.blendAssetId);
         const CourseCinematicCameraShot resolvedShot = ResolveCameraShot(*this, shot);
         const float weight = EvaluateShotWeight(resolvedShot, blendAsset, distance);
-        if (weight > result.weight) {
+        if (weight > 0 && (result.weight <= 0 || shot.view.priority > result.shot.view.priority ||
+            (shot.view.priority == result.shot.view.priority && weight > result.weight))) {
             result.weight = weight;
             result.shot = resolvedShot;
             result.presetId = shot.presetId;
@@ -1945,11 +2024,22 @@ const CourseSection* CourseAsset::FindSection(float distance) const {
 
 void CourseRuntime::Bind(const CourseAsset* asset) {
     asset_ = asset;
+    traversalEndDistance_ = -1.0f;
     Reset(0.0f);
+}
+
+void CourseRuntime::SetTraversalEndDistance(float distance) {
+    traversalEndDistance_ = std::isfinite(distance) && distance >= 0.0f ? distance : -1.0f;
+}
+
+float CourseRuntime::TraversalEndDistance(const RailPath& railPath) const {
+    return traversalEndDistance_ >= 0.0f
+        ? (std::min)(traversalEndDistance_, railPath.Length()) : railPath.Length();
 }
 
 void CourseRuntime::Reset(float distance) {
     distance_ = (std::max)(0.0f, distance);
+    if (traversalEndDistance_ >= 0.0f) distance_ = (std::min)(distance_, traversalEndDistance_);
     nextEventIndex_ = 0;
     if (asset_ == nullptr) {
         return;
@@ -2025,12 +2115,13 @@ std::vector<CourseEventMarker> CourseRuntime::AdvanceInternal(
         ? (std::isfinite(*speedOverride) ? (std::max)(0.0f, *speedOverride) : 0.0f)
         : (std::max)(12.0f, sample.speed);
     distance_ += speed * (std::max)(0.0f, deltaTime);
-    if (distance_ > railPath.Length()) {
+    const float travelEnd = loopAtEnd ? railPath.Length() : TraversalEndDistance(railPath);
+    if (distance_ > travelEnd) {
         if (loopAtEnd) {
             distance_ = std::fmod(distance_, railPath.Length());
             nextEventIndex_ = 0;
         } else {
-            distance_ = railPath.Length();
+            distance_ = travelEnd;
         }
     }
 

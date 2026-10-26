@@ -127,7 +127,7 @@ void EnemyEntranceExitDirector::BeginFrame(CourseSpawnRuntime& runtime) {
 void EnemyEntranceExitDirector::BeginFrameActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime) {
     for (CourseEnemyActor& actor : actors) {
-        if(actor.startupFlightControlled) continue;
+        if(actor.startupFlightControlled || actor.stationaryDormant) continue;
         EnemyEntranceExitRuntimeState& state = actor.entranceExitState;
         if (!state.initialized) continue;
         actor.desc.distanceOffset -= state.appliedForwardOffset;
@@ -184,7 +184,7 @@ void EnemyEntranceExitDirector::UpdateActors(std::span<CourseEnemyActor> actors,
     const float dt = std::isfinite(deltaTime)
         ? (std::clamp)(deltaTime, 0.0f, 0.25f) : 0.0f;
     for (CourseEnemyActor& actor : actors) {
-        if(actor.startupFlightControlled) continue;
+        if(actor.startupFlightControlled || actor.stationaryDormant) continue;
         const std::string formationId = FormationId(actor);
         const bool explicitlyAuthored =
             !actor.desc.formationDefinition.definitionId.empty();

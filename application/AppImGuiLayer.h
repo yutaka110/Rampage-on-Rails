@@ -298,6 +298,15 @@ public:
     const editor::EditorViewportRealtimePolicy& ViewportRealtimePolicy() const {
         return editorViewportRealtimePolicy_;
     }
+    float CameraSectionPreviewEndDistance() const {
+        return courseCameraShotDetailsPanel_.PreviewEndDistance();
+    }
+    bool CameraSectionPreviewActive() const {
+        return courseCameraShotDetailsPanel_.CameraPreviewActive();
+    }
+    editor::CourseCameraCompositionController& CameraComposition() {
+        return courseCameraShotDetailsPanel_.Composition();
+    }
     bool EditorPlaySessionActive() const {
         return editorPlaySession_.IsActive();
     }
@@ -590,6 +599,8 @@ private:
     editor::EditorDocumentId editorSceneDocumentId_{};
     bool editorCourseObjectDirtyRevisionInitialized_ = false;
     uint32_t editorCourseObjectDirtyRevision_ = 0;
+    std::array<uint64_t, 3> editorCourseControllerDirtyGenerations_{};
+    std::array<uint64_t, 3> editorCourseControllerDirtyRevisions_{};
     uint64_t editorDocumentServiceFrame_ = 0;
     bool editorDocumentRecoveryScanned_ = false;
     std::vector<editor::EditorDocumentRecoveryCandidate> editorDocumentRecoveryCandidates_{};

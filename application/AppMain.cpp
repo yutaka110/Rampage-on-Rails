@@ -100,12 +100,7 @@ int AppMain::Run() {
 
 	auto& heaps = engineContext.GetHeaps();
 	ComPtr<ID3D12DescriptorHeap> srvDescriptorHeap = heaps.srv.GetHeap();
-	heaps.srv.Reserve(
-		AppSceneResources::kMaterialTextureSrvBaseIndex +
-		AppSceneResources::kMaterialTextureSrvCount);
-	// Fixed high ranges are owned outside the monotonic allocator:
-	// 3200-3711 Editor thumbnails, 3712-4095 E-8 production Texture residency.
-	heaps.srv.ReserveRange(3200, 896);
+	// EngineContext reserves fixed SRV ranges before allocating scene depth.
 
 	uint32_t descriptorSizeSRV = device->GetDescriptorHandleIncrementSize(
 		D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);

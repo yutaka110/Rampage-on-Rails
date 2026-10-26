@@ -1,4 +1,4 @@
-﻿#include "RailLockOnSystem.h"
+#include "RailLockOnSystem.h"
 #include "GameplaySettingsValidation.h"
 
 #include "../diagnostics/DebugDrawSystem.h"
@@ -95,6 +95,8 @@ void RailLockOnSystem::Update(const RailLockOnFrameInput& input) {
     registryInput.playerDistance = input.playerDistance;
     registryInput.settings = settings_;
     registryInput.cameraPosition = input.gameplayCameraPosition;
+    registryInput.viewRelativeTargeting = input.viewRelativeTargeting;
+    registryInput.viewForward = input.viewForward;
     registry_.Build(registryInput);
 
     RailReticleFrameInput reticleInput{};

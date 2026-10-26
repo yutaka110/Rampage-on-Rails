@@ -227,7 +227,11 @@ void RailLockResolver::Update(const RailLockResolverFrameInput& input) {
             candidates_.push_back(candidate);
             continue;
         }
-        if (HasToken(anchor)) {
+        const auto latest=std::find_if(tokens_.rbegin(),tokens_.rend(),[&](const auto& token) {
+            return SameTarget(token.target,anchor.target) && token.anchorId==anchor.anchorId;
+        });
+        if (HasToken(anchor) && (anchor.stackAcquireIntervalSeconds<=0 ||
+                (latest!=tokens_.rend() && input.elapsedTime-latest->acquiredTime<anchor.stackAcquireIntervalSeconds))) {
             candidate.rejectReason = RailLockRejectReason::AlreadyLocked;
             candidates_.push_back(candidate);
             continue;

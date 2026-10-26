@@ -10,9 +10,13 @@ struct RailRideMotionEnvelopeInput final {
     const RailVehicleRuntimeState* vehicleState = nullptr;
     const RailRideDirectorFrame* ride = nullptr;
     const RailPath* railPath = nullptr;
+    float normalSpeedScale = 1.0f;
+    float manualBoostMultiplier = 1.0f;
 };
 
 struct RailRideMotionEnvelopeFrame final {
+    float normalRequestedSpeed = 0.0f;
+    float manualBoostMultiplier = 1.0f;
     bool active = false;
     bool cornerLimited = false;
     float sourceRequestedSpeed = 0.0f;

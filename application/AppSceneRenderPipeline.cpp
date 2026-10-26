@@ -1544,3 +1544,39 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->debugDraw.VertexCount());
         }});
 }
+
+
+void AppSceneRenderPipeline::RegisterRailBoostProtectionPass(const AppFrameGraphBuildContext& ctx) const {
+    if (!ctx.HasRailBoostBlur()) return;
+    const float clear[4] = {};
+    ctx.renderGraph->DeclareTransientRenderTarget("RailBoostProtection", 1.0f, DXGI_FORMAT_R8_UNORM, clear);
+    ctx.renderGraph->AddPass({
+        "Geometry.RailBoostProtection", ge3::graphics::RenderPassLayer::Geometry,
+        {{"SceneDepth", ge3::graphics::RenderResourceAccessType::ReadDepth},
+         {"RailBoostProtection", ge3::graphics::RenderResourceAccessType::WriteRtv}},
+        "SceneDepth",
+        [ctx](ge3::graphics::RenderPassContext& pass) {
+            if (!ctx.frameRenderer->PrepareMainPass(pass.commandList, ctx.srvDescriptorHeap,
+                ctx.runtimeState->viewport, ctx.runtimeState->scissorRect,
+                ctx.appPipelines->GetMainRootSignature(), ctx.appPipelines->GetRailBoostMaskPSO())) return;
+            const auto draw = [&](uint32_t modelIndex, ID3D12Resource* transform) {
+                const auto* model = ctx.scene->FindManagedModel(modelIndex);
+                if (!model || !transform || !model->mesh.indexCount) return;
+                pass.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                pass.commandList->IASetVertexBuffers(0,1,&model->mesh.vbv);
+                pass.commandList->IASetIndexBuffer(&model->mesh.ibv);
+                pass.commandList->SetGraphicsRootConstantBufferView(1,transform->GetGPUVirtualAddress());
+                pass.commandList->DrawIndexedInstanced(model->mesh.indexCount,1,0,0,0);
+            };
+            const auto& cart = ctx.scene->RailVehicleObject();
+            if (cart.visible) draw(cart.modelIndex,cart.transformResource.Get());
+            const auto& occupant = ctx.scene->RailVehicleOccupantObject();
+            if (occupant.visible) draw(occupant.modelIndex,occupant.transformResource.Get());
+            for (const auto& item : ctx.scene->CourseMeshes().Items())
+                if (item.visible && item.kind == CourseMeshRenderKind::Enemy)
+                    draw(item.modelIndex,item.transformResource.Get());
+            for (const auto& item : ctx.scene->CourseRailTrackMeshes().Items())
+                if (item.visible && item.kind == CourseMeshRenderKind::VehicleWheel)
+                    draw(item.modelIndex,item.transformResource.Get());
+        }});
+}

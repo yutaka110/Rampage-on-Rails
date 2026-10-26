@@ -40,8 +40,10 @@ public:
         const TerrainEditLayer* edits, const TerrainEditLayer* preview) const;
     // Full rail-search coverage is required even for misses. A partially
     // resident mesh must never be interpreted as an unobstructed line of sight.
+    // Exterior entrance planning can respect cached visual cutouts; ordinary
+    // gameplay retains its conservative surface and hybrid validation.
     Hit Query(const Vector3& origin, const Vector3& unitDirection, float maxDistance,
-        float searchStart, float searchEnd) const;
+        float searchStart, float searchEnd, bool respectVisualOpenings = false) const;
     Stats GetStats() const;
 
     // Deterministic headless validation/benchmark path; gameplay uses Update.

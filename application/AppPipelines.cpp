@@ -357,6 +357,7 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/TrailMeshBuild.CS.hlsl",
         L"resources/FullscreenComposite.VS.hlsl",
         L"resources/FullscreenComposite.PS.hlsl",
+        L"resources/RailBoostMask.PS.hlsl",
         L"resources/BloomExtract.PS.hlsl",
         L"resources/BloomDownsample.PS.hlsl",
         L"resources/BloomUpsample.PS.hlsl",
@@ -1586,6 +1587,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
     gpuParticlePoolArgsCs_ = Compile_(L"resources/ParticlePoolArgs.CS.hlsl", L"cs_6_0");
     trailMeshStreamCs_ = Compile_(L"resources/TrailMeshStream.CS.hlsl", L"cs_6_0");
     trailMeshBuildCs_ = Compile_(L"resources/TrailMeshBuild.CS.hlsl", L"cs_6_0");
+    railBoostMaskPs_ = Compile_(L"resources/RailBoostMask.PS.hlsl", L"ps_6_0");
+    if (!railBoostMaskPs_) return false;
     compositeVs_ = Compile_(L"resources/FullscreenComposite.VS.hlsl", L"vs_6_0");
     compositePs_ = Compile_(L"resources/FullscreenComposite.PS.hlsl", L"ps_6_0");
     bloomExtractPs_ = Compile_(L"resources/BloomExtract.PS.hlsl", L"ps_6_0");
@@ -1747,6 +1750,16 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
 
     hr = device->CreateGraphicsPipelineState(&graphicsPipelineStateDesc, IID_PPV_ARGS(&mainPso_));
     if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(Main)", hr);
+
+    // Cheap depth-tested protection reuses the real object vertex transforms.
+    auto boostMaskDesc = graphicsPipelineStateDesc;
+    boostMaskDesc.PS = {railBoostMaskPs_->GetBufferPointer(), railBoostMaskPs_->GetBufferSize()};
+    boostMaskDesc.RTVFormats[0] = DXGI_FORMAT_R8_UNORM;
+    boostMaskDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    boostMaskDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    boostMaskDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    hr = device->CreateGraphicsPipelineState(&boostMaskDesc, IID_PPV_ARGS(&railBoostMaskPso_));
+    if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(RailBoostMask)", hr);
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC terrainPsoDesc = graphicsPipelineStateDesc;
     terrainPsoDesc.PS = { terrainPs_->GetBufferPointer(), terrainPs_->GetBufferSize() };
@@ -2774,6 +2787,7 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/TrailMeshBuild.CS.hlsl",
         L"resources/FullscreenComposite.VS.hlsl",
         L"resources/FullscreenComposite.PS.hlsl",
+        L"resources/RailBoostMask.PS.hlsl",
         L"resources/BloomExtract.PS.hlsl",
         L"resources/BloomDownsample.PS.hlsl",
         L"resources/BloomUpsample.PS.hlsl",

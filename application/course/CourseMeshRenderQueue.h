@@ -12,6 +12,7 @@
 
 #include "CourseAsset.h"
 #include "TwinShieldDronePose.h"
+#include "RailMothershipPresentation.h"
 #include "../terrain/RailPath.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
@@ -84,6 +85,9 @@ public:
     void AppendTwinShieldDrone(const TwinShieldDronePose& pose,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix, const Matrix4x4& projMatrix);
+    void AppendMothership(const RailMothership::Frame& carrier,
+        std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix);
     void SyncFromCourseRuntime(
         const CourseSpawnRuntime& runtime,
         const CourseAsset* course,

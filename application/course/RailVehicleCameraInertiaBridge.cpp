@@ -93,6 +93,13 @@ const RailVehicleCameraInertiaFrame& RailVehicleCameraInertiaBridge::Update(
     }
     longitudinalTarget*=focusScale; lateralTarget*=focusScale; leadTarget*=focusScale;
     fovTarget*=focusScale; rollTarget*=focusScale;
+    // Keep the boost readable while locking on, with a smaller, stable FOV
+    // expansion. Both aiming and display use the director's final projection.
+    const float ignition = (std::clamp)(input.manualBoostIgnition, 0.0f, 1.0f);
+    longitudinalTarget -= (input.aimFocusActive ? 0.22f : 0.65f) * ignition;
+    fovTarget += (input.aimFocusActive ? 3.0f : 5.0f) *
+        (std::clamp)(input.manualBoostStrength, 0.0f, 1.0f) * kPi / 180.0f;
+    fovTarget += (input.aimFocusActive ? 0.45f : 0.9f) * ignition * kPi / 180.0f;
 
     float remaining=(std::clamp)(input.deltaTime,0.0f,0.25f);
     while (remaining>0.0f) {

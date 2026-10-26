@@ -466,6 +466,38 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         }});
     }
 
+    if (ctx.HasRailBoostBlur()) {
+        // Resolve through a separate target, then copy to the normal logical
+        // output. Both the fullscreen and editor viewport therefore see the
+        // effect, with no simultaneous sampling/writing of the same texture.
+        ctx.renderGraph->DeclareTransientRenderTarget("RailBoostBlurred",1.0f,DXGI_FORMAT_R8G8B8A8_UNORM);
+        ctx.renderGraph->AddPass({"PostProcess.RailBoostPeripheralBlur",ge3::graphics::RenderPassLayer::PostProcess,
+            {{finalOutputResource,ge3::graphics::RenderResourceAccessType::ReadSrv},
+             {"RailBoostProtection",ge3::graphics::RenderResourceAccessType::ReadSrv},
+             {"RailBoostBlurred",ge3::graphics::RenderResourceAccessType::WriteRtv}},"",
+            [ctx,finalOutputResource](ge3::graphics::RenderPassContext& pass) {
+                // Mode -1 packs its optical pulse and two exhaust projections
+                // into the existing constants; no extra fullscreen pass.
+                const float params[16]={0,0,0,1,ctx.railBoostBlurStrength,-1,ctx.railBoostIgnitionShock,0,
+                    ctx.railBoostBlurFocus.x,ctx.railBoostBlurFocus.y,
+                    ctx.railBoostLensSources[0].x,ctx.railBoostLensSources[0].y,
+                    ctx.railBoostLensSources[1].x,ctx.railBoostLensSources[1].y,
+                    ctx.railBoostLensVisibility[0],ctx.railBoostLensVisibility[1]};
+                ctx.vfxRenderTargets->ExecutePostProcessPass(pass.commandList,"RailBoostBlurred",
+                    ctx.appPipelines->GetCompositeRootSignature(),ctx.appPipelines->GetCompositePSO(),
+                    finalOutputResource,"RailBoostProtection",finalOutputResource,params);
+            }});
+        ctx.renderGraph->AddPass({"PostProcess.RailBoostResolve",ge3::graphics::RenderPassLayer::PostProcess,
+            {{"RailBoostBlurred",ge3::graphics::RenderResourceAccessType::ReadSrv},
+             {finalOutputResource,ge3::graphics::RenderResourceAccessType::WriteRtv}},"",
+            [ctx,finalOutputResource](ge3::graphics::RenderPassContext& pass) {
+                const float params[16]={0,0,0,1,0,-2};
+                ctx.vfxRenderTargets->ExecutePostProcessPass(pass.commandList,finalOutputResource,
+                    ctx.appPipelines->GetCompositeRootSignature(),ctx.appPipelines->GetCompositePSO(),
+                    "RailBoostBlurred","RailBoostBlurred","RailBoostBlurred",params);
+            }});
+    }
+
     const bool editorViewportCompositedByImGui =
         ctx.railFilmBurnInEditorViewport ||
         (ctx.imguiLayer != nullptr && ctx.imguiLayer->WantsDeveloperDiagnostics());

@@ -69,6 +69,7 @@ struct GameSessionDefinition final {
     bool restoreCheckpointScoreOnRetry = true;
     bool defeatTakesPriority = true;
     uint32_t eventHistoryCapacity = 128;
+    bool timeLimitPerAttempt = false;
 
     static GameSessionDefinition RailShooterDefaults();
     bool Validate(std::string* errorMessage = nullptr) const;

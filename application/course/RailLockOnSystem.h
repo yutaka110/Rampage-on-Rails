@@ -26,6 +26,8 @@ struct RailLockOnFrameInput {
     const TerrainEditLayer* terrainEdits = nullptr;
     const TerrainEditLayer* terrainPreview = nullptr;
     Vector3 gameplayCameraPosition{};
+    bool viewRelativeTargeting = false;
+    Vector3 viewForward{0, 0, 1};
     float aimRayMaxDistance = 120.0f;
     bool gamepadConnected = false;
     Vector2 gamepadAim{};

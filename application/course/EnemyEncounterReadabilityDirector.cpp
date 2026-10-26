@@ -120,6 +120,7 @@ void EnemyEncounterReadabilityDirector::Update(
     }
 
     for (const CourseEnemyActor& actor : input.runtime->Enemies()) {
+        if(actor.stationaryDormant) continue;
         const RailPathSample sample = input.railPath->Evaluate(
             actor.desc.spawnDistance + actor.desc.distanceOffset);
         const Vector3 world = Add(
