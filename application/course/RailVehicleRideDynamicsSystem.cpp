@@ -139,7 +139,11 @@ const RailVehicleRideDynamicsFrame& RailVehicleRideDynamicsSystem::Update(
         -jerk * settings.jerkPitchDegreesPerUnit,
         -settings.maximumJerkPitchDegrees,
         settings.maximumJerkPitchDegrees);
-    const float rawPitch = gradePitch + accelerationPitch + jerkPitch;
+    // A small sustained rearward load complements the existing acceleration
+    // spring. Collision, mounts and weapon origins remain authoritative.
+    const float boostPitch = -1.8f * (std::clamp)(input.manualBoostStrength, 0.0f, 1.0f)
+        - 1.5f * (std::clamp)(input.manualBoostIgnition, 0.0f, 1.0f);
+    const float rawPitch = gradePitch + accelerationPitch + jerkPitch + boostPitch;
     const float pitchTarget = (std::clamp)(
         rawPitch,
         -settings.maximumPitchDegrees,

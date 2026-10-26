@@ -133,6 +133,7 @@ bool RailVehicleControlDefinitionAsset::LoadFromFile(
         "vehicle.maximumLateralAcceleration", "vehicle.curvatureLookAheadDistance",
         "vehicle.endStopTolerance", "vehicle.maximumHitPoints", "vehicle.allowDerail",
         "speedPolicy.enabled", "speedPolicy.minSpeed", "speedPolicy.maxSpeed",
+        "speedPolicy.normalSpeedScale",
         "speedPolicy.cruiseMultiplier", "speedPolicy.combatMultiplier",
         "speedPolicy.highSpeedMultiplier", "speedPolicy.tunnelMultiplier",
         "speedPolicy.bossMultiplier", "speedPolicy.setpieceMultiplier",
@@ -278,6 +279,7 @@ bool RailVehicleControlDefinitionAsset::LoadFromFile(
     RV_FLOAT("vehicle.maximumHitPoints", vehicle.maximumHitPoints);
     RV_BOOL("vehicle.allowDerail", vehicle.allowDerail);
     RV_BOOL("speedPolicy.enabled", speedPolicy.enabled);
+    RV_FLOAT("speedPolicy.normalSpeedScale", speedPolicy.normalSpeedScale);
     RV_FLOAT("speedPolicy.minSpeed", speedPolicy.minSpeed);
     RV_FLOAT("speedPolicy.maxSpeed", speedPolicy.maxSpeed);
     RV_FLOAT("speedPolicy.cruiseMultiplier", speedPolicy.cruiseMultiplier);

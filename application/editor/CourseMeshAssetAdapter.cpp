@@ -32,6 +32,7 @@ void CourseMeshAssetAdapter::RegisterAssets(EditorAssetRegistry& registry) const
     RegisterMesh(registry, "animated_cube", "Resources/AnimatedCube/AnimatedCube.gltf");
     RegisterMesh(registry, "organic_arch_large", "Resources/course_meshes/OrganicArchLarge/OrganicArchLarge.obj");
     RegisterMesh(registry, "rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall/RibTunnelWall.obj");
+    RegisterMesh(registry, "rib_tunnel_inner", "Resources/course_meshes/RibTunnelInner/RibTunnelInner.obj");
     RegisterMesh(registry, "root_spire_column", "Resources/course_meshes/RootSpireColumn/RootSpireColumn.obj");
     RegisterMesh(registry, "curved_canyon_wall", "Resources/course_meshes/CurvedCanyonWall/CurvedCanyonWall.obj");
     RegisterMesh(registry, "vista_hole_wall", "Resources/course_meshes/VistaHoleWall/VistaHoleWall.obj");

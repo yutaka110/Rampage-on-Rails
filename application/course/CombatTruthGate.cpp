@@ -18,6 +18,7 @@ std::string Utf8(std::u8string_view text) {
 }
 
 bool IsLivingThreat(const CourseEnemyActor& actor) noexcept {
+    if(actor.stationaryDormant) return false;
     if (actor.entranceExitState.exitComplete ||
         actor.entranceExitState.phase == EnemyEntranceExitPhase::Exited) {
         return false;

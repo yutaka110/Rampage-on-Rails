@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" DefaultTargets="Build">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|x64">
@@ -346,6 +346,7 @@
     <ClCompile Include="application\editor\course\CourseMapCartographyBakePipeline.cpp" />
     <ClCompile Include="application\editor\course\CourseMapCartographyRenderer.cpp" />
     <ClCompile Include="application\editor\course\CourseMap3DViewportController.cpp" />
+    <ClCompile Include="application\editor\course\CourseMapCameraEditTool.cpp" />
     <ClCompile Include="application\editor\course\CourseMap3DViewportRenderer.cpp" />
     <ClCompile Include="application\editor\course\CourseMap3DPickingService.cpp" />
     <ClCompile Include="application\editor\course\CourseTerrainMapAsset.cpp" />
@@ -418,6 +419,7 @@
     <ClCompile Include="application\course\EnemyFormationDefinition.cpp" />
     <ClCompile Include="application\course\EnemyFormationSystem.cpp" />
     <ClCompile Include="application\course\EnemyEntranceExitDirector.cpp" />
+    <ClCompile Include="application\course\RailEnemyIngress.cpp" />
     <ClCompile Include="application\course\EnemyAttackCoordinator.cpp" />
     <ClCompile Include="application\course\EnemyAttackInterruptSystem.cpp" />
     <ClCompile Include="application\course\EnemyAttackDefenseValidationSystem.cpp" />
@@ -497,6 +499,7 @@
     <ClCompile Include="application\course\RailAimAssistPresetRegistry.cpp" />
     <ClCompile Include="application\course\RailCameraDirector.cpp" />
     <ClCompile Include="application\course\RailLockOnSystem.cpp" />
+    <ClCompile Include="application\course\RailLockVolley.cpp" />
     <ClCompile Include="application\course\RailLockResolver.cpp" />
     <ClCompile Include="application\course\RailReticleController.cpp" />
     <ClCompile Include="application\course\RailWorldRaycast.cpp" />
@@ -1309,6 +1312,7 @@
     <ClInclude Include="application\editor\course\CourseMapCartographyBakePipeline.h" />
     <ClInclude Include="application\editor\course\CourseMapCartographyRenderer.h" />
     <ClInclude Include="application\editor\course\CourseMap3DViewportController.h" />
+    <ClInclude Include="application\editor\course\CourseMapCameraEditTool.h" />
     <ClInclude Include="application\editor\course\CourseMap3DViewportRenderer.h" />
     <ClInclude Include="application\editor\course\CourseMap3DPickingService.h" />
     <ClInclude Include="application\editor\course\CourseTerrainMapAsset.h" />
@@ -1345,6 +1349,7 @@
     <ClInclude Include="application\editor\course\RailRideSpeedBeatAuthoring.h" />
     <ClInclude Include="application\editor\course\CourseRideProfileDetailsPanel.h" />
     <ClInclude Include="application\editor\course\CourseCameraShotDetailsPanel.h" />
+    <ClInclude Include="application\editor\course\CourseCameraCompositionController.h" />
     <ClInclude Include="application\editor\course\RailRideTuningTelemetryPanel.h" />
     <ClInclude Include="application\editor\course\CoursePreviewSimulationSystem.h" />
     <ClInclude Include="application\editor\course\CourseWaveRuntimeCompiler.h" />
@@ -1371,6 +1376,9 @@
     <ClInclude Include="application\AppFrameGraphBuilder.h" />
     <ClInclude Include="application\runtime\AppFrameCoordinator.h" />
     <ClInclude Include="application\AppPostProcessPipeline.h" />
+    <ClInclude Include="application\SunfallAtmosphere.h" />
+    <ClInclude Include="application\CaveLighting.h" />
+    <ClInclude Include="application\CaveSubjectMaterial.h" />
     <ClInclude Include="application\AppSceneRenderPipeline.h" />
     <ClInclude Include="application\AppVfxRenderPipeline.h" />
     <ClInclude Include="application\EffectAssetLoader.h" />
@@ -1406,6 +1414,7 @@
     <ClInclude Include="application\course\EnemyFormationDefinition.h" />
     <ClInclude Include="application\course\EnemyFormationSystem.h" />
     <ClInclude Include="application\course\EnemyEntranceExitDirector.h" />
+    <ClInclude Include="application\course\RailEnemyIngress.h" />
     <ClInclude Include="application\course\EnemyAttackCoordinator.h" />
     <ClInclude Include="application\course\EnemyAttackInterruptSystem.h" />
     <ClInclude Include="application\course\EnemyAttackDefenseValidationSystem.h" />
@@ -1454,6 +1463,8 @@
     <ClInclude Include="application\course\RailShooterHudPresentationBridge.h" />
     <ClInclude Include="application\course\RailTitleScene.h" />
     <ClInclude Include="application\course\TwinShieldDronePose.h" />
+    <ClInclude Include="application\course\TwinShieldDroneShading.h" />
+    <ClInclude Include="application\course\TwinShieldDroneKillFlash.h" />
     <ClInclude Include="application\course\RailShooterHudRenderer.h" />
     <ClInclude Include="application\course\RailShooterDefensePromptRenderer.h" />
     <ClInclude Include="application\course\CourseRailRideEventDefinition.h" />
@@ -1489,11 +1500,21 @@
     <ClInclude Include="application\course\GameplaySettingsValidation.h" />
     <ClInclude Include="application\editor\EditorSettingsValidation.h" />
     <ClInclude Include="application\course\RailLockOnSystem.h" />
+    <ClInclude Include="application\course\RailLockVolley.h" />
+    <ClInclude Include="application\course\RailLockReticlePresentation.h" />
+    <ClInclude Include="application\course\RailPulseShotPresentation.h" />
+    <ClInclude Include="application\course\RailPrimaryKillPresentation.h" />
     <ClInclude Include="application\course\RailLockOnTypes.h" />
     <ClInclude Include="application\course\RailLockResolver.h" />
     <ClInclude Include="application\course\RailReticleController.h" />
     <ClInclude Include="application\course\RailWorldRaycast.h" />
     <ClInclude Include="application\course\RailSpeedDirector.h" />
+    <ClInclude Include="application\course\RailManualBoost.h" />
+    <ClInclude Include="application\course\RailBoostPresentation.h" />
+    <ClInclude Include="application\course\RailMothershipPresentation.h" />
+    <ClInclude Include="application\course\RailTurretGeometry.h" />
+    <ClInclude Include="application\course\RailMothershipBattle.h" />
+    <ClInclude Include="application\course\RailShortCourse.h" />
     <ClInclude Include="application\course\RailRideDirector.h" />
     <ClInclude Include="application\course\RailRideMotionEnvelope.h" />
     <ClInclude Include="application\course\RailRideTuningTelemetry.h" />
@@ -1648,6 +1669,10 @@
     <None Include="Resources\Spear.PS.hlsl" />
     <None Include="Resources\Spear.VS.hlsl" />
     <None Include="Resources\Skybox.hlsli" />
+    <None Include="Resources\SunfallVolume.PS.hlsl" />
+    <None Include="Resources\SunfallComposite.PS.hlsl" />
+    <None Include="Resources\SunfallLighting.hlsli" />
+    <None Include="Resources\RailBoostMask.PS.hlsl" />
     <None Include="Resources\TerrainDebrisCull.CS.hlsl" />
     <None Include="Resources\TerrainHiZBuild.CS.hlsl" />
     <None Include="Resources\TerrainDebris.VS.hlsl" />

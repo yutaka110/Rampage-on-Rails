@@ -44,6 +44,9 @@ struct CourseGameplayWaveRuntimeSettings final {
     bool retireActorsWhenWaveCompletes = true;
     bool detectMissingActiveActorsAsDefeated = true;
     uint32_t maximumStateTransitionsPerFrame = 256;
+    bool earlyClearAdvanceEnabled = false;
+    float earlyClearRecoverySeconds = 1.5f;
+    float maximumEarlyAdvanceDistance = 180.0f;
 
     bool Validate(std::string* errorMessage = nullptr) const;
 };
@@ -52,6 +55,8 @@ struct CourseGameplayWaveFrameInput final {
     float deltaTime = 0.0f;
     float playerDistance = 0.0f;
     std::vector<std::string> signaledEventIds;
+    bool combatClearConfirmed = false;
+    bool allowEarlyAdvance = true;
 };
 
 struct CourseGameplayWaveRuntimeStats final {
@@ -74,6 +79,8 @@ struct CourseGameplayWaveCheckpoint final {
     float playerDistance = 0.0f;
     std::vector<CourseGameplayWavePhase> wavePhases;
     std::vector<float> waveActiveSeconds;
+    std::vector<float> waveDistanceOffsets;
+    float clearRecoverySeconds = 0.0f;
     std::vector<std::string> defeatedPlacementGuids;
     std::vector<std::string> signaledEventIds;
 };
@@ -99,6 +106,8 @@ public:
         const CourseGameplayWaveCheckpoint& checkpoint,
         std::string* errorMessage = nullptr);
 
+    float EffectiveTriggerDistance(std::string_view waveGuid) const;
+    CourseGameplayWavePhase Phase(std::string_view waveGuid) const;
     bool IsBound() const noexcept { return program_ != nullptr && runtime_ != nullptr; }
     const CourseRuntimeProgramAsset* Program() const noexcept { return program_; }
     const std::vector<CourseGameplayWavePhase>& WavePhases() const noexcept {
@@ -117,6 +126,7 @@ private:
     void ReconcileDefeatedActors();
     void UpdateActiveWaves(float deltaTime);
     void UpdatePrewarmAndActivation();
+    void UpdateEarlyClearAdvance(const CourseGameplayWaveFrameInput& input);
     bool CanActivateWave(std::size_t index) const;
     void PrewarmWave(std::size_t index);
     void ActivateWave(std::size_t index);
@@ -138,6 +148,8 @@ private:
     std::vector<CourseGameplayWavePhase> wavePhases_;
     std::vector<CourseGameplayActorPhase> actorPhases_;
     std::vector<float> waveActiveSeconds_;
+    std::vector<float> waveDistanceOffsets_;
+    float clearRecoverySeconds_ = 0.0f;
     std::unordered_set<std::string> signaledEventIds_;
     std::unordered_set<std::size_t> forcedWaveIndices_;
     std::vector<CourseGameplayWaveEvent> events_;

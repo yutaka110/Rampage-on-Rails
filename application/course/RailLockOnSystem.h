@@ -26,6 +26,8 @@ struct RailLockOnFrameInput {
     const TerrainEditLayer* terrainEdits = nullptr;
     const TerrainEditLayer* terrainPreview = nullptr;
     Vector3 gameplayCameraPosition{};
+    bool viewRelativeTargeting = false;
+    Vector3 viewForward{0, 0, 1};
     float aimRayMaxDistance = 120.0f;
     bool gamepadConnected = false;
     Vector2 gamepadAim{};
@@ -39,7 +41,7 @@ public:
     void Reset();
     // Prepare the visible startup reticle without polling input, acquiring
     // targets, advancing timers or running world visibility queries.
-    void PrepareReticleForGameplay(const RailLockOnFrameInput& input);
+    void PrepareReticleForGameplay(const RailLockOnFrameInput& input, bool allowAim = false);
     void Update(const RailLockOnFrameInput& input);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw) const;
 

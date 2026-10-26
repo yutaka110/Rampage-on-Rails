@@ -1,5 +1,6 @@
 wave|spire_shard_crossfire|Spire Shard Crossfire
-unitAsset|left_anchor|spire_anchor_turret|turret_readable_spread|90|-8|3|0|2.6|14|1.0|0.24|0.12|1.0
+# Left anchor: queued dispatch can arrive ~4s late; keep its fixed position ahead of the central fragment.
+unitAsset|left_anchor|spire_anchor_turret|turret_readable_spread|185|-8|3|0|2.6|14|1.0|0.24|0.12|1.0
 unitAsset|right_anchor|spire_anchor_turret|turret_readable_spread|114|8|3|0|2.6|14|1.0|0.24|0.12|1.0
 unitAsset|dust_interceptor_left|spire_interceptor|twin_chase|52|-8|6|5.0|1.1|9|1.0|0.56|0.18|1.0
 unitAsset|dust_interceptor_right|spire_interceptor|twin_chase|60|8|6|5.0|1.1|9|1.0|0.56|0.18|1.0

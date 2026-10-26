@@ -207,7 +207,10 @@ uint64_t EditorCourseAuthoringFingerprint(const CourseAsset& course) {
         EDITOR_HASH_FIELD(value, blendInDistance); EDITOR_HASH_FIELD(value, blendOutDistance); EDITOR_HASH_FIELD(value, weightScale);
         EDITOR_HASH_FIELD(value, backDistanceOffset); EDITOR_HASH_FIELD(value, verticalOffset); EDITOR_HASH_FIELD(value, lateralOffset);
         EDITOR_HASH_FIELD(value, lookAheadOffset); EDITOR_HASH_FIELD(value, lookUpOffset); EDITOR_HASH_FIELD(value, lookForwardOffset);
-        EDITOR_HASH_FIELD(value, fovOffset); EDITOR_HASH_FIELD(value, rollOffset); EDITOR_HASH_FIELD(value, shakeAmount); return hash;
+        EDITOR_HASH_FIELD(value, fovOffset); EDITOR_HASH_FIELD(value, rollOffset); EDITOR_HASH_FIELD(value, shakeAmount);
+        EDITOR_HASH_FIELD(value.view, mode); EDITOR_HASH_FIELD(value.view, positionOffset);
+        EDITOR_HASH_FIELD(value.view, yaw); EDITOR_HASH_FIELD(value.view, pitch); EDITOR_HASH_FIELD(value.view, fovY);
+        EDITOR_HASH_FIELD(value.view, hideVehicle); EDITOR_HASH_FIELD(value.view, priority); return hash;
     });
     hash = HashVector(hash, course.terrainMaterialPresets, [](uint64_t hash, const CourseTerrainMaterialPreset& value) {
         EDITOR_HASH_FIELD(value, distance); EDITOR_HASH_FIELD(value, id); EDITOR_HASH_FIELD(value, blendDistance);

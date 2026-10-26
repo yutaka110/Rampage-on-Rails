@@ -1,3 +1,4 @@
+#include "RailTurretGeometry.h"
 #include "EnemyTargetingSystem.h"
 
 #include "CourseSpawnRuntime.h"
@@ -48,8 +49,10 @@ Vector3 ProjectMuzzleToRail(const RailPath& rail, Vector3 world, float hint) {
 
 void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& input) {
     auto& mount=actor.weaponMount;
+    const auto previous=mount.dronePose;
+    const bool hadPrevious=mount.ready;
     mount={};
-    if(actor.desc.meshId!="twin_shield_hull" || !input.railPath ||
+    if(actor.startupFlightControlled || actor.desc.meshId!="twin_shield_hull" || !input.railPath ||
         !input.hasCameraPosition || input.railPath->Length()<=0 ||
         actor.combatState.phase==EnemyCombatPhase::Dying || actor.combatState.phase==EnemyCombatPhase::Retired) return;
     const auto animation=ResolveEnemyCombatActorPresentation(actor,input.presentationSettings?
@@ -58,16 +61,28 @@ void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& 
     const auto sample=input.railPath->Evaluate(distance);
     auto& pose=mount.dronePose;
     pose.visible=true;
+    pose.charge=animation.weaponCharge;
+    pose.flash=animation.flashStrength;
     pose.position=ResolveEnemyProjectileWorldPosition(*input.railPath,
         {actor.desc.lateralOffset,actor.desc.verticalOffset,distance});
     pose.position.x+=sample.tangent.x*animation.forwardOffset+sample.right.x*animation.lateralOffset+sample.up.x*animation.verticalOffset;
     pose.position.y+=sample.tangent.y*animation.forwardOffset+sample.right.y*animation.lateralOffset+sample.up.y*animation.verticalOffset;
     pose.position.z+=sample.tangent.z*animation.forwardOffset+sample.right.z*animation.lateralOffset+sample.up.z*animation.verticalOffset;
-    const auto forward=Unit({input.cameraPosition.x-pose.position.x,
-        input.cameraPosition.y-pose.position.y,input.cameraPosition.z-pose.position.z});
-    pose.rotation={std::asin((std::clamp)(forward.y,-1.0f,1.0f))+actor.desc.localRotation.x+animation.rotationOffset.x,
-        std::atan2(-forward.x,-forward.z)+actor.desc.localRotation.y+animation.rotationOffset.y,
-        actor.desc.localRotation.z+animation.rotationOffset.z};
+    if(hadPrevious && std::isfinite(input.deltaTime) && input.deltaTime>0.00001f) {
+        const float inverseTime=1.0f/input.deltaTime;
+        const Vector3 velocity{(pose.position.x-previous.position.x)*inverseTime,
+            (pose.position.y-previous.position.y)*inverseTime,(pose.position.z-previous.position.z)*inverseTime};
+        const float speed2=velocity.x*velocity.x+velocity.y*velocity.y+velocity.z*velocity.z;
+        // Reject teleports/editor corrections rather than launching a wreck at
+        // an unbounded speed. Prediction copies never publish this velocity.
+        if(std::isfinite(speed2) && speed2<=60.0f*60.0f) {
+            pose.flightVelocity=velocity;pose.hasFlightVelocity=true;
+        }
+    } else if(hadPrevious) {
+        pose.flightVelocity=previous.flightVelocity;pose.hasFlightVelocity=previous.hasFlightVelocity;
+    }
+    pose.rotation=ResolveTwinShieldDroneFacing(sample.tangent,pose.position,
+        input.cameraPosition,actor.desc.localRotation,animation.rotationOffset,false);
     float readableScale=1.0f;
     if(input.readability) if(const auto* readable=input.readability->FindActor(actor.actorId))
         readableScale=(std::max)(1.0f,readable->presentationScale);
@@ -138,6 +153,7 @@ uint32_t PrepareScheduledWeaponMount(CourseEnemyActor& actor,
         previousDistance=distance;
     }
     auto futureInput=input;
+    futureInput.deltaTime=0;
     const float playerTravel=travel->DistanceAt(delay)-startDistance;
     futureInput.cameraPosition=ResolveEnemyProjectileWorldPosition(*input.railPath,
         {cameraRail.x,cameraRail.y,cameraRail.z+playerTravel});
@@ -261,7 +277,7 @@ Vector3 ResolveEnemyProjectileWorldPosition(const RailPathSample& sample,Vector3
 Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,int index) {
     if(actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready)
         return actor.weaponMount.muzzleRail[index & 1];
-    if(actor.desc.meshId=="combat_turret" && actor.targetingState.solutionLocked &&
+    if(RailTurret::IsMesh(actor.desc.meshId) && actor.targetingState.solutionLocked &&
         actor.targetingState.attackIntentSequence==actor.attackState.intentSequence &&
         actor.targetingState.attackTokenId==actor.attackState.tokenId)
         return ResolveTurretMuzzleRailPosition(actor,(index & 1)?1.0f:-1.0f);
@@ -331,7 +347,7 @@ bool CanEnemyProjectileVolleyReachTarget(const CourseEnemyActor& actor,float lau
 Vector3 ResolveTurretAimDirection(const CourseEnemyActor& actor) {
     const auto& target = actor.targetingState;
     return Unit({target.targetLateralOffset-actor.desc.lateralOffset,
-        target.targetVerticalOffset-actor.desc.verticalOffset-0.1598f*actor.desc.radius,
+        target.targetVerticalOffset-actor.desc.verticalOffset-RailTurret::ForMesh(actor.desc.meshId).muzzleHeight*actor.desc.radius,
         target.targetDistance-actor.desc.spawnDistance-actor.desc.distanceOffset});
 }
 
@@ -341,9 +357,10 @@ Vector3 ResolveTurretMuzzleRailPosition(const CourseEnemyActor& actor, float bar
     const Vector3 up{right.y*forward.z-right.z*forward.y,
         right.z*forward.x-right.x*forward.z,right.x*forward.y-right.y*forward.x};
     const float r = actor.desc.radius;
-    return {actor.desc.lateralOffset+r*(forward.x*0.8272f+right.x*barrelSide*0.2538f+up.x*0.1598f),
-        actor.desc.verticalOffset+r*(forward.y*0.8272f+right.y*barrelSide*0.2538f+up.y*0.1598f),
-        actor.desc.spawnDistance+actor.desc.distanceOffset+r*(forward.z*0.8272f+right.z*barrelSide*0.2538f+up.z*0.1598f)};
+    const auto geometry=RailTurret::ForMesh(actor.desc.meshId);
+    return {actor.desc.lateralOffset+r*(forward.x*geometry.muzzleForward+right.x*barrelSide*geometry.muzzleSide+up.x*geometry.muzzleHeight),
+        actor.desc.verticalOffset+r*(forward.y*geometry.muzzleForward+right.y*barrelSide*geometry.muzzleSide+up.y*geometry.muzzleHeight),
+        actor.desc.spawnDistance+actor.desc.distanceOffset+r*(forward.z*geometry.muzzleForward+right.z*barrelSide*geometry.muzzleSide+up.z*geometry.muzzleHeight)};
 }
 
 void EnemyTargetingSystem::Reset() {
@@ -405,8 +422,9 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
     frame_.travelForecastsBuilt = builtForecast ? 1 : 0;
     frame_.travelForecastSamples = input.travelPrediction ? static_cast<uint32_t>(input.travelPrediction->samples.size()) : 0;
     for (CourseEnemyActor& actor : actors) {
+        if(actor.stationaryDormant) continue;
         PrepareWeaponMount(actor,input);
-        const bool turret = actor.desc.meshId == "combat_turret";
+        const bool turret = RailTurret::IsMesh(actor.desc.meshId);
         const Vector3 previousAim = actor.targetingState.turretAimDirection;
         if (turret && actor.combatState.canBeTargeted) {
             if (!actor.attackState.tokenReserved || !actor.targetingState.solutionLocked) {
@@ -534,7 +552,7 @@ void EnemyTargetingSystem::LockSolution(
     state.forwardTravelPrediction = input.travelPrediction;
     state.solutionLocked = true;
     if(state.compensatesForwardTravel) RefreshForwardIntercept(actor,input,playerForwardVelocity);
-    if (actor.desc.meshId == "combat_turret") {
+    if (RailTurret::IsMesh(actor.desc.meshId)) {
         const Vector3 muzzle = ResolveTurretMuzzleRailPosition(actor,0.0f);
         state.originDistance = muzzle.z;
         state.originLateralOffset = muzzle.x;

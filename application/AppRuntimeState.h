@@ -5,6 +5,7 @@
 #include <d3d12.h>
 
 #include "AppVfxRuntimeState.h"
+#include "SunfallAtmosphere.h"
 #include "HandParticleAttachment.h"
 #include "WeaponAttachment.h"
 #include "terrain/TerrainGenerationSettings.h"
@@ -123,6 +124,7 @@ struct AppRuntimeState {
     RuntimeWeaponDrawTelemetry weaponDrawTelemetry{};
 
     DirectionalLight directionalLightData{};
+    SunfallAtmosphereSettings sunfall{};
     PointLight pointLightData{};
     SpotLight spotLight{};
     RuntimeCameraState camera{};

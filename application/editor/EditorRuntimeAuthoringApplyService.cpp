@@ -154,6 +154,15 @@ uint64_t CourseSignature(const CourseAsset& course) {
         hash = HashString(hash, shot.mode);
         hash = HashString(hash, shot.presetId);
         hash = HashString(hash, shot.blendAssetId);
+        hash = HashValue(hash, shot.view.mode);
+        hash = HashValue(hash, shot.view.positionOffset.x);
+        hash = HashValue(hash, shot.view.positionOffset.y);
+        hash = HashValue(hash, shot.view.positionOffset.z);
+        hash = HashValue(hash, shot.view.yaw);
+        hash = HashValue(hash, shot.view.pitch);
+        hash = HashValue(hash, shot.view.fovY);
+        hash = HashValue(hash, shot.view.hideVehicle);
+        hash = HashValue(hash, shot.view.priority);
     }
     hash = HashValue(hash, course.terrainMaterialPresets.size());
     for (const CourseTerrainMaterialPreset& material : course.terrainMaterialPresets) {

@@ -1,5 +1,13 @@
-﻿#pragma once
+#pragma once
 #include "course/RailTitleScene.h"
+#include "course/RailLockVolley.h"
+#include "course/RailPulseShotPresentation.h"
+#include "course/RailPrimaryKillPresentation.h"
+#include "course/RailBoostPresentation.h"
+#include "SunfallAtmosphere.h"
+#include "course/RailMothershipPresentation.h"
+#include "course/RailMothershipBattle.h"
+#include "CaveLighting.h"
 #include "terrain/TerrainCollisionWorld.h"
 
 #include <Windows.h>
@@ -285,7 +293,7 @@ private:
     void DispatchEnemyAttackDefenseOutcomeFeedback();
     void StopGameSessionPresentation();
     void DispatchRailVehicleAudio(float deltaTime, float realDeltaTime);
-    void UpdateRailRollingAudio(float deltaTime, float targetGain, float tunnelBlend);
+    void UpdateRailRollingAudio(float deltaTime, float targetGain, float tunnelBlend, float targetPitch = 1.0f);
     void UpdateRailSandTransitionAudio(bool active,float age,bool focused,float dust,float coverage);
     void StopRailSandTransitionAudio();
     void DispatchRailTrackFeedback();
@@ -413,8 +421,11 @@ private:
     ThreatResponseDirector railThreatResponseDirector_{};
     ThreatResponseSettings railThreatResponseSettings_{};
     CourseEventDispatcher railShooterEventDispatcher_;
+    std::vector<RailEnemyIngressRoute> railEnemyIngressRoutes_;
     EncounterDirector railShooterEncounterDirector_;
     RailCameraDirector railShooterCameraDirector_;
+    bool cameraSectionPreviewWasActive_ = false;
+    float cameraSectionPreviewLastDistance_ = 0.0f;
     RailSpeedDirector railShooterSpeedDirector_;
     RailRideDirector railShooterRideDirector_;
     RailRideMotionEnvelope railShooterRideMotionEnvelope_{};
@@ -493,6 +504,7 @@ private:
     audio::SoundHandle railEnemyAttackSound_{};
     audio::SoundHandle railEnemyHitReactSound_{};
     audio::SoundHandle railEnemyDeathSound_{};
+    audio::SoundHandle railEnemyCoreBreakSound_{};
     audio::SoundHandle railEnemyProjectileLaunchSound_{};
     audio::SoundHandle railEnemyProjectileFlyBySound_{};
     audio::SoundHandle railEnemyProjectileImpactSound_{};
@@ -509,19 +521,19 @@ private:
     uint32_t railTelegraphVibrationController_ = UINT32_MAX;
     uint32_t railSessionVibrationController_ = UINT32_MAX;
     RailLockOnSystem railShooterLockOnSystem_;
+    RailLockVolley railLockVolley_;
+    RailPulseShotPresentation railPulseShots_;
+    RailPrimaryKillPresentation railPrimaryKills_;
+    RailBoostPresentation railBoostVfx_;
+    audio::SoundHandle railPulseFireSound_{};
+    audio::SoundHandle railPrimaryKillSound_{};
+    audio::SoundHandle railBoostIgnitionSound_{};
+    audio::SoundHandle railLockAcquireSound_{}, railLockFullSound_{}, railLockReleaseSound_{};
     RailAimAssistPresetRegistry railAimAssistPresetRegistry_{};
     struct RailHudAtlasVertex {
         Vector4 position;
         Vector2 texcoord;
         Vector4 color;
-    };
-    struct RailNormalShotLine {
-        Vector2 start{};
-        Vector2 end{};
-        float age = 0.0f;
-        float lifetime = 0.085f;
-        float thickness = 2.0f;
-        bool hit = false;
     };
     Microsoft::WRL::ComPtr<ID3D12Resource> railLockOnHudAtlasTexture_;
     Microsoft::WRL::ComPtr<ID3D12Resource> railLockOnHudAtlasVertexResource_;
@@ -547,9 +559,9 @@ private:
         bool valid = false;
     };
     std::vector<SubmissionHudGlyph> submissionHudGlyphs_;
+    std::vector<SubmissionHudGlyph> submissionStartCueGlyphs_;
     bool submissionHudFontReady_ = false;
     bool submissionHudManuallyHidden_ = false;
-    std::vector<RailNormalShotLine> railNormalShotLines_;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
     std::string railShooterCourseLoadStatus_;
     RailPath railPath_;
@@ -748,6 +760,7 @@ private:
         int selectedRockCluster = -1;
         std::vector<int> selectedTerrainPlacements{};
         std::vector<int> selectedRockClusters{};
+        bool HasSameObjects(const CourseObjectEditSnapshot& other) const;
     };
     struct CourseObjectDragState {
         struct Item {
@@ -809,12 +822,17 @@ private:
     bool releaseShowcaseInitialized_ = false;
     bool railTitleScreenVisible_ = false;
     RailTitleGameplayEntry railTitleGameplayEntry_{};
+    std::array<uint32_t,kRailReadyDroneCount> railReadyDroneActorIds_{};
+    RailReadyDroneSalvo railReadyDroneSalvo_{};
     RailTransitionDemo railTransitionDemo_{};
     bool railTransitionDemoEnabled_ = false;
     bool railTransitionDemoHover_ = false, railTransitionDemoPressed_ = false;
     bool railTransitionDemoHasLastUpdate_ = false;
     std::chrono::steady_clock::time_point railTransitionDemoLastUpdate_{};
     void ReturnToDemoTitle();
+    void BeginRailGameplayEntry();
+    void RestartRailRun();
+    bool railResultReturnActive_=false;
     DirectionalLight railTitleSavedLight_{};
     PointLight railTitleSavedPointLight_{};
     SpotLight railTitleSavedSpotLight_{};
@@ -828,9 +846,17 @@ private:
     audio::SoundHandle railTitleTunnelAmbience_{};
     audio::SoundHandle railTitleReticleBootSound_{};
     audio::SoundHandle railTitleGaugesBootSound_{};
+    audio::SoundHandle railReadySound_{}, railGoSound_{};
+    audio::SoundHandle railDroneFlybySound_{};
+    audio::SoundHandle railDroneWingmanFlybySound_{};
     bool railTitleAmbiencePlaying_ = false;
     bool railTitleTunnelAmbiencePlaying_ = false;
     float railTitleAudioGain_ = 0.0f;
+    float railTitleAudioPitch_ = 1.0f;
+    SunfallExposure sunfallExposure_{};
+    RailMothership::Reveal railMothershipReveal_{};
+    RailMothership::Battle railMothershipBattle_{};
+    CaveOpeningLighting caveOpeningLighting_{};
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;
     RailTitleScene railTitleScene_;

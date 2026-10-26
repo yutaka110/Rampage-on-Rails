@@ -13,12 +13,14 @@
 #include <vector>
 
 #include "AppLogFile.h"
+#include "CaveSubjectMaterial.h"
 #include "AppRenderResources.h"
 #include "AppRuntimeConfig.h"
 #include "AppRuntimeUtils.h"
 #include "ModelLoaderAssimp.h"
 #include "course/RailVehicleOccupantActor.h"
 #include "course/RailVehicleRenderer.h"
+#include "course/RailBoostPresentation.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -1224,6 +1226,16 @@ namespace {
             // rail-contact transforms and rotation.
             AppendCartBeveledBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f},0.035f);
             AppendCartBeveledBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f},0.035f);
+            // Hollow side-sill housings: four closed beveled strips per
+            // nozzle leave the rear aperture open for the rooted boost jet.
+            for(float side:{-1.0f,1.0f}) {
+                const auto root=RailBoostExhaust::Root(side);
+                const float x=root.x, y=root.y, z=root.z;
+                AppendCartBeveledBox(model,{x-0.40f,y-0.32f,z},{x+0.40f,y-0.20f,z+1.15f},0.025f);
+                AppendCartBeveledBox(model,{x-0.40f,y+0.20f,z},{x+0.40f,y+0.32f,z+1.15f},0.025f);
+                AppendCartBeveledBox(model,{x-0.40f,y-0.22f,z},{x-0.28f,y+0.22f,z+1.15f},0.025f);
+                AppendCartBeveledBox(model,{x+0.28f,y-0.22f,z},{x+0.40f,y+0.22f,z+1.15f},0.025f);
+            }
         });
         appendPart("safety_trim", 2, [&]() {
             AppendCartBeveledBox(model, {-2.31f, 1.55f, -3.26f}, {-1.72f, 1.88f, 3.26f},0.035f);
@@ -1264,6 +1276,27 @@ namespace {
             {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f}};
         model.rootNode.localMatrix = MakeIdentity4x4();
         EnsureModelDataMaterialLayout(model);
+        RepairModelGeometryOrientation(model);
+        return model;
+    }
+
+    ModelData BuildRailStartupRearFloorModelData() {
+        ModelData model=BuildCourseRailTrackUnitModelData();
+        model.vertices.clear(); model.indices.clear();
+        for(float z=-200.0f;z<40.0f;z+=4.0f) {
+            const auto first=model.vertices.size();
+            AppendBox(model,{-32,-1,z},{32,0,z+4});
+            const float h0=RailStartupRearFloorHeight(z),h1=RailStartupRearFloorHeight(z+4);
+            const auto normal=Normalize(Vector3{0,1,-(h1-h0)/4.0f});
+            for(size_t i=first;i<model.vertices.size();++i) {
+                auto& vertex=model.vertices[i];
+                vertex.position.y+=vertex.position.z==z?h0:h1;
+                if(vertex.normal.y>0.5f) vertex.normal=normal;
+                else if(vertex.normal.y<-0.5f) vertex.normal={-normal.x,-normal.y,-normal.z};
+            }
+        }
+        model.subMeshes.front().indexCount=static_cast<uint32_t>(model.indices.size());
+        model.rootNode.name="startup_rear_floor_root";
         RepairModelGeometryOrientation(model);
         return model;
     }
@@ -2730,6 +2763,7 @@ bool AppSceneResources::Initialize(
         {"courseOrganicRock", "Resources/course_meshes/materials/organic_rock_albedo.bmp"},
         {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
+        {"siegeTurret", "Resources/enemies/SiegeTurret/SiegeTurret.bmp"},
         {"courseVistaRock", "Resources/course_meshes/materials/vista_rock_albedo.bmp"},
         {"titleSandstone", "Resources/course_meshes/TitleLandscape/title_sandstone.bmp"},
         {"titleCaveRock", "Resources/terrain/Rocks016_1K-JPG/Rocks016.png"},
@@ -3147,8 +3181,14 @@ bool AppSceneResources::Initialize(
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
+    registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
+    registerCourseMesh("siege_turret_head", "Resources/enemies/SiegeTurretHead", "SiegeTurretHead.obj", "siegeTurret");
+    registerCourseMesh("siege_turret", "Resources/enemies/SiegeTurret", "SiegeTurret.obj", "siegeTurret");
     registerCourseMesh("combat_turret_base", "Resources/enemies/CombatTurretBase", "CombatTurretBase.obj", "default");
     registerCourseMesh("combat_turret_head", "Resources/enemies/CombatTurretHead", "CombatTurretHead.obj", "default");
+    registerCourseMesh("carrier_hull", "Resources/enemies/MothershipBlockout", "MothershipHull.obj", "default");
+    registerCourseMesh("mothership_core", "Resources/enemies/MothershipBlockout", "MothershipReactor.obj", "default");
+    registerCourseMesh("carrier_box", "Resources/enemies/MothershipBlockout", "MothershipBox.obj", "default");
     registerCourseMesh("twin_shield_hull", "Resources/enemies/TwinShieldDrone", "TwinShieldHull.obj", "default");
     registerCourseMesh("twin_shield_panel", "Resources/enemies/TwinShieldDrone", "TwinShieldPanel.obj", "default");
     registerCourseMesh("twin_shield_core", "Resources/enemies/TwinShieldDrone", "TwinShieldCore.obj", "default");
@@ -3217,6 +3257,7 @@ bool AppSceneResources::Initialize(
         "Resources/tests/MultiMaterial",
         "MultiMaterial.obj",
         "default");
+    registerCourseMesh("rib_tunnel_inner", "Resources/course_meshes/RibTunnelInner", "RibTunnelInner.obj", "courseRibRock");
 
     railVehicleModelIndex = UINT32_MAX;
     ModelData railVehicleData = BuildRailVehicleModelDataForSubmission();
@@ -3257,6 +3298,8 @@ bool AppSceneResources::Initialize(
     };
     registerProceduralModel(
         "course_rail.track_unit", BuildCourseRailTrackUnitModelData());
+    registerProceduralModel(
+        "course_startup.rear_floor", BuildRailStartupRearFloorModelData());
     registerProceduralModel(
         "course_rail.wheel_proxy", BuildCourseRailWheelProxyModelData());
 
@@ -3763,6 +3806,7 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     mappedCamera->titleSubject.w = 0.0f;
     mappedCamera->titleLightSweep = {};
     mappedCamera->titleRailImpact = {};
+    mappedCamera->railBoostLights = {};
 }
 
 SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {
@@ -3819,7 +3863,9 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     const Matrix4x4& projMatrix,
     const EnemyCombatPresentationBridge* enemyPresentation,
     const EnemyEncounterReadabilityDirector* enemyReadability,
-    const TwinShieldDronePose* titlePursuer) {
+    const TwinShieldDronePose* titlePursuer,
+    bool includeStartupRearScenery,
+    const RailMothership::Frame* mothership) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3842,7 +3888,9 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         viewMatrix,
         projMatrix,
         enemyPresentation,
-        enemyReadability);
+        enemyReadability,
+        includeStartupRearScenery);
+    if (mothership) courseMeshRenderQueue.AppendMothership(*mothership,bindings,viewMatrix,projMatrix);
     if (titlePursuer) courseMeshRenderQueue.AppendTwinShieldDrone(*titlePursuer,bindings,viewMatrix,projMatrix);
 }
 
@@ -4341,6 +4389,24 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
                     continue;
                 }
                 syncGpuMaterial(gpuMaterial);
+                if (managedModel.name == "rail_vehicle.mine_cart" && gpuMaterial.mappedConstants != nullptr) {
+                    // Keep the established warm cart palette inside the cave,
+                    // while preserving the original material outside it.
+                    const auto& paletteLight = titleVehicleReferenceLight.intensity > 0.0f
+                        ? titleVehicleReferenceLight : directionalLightData;
+                    Material caveSurface = BuildRailVehicleTitleMaterial(gpuMaterial.source,
+                        runtimeState.materialData, paletteLight, titleVehicleReferenceNormal, titleVehicleReferenceView);
+                    // The legacy broad highlight can clip the orange trim to
+                    // white. Retain its paint identity under diffuse cave light.
+                    if (gpuMaterial.source.name == "safety_trim") {
+                        caveSurface.color.y *= 0.65f;
+                        caveSurface.color.z *= 0.28f;
+                    }
+                    const bool iron = gpuMaterial.source.name == "iron_running_gear";
+                    *gpuMaterial.mappedConstants = WithCaveSurfaceLighting(*gpuMaterial.mappedConstants,
+                        {caveSurface.color.x, caveSurface.color.y, caveSurface.color.z},
+                        caveSurface.shininess, caveSurface.environmentCoefficient, iron ? 0.62f : 1.0f);
+                }
             }
         }
         for (SkinnedModelInstance& skinnedModel : skinnedModels) {
@@ -4403,5 +4469,6 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         terrainMaterialData->padding2[14] = terrain.materialFloorSandShadowStrength;
         terrainMaterialData->padding2[15] = terrain.materialBacklightRimBoost;
         terrainMaterialData->uvTransform = MakeIdentity4x4();
+        courseMeshRenderQueue.SyncStartupRearMaterial(*terrainMaterialData);
     }
 }

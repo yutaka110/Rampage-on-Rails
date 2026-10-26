@@ -430,10 +430,11 @@ void EnemyProjectileVfxRenderer::Update(
         const EnemyProjectileVisualDefinitionAsset& visual =
             ResolveVisual(projectile);
         if (!visual.enabled) continue;
-        const float pulse = 1.0f + visual.pulseAmplitude * std::sin(
+        const bool shadedOrb = visual.style==EnemyProjectileVisualStyle::Orb && input.settings.orbSpritesEnabled;
+        const float pulse = shadedOrb ? 1.0f : 1.0f + visual.pulseAmplitude * std::sin(
             input.elapsedTime * visual.pulseFrequencyHz * 6.28318530718f +
             static_cast<float>(projectile.projectileId % 29u) * 0.21f);
-        const float threatScale = projectile.threat
+        const float threatScale = projectile.threat && !shadedOrb
             ? visual.threatRadiusScale
             : 1.0f;
         const float physicalRadius = projectile.collisionRadius *
@@ -467,6 +468,11 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.projectileId = projectile.projectileId;
         proxy.visualDefinitionId = visual.id;
         proxy.style = visual.style;
+        proxy.spriteBacked = shadedOrb;
+        // A periodic internal flow, independent of the collision silhouette.
+        const float clock=std::isfinite(input.elapsedTime)?(std::max)(0.0f,input.elapsedTime):0.0f;
+        const uint32_t flow=uint32_t(std::fmod(clock*0.55f,1.0f)*64.0f);
+        proxy.orbAnimationUvY=float(2*(flow+64*uint32_t(projectile.projectileId%16)));
         proxy.worldPosition = projectile.worldPosition;
         proxy.cameraRight = cameraRight;
         proxy.cameraUp = cameraUp;
@@ -511,7 +517,8 @@ void EnemyProjectileVfxRenderer::Update(
             managed.visualDefinitionId = visual.id;
         }
         managed.touchedRevision = touchedRevision;
-        if (input.settings.effectRuntimeEnabled && input.effectRuntime != nullptr) {
+        if(shadedOrb) StopManaged(managed,input.effectRuntime);
+        if (!shadedOrb && input.settings.effectRuntimeEnabled && input.effectRuntime != nullptr) {
             if (managed.coreInstanceId == 0) {
                 managed.coreInstanceId = input.effectRuntime->PlayEffectWithParams(
                     visual.coreEffectId,
@@ -552,7 +559,10 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.effectBacked =
             IsRenderableEffectInstance(input.effectRuntime, managed.coreInstanceId) &&
             IsRenderableEffectInstance(input.effectRuntime, managed.haloInstanceId);
-        if (proxy.effectBacked) {
+        if (shadedOrb) {
+            proxy.visualState = EnemyProjectileVisualState::ProductionSpriteReady;
+            ++frame_.spriteBackedProjectiles;
+        } else if (proxy.effectBacked) {
             proxy.visualState = EnemyProjectileVisualState::ProductionEffectReady;
             ++frame_.effectBackedProjectiles;
         } else if (input.settings.productionPrimitivesEnabled ||
@@ -563,7 +573,7 @@ void EnemyProjectileVfxRenderer::Update(
             proxy.visualState = EnemyProjectileVisualState::Unavailable;
             ++frame_.unavailableProjectiles;
         }
-        if (input.settings.productionPrimitivesEnabled ||
+        if (shadedOrb || input.settings.productionPrimitivesEnabled ||
             (!proxy.effectBacked && input.settings.fallbackPrimitivesEnabled)) {
             ++frame_.productionSubmittedProjectiles;
         }
@@ -586,6 +596,10 @@ void EnemyProjectileVfxRenderer::Update(
         burst.motionDirection = NormalizeOr(
             event.motionDirection, {0.0f, 0.0f, -1.0f});
         burst.color = event.color;
+        const auto source=std::find_if(frame_.proxies.begin(),frame_.proxies.end(),
+            [&](const auto& p){return p.projectileId==event.projectileId;});
+        if(source!=frame_.proxies.end() && source->style==EnemyProjectileVisualStyle::Orb)
+            burst.color=source->haloColor;
         switch (event.kind) {
         case EnemyProjectilePresentationEventKind::Spawned:
             burst.kind = EnemyProjectileLifecycleVisualKind::Launch;
@@ -660,6 +674,7 @@ void EnemyProjectileVfxRenderer::AppendProductionWorldPrimitives(
     ge3::debug::DebugDrawSystem& productionDraw) const {
     for (const EnemyProjectileVfxProxy& proxy : frame_.proxies) {
         if (proxy.visualState == EnemyProjectileVisualState::Unavailable) continue;
+        if (proxy.spriteBacked) continue;
         AppendProjectilePrimitive(proxy, productionDraw);
     }
     for (const EnemyProjectileLifecycleVfxProxy& burst : frame_.lifecycleBursts) {
@@ -670,7 +685,7 @@ void EnemyProjectileVfxRenderer::AppendProductionWorldPrimitives(
 void EnemyProjectileVfxRenderer::AppendFallbackWorldPrimitives(
     ge3::debug::DebugDrawSystem& debugDraw) const {
     for (const EnemyProjectileVfxProxy& proxy : frame_.proxies) {
-        if (proxy.effectBacked) continue;
+        if (proxy.effectBacked || proxy.spriteBacked) continue;
         AppendProjectilePrimitive(proxy, debugDraw);
     }
     for (const EnemyProjectileLifecycleVfxProxy& burst : frame_.lifecycleBursts) {
@@ -680,6 +695,8 @@ void EnemyProjectileVfxRenderer::AppendFallbackWorldPrimitives(
 
 const char* ToString(EnemyProjectileVisualState state) noexcept {
     switch (state) {
+    case EnemyProjectileVisualState::ProductionSpriteReady:
+        return "ProductionSpriteReady";
     case EnemyProjectileVisualState::ProductionEffectReady:
         return "ProductionEffectReady";
     case EnemyProjectileVisualState::ProductionFallbackReady:

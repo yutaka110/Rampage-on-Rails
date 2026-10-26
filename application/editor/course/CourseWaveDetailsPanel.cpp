@@ -1,5 +1,9 @@
 #include "CourseWaveDetailsPanel.h"
 
+#if defined(_MSC_VER)
+#pragma execution_character_set("utf-8")
+#endif
+
 #include "CourseRailAuthoringModel.h"
 
 #include "../../externals/imgui/imgui.h"
@@ -24,21 +28,21 @@ void CopyText(std::array<char, N>& destination, const std::string& source) {
 
 const char* CompletionLabel(CourseWaveCompletionCondition value) {
     switch (value) {
-    case CourseWaveCompletionCondition::AllEnemiesDefeated: return "All Enemies Defeated";
-    case CourseWaveCompletionCondition::Timeout: return "Timeout";
-    case CourseWaveCompletionCondition::ReachRailDistance: return "Reach Rail Distance";
-    case CourseWaveCompletionCondition::ScriptedEvent: return "Scripted Event";
+    case CourseWaveCompletionCondition::AllEnemiesDefeated: return "敵をすべて倒す";
+    case CourseWaveCompletionCondition::Timeout: return "制限時間に達する";
+    case CourseWaveCompletionCondition::ReachRailDistance: return "指定距離に到達";
+    case CourseWaveCompletionCondition::ScriptedEvent: return "指定イベントの発生";
     }
-    return "Unknown";
+    return "不明";
 }
 
 const char* PolicyLabel(CourseWaveExecutionPolicy value) {
     switch (value) {
-    case CourseWaveExecutionPolicy::Parallel: return "Parallel";
-    case CourseWaveExecutionPolicy::Sequential: return "Sequential";
-    case CourseWaveExecutionPolicy::Exclusive: return "Exclusive";
+    case CourseWaveExecutionPolicy::Parallel: return "並行して実行";
+    case CourseWaveExecutionPolicy::Sequential: return "順番に実行";
+    case CourseWaveExecutionPolicy::Exclusive: return "単独で実行";
     }
-    return "Unknown";
+    return "不明";
 }
 
 } // namespace
@@ -58,14 +62,14 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
     if (!HandlesSelection(context.selection)) {
         CancelEdit();
         if (!context.selection->Empty()) return;
-        ImGui::TextUnformatted("Course Encounter Waves");
+        ImGui::TextUnformatted("敵の出現グループ");
         const CourseWaveAuthoringModel* model = context.controller->Model();
         const uint32_t count = model != nullptr
             ? static_cast<uint32_t>(model->Waves().size()) : 0;
-        ImGui::TextDisabled("%u authored waves", count);
+        ImGui::TextDisabled("登録済みグループ: %u", count);
         ImGui::BeginDisabled(!context.canMutateAuthoring ||
             !context.controller->State().authoringAllowed);
-        if (ImGui::Button("Add Course Wave")) AddWave(context);
+        if (ImGui::Button("出現グループを追加")) AddWave(context);
         ImGui::EndDisabled();
         if (model != nullptr) {
             ImGui::Separator();
@@ -85,14 +89,14 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
     const CourseWaveAuthoringModel* model = context.controller->Model();
     const CourseWaveDefinition* source = model != nullptr ? model->Find(guid) : nullptr;
     if (source == nullptr) {
-        ImGui::TextDisabled("Selected Course Wave no longer exists.");
+        ImGui::TextDisabled("選択した出現グループは存在しません。");
         return;
     }
 
-    ImGui::TextUnformatted("Course Wave Definition");
+    ImGui::TextUnformatted("出現グループの設定");
     ImGui::TextDisabled("GUID: %s", source->editorGuid.c_str());
     const CourseWaveResolution resolution = model->Resolve(guid);
-    ImGui::Text("Members: %u  Incoming transitions: %u",
+    ImGui::Text("所属する敵: %u / このグループへの遷移: %u",
         static_cast<uint32_t>(resolution.members.size()),
         static_cast<uint32_t>(resolution.incomingTransitions.size()));
 
@@ -100,7 +104,7 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
         context.controller->State().authoringAllowed && !buffer_.editorLocked;
     ImGui::BeginDisabled(!canEdit);
     const bool nameChanged = ImGui::InputText(
-        "Display Name", displayNameBuffer_.data(), displayNameBuffer_.size());
+        "表示名", displayNameBuffer_.data(), displayNameBuffer_.size());
     if (nameChanged) ReadTextBuffers();
     if (ImGui::IsItemActivated()) BeginContinuousEdit(context);
     if (nameChanged) RefreshPreview(context);
@@ -111,7 +115,7 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
     const float railLength = context.controller->Course() != nullptr
         ? CourseRailAuthoringModel(*context.controller->Course()).Length() : 0.0f;
     const bool triggerChanged = ImGui::DragFloat(
-        "Trigger Rail Distance", &buffer_.triggerRailDistance,
+        "開始する距離", &buffer_.triggerRailDistance,
         0.5f, 0.0f, railLength, "%.2f");
     buffer_.triggerRailDistance = (std::clamp)(
         buffer_.triggerRailDistance, 0.0f, (std::max)(railLength, 0.0f));
@@ -122,7 +126,7 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
     }
 
     const bool prewarmChanged = ImGui::DragFloat(
-        "Prewarm Distance", &buffer_.prewarmDistance, 0.5f, 0.0f, 100000.0f, "%.2f");
+        "事前準備の距離", &buffer_.prewarmDistance, 0.5f, 0.0f, 100000.0f, "%.2f");
     buffer_.prewarmDistance = (std::max)(buffer_.prewarmDistance, 0.0f);
     if (ImGui::IsItemActivated()) BeginContinuousEdit(context);
     if (prewarmChanged) RefreshPreview(context);
@@ -131,7 +135,7 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
     }
 
     const bool timeoutChanged = ImGui::DragFloat(
-        "Timeout Seconds", &buffer_.timeoutSeconds, 0.1f, 0.0f, 3600.0f, "%.2f");
+        "制限時間（秒）", &buffer_.timeoutSeconds, 0.1f, 0.0f, 3600.0f, "%.2f");
     buffer_.timeoutSeconds = (std::max)(buffer_.timeoutSeconds, 0.0f);
     if (ImGui::IsItemActivated()) BeginContinuousEdit(context);
     if (timeoutChanged) RefreshPreview(context);
@@ -139,7 +143,7 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
         CommitContinuousEdit(context, "Edit Course Wave Timeout");
     }
 
-    if (ImGui::BeginCombo("Completion Condition", CompletionLabel(buffer_.completionCondition))) {
+    if (ImGui::BeginCombo("終了条件", CompletionLabel(buffer_.completionCondition))) {
         constexpr CourseWaveCompletionCondition values[]{
             CourseWaveCompletionCondition::AllEnemiesDefeated,
             CourseWaveCompletionCondition::Timeout,
@@ -154,7 +158,7 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
         }
         ImGui::EndCombo();
     }
-    if (ImGui::BeginCombo("Execution Policy", PolicyLabel(buffer_.executionPolicy))) {
+    if (ImGui::BeginCombo("実行方法", PolicyLabel(buffer_.executionPolicy))) {
         constexpr CourseWaveExecutionPolicy values[]{
             CourseWaveExecutionPolicy::Parallel,
             CourseWaveExecutionPolicy::Sequential,
@@ -171,9 +175,9 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
 
     const CourseWaveDefinition* next = buffer_.nextWaveGuid.empty()
         ? nullptr : model->Find(buffer_.nextWaveGuid);
-    const char* nextLabel = next != nullptr ? next->displayName.c_str() : "None";
-    if (ImGui::BeginCombo("Next Wave", nextLabel)) {
-        if (ImGui::Selectable("None", buffer_.nextWaveGuid.empty())) {
+    const char* nextLabel = next != nullptr ? next->displayName.c_str() : "なし";
+    if (ImGui::BeginCombo("次の出現グループ", nextLabel)) {
+        if (ImGui::Selectable("なし", buffer_.nextWaveGuid.empty())) {
             CourseWaveDefinition changed = buffer_;
             changed.nextWaveGuid.clear();
             CommitWave(context, changed, "Clear Course Wave Transition");
@@ -191,7 +195,7 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
     }
 
     const bool eventChanged = ImGui::InputText(
-        "Trigger Event ID", triggerEventBuffer_.data(), triggerEventBuffer_.size());
+        "イベントID", triggerEventBuffer_.data(), triggerEventBuffer_.size());
     if (eventChanged) ReadTextBuffers();
     if (ImGui::IsItemActivated()) BeginContinuousEdit(context);
     if (eventChanged) RefreshPreview(context);
@@ -202,42 +206,42 @@ void CourseWaveDetailsPanel::Draw(const CourseWaveDetailsPanelContext& context) 
 
     bool enabled = buffer_.enabled;
     ImGui::BeginDisabled(buffer_.editorLocked || !context.canMutateAuthoring);
-    if (ImGui::Checkbox("Gameplay Enabled", &enabled)) {
+    if (ImGui::Checkbox("ゲーム内で有効", &enabled)) {
         CommitBulkState(context, CourseWaveMutationKind::SetEnabled,
             enabled, "Set Course Wave Gameplay State");
     }
     ImGui::EndDisabled();
     bool visible = buffer_.editorVisible;
     ImGui::BeginDisabled(!context.canMutateAuthoring);
-    if (ImGui::Checkbox("Editor Visible", &visible)) {
+    if (ImGui::Checkbox("マップに表示", &visible)) {
         CommitBulkState(context, CourseWaveMutationKind::SetVisible,
             visible, "Set Course Wave Visibility");
     }
     bool locked = buffer_.editorLocked;
-    if (ImGui::Checkbox("Editor Locked", &locked)) {
+    if (ImGui::Checkbox("編集をロック", &locked)) {
         CommitBulkState(context, CourseWaveMutationKind::SetLocked,
             locked, "Set Course Wave Lock");
     }
 
     ImGui::Separator();
-    if (ImGui::Button("Add Wave After Selected")) AddWave(context);
+    if (ImGui::Button("選択グループの後に追加")) AddWave(context);
     ImGui::SameLine();
-    if (ImGui::Button("Select Member Enemies")) SelectMembers(context);
-    if (ImGui::Button("Duplicate Selected Waves")) DuplicateSelection(context);
+    if (ImGui::Button("所属する敵を選択")) SelectMembers(context);
+    if (ImGui::Button("選択グループを複製")) DuplicateSelection(context);
     ImGui::SameLine();
-    if (ImGui::Button("Delete Selected Waves")) RemoveSelection(context);
-    ImGui::Checkbox("Clear references when deleting", &clearReferencesOnDelete_);
+    if (ImGui::Button("選択グループを削除")) RemoveSelection(context);
+    ImGui::Checkbox("削除時に関連付けも解除", &clearReferencesOnDelete_);
     if (ImGui::IsItemHovered()) {
         ImGui::SetTooltip(
-            "Atomically clears enemy memberships and incoming transitions before deletion.");
+            "削除するグループへの敵の所属と、他のグループからの遷移をまとめて解除します。");
     }
-    if (ImGui::Button("Copy Wave Values")) {
+    if (ImGui::Button("グループの値をコピー")) {
         clipboard_ = buffer_;
-        lastMessage_ = "Course wave values copied.";
+        lastMessage_ = "出現グループの値をコピーしました。";
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!clipboard_.has_value() || buffer_.editorLocked);
-    if (ImGui::Button("Paste Wave Values") && clipboard_.has_value()) {
+    if (ImGui::Button("グループの値を貼り付け") && clipboard_.has_value()) {
         CourseWaveDefinition pasted = *clipboard_;
         pasted.editorGuid = selectedGuid_;
         CommitWave(context, pasted, "Paste Course Wave Values");
@@ -400,7 +404,7 @@ void CourseWaveDetailsPanel::AddWave(
     request.kind = CourseWaveMutationKind::AddWaves;
     request.expectedRevision = context.controller->State().mutationRevision;
     request.waves.push_back(std::move(wave));
-    request.label = "Add Course Wave";
+    request.label = "出現グループを追加";
     const CourseWaveMutationResult result = context.controller->Mutate(request);
     lastMessage_ = result.message;
     if (result.succeeded && !result.affectedWaveGuids.empty()) {

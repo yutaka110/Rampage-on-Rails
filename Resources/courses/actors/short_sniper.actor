@@ -1,0 +1,7 @@
+# Tall, brass-toned precision drone: slower motion, longer warning, tougher core.
+actor|short_sniper|Short Run Sniper|combat_sniper_hull|1.5|42|120|0.95|0.64|0.24|1|sniper_predictive_single
+combat|5.5|0.45|50|sniper_predictive_single
+movement|0.6
+behavior|sniper|0.42|0.40|0.48|2.2|5.5|0.35|0.55|0.8|0.45|0.20|true
+engagement_band|true|48|70|94|16|1.8|44|9
+attack_pass|false|0.35|0.90|0.30

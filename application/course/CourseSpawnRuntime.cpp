@@ -1,3 +1,4 @@
+﻿#include "RailTurretGeometry.h"
 #include "CourseSpawnRuntime.h"
 #include "../diagnostics/DronePerformanceProfile.h"
 #include "RailWorldRaycast.h"
@@ -8,6 +9,7 @@
 #include <initializer_list>
 
 #include "../EffectRuntime.h"
+#include "../terrain/TerrainCollisionWorld.h"
 
 #include <algorithm>
 #include <cmath>
@@ -29,8 +31,10 @@ bool ValidEnemyDescription(const CourseEnemyActorDesc& d) {
         d.bulletLifetime, d.bulletDamage, d.color.x, d.color.y, d.color.z, d.color.w,
         d.bulletColor.x, d.bulletColor.y, d.bulletColor.z, d.bulletColor.w,
         d.localRotation.x, d.localRotation.y, d.localRotation.z,
-        d.localScale.x, d.localScale.y, d.localScale.z}) &&
-        d.hitPoints >= 0.0f && d.lifetime > 0.0f && d.radius > 0.0f;
+        d.localScale.x, d.localScale.y, d.localScale.z, d.stationaryActivationDistance}) &&
+        d.stationaryActivationDistance >= -1.0f &&
+        d.hitPoints >= 0.0f && d.lifetime > 0.0f && d.radius > 0.0f &&
+        d.entrySource<=EnemyEntrySource::SideOpening;
 }
 
 bool ValidObstacleDescription(const CourseObstacleActorDesc& d) {
@@ -265,6 +269,11 @@ void CourseSpawnRuntime::ClearEnemies() {
 
 void CourseSpawnRuntime::ClearObstacles() { obstacles_.clear(); }
 
+size_t CourseSpawnRuntime::ActiveEnemyCount() const {
+    return static_cast<size_t>(std::count_if(enemies_.begin(),enemies_.end(),
+        [](const auto& actor){return !actor.stationaryDormant;}));
+}
+
 void CourseSpawnRuntime::Reset() {
     enemies_.clear();
     bullets_.clear();
@@ -302,6 +311,13 @@ bool CourseSpawnRuntime::ValidateCheckpoint(
     for (const CourseEnemyActor& actor : checkpoint.enemies) {
         valid = valid && validId(actor.actorId) && ValidEnemyDescription(actor.desc) &&
             FiniteValues({actor.age, actor.fireTimer, actor.fireVisibleTime}) && actor.age >= 0.0f &&
+            ValidateRailEnemyIngress(actor.terrainIngress) &&
+            (!actor.carrierDeployment.initialized ||
+                (FiniteValues({actor.carrierDeployment.elapsed,actor.carrierDeployment.delay,
+                    actor.carrierDeployment.launchDistance,actor.carrierDeployment.launchLateral,
+                    actor.carrierDeployment.launchVertical,actor.carrierDeployment.forward,
+                    actor.carrierDeployment.lateral,actor.carrierDeployment.vertical}) &&
+                 actor.carrierDeployment.elapsed>=0.0f && actor.carrierDeployment.delay>=0.0f)) &&
             (!actor.combatState.initialized ||
                 (FiniteValues({actor.combatState.currentHitPoints, actor.combatDefinition.maximumHitPoints}) &&
                  actor.combatDefinition.maximumHitPoints > 0.0f && actor.combatState.currentHitPoints >= 0.0f &&
@@ -362,17 +378,96 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     const drone_perf::Scope profile(drone_perf::Stage::Spawn);
     const float dt = (std::max)(0.0f, deltaTime);
     fireSafetyStats_ = {};
+    for(auto& enemy:enemies_) {
+        const bool wasDormant=enemy.stationaryDormant;
+        enemy.stationaryDormant=enemy.desc.stationaryActivationDistance>=0 &&
+            safetyInput.playerDistance<enemy.desc.stationaryActivationDistance;
+        if(enemy.stationaryDormant || wasDormant) {
+            auto& staging=enemy.entranceExitState;
+            staging.initialized=true;staging.phase=EnemyEntranceExitPhase::Active;
+            staging.presentationAlpha=staging.presentationScale=1.0f;
+            staging.targetable=!enemy.stationaryDormant && enemy.groundPlacementResolved;
+            staging.attackSuppressed=!staging.targetable;
+        }
+    }
+
+    UpdateCarrierDeployments(dt, safetyInput.playerDistance, safetyInput.playerSpeed);
 
     // Additive staging is removed in reverse order before Behavior writes the
     // new base pose. This prevents cumulative drift in long-lived formations.
     enemyEntranceExitDirector_.BeginFrame(*this);
     enemyFormationSystem_.BeginFrame(*this);
+    UpdateTerrainIngresses(dt,safetyInput);
 
     EnemyCombatFrameInput combatInput{};
     combatInput.deltaTime = dt;
     combatInput.playerDistance = safetyInput.playerDistance;
     enemyCombatSystem_.Update(*this, combatInput);
     for (CourseEnemyActor& enemy : enemies_) {
+        if(enemy.desc.actorAssetId=="short_mothership_core") {
+            const bool damaged=enemy.desc.hitPoints<enemy.combatDefinition.maximumHitPoints*0.5f;
+            enemy.desc.bulletCount=damaged?5:3;
+            enemy.desc.bulletLateralSpreadSpeed=damaged?2.25f:2.8f;
+        }
+        if(enemy.desc.actorAssetId=="short_turret") {
+            // A fixed emplacement must not be chased by the engagement band,
+            // launched from the carrier, or left alive behind the camera.
+            if(safetyInput.playerDistance>enemy.desc.spawnDistance+enemy.desc.distanceOffset+35.0f) {
+                enemy.entranceExitState.initialized=true;
+                enemy.entranceExitState.exitComplete=true;
+                enemy.entranceExitState.presentationAlpha=0.0f;
+                enemy.entranceExitState.targetable=false;
+                enemy.entranceExitState.attackSuppressed=true;
+                InvalidateEnemyAttackWarning(enemy.actorId);
+                continue;
+            }
+            if(!enemy.groundPlacementResolved && safetyInput.railPath && safetyInput.terrainSettings) {
+                auto anchor=safetyInput.railPath->Evaluate(enemy.desc.spawnDistance+enemy.desc.distanceOffset);
+                anchor.position=Add(anchor.position,Scale(anchor.right,enemy.desc.lateralOffset));
+                const auto geometry=RailTurret::ForMesh(enemy.desc.meshId);
+                const float footprint=enemy.desc.radius*geometry.halfFootprint;
+                float support=-1000.0f;bool placed=false;
+                if(safetyInput.groundSupportQuery) {
+                    placed=safetyInput.groundSupportQuery(anchor,footprint,support);
+                } else {
+                    // Headless/editor fallback still checks the whole footprint.
+                    placed=true;
+                    for(float x:{-footprint,0.0f,footprint}) for(float z:{-footprint,0.0f,footprint}) {
+                        RailAimState down;down.valid=true;down.maxDistance=100;
+                        down.worldRayOrigin=Add(anchor.position,Add(Scale(anchor.up,30),
+                            Add(Scale(anchor.right,x),Scale(anchor.tangent,z))));
+                        down.worldRayDirection=Scale(anchor.up,-1);
+                        RailWorldRaycastInput ground;ground.aim=&down;ground.railPath=safetyInput.railPath;
+                        ground.course=safetyInput.course;ground.terrainSettings=safetyInput.terrainSettings;
+                        ground.terrainEdits=safetyInput.terrainEdits;ground.terrainPreview=safetyInput.terrainPreview;
+                        ground.terrainCollision=safetyInput.terrainCollision;ground.playerDistance=safetyInput.playerDistance;
+                        const auto hit=RailWorldRaycast::Query(ground);
+                        if(!hit.hit || hit.normal.x*anchor.up.x+hit.normal.y*anchor.up.y+hit.normal.z*anchor.up.z<0.35f) {placed=false;continue;}
+                        const auto delta=Vector3{hit.position.x-anchor.position.x,hit.position.y-anchor.position.y,hit.position.z-anchor.position.z};
+                        support=(std::max)(support,delta.x*anchor.up.x+delta.y*anchor.up.y+delta.z*anchor.up.z);
+                    }
+                }
+                auto& staging=enemy.entranceExitState;
+                staging.initialized=true;staging.phase=EnemyEntranceExitPhase::Active;
+                staging.targetable=placed;staging.attackSuppressed=!placed;staging.presentationAlpha=placed?1.0f:0.0f;
+                if(!placed) { enemy.fireEnvironmentReady=false;InvalidateEnemyAttackWarning(enemy.actorId);continue; }
+                enemy.groundPlacementResolved=true;
+                // Distant and near terrain tessellation can differ slightly.
+                // The deep foundation skirt covers this small shoulder margin
+                // without moving the tower when its terrain LOD changes.
+                const float vertical=support-geometry.groundFootY*enemy.desc.radius+0.30f;
+                enemy.desc.verticalOffset=vertical;
+                enemy.behaviorState.authoredVerticalOffset=vertical;
+            }
+        }
+        if(enemy.stationaryDormant) {
+            enemy.entranceExitState.targetable=false;
+            enemy.entranceExitState.attackSuppressed=true;
+            enemy.fireEnvironmentReady=enemy.fireSafetyAllowed=false;
+            enemy.fireVisibleTime=0;
+            InvalidateEnemyAttackWarning(enemy.actorId);
+            continue;
+        }
         enemy.fireEnvironmentReady = UpdateEnemyFireEnvironment(enemy, safetyInput, dt);
         if (!enemy.fireEnvironmentReady) {
             InvalidateEnemyAttackWarning(enemy.actorId);
@@ -389,8 +484,9 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     fireSafetyStats_ = {};
 
     for (CourseEnemyActor& enemy : enemies_) {
-        ++fireSafetyStats_.activeEnemies;
         enemy.bulletsEmittedThisFrame = 0;
+        if(enemy.stationaryDormant) continue;
+        ++fireSafetyStats_.activeEnemies;
         enemy.age += dt;
         const bool behaviorDriven = enemy.behaviorState.initialized &&
             enemy.behaviorDefinition.commercialBehavior;
@@ -465,7 +561,7 @@ void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
         const auto& definition = actor.behaviorDefinition;
         auto& behavior = actor.behaviorState;
         auto& staging = actor.entranceExitState;
-        if (!definition.maintainForwardEngagementBand ||
+        if (actor.startupFlightControlled || !definition.maintainForwardEngagementBand ||
             actor.desc.hitPoints <= 0.0f ||
             actor.combatState.phase == EnemyCombatPhase::Dying ||
             actor.combatState.phase == EnemyCombatPhase::Retired) continue;
@@ -658,7 +754,7 @@ bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
     const bool entranceExitSuppressesFire =
         enemy.entranceExitState.initialized &&
         enemy.entranceExitState.attackSuppressed;
-    if (enemy.desc.suppressFire || entranceExitSuppressesFire ||
+    if (enemy.stationaryDormant || enemy.startupFlightControlled || enemy.desc.suppressFire || entranceExitSuppressesFire ||
         (enemy.combatState.initialized && !enemy.combatState.canFire)) {
         enemy.fireVisibleTime = 0.0f;
         enemy.fireSafetyAllowed = false;
@@ -810,7 +906,7 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             enemies_.begin(),
             enemies_.end(),
             [](const CourseEnemyActor& enemy) {
-                if (!enemy.HoldsCombatPositionUntilResolved() &&
+                if (!enemy.HoldsCombatPositionUntilResolved() && enemy.desc.actorAssetId!="short_turret" &&
                     enemy.age >= enemy.desc.lifetime) {
                     return true;
                 }
@@ -856,6 +952,16 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
         if (errorMessage != nullptr) *errorMessage = "Enemy spawn requires finite valid geometry/health and a bounded projectile count.";
         return false;
     }
+    if(desc.actorAssetId=="short_mothership_core") desc.role="mothership_boss_reactor";
+    const int carrierPart=RailMothership::PartIndex(desc.actorAssetId);
+    if(carrierPart>=0) {
+        desc.role=carrierPart==0?"carrier_rapid_part":"carrier_heavy_part";
+        // The two sockets share one travelling frame instead of independently
+        // drifting to different engagement distances.
+        desc.behaviorDefinition.engagementBandPreferredForwardDistance=78;
+        desc.behaviorDefinition.engagementBandMinimumForwardDistance=68;
+        desc.behaviorDefinition.engagementBandMaximumForwardDistance=90;
+    }
     desc.lifetime = (std::max)(0.1f, desc.lifetime);
     desc.radius = (std::max)(0.05f, desc.radius);
     desc.hitPoints = (std::max)(1.0f, desc.hitPoints);
@@ -890,6 +996,7 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
 
     CourseEnemyActor actor{};
     actor.desc = std::move(desc);
+    actor.stationaryDormant=actor.desc.stationaryActivationDistance>=0;
     actor.fireTimer = actor.desc.firstShotDelay;
     actor.actorId = nextActorId_++;
     enemyCombatSystem_.InitializeActor(actor);
@@ -915,9 +1022,77 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
     }
     actor.desc.projectileDefinitionId = actor.desc.projectileDefinition.id;
     enemyAttackCoordinator_.InitializeActor(actor);
+    if(actor.stationaryDormant) {
+        actor.entranceExitState.initialized=true;
+        actor.entranceExitState.phase=EnemyEntranceExitPhase::Active;
+        actor.entranceExitState.presentationAlpha=actor.entranceExitState.presentationScale=1;
+        actor.entranceExitState.targetable=false;
+        actor.entranceExitState.attackSuppressed=true;
+    }
+    if (actor.desc.establishedEntrance) {
+        actor.entranceExitState.initialized = true;
+        actor.entranceExitState.phase = EnemyEntranceExitPhase::Active;
+        actor.entranceExitState.presentationAlpha = actor.entranceExitState.presentationScale = 1.0f;
+        actor.entranceExitState.attackSuppressed = false;
+        actor.entranceExitState.targetable = true;
+    }
     enemies_.push_back(std::move(actor));
     if (errorMessage != nullptr) errorMessage->clear();
     return true;
+}
+
+bool CourseSpawnRuntime::SetEnemyLocalRotation(uint32_t actorId, Vector3 rotation) {
+    if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y) || !std::isfinite(rotation.z)) return false;
+    for (auto& actor : enemies_) {
+        if (actor.actorId != actorId) continue;
+        actor.desc.localRotation = rotation;
+        actor.weaponMount.ready = false;
+        return true;
+    }
+    return false;
+}
+
+bool CourseSpawnRuntime::SetEnemyStartupFlight(uint32_t actorId, float playerDistance,
+        float forward, float lateral, float vertical, Vector3 rotation,
+        bool releaseToCombat, float playerSpeed) {
+    if(!FiniteValues({playerDistance,forward,lateral,vertical,rotation.x,rotation.y,
+            rotation.z,playerSpeed})) return false;
+    for(auto& actor:enemies_) {
+        if(actor.actorId!=actorId || !actor.desc.establishedEntrance) continue;
+        actor.startupFlightControlled=!releaseToCombat;
+        actor.desc.spawnDistance=playerDistance+forward;
+        actor.desc.distanceOffset=0.0f;
+        actor.desc.lateralOffset=lateral;
+        actor.desc.verticalOffset=vertical;
+        actor.desc.localRotation=rotation;
+        actor.weaponMount.ready=false;
+        actor.formationState={};
+        auto& state=actor.behaviorState;
+        state.authoredForwardOffset=state.integratedForwardOffset=0.0f;
+        state.authoredLateralOffset=lateral;
+        state.authoredVerticalOffset=vertical;
+        state.engagementBandForwardDistance=forward;
+        if(releaseToCombat) {
+            // This visible entrance already occupies its endpoint. Do not let
+            // the formation's age-zero hidden-spawn placement snap it elsewhere.
+            actor.formationState.hoverInitialized=true;
+            // Seed the same hover phase and velocity as the cinematic endpoint.
+            // Subtract its procedural offset so GO never teleports the actor.
+            state.hoverPreferredForwardDistance=forward;
+            state.engagementBandVelocity=(std::max)(0.0f,playerSpeed);
+            CourseEnemyActor preview=actor;
+            AdvanceEnemyBehaviorMovement(preview,0.0f,playerDistance,playerSpeed);
+            state.integratedForwardOffset=-preview.behaviorState.behaviorForwardOffset;
+            state.authoredLateralOffset-=preview.behaviorState.behaviorLateralOffset;
+            state.authoredVerticalOffset-=preview.behaviorState.behaviorVerticalOffset;
+            state.behaviorForwardOffset=preview.behaviorState.behaviorForwardOffset;
+            state.behaviorLateralOffset=preview.behaviorState.behaviorLateralOffset;
+            state.behaviorVerticalOffset=preview.behaviorState.behaviorVerticalOffset;
+            state.attackCooldownRemaining=(std::max)(state.attackCooldownRemaining,actor.desc.firstShotDelay);
+        }
+        return true;
+    }
+    return false;
 }
 
 bool CourseSpawnRuntime::MarkEnemyAttackTelegraphPresented(
@@ -929,6 +1104,205 @@ bool CourseSpawnRuntime::MarkEnemyAttackTelegraphPresented(
     }
     return enemyBehaviorSystem_.MarkTelegraphPresented(
         *this, actorId, attackIntentSequence);
+}
+
+void CourseSpawnRuntime::StageCarrierDeployments(float playerDistance,
+        const RailMothership::Frame& carrier) {
+    if(!carrier.visible || !std::isfinite(playerDistance)) return;
+    uint32_t slot=0;
+    for(auto& actor:enemies_) {
+        if(actor.carrierDeployment.initialized && !actor.carrierDeployment.finished) {
+            actor.carrierDeployment.launchDistance=carrier.railDistance;
+            actor.carrierDeployment.launchVertical=carrier.railVertical+RailMothership::BayHeight;
+        }
+        if(actor.age>0.0f || actor.carrierDeployment.initialized ||
+            actor.desc.establishedEntrance || RailTurret::IsMesh(actor.desc.meshId) ||
+            RailMothership::IsCombatActor(actor.desc.actorAssetId)) continue;
+        const size_t groupSize=std::count_if(enemies_.begin(),enemies_.end(),[&](const auto& member) {
+            return member.desc.waveId==actor.desc.waveId && member.desc.hitPoints>0 &&
+                !RailTurret::IsMesh(member.desc.meshId);
+        });
+        if(actor.desc.entrySource!=EnemyEntrySource::Carrier &&
+            (actor.desc.entrySource!=EnemyEntrySource::Automatic || groupSize<3 || actor.desc.waveId.empty())) continue;
+        auto& launch=actor.carrierDeployment;
+        launch.initialized=true;
+        launch.delay=carrier.deploymentDelay+RailMothership::LaunchStagger*float(slot);
+        launch.launchDistance=carrier.railDistance;
+        launch.launchLateral=(slot&1u)?RailMothership::BayLateral:-RailMothership::BayLateral;
+        launch.launchVertical=carrier.railVertical+RailMothership::BayHeight;
+        launch.forward=(std::clamp)(actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance,44.0f,85.0f);
+        launch.lateral=actor.desc.lateralOffset;
+        launch.vertical=actor.desc.verticalOffset;
+        actor.desc.establishedEntrance=true;
+        actor.entranceExitState={};
+        actor.entranceExitState.initialized=true;
+        actor.entranceExitState.phase=EnemyEntranceExitPhase::Active;
+        actor.entranceExitState.presentationAlpha=actor.entranceExitState.presentationScale=1.0f;
+        const auto flight=RailMothership::Evaluate(launch,playerDistance);
+        (void)SetEnemyStartupFlight(actor.actorId,playerDistance,
+            flight.distance-playerDistance,flight.lateral,flight.vertical,flight.rotation);
+        actor.entranceExitState.targetable=false;
+        actor.entranceExitState.attackSuppressed=true;
+        ++slot;
+    }
+}
+
+void CourseSpawnRuntime::UpdateCarrierDeployments(float deltaTime,float playerDistance,float playerSpeed) {
+    for(auto& actor:enemies_) {
+        auto& launch=actor.carrierDeployment;
+        if(!launch.initialized || launch.finished || actor.desc.hitPoints<=0.0f) continue;
+        launch.elapsed+=std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,0.25f):0.0f;
+        const auto flight=RailMothership::Evaluate(launch,playerDistance);
+        (void)SetEnemyStartupFlight(actor.actorId,playerDistance,
+            flight.distance-playerDistance,flight.lateral,flight.vertical,flight.rotation,
+            flight.released,playerSpeed);
+        actor.entranceExitState.presentationAlpha=launch.elapsed>=launch.delay ? 1.0f : 0.0f;
+        actor.entranceExitState.targetable=flight.released;
+        actor.entranceExitState.attackSuppressed=!flight.released;
+        launch.finished=flight.released;
+    }
+}
+
+void CourseSpawnRuntime::UpdateTerrainIngresses(float deltaTime,const CourseEnemyFireSafetyFrameInput& input) {
+    if(input.ingressRoutes.empty() || deltaTime<=0) return;
+    unsigned validationBudget=48;
+    const bool collisionMatches=!input.terrainCollision || (input.railPath && input.terrainSettings &&
+        input.terrainCollision->Matches(*input.railPath,*input.terrainSettings,input.terrainEdits,input.terrainPreview));
+    for(auto& actor:enemies_) {
+        auto& entry=actor.terrainIngress;
+        if(entry.finished) {entry.elapsed+=(std::min)(deltaTime,0.25f);continue;}
+        if(actor.desc.hitPoints<=0 || actor.carrierDeployment.initialized ||
+            RailTurret::IsMesh(actor.desc.meshId) || RailMothership::IsCombatActor(actor.desc.actorAssetId)) continue;
+        if(!entry.waiting && !entry.initialized) {
+            if(actor.age>0 || actor.desc.establishedEntrance) continue;
+            entry.waiting=true;
+            const float home=actor.behaviorState.hoverPreferredForwardDistance;
+            entry.forward=(std::clamp)(home>0?home:
+                actor.desc.spawnDistance+actor.desc.distanceOffset-input.playerDistance,44.0f,100.0f);
+            entry.lateral=actor.desc.lateralOffset;entry.vertical=actor.desc.verticalOffset;
+            const auto earlier=std::count_if(enemies_.begin(),enemies_.end(),[&](const auto& other) {
+                return other.actorId<actor.actorId && other.age<0.25f && other.desc.waveId==actor.desc.waveId;
+            });
+            entry.delay=float((std::min)(earlier,decltype(earlier)(5)))*0.12f;
+            actor.desc.establishedEntrance=true;actor.startupFlightControlled=true;
+            actor.entranceExitState={};actor.entranceExitState.initialized=true;
+            // This flight owns the whole entrance. Pending would replay the
+            // legacy side-entry offset on the exact hover-release frame.
+            actor.entranceExitState.phase=EnemyEntranceExitPhase::Active;
+            actor.entranceExitState.presentationAlpha=actor.entranceExitState.presentationScale=1;
+            actor.entranceExitState.targetable=false;
+            actor.entranceExitState.attackSuppressed=true;
+        }
+        if(entry.waiting) {
+            const float desiredSide=actor.desc.entrySource==EnemyEntrySource::RockLeft?-1.0f:
+                actor.desc.entrySource==EnemyEntrySource::RockRight?1.0f:
+                (entry.lateral<0?-1.0f:1.0f);
+            std::vector<std::pair<float,const RailEnemyIngressRoute*>> candidates;
+            for(const auto& route:input.ingressRoutes) {
+                const float ahead=route.distance-input.playerDistance;
+                if(ahead<32+(std::max)(0.0f,input.playerSpeed)*0.20f || ahead>300) continue;
+                const float desiredAhead=route.kind==RailEnemyIngressKind::SideOpening?
+                    90+input.playerSpeed*.4f:90+input.playerSpeed*1.8f;
+                float candidate=std::abs(ahead-desiredAhead)+(route.side!=desiredSide?90.0f:0.0f);
+                if(actor.desc.entrySource!=EnemyEntrySource::High)
+                    candidate+=(std::max)(0.0f,route.departure.y-50)*0.40f;
+                if(actor.desc.entrySource==EnemyEntrySource::High && route.kind!=RailEnemyIngressKind::Cliff)
+                    candidate+=route.kind==RailEnemyIngressKind::SideOpening?18:45;
+                if(actor.desc.entrySource==EnemyEntrySource::SideOpening && route.kind!=RailEnemyIngressKind::SideOpening)
+                    candidate+=60;
+                if((actor.desc.entrySource==EnemyEntrySource::RockLeft || actor.desc.entrySource==EnemyEntrySource::RockRight) &&
+                    route.kind!=RailEnemyIngressKind::Rock) candidate+=20;
+                candidates.push_back({candidate,&route});
+            }
+            std::sort(candidates.begin(),candidates.end(),[](const auto& a,const auto& b){return a.first<b.first;});
+            const RailEnemyIngressRoute* best=nullptr;
+            RailEnemyIngressState selected;
+            for(size_t probe=0;probe<candidates.size();++probe) {
+                const auto& candidate=candidates[entry.routeProbeCursor%candidates.size()];
+                if(input.terrainCollision && (validationBudget<17 || !collisionMatches)) break;
+                auto plan=entry;plan.route=*candidate.second;
+                PrepareRailEnemyIngress(plan,input.playerDistance,input.playerSpeed,input.railPath);
+                if(input.terrainCollision && input.railPath && input.terrainSettings) {
+                    auto forecast=plan;forecast.delay=0;forecast.elapsed=0;
+                    auto previous=EvaluateRailEnemyIngress(forecast,input.playerDistance,input.railPath).railPosition;
+                    bool clear=true;
+                    const auto world=[&](Vector3 p) {
+                        const auto s=input.railPath->Evaluate(p.z);
+                        return Add(s.position,Add(Scale(s.right,p.x),Scale(s.up,p.y)));
+                    };
+                    const auto eyeSample=input.railPath->Evaluate((std::max)(0.0f,input.playerDistance-24));
+                    const auto eye=input.hasCameraPosition?input.cameraPosition:Add(eyeSample.position,Scale(eyeSample.up,10));
+                    const auto sourceSample=input.railPath->Evaluate(previous.z);
+                    const float body=actor.desc.radius*2;
+                    // The exterior launch must be hidden by the ORIGINAL
+                    // terrain, rather than made invisible in open air.
+                    for(const auto& offset:{Vector3{},Scale(sourceSample.right,body),Scale(sourceSample.right,-body),
+                            Scale(sourceSample.up,body),Scale(sourceSample.up,-body)}) {
+                        --validationBudget;
+                        const auto source=Add(world(previous),offset);
+                        const Vector3 d{source.x-eye.x,source.y-eye.y,source.z-eye.z};
+                        const float length=std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z);
+                        const auto hit=input.terrainCollision->Query(eye,Scale(d,1/(std::max)(0.001f,length)),length,
+                            (std::max)(0.0f,input.playerDistance-36),
+                            (std::min)(input.railPath->Length()-0.001f,previous.z+12),true);
+                        if(!hit.available || !hit.hit || hit.distance>length-body) {clear=false;break;}
+                    }
+                    if(!clear) {++entry.routeProbeCursor;continue;}
+                    for(unsigned step=1;step<=12;++step) {
+                        --validationBudget;forecast.elapsed=forecast.duration*float(step)/12;
+                        const auto next=EvaluateRailEnemyIngress(forecast,input.playerDistance+
+                            (std::max)(0.0f,input.playerSpeed)*(forecast.elapsed+entry.delay),input.railPath).railPosition;
+                        const auto from=world(previous),to=world(next);
+                        const Vector3 d{to.x-from.x,to.y-from.y,to.z-from.z};
+                        const float length=std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z);
+                        if(length>0.001f) {
+                            const auto hit=input.terrainCollision->Query(from,Scale(d,1/length),length+actor.desc.radius,
+                                (std::max)(0.0f,(std::min)(previous.z,next.z)-8),
+                                (std::min)(input.railPath->Length()-0.001f,(std::max)(previous.z,next.z)+8),true);
+                            if(!hit.available || hit.hit) {clear=false;break;}
+                        }
+                        previous=next;
+                    }
+                    if(!clear) {++entry.routeProbeCursor;continue;}
+                }
+                best=candidate.second;selected=std::move(plan);break;
+            }
+            if(!best) continue;
+            entry=std::move(selected);entry.initialized=true;entry.waiting=false;
+        }
+        entry.elapsed+=(std::min)(deltaTime,0.25f);
+        const auto flight=EvaluateRailEnemyIngress(entry,input.playerDistance,input.railPath);
+        auto rotation=actor.desc.localRotation;
+        if(input.railPath) {
+            const auto target=ResolveRailEnemyIngressRotation(entry,*input.railPath,input.playerDistance,
+                input.playerSpeed,input.cameraPosition,input.hasCameraPosition);
+            if(entry.elapsed<=entry.delay+deltaTime*1.5f) rotation=target;
+            else {
+                const float dt=(std::min)(deltaTime,0.25f);
+                const float tail=(std::clamp)((flight.progress-0.85f)/0.15f,0.0f,1.0f);
+                const float response=1-std::exp(-7*dt)*(1-tail*tail*(3-2*tail));
+                const float yawDelta=std::remainder(target.y-rotation.y,6.28318530718f);
+                const float yawStep=(std::clamp)(yawDelta*response,-2.6f*dt,2.6f*dt);
+                rotation.y+=yawStep;
+                rotation.x+=(std::clamp)((target.x-rotation.x)*response,-1.8f*dt,1.8f*dt);
+                const float bank=(std::clamp)(-yawStep/(std::max)(dt,0.0001f)*0.22f,-0.40f,0.40f)*(1-tail);
+                rotation.z+=(bank-rotation.z)*(1-std::exp(-5*dt));
+                rotation.z*=1-tail*tail*(3-2*tail);
+            }
+        }
+        // The live aiming convention adds the camera-facing base rotation.
+        // Do not add the cinematic absolute heading a second time at handoff.
+        if(flight.released) rotation={};
+        (void)SetEnemyStartupFlight(actor.actorId,input.playerDistance,
+            flight.railPosition.z-input.playerDistance,flight.railPosition.x,flight.railPosition.y,
+            rotation,flight.released,input.playerSpeed);
+        actor.entranceExitState.presentationAlpha=actor.entranceExitState.presentationScale=1;
+        // Visible arrivals can already be intercepted; terrain visibility and
+        // the regular targeting range still exclude hidden/far actors.
+        actor.entranceExitState.targetable=flight.progress>=0.30f;
+        actor.entranceExitState.attackSuppressed=!flight.released;
+        entry.finished=flight.released;
+    }
 }
 
 bool CourseSpawnRuntime::SpawnObstacle(CourseObstacleActorDesc desc, std::string* errorMessage) {

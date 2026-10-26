@@ -184,6 +184,19 @@ struct RailCameraDirectorFrameInput {
     // Title-to-game match cut, resolved in rail space before vehicle/terrain safety.
     float titleHandoffWeight = 0.0f;
     CourseCameraKey titleHandoffRig{};
+    // Gated READY flyby, resolved before the existing framing/collision passes.
+    // Cave-exit carrier introduction, released smoothly into the combat view.
+    float mothershipCameraWeight = 0.0f;
+    float mothershipHeroWeight = 0.0f;
+    Vector3 mothershipCameraSubject{};
+    float startupCameraWeight = 0.0f;
+    float startupCameraFocusBlend = 0.0f;
+    float startupCameraFovY = 0.98f;
+    Vector3 startupCameraEyeOffset{};
+    Vector3 startupCameraDroneOffset{};
+    uint32_t startupCameraDroneId = 0;
+    uint32_t startupCameraWingmanId = 0;
+    Vector3 startupCameraWingmanOffset{};
     // Conservative rendered vehicle bounds, including bank and suspension.
     bool vehicleFramingActive = false;
     std::array<Vector3, 8> vehicleBoundsCorners{};
@@ -235,6 +248,10 @@ struct RailCameraDirectorFrameInput {
 };
 
 struct RailCameraDirectorFrame {
+    CourseCameraViewDefinition authoredView{};
+    float authoredViewWeight = 0.0f;
+    bool hideVehicle = false;
+    bool viewRelativeTargeting = false;
     float vehicleFramingPullback = 0.0f;
     float vehicleFramingLift = 0.0f;
     float vehicleScreenTop = 1.0f;

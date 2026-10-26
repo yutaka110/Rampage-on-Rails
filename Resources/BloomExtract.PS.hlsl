@@ -29,5 +29,14 @@ float4 main(PSInput input) : SV_TARGET
     float lower = max(gThresholdMin - softKnee, 0.0f);
     float upper = max(gThresholdMax + softKnee, lower + 0.001f);
     float threshold = smoothstep(lower, upper, luminance);
-    return float4(color.rgb * threshold * gIntensity, color.a);
+    float3 bloom=color.rgb*threshold;
+    if(gAux4>0.0f) {
+        // Sunlight and weapon emission share the blur chain but retain separate
+        // thresholds, so a brighter sky cannot erase a dimmer projectile halo.
+        float3 emission=gUnused1.Sample(gSampler,saturate(input.uv)).rgb;
+        float emissionLuma=dot(emission,float3(0.2126f,0.7152f,0.0722f));
+        float emissionThreshold=smoothstep(max(gAux5-softKnee,0),max(gAux6+softKnee,0.001f),emissionLuma);
+        bloom+=emission*emissionThreshold*gAux4;
+    }
+    return float4(bloom*gIntensity,color.a);
 }

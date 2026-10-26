@@ -535,6 +535,9 @@ CourseValidationReport ValidateCourseAsset(
             cameraShotIds.insert(shot.id);
         }
         const std::string subject = "camera_shot[" + std::to_string(index) + "]";
+        std::string viewError;
+        if (!shot.view.Validate(&viewError))
+            AddIssue(report, CourseValidationSeverity::Error, subject, viewError, shot.startDistance);
         if (shot.id.empty()) {
             AddIssue(report, CourseValidationSeverity::Warning, subject, "Camera shot id is empty.", shot.startDistance);
         }

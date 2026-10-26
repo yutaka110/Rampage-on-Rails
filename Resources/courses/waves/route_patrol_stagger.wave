@@ -1,0 +1,5 @@
+wave|route_patrol_stagger|Staggered Upper Patrol
+deployment|high
+formation|authored|dive|forward|1|8|3|5|2|0.4|1.35|0.7|20|20|0.65|30|0
+unitAsset|route_patrol_lead|route_scout|assault_magenta_single|76|-10|5|0|1.15|120|0.8|0.75|0.65|1
+unitAsset|route_patrol_follow|route_scout|assault_magenta_single|90|10|10|0|1.15|120|0.8|0.75|0.65|1

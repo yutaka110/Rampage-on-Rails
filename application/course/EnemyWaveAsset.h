@@ -6,6 +6,7 @@
 
 #include "EnemyFormationDefinition.h"
 #include "utils/math/Vector.h"
+#include "RailEnemyIngress.h"
 
 struct EnemyWaveUnit {
     std::string role = "drone";
@@ -25,6 +26,7 @@ struct EnemyWaveAsset {
     std::string displayName;
     std::optional<EnemyFormationDefinition> formationDefinition;
     std::vector<EnemyWaveUnit> units;
+    EnemyEntrySource entrySource = EnemyEntrySource::Automatic;
 
     bool LoadFromFile(const std::string& path, std::string* errorMessage = nullptr);
 };

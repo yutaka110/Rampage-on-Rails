@@ -187,6 +187,24 @@ struct CourseLightingPreset {
     float coolFloorHazeStrength = 0.24f;
 };
 
+enum class CourseCameraViewMode { Inherit, FirstPerson, Rear, CloseUp, Custom };
+
+// Explicit poses are relative to the rail at the player's current distance.
+// Zero yaw looks along travel; pi looks behind while the vehicle keeps moving forward.
+struct CourseCameraViewDefinition {
+    CourseCameraViewMode mode = CourseCameraViewMode::Inherit;
+    Vector3 positionOffset{0.0f, 5.8f, 0.8f};
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+    float fovY = 1.0471975512f;
+    bool hideVehicle = false;
+    int priority = 0;
+
+    static CourseCameraViewDefinition Preset(CourseCameraViewMode mode);
+    bool Validate(std::string* errorMessage = nullptr) const;
+};
+const char* ToCourseCameraViewModeString(CourseCameraViewMode mode);
+
 struct CourseCinematicCameraShot {
     float startDistance = 0.0f;
     float endDistance = 0.0f;
@@ -206,6 +224,7 @@ struct CourseCinematicCameraShot {
     float fovOffset = 0.0f;
     float rollOffset = 0.0f;
     float shakeAmount = 0.0f;
+    CourseCameraViewDefinition view{};
 };
 
 struct CourseCameraShotPreset {
@@ -344,6 +363,10 @@ public:
         const RailPath& railPath,
         float speedOverride);
 
+    // A gameplay finish can precede the scenery tail. Copies used by enemy
+    // aim prediction retain this same authoritative stop.
+    void SetTraversalEndDistance(float distance);
+    float TraversalEndDistance(const RailPath& railPath) const;
     float Distance() const { return distance_; }
     const CourseSection* CurrentSection() const;
 
@@ -357,4 +380,5 @@ private:
     const CourseAsset* asset_ = nullptr;
     float distance_ = 0.0f;
     size_t nextEventIndex_ = 0;
+    float traversalEndDistance_ = -1.0f;
 };

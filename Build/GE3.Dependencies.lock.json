@@ -1,5 +1,16 @@
 {
   "schema": "ge3.dependencies.v1",
+  "assetFonts": [
+    {
+      "id": "barlow-condensed-bold-italic",
+      "source": "https://github.com/google/fonts/tree/main/ofl/barlowcondensed",
+      "path": "Resources/UI/Fonts/BarlowCondensed-BoldItalic.ttf",
+      "sha256": "D8694F65CD70C3E5E600EAD37657AAB0ADB5F63B275D0C1F6F4A7046DE222145",
+      "license": "OFL-1.1",
+      "licensePath": "Resources/UI/Fonts/OFL-BarlowCondensed.txt",
+      "licenseSha256": "186D750EB496A4C17A76385F82BE6AEA2AC1CF2DE074A811D63786CF374EA73F"
+    }
+  ],
   "toolchain": {
     "platformToolset": "v145",
     "windowsSdkVersion": "10.0.26100.0",

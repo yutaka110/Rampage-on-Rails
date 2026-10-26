@@ -31,6 +31,10 @@ public:
     void SetLens(float fovY, float aspectRatio, float nearZ, float farZ);
     bool SetSettings(const EditorViewportCameraSettings& settings,
         std::string* errorMessage = nullptr);
+    // Seed inspection from the current game camera on entry, while preserving
+    // subsequent editor navigation until ownership or the source changes.
+    void SyncInspection(bool active, const Transform& source, bool sourceChanged = false);
+    void InvalidateInspection() { inspectionActive_ = false; }
     void Update(const EditorViewportCameraInput& input);
 
     bool Initialized() const { return initialized_; }
@@ -59,6 +63,7 @@ private:
     Matrix4x4 viewProjectionMatrix_{};
     uint32_t revision_ = 0;
     bool initialized_ = false;
+    bool inspectionActive_ = false;
 };
 
 } // namespace editor

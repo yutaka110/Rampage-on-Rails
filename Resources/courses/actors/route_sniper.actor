@@ -1,0 +1,7 @@
+# Brass precision hull. One lock volley can interrupt/defeat its long charge.
+actor|route_sniper|Canyon Precision Drone|combat_sniper_hull|1.5|32|120|0.95|0.64|0.24|1|sniper_predictive_single
+combat|4.6|0.50|60|sniper_predictive_single
+movement|0.6
+behavior|sniper|0.30|0.25|0.30|1.8|4.6|0.35|0.55|0.65|0.35|0.20|true
+engagement_band|true|44|62|84|16|2.0|44|10
+attack_pass|false|0.35|0.90|0.30

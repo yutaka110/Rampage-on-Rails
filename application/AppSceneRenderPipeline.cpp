@@ -746,6 +746,10 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.appPipelines->GetSkyboxPSO());
 
                 if (skyboxReady) {
+                    const auto& sun=ctx.runtimeState->directionalLightData;
+                    const float sunlight[8]={sun.direction.x,sun.direction.y,sun.direction.z,
+                        ctx.sunfallActive ? 1.0f : 0.0f,sun.color.x,sun.color.y,sun.color.z,sun.intensity};
+                    passContext.commandList->SetGraphicsRoot32BitConstants(2,8,sunlight,0);
                     ctx.frameRenderer->DrawSkybox(
                         passContext.commandList,
                         ctx.srvDescriptorHeap,
@@ -969,7 +973,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             for (const CourseMeshRenderItem& item : ctx.scene->CourseMeshes().Items()) {
                 const AppManagedModelResource* model =
                     ctx.scene->FindManagedModel(item.modelIndex);
-                if (IsTitleLandscapeMesh(item.meshId) || !item.visible ||
+                if (IsTitleLandscapeMesh(item.meshId) || IsGameplayLandscapeMesh(item.meshId) || !item.visible ||
                     model == nullptr ||
                     !item.transformResource) {
                     continue;
@@ -1240,7 +1244,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             const auto& courseItems = ctx.scene->CourseMeshes().Items();
             const bool hasTitleLandscape = std::any_of(courseItems.begin(), courseItems.end(),
                 [](const CourseMeshRenderItem& item) {
-                    return item.visible && IsTitleLandscapeMesh(item.meshId);
+                    return item.visible && (IsTitleLandscapeMesh(item.meshId) || IsGameplayLandscapeMesh(item.meshId));
                 });
             const bool drawGameplayTerrain = ctx.runtimeState->terrain.enabled &&
                 ctx.terrainChunkManager != nullptr;
@@ -1310,7 +1314,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                     ctx.scene->cascadeShadowSrvTableGpu);
             }
             for (const CourseMeshRenderItem& item : courseItems) {
-                if (!item.visible || !IsTitleLandscapeMesh(item.meshId) ||
+                if (!item.visible || !(IsTitleLandscapeMesh(item.meshId) || IsGameplayLandscapeMesh(item.meshId)) ||
                     !item.transformResource || !item.materialResource) continue;
                 const AppManagedModelResource* model = ctx.scene->FindManagedModel(item.modelIndex);
                 if (model == nullptr || model->mesh.indexCount == 0) continue;
@@ -1538,5 +1542,41 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->debugDraw.VertexBufferView(),
                 ctx.scene->debugDraw.TransformBufferAddress(),
                 ctx.scene->debugDraw.VertexCount());
+        }});
+}
+
+
+void AppSceneRenderPipeline::RegisterRailBoostProtectionPass(const AppFrameGraphBuildContext& ctx) const {
+    if (!ctx.HasRailBoostBlur()) return;
+    const float clear[4] = {};
+    ctx.renderGraph->DeclareTransientRenderTarget("RailBoostProtection", 1.0f, DXGI_FORMAT_R8_UNORM, clear);
+    ctx.renderGraph->AddPass({
+        "Geometry.RailBoostProtection", ge3::graphics::RenderPassLayer::Geometry,
+        {{"SceneDepth", ge3::graphics::RenderResourceAccessType::ReadDepth},
+         {"RailBoostProtection", ge3::graphics::RenderResourceAccessType::WriteRtv}},
+        "SceneDepth",
+        [ctx](ge3::graphics::RenderPassContext& pass) {
+            if (!ctx.frameRenderer->PrepareMainPass(pass.commandList, ctx.srvDescriptorHeap,
+                ctx.runtimeState->viewport, ctx.runtimeState->scissorRect,
+                ctx.appPipelines->GetMainRootSignature(), ctx.appPipelines->GetRailBoostMaskPSO())) return;
+            const auto draw = [&](uint32_t modelIndex, ID3D12Resource* transform) {
+                const auto* model = ctx.scene->FindManagedModel(modelIndex);
+                if (!model || !transform || !model->mesh.indexCount) return;
+                pass.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                pass.commandList->IASetVertexBuffers(0,1,&model->mesh.vbv);
+                pass.commandList->IASetIndexBuffer(&model->mesh.ibv);
+                pass.commandList->SetGraphicsRootConstantBufferView(1,transform->GetGPUVirtualAddress());
+                pass.commandList->DrawIndexedInstanced(model->mesh.indexCount,1,0,0,0);
+            };
+            const auto& cart = ctx.scene->RailVehicleObject();
+            if (cart.visible) draw(cart.modelIndex,cart.transformResource.Get());
+            const auto& occupant = ctx.scene->RailVehicleOccupantObject();
+            if (occupant.visible) draw(occupant.modelIndex,occupant.transformResource.Get());
+            for (const auto& item : ctx.scene->CourseMeshes().Items())
+                if (item.visible && item.kind == CourseMeshRenderKind::Enemy)
+                    draw(item.modelIndex,item.transformResource.Get());
+            for (const auto& item : ctx.scene->CourseRailTrackMeshes().Items())
+                if (item.visible && item.kind == CourseMeshRenderKind::VehicleWheel)
+                    draw(item.modelIndex,item.transformResource.Get());
         }});
 }

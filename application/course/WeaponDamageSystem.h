@@ -46,6 +46,8 @@ struct WeaponHitRequest {
     Vector3 hitNormal{};
     float hitDistance = 0.0f;
     float baseDamage = 0.0f;
+    // Presentation source only; damage acceptance remains actor/shot-ID based.
+    bool lockOnContact = false;
 };
 
 struct DamageResult {

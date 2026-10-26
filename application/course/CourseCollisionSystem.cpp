@@ -102,6 +102,7 @@ void CourseCollisionSystem::Reset() {
     lastDamageResult_ = {};
     lastWeaponFeedbackResult_ = {};
     lastWeaponFireResult_ = {};
+    playerShotTraces_.clear();
     weaponFireSystem_.Reset();
     weaponDefinitionRegistry_.SynchronizeFireSystem(weaponFireSystem_);
     weaponFeedbackSystem_.Reset();
@@ -165,6 +166,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     weaponFeedbackSystem_.Update(dt);
     lastFrameStats_ = {};
     projectileShootDownSystem_.BeginFrame();
+    playerShotTraces_.clear();
     attackInterruptSystem_.BeginFrame();
     lastShotVisible_ = false;
 
@@ -385,6 +387,11 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         static_cast<uint32_t>(lastWeaponFireResult_.shots.size());
     for (const WeaponShot& shot : lastWeaponFireResult_.shots) {
         FirePlayerShot(runtime, input, shot);
+        if (lastShotHasWorldPoint_) {
+            const size_t index = &shot - lastWeaponFireResult_.shots.data();
+            const float age = float(lastWeaponFireResult_.shots.size() - 1 - index) * weapon_.shotInterval;
+            playerShotTraces_.push_back({shot.shotId, lastShotWorldPoint_, age});
+        }
     }
 
     runtime.PruneDestroyedActors();

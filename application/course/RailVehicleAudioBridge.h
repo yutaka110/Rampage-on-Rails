@@ -37,6 +37,8 @@ struct RailVehicleAudioFrame final {
     size_t cueCount = 0;
     float distanceAttenuation = 1.0f;
     bool rolling = false;
+    float rollingLoopPitch = 1.0f;
+    float rollingLoopGain = 1.0f;
     uint64_t sourceActorRevision = 0;
     uint64_t sourcePresentationRevision = 0;
     uint64_t revision = 0;
@@ -46,6 +48,7 @@ struct RailVehicleAudioInput final {
     const RailVehicleActorFrame* actor = nullptr;
     const RailVehiclePresentationFrame* presentation = nullptr;
     float deltaTime = 0.0f;
+    float manualBoostStrength = 0.0f;
     Vector3 listenerPosition{};
     Vector3 listenerRight{1.0f, 0.0f, 0.0f};
     RailVehicleAudioSettings settings{};

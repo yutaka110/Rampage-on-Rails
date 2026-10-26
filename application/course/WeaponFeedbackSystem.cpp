@@ -257,17 +257,29 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
     event.feedbackKind = feedbackKind;
     event.worldPosition = request.hitPoint;
     event.worldNormal = request.hitNormal;
+    event.incomingDirection = request.rayDirection;
     event.requestedDamage = damageResult.requestedDamage;
     event.appliedDamage = damageResult.appliedDamage;
     event.remainingHitPoints = damageResult.remainingHitPoints;
     event.blocked = damageResult.blocked;
     event.weakPoint = damageResult.weakPointHit;
     event.destroyed = damageResult.destroyed;
+    event.lockOnContact = request.lockOnContact && damageResult.damageApplied;
     ConfigurePresentation(event);
 
-    SpawnImpactVfx(runtime, event);
+    const bool droneCoreBreak=event.destroyed && event.hitKind==RailAimHitKind::Enemy &&
+        std::any_of(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& actor) {
+            return actor.actorId==event.targetActorId && actor.desc.meshId=="twin_shield_hull";
+        });
+    if(droneCoreBreak || event.lockOnContact) {
+        // Lock arrival owns the short contact; Defeated owns the core cut.
+        // Neither should be covered by the old long yellow contact ring.
+        event.impactCueId=droneCoreBreak ? "weapon_feedback_drone_core_break" : "weapon_feedback_lock_contact";
+        event.impactEffectName.clear();
+        event.hudDuration=0.18f;
+    } else SpawnImpactVfx(runtime, event);
     result.accepted = true;
-    result.vfxSpawned = true;
+    result.vfxSpawned = !droneCoreBreak && !event.lockOnContact;
     ++acceptedEventCount_;
     lastAcceptedEvent_ = event;
     recentEvents_.push_back(event);

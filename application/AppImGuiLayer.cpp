@@ -1,4 +1,4 @@
-#include "AppImGuiLayer.h"
+﻿#include "AppImGuiLayer.h"
 #include "editor/course/CourseEnemyEditorController.h"
 #include "editor/course/CourseEnemyDetailsPanel.h"
 #include "editor/course/CourseEnemyPickingService.h"
@@ -2617,6 +2617,39 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                     !editorPlaySession_.RuntimeStepRequested()),
             context.courseDistance,
             context.courseSpeed});
+    // Course controllers also serve the map/details panels and can be bound
+    // without a dirty-state service. Publish their committed revisions to the
+    // document manager so Save becomes available for those editing paths too.
+    const auto syncCourseControllerDirty = [this](const auto* controller,
+            std::size_t index, const char* key, const char* label) {
+        if (controller == nullptr || !controller->State().bound) {
+            editorCourseControllerDirtyGenerations_[index] = 0;
+            editorCourseControllerDirtyRevisions_[index] = 0;
+            return;
+        }
+        const auto& state = controller->State();
+        auto& generation = editorCourseControllerDirtyGenerations_[index];
+        auto& revision = editorCourseControllerDirtyRevisions_[index];
+        if (generation != state.bindingGeneration) {
+            generation = state.bindingGeneration;
+            revision = state.mutationRevision;
+            return;
+        }
+        if (revision == state.mutationRevision) return;
+        revision = state.mutationRevision;
+        editorWorldRefreshRevisionGate_.Invalidate();
+        editorDirtyState_.MarkDirty(editor::EditorDirtyDomain::CourseAuthoring,
+            key, label, state.message, static_cast<uint32_t>(revision));
+        if (auto* document = editorDocumentManager_.FindByPath(editorCourseDocumentPath_)) {
+            editorDocumentManager_.MarkDirty(document->id, state.message);
+        }
+    };
+    syncCourseControllerDirty(context.courseRailEditorController, 0,
+        "course.rail.controller", "Course Rail");
+    syncCourseControllerDirty(context.courseEnemyEditorController, 1,
+        "course.enemy.controller", "Course Enemies");
+    syncCourseControllerDirty(context.courseWaveEditorController, 2,
+        "course.wave.controller", "Course Waves");
     const uint32_t courseObjectRevision = runtimeState.terrain.courseObjectEditRevision;
     if (!editorCourseObjectDirtyRevisionInitialized_) {
         editorCourseObjectDirtyRevisionInitialized_ = true;
@@ -2889,9 +2922,14 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         const bool playSessionActive = editorPlaySession_.IsActive();
         const bool coursePreviewFrozen =
             runtimeState.terrain.freezeCourseRuntime;
-        if (playSessionActive || coursePreviewFrozen) {
+        const bool composing = courseCameraShotDetailsPanel_.Composition().Active();
+        if (playSessionActive || coursePreviewFrozen || composing) {
             std::ostringstream debugState;
-            if (playSessionActive) {
+            if (composing) {
+                debugState << "CAMERA COMPOSITION | Course paused"
+                    << "\nRMB drag: Look | RMB+WASD / Q,E: Move | RMB+Wheel: Dolly"
+                    << "\nF: Look at vehicle | Register View / Register and Play in Camera Editor";
+            } else if (playSessionActive) {
                 debugState
                     << (editorPlaySession_.RuntimePaused()
                             ? "FROZEN"
@@ -2994,7 +3032,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
     const bool interactiveToolConsumesViewport =
         activeInteractiveDescriptor != nullptr &&
         activeInteractiveDescriptor->requiresViewport;
-    const bool viewportOverlayUiBlocked =
+    const bool viewportOverlayUiBlocked = courseMapEditorWorkspace_.IsOpen() ||
         editor::EditorViewportOverlayUiContains(
             editorPanelLayout_.ViewportRect(),
             imguiIO.MousePos.x,
@@ -3075,7 +3113,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         ImGui::IsMouseDown(ImGuiMouseButton_Right);
     viewportInteractionInput.cameraCaptureReleased =
         ImGui::IsMouseReleased(ImGuiMouseButton_Right);
-    viewportInteractionInput.cameraCaptureCancelRequested = cameraCancelRequested;
+    viewportInteractionInput.cameraCaptureCancelRequested = cameraCancelRequested || courseMapEditorWorkspace_.IsOpen();
     viewportInteractionInput.applicationFocused = hwnd_ != nullptr && GetForegroundWindow() == hwnd_;
     editorViewportInteraction_.Update(viewportInteractionInput);
 
@@ -3112,7 +3150,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         }
     }
     editorViewportCameraInput_.focusSelectionPressed =
-        editorViewportInteraction_.MouseInsideViewport() &&
+        !courseMapEditorWorkspace_.IsOpen() && editorViewportInteraction_.MouseInsideViewport() &&
         !imguiIO.WantTextInput && ImGui::IsKeyPressed(ImGuiKey_F);
     const bool coursePreviewSimulationActive =
         context.coursePreviewSimulationSystem != nullptr &&
@@ -4421,6 +4459,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                 descriptor.id == "editor.performance") {
                 descriptor.bottomDockGroup = editor::EditorBottomDockGroup::Profiling;
             } else if (descriptor.id == "course.timeline" ||
+                       descriptor.id == "course.cameraEditor" ||
                        descriptor.id == "course.overviewMap" ||
                        descriptor.id == "editor.transactions" ||
                        descriptor.id == "material.graph") {
@@ -4580,24 +4619,31 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             editor::EditorPanelHostArea::LeftSidebar,
             panelVisible("editor.toolPalette"),
             [&]() { editor::DrawEditorModePalettePanel(editorContext); }});
+    const editor::CourseCameraShotDetailsPanelContext cameraEditorContext{
+        editableCourse, &editorCourseSequencerProvider_, &editorSequencer_, context.courseRailLength,
+        editorCommandContext.canMutateAuthoring && app::kRuntimeAuthoringEnabled,
+        context.coursePreviewSimulationSystem, &runtimeState.terrain.freezeCourseRuntime,
+        context.courseDistance, !editorPlaySession_.IsActive(), [&]() {
+            courseMapEditorWorkspace_.Open();
+            courseMapEditorMajorTab_.SetCameraEditing(true);
+            courseMap3DViewportController_.SetActive(true);
+        }};
+    registerPanel(editor::EditorPanelDescriptor{
+        "course.cameraEditor", "カメラ編集", "Course",
+        editor::EditorPanelHostArea::BottomDock, panelVisible("course.cameraEditor"),
+        [&]() { courseCameraShotDetailsPanel_.DrawEditor(cameraEditorContext); }});
+
     registerPanel(
         editor::EditorPanelDescriptor{
             "editor.details",
-            "Details",
+            "詳細",
             "Editor",
             editor::EditorPanelHostArea::RightInspector,
             panelVisible("editor.details"),
             [&]() {
                 if (courseCameraShotDetailsPanel_.HandlesSelection(
                         &editorSequencer_, &editorCourseSequencerProvider_)) {
-                    courseCameraShotDetailsPanel_.Draw(
-                        editor::CourseCameraShotDetailsPanelContext{
-                            editableCourse,
-                            &editorCourseSequencerProvider_,
-                            &editorSequencer_,
-                            context.courseRailLength,
-                            editorCommandContext.canMutateAuthoring &&
-                                app::kRuntimeAuthoringEnabled});
+                    courseCameraShotDetailsPanel_.Draw(cameraEditorContext);
                     return;
                 }
                 if (courseRideProfileDetailsPanel_.HandlesSelection(
@@ -5205,7 +5251,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
                         context.transientBufferCount,
                         context.transientBufferStorageCount});
             }});
-    const editor::CourseOverviewMapPanelContext courseMapPanelContext{
+    editor::CourseOverviewMapPanelContext courseMapPanelContext{
         context.courseRailEditorController,
         context.courseEnemyEditorController,
         context.courseWaveEditorController,
@@ -5234,7 +5280,14 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         &courseMapHologramRenderer_,
         &courseMapHybridCompositor_,
         &courseMapSceneVisualization_,
-        ActiveEditorScene()};
+        ActiveEditorScene(),
+        &courseCameraShotDetailsPanel_, cameraEditorContext,
+        editorViewportPreview.ptr, editorViewportTarget.aspectRatio,
+        editorContext.commands};
+    courseMapPanelContext.courseDirty = [&]() {
+        const auto* document = editorDocumentManager_.FindByPath(editorCourseDocumentPath_);
+        return document && document->dirty;
+    };
     registerPanel(
         editor::EditorPanelDescriptor{
             "course.overviewMap",
@@ -5326,7 +5379,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
         editorPanelRegistry_,
         editor::EditorPanelHostArea::RightInspector,
         editorPanelLayout_.InspectorRect(),
-        "Editor Right Inspector",
+        "詳細設定###Editor Right Inspector",
         &editorLayoutPersistence_);
     const bool courseMapOpen = courseMapEditorWorkspace_.IsOpen();
     const bool courseMapFillsCenter =
@@ -5367,7 +5420,7 @@ void AppImGuiLayer::BuildUi(const AppImGuiFrameContext& context) {
             courseOverviewMapController_,
             courseMapPanelContext,
             editor::CourseMapEditorMajorTab::ResolvePresentationRect(
-                editorPanelLayout_, courseMapEditorWorkspace_.IsMaximized()));
+                editorPanelLayout_, courseMapEditorWorkspace_.IsMaximized(),courseMapEditorMajorTab_.CameraEditing()));
     }
     if (showDeveloperTools_ &&
         contentDrawerPresentationRect.Valid() &&

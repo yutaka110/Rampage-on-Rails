@@ -1,5 +1,9 @@
-#include "RailTitleScene.h"
+﻿#include "RailTitleScene.h"
 #include "../ModelLoaderAssimp.h"
+#include "CourseSpawnRuntime.h"
+#include "RailWorldRaycast.h"
+#include "../terrain/TerrainVolumeField.h"
+#include "EnemyEncounterReadabilityDirector.h"
 #include <algorithm>
 #include <cmath>
 
@@ -816,6 +820,364 @@ void RailTitleGameplayEntry::Reset() {
     frame_={};
     pendingEvents_.clear();
 }
+RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed,uint32_t droneIndex) {
+    const float t=std::isfinite(elapsed) ? (std::max)(0.0f,elapsed) : 0.0f;
+    const bool wingman=droneIndex==1;
+    const float side=wingman?-1.0f:1.0f;
+    const float approachBegin=wingman?RailTitleGameplayEntry::WingmanReadyBegin:0.64f;
+    const float passEnd=wingman?2.38f:2.15f;
+    const float passDelay=passEnd-2.15f;
+    const float turnBegin=wingman?3.32f:RailTitleGameplayEntry::DroneTurnBegin;
+    const float turnEnd=wingman?4.46f:RailTitleGameplayEntry::DroneTurnEnd;
+    const float brakeEnd=wingman?4.76f:RailTitleGameplayEntry::DroneBrakeEnd;
+    const float startForward=wingman?-80.0f:-66.0f;
+    const float hoverForward=wingman?44.0f:34.0f;
+    const float startSide=wingman?1.8f:1.2f;
+    const float passSide=wingman?6.8f:5.9f;
+    const float approachHeight=wingman?8.4f:7.0f;
+    const auto smooth=[&](float from,float to) {
+        const float u=(std::clamp)((t-from)/(to-from),0.0f,1.0f);
+        return u*u*(3.0f-2.0f*u);
+    };
+    const auto hermite=[&](float from,float to,float a,float b,float va,float vb) {
+        const float u=(std::clamp)((t-from)/(to-from),0.0f,1.0f);
+        const float u2=u*u,u3=u2*u;
+        return (2*u3-3*u2+1)*a+(u3-2*u2+u)*(to-from)*va+
+            (-2*u3+3*u2)*b+(u3-u2)*(to-from)*vb;
+    };
+    const auto smoothSpeed=[&](float from,float to) {
+        const float u=(std::clamp)((t-from)/(to-from),0.0f,1.0f);
+        return 6.0f*u*(1.0f-u)/(to-from);
+    };
+    const auto hermiteSpeed=[&](float from,float to,float a,float b,float va,float vb) {
+        const float u=(std::clamp)((t-from)/(to-from),0.0f,1.0f),u2=u*u;
+        return ((6*u2-6*u)*a+(-6*u2+6*u)*b)/(to-from)+
+            (3*u2-4*u+1)*va+(3*u2-2*u)*vb;
+    };
+    const float turnRadius=wingman?7.0f:6.5f,turnOuterSide=9.0f;
+    const float turnDuration=turnEnd-turnBegin;
+    const float brakeDuration=brakeEnd-turnEnd;
+    const float turnSpeed=Pi*turnRadius/turnDuration;
+    const float brakeRelativeSpeed=turnSpeed+RailTitleScene::Speed;
+    const float turnExitForward=hoverForward+brakeRelativeSpeed*brakeDuration*0.5f;
+    const float turnEntryForward=turnExitForward+RailTitleScene::Speed*turnDuration;
+    RailReadyDroneFlight flight;
+    // Start as a distant pursuer in the rail lane. The lateral clearance is
+    // needed only for the brief pass, not for the whole approach.
+    if(t<approachBegin) flight.forward=startForward;
+    else if(t<passEnd) flight.forward=hermite(approachBegin,passEnd,startForward,14.0f,0.0f,36.0f);
+    else if(t<turnBegin)
+        flight.forward=hermite(passEnd,turnBegin,
+            14.0f,turnEntryForward,36.0f,turnSpeed-RailTitleScene::Speed);
+    const float pass=smooth(1.15f+passDelay,2.05f+passDelay);
+    const float widen=smooth(passEnd,turnBegin);
+    flight.lateral=side*(startSide+(passSide-startSide)*pass+(turnOuterSide-passSide)*widen);
+    flight.vertical=approachHeight;
+    Vector3 velocity{side*((passSide-startSide)*smoothSpeed(1.15f+passDelay,2.05f+passDelay)+
+        (turnOuterSide-passSide)*smoothSpeed(passEnd,turnBegin)),0,RailTitleScene::Speed};
+    if(t>=approachBegin && t<passEnd)
+        velocity.z+=hermiteSpeed(approachBegin,passEnd,startForward,14.0f,0.0f,36.0f);
+    else if(t>=passEnd && t<turnBegin)
+        velocity.z+=hermiteSpeed(passEnd,turnBegin,
+            14.0f,turnEntryForward,36.0f,turnSpeed-RailTitleScene::Speed);
+    // Define a moving semicircle in world travel, subtracting cart travel
+    // only when writing the relative rail distance. Nose and bank belong to
+    // this same curve; the drone actually flies back before braking to hover.
+    const float turn=(std::clamp)((t-turnBegin)/turnDuration,0.0f,1.0f);
+    if(t>=turnBegin) {
+        const float angle=Pi*turn;
+        flight.lateral=side*(turnOuterSide-turnRadius+turnRadius*std::cos(angle));
+        flight.forward=turnEntryForward+turnRadius*std::sin(angle)-
+            RailTitleScene::Speed*(std::min)(t-turnBegin,turnDuration);
+        flight.vertical=approachHeight-turn*turn*(3.0f-2.0f*turn);
+        velocity={-side*turnSpeed*std::sin(angle),-6.0f*turn*(1.0f-turn)/turnDuration,
+            turnSpeed*std::cos(angle)};
+    }
+    float yaw=std::atan2(-velocity.x,-velocity.z);
+    if(yaw<0.0f) yaw+=2.0f*Pi;
+    flight.rotation={std::atan2(velocity.y,std::sqrt(velocity.x*velocity.x+velocity.z*velocity.z)),yaw,0};
+    const float bankIn=smooth(turnBegin-0.18f,turnBegin);
+    const float bankOut=1.0f-smooth(turnEnd,brakeEnd);
+    // Lean into the right-hand lane change, then counter-bank as it settles.
+    // Two bounded weight transfers give the approach inertia without idle wobble.
+    const float approachBank=0.19f*(smooth(1.06f+passDelay,1.32f+passDelay)-
+        2.0f*smooth(1.57f+passDelay,1.84f+passDelay)+smooth(1.96f+passDelay,2.17f+passDelay));
+    const float outwardBank=0.10f*(smooth(passEnd,2.40f+passDelay)-smooth(2.70f+passDelay,3.02f+passDelay));
+    flight.rotation.z=side*((approachBank+outwardBank)*(1.0f-bankIn)-
+        (0.55f+0.08f*std::sin(Pi*turn))*bankIn*bankOut);
+    if(t>=turnEnd) {
+        const float remaining=1.0f-(std::clamp)((t-turnEnd)/brakeDuration,0.0f,1.0f);
+        flight.forward=hoverForward+brakeRelativeSpeed*brakeDuration*0.5f*remaining*remaining;
+        flight.rotation.x=flight.rotation.y=0.0f;
+    }
+    return flight;
+}
+
+RailReadyDroneFlight EvaluateRailReadyDroneFlight(float elapsed,const RailPath& rail,
+        float playerDistance,float playerSpeed,uint32_t droneIndex) {
+    auto flight=EvaluateRailReadyDroneFlight(elapsed,droneIndex);
+    const float turnEnd=droneIndex==1?4.46f:RailTitleGameplayEntry::DroneTurnEnd;
+    if(!std::isfinite(elapsed) || !std::isfinite(playerDistance) || !std::isfinite(playerSpeed) ||
+            rail.Length()<=0.0f || elapsed>=turnEnd) return flight;
+    constexpr float h=0.002f;
+    const auto position=[&](float step) {
+        const auto adjacent=EvaluateRailReadyDroneFlight(elapsed+step,droneIndex);
+        const float distance=playerDistance+playerSpeed*step+adjacent.forward;
+        const auto sample=rail.Evaluate(distance);
+        return Add(sample.position,Add(Scale(sample.tangent,(std::min)(0.0f,distance)),
+            Add(Scale(sample.right,adjacent.lateral),Scale(sample.up,adjacent.vertical))));
+    };
+    const auto velocity=Scale(Add(position(h),Scale(position(-h),-1.0f)),0.5f/h);
+    if(Dot(velocity,velocity)<0.0001f) return flight;
+    const auto frame=rail.Evaluate(playerDistance+flight.forward);
+    const Vector3 local{Dot(velocity,frame.right),Dot(velocity,frame.up),Dot(velocity,frame.tangent)};
+    flight.rotation.x=std::atan2(local.y,std::sqrt(local.x*local.x+local.z*local.z));
+    flight.rotation.y=std::atan2(-local.x,-local.z);
+    if(flight.rotation.y<0.0f) flight.rotation.y+=2.0f*Pi;
+    return flight;
+}
+
+TwinShieldDronePose BuildRailReadyDronePose(const RailPath& rail,float railDistance,
+        float lateral,float vertical,Vector3 rotation,float radius) {
+    const auto sample=rail.Evaluate(railDistance);
+    TwinShieldDronePose pose;
+    pose.visible=true;
+    pose.position=Add(sample.position,Add(Scale(sample.tangent,(std::min)(0.0f,railDistance)),
+        Add(Scale(sample.right,lateral),Scale(sample.up,vertical))));
+    pose.rotation=ResolveTwinShieldDroneFacing(sample.tangent,pose.position,{},rotation,{},true);
+    pose.flightBank=pose.rotation.z; pose.rotation.z=0;
+    const float size=radius*kTwinShieldGameplayModelScale;
+    pose.scale={size,size,size};
+    return pose;
+}
+
+void RailReadyDroneSalvo::Reset() {
+    planAttempted_={}; planned_={}; targets_={}; durations_={};
+    attempted_={}; launched_={}; normals_={}; impacts_={}; shots_.clear(); cues_.clear(); muzzleFlash_=0; muzzlePosition_={};
+}
+
+Vector3 RailReadyDroneSalvo::Muzzle(const TwinShieldDronePose& pose,uint32_t barrelIndex) {
+    const auto world=BuildTwinShieldDroneWorldMatrix(pose);
+    const Vector3 lip{barrelIndex==0?-0.30f:0.30f,-0.61f,-0.94f};
+    return {lip.x*world.m[0][0]+lip.y*world.m[1][0]+lip.z*world.m[2][0]+world.m[3][0],
+        lip.x*world.m[0][1]+lip.y*world.m[1][1]+lip.z*world.m[2][1]+world.m[3][1],
+        lip.x*world.m[0][2]+lip.y*world.m[1][2]+lip.z*world.m[2][2]+world.m[3][2]};
+}
+
+RailReadyDroneFlight RailReadyDroneSalvo::Flight(float elapsed,float playerDistance,
+        const RailPath& rail,float radius) const {
+    auto flight=EvaluateRailReadyDroneFlight(elapsed,rail,playerDistance,RailTitleScene::Speed);
+    if((!planned_[0] && !planned_[1]) || !std::isfinite(elapsed)) return flight;
+    const auto smooth=[](float t,float a,float b) {
+        const float u=(std::clamp)((t-a)/(b-a),0.0f,1.0f); return u*u*(3-2*u);
+    };
+    const float first=planned_[0]?ShotTimes[0]:ShotTimes[1];
+    const float last=planned_[1]?ShotTimes[1]:ShotTimes[0];
+    const float weight=smooth(elapsed,first-0.28f,first-0.07f)*
+        (1-smooth(elapsed,last+0.08f,last+0.30f));
+    if(weight<=0) return flight;
+    const float mix=planned_[0] && planned_[1] ? smooth(elapsed,ShotTimes[0],ShotTimes[1]) :
+        (planned_[1]?1.0f:0.0f);
+    const auto target=planned_[0] && planned_[1] ? Add(Scale(targets_[0],1-mix),Scale(targets_[1],mix)) :
+        targets_[planned_[1]?1:0];
+    const auto frame=rail.Evaluate(playerDistance+flight.forward);
+    const auto base=flight.rotation;
+    // Aim the rigid aircraft briefly while it continues its flight path. The
+    // same pose drives the rendered hull, the gun lips and the actual shot.
+    for(int iteration=0;iteration<4;++iteration) {
+        const auto pose=BuildRailReadyDronePose(rail,playerDistance+flight.forward,
+            flight.lateral,flight.vertical,flight.rotation,radius);
+        const auto origin=Add(Scale(Muzzle(pose,0),1-mix),Scale(Muzzle(pose,1),mix));
+        const auto direction=Normalize(Add(target,Scale(origin,-1)));
+        const float x=Dot(direction,frame.right),y=Dot(direction,frame.up),z=Dot(direction,frame.tangent);
+        const float yaw=std::atan2(-x,-z);
+        const float pitch=std::atan2(y,std::sqrt(x*x+z*z));
+        // Partial weight always blends from the flight tangent, not recursively.
+        flight.rotation.x=base.x+(pitch-base.x)*weight;
+        flight.rotation.y=base.y+std::remainder(yaw-base.y,2*Pi)*weight;
+    }
+    return flight;
+}
+
+bool RailReadyDroneSalvo::TraceVehicleNearMiss(const RailWorldRaycastInput& terrain,Vector3 origin,
+        float launchDistance,uint32_t index,Vector3& contact,Vector3& normal) {
+    if(!terrain.railPath || !terrain.terrainSettings || index>=ShotTimes.size() ||
+        !std::isfinite(launchDistance) || !std::isfinite(origin.x) ||
+        !std::isfinite(origin.y) || !std::isfinite(origin.z)) return false;
+    const auto& rail=*terrain.railPath;
+    const auto atLaunch=rail.Evaluate(launchDistance);
+    const float side=Dot(Add(origin,Scale(atLaunch.position,-1)),atLaunch.right)<0?-1.0f:1.0f;
+    const float clearance=6.8f+0.35f*float(index);
+    // Predict the moving cart's side first. A fixed far-wall target can look
+    // like unrelated sideways fire while the pursuit camera swings around.
+    // Stay on the gun's side so the miss cannot cut through the cart en route.
+    float arrival=0.0f;Vector3 pass{};
+    for(int iteration=0;iteration<8;++iteration) {
+        const auto cart=rail.Evaluate(launchDistance+RailTitleScene::Speed*arrival);
+        pass=Add(cart.position,Add(Scale(cart.right,side*clearance),Scale(cart.up,4.2f)));
+        const auto delta=Add(pass,Scale(origin,-1));
+        arrival=std::sqrt(Dot(delta,delta))/ShotSpeed;
+    }
+    const auto delta=Add(pass,Scale(origin,-1));
+    const float passDistance=std::sqrt(Dot(delta,delta));
+    if(!std::isfinite(passDistance) || passDistance<4.0f || passDistance>165.0f) return false;
+    RailAimState aim;
+    aim.valid=true;aim.worldRayOrigin=origin;aim.worldRayDirection=Scale(delta,1.0f/passDistance);
+    // A near miss may continue much farther down an open tunnel than a shot
+    // aimed at its wall. Keep the ray straight, and leave time for the real
+    // impact and its dust to finish before the bounded READY clock stops.
+    aim.maxDistance=(std::min)(300.0f,
+        ShotSpeed*(RailTitleGameplayEntry::GoEnd-ShotTimes[index]-1.55f));
+    auto query=terrain;
+    query.aim=&aim;query.playerDistance=launchDistance;
+    query.spawnRuntime=nullptr;query.course=nullptr;query.includeVisualColumns=false;
+    // Continue that one straight ray to its first real terrain contact. Do not
+    // bend a projectile after it passes the cart or invent a visible impact.
+    const auto hit=RailWorldRaycast::Query(query);
+    if(!hit.hit || hit.kind!=RailAimHitKind::ProceduralTerrain || hit.distance<passDistance+1.0f ||
+        Dot(hit.normal,hit.normal)<0.5f) return false;
+    RailTitleShot test;test.origin=origin;test.target=hit.position;test.duration=hit.distance/ShotSpeed;
+    if(!ClearsVehicle(test,rail,launchDistance)) return false;
+    contact=hit.position;normal=hit.normal;return true;
+}
+
+bool RailReadyDroneSalvo::ClearsVehicle(const RailTitleShot& shot,const RailPath& rail,float playerDistanceAtLaunch) {
+    // Sweep the moving cart corridor, including passenger height and a margin
+    // around the projectile. Never rely on disabling damage to hide a hit.
+    for(int i=0;i<=96;++i) {
+        const float u=float(i)/96.0f;
+        const auto cart=rail.Evaluate(playerDistanceAtLaunch+RailTitleScene::Speed*shot.duration*u);
+        const auto point=Add(shot.origin,Scale(Add(shot.target,Scale(shot.origin,-1)),u));
+        const auto delta=Add(point,Scale(cart.position,-1));
+        if(std::abs(Dot(delta,cart.right))<4.4f && std::abs(Dot(delta,cart.tangent))<7.0f &&
+            Dot(delta,cart.up)>-2.0f && Dot(delta,cart.up)<5.4f) return false;
+    }
+    return true;
+}
+
+void RailReadyDroneSalvo::Update(float elapsed,float playerDistance,const RailPath& rail,
+        float radius,const WallTrace& trace) {
+    cues_.clear(); muzzleFlash_=0;
+    if(!std::isfinite(elapsed) || !std::isfinite(playerDistance) || !std::isfinite(radius) || radius<=0 || rail.Length()<=0) return;
+    // Cache wall contacts before the shot, so the aircraft has time to aim.
+    // Terrain is queried at most twice per shot, never for every READY frame.
+    for(size_t i=0;i<ShotTimes.size();++i) {
+        if(planAttempted_[i] || elapsed<ShotTimes[i]-0.28f) continue;
+        planAttempted_[i]=true;
+        if(elapsed>ShotTimes[i] || !trace) continue;
+        const float d=playerDistance+RailTitleScene::Speed*(ShotTimes[i]-elapsed);
+        const auto f=EvaluateRailReadyDroneFlight(ShotTimes[i],rail,d,RailTitleScene::Speed);
+        const auto pose=BuildRailReadyDronePose(rail,d+f.forward,f.lateral,f.vertical,f.rotation,radius);
+        planned_[i]=trace(Muzzle(pose,static_cast<uint32_t>(i)),d,static_cast<uint32_t>(i),targets_[i],normals_[i]);
+    }
+    for(size_t i=0;i<ShotTimes.size();++i) {
+        const float age=elapsed-ShotTimes[i];
+        if(age>=0 && age<0.09f && launched_[i]) muzzleFlash_=(std::max)(muzzleFlash_,1.0f-age/0.09f);
+        if(attempted_[i] || elapsed<ShotTimes[i]) continue;
+        attempted_[i]=true;
+        if(elapsed>=RailTitleGameplayEntry::Duration || age>0.10f || !trace || !planned_[i]) continue;
+        const float launchDistance=playerDistance-RailTitleScene::Speed*age;
+        auto flight=Flight(ShotTimes[i],launchDistance,rail,radius);
+        auto pose=BuildRailReadyDronePose(rail,launchDistance+flight.forward,
+            flight.lateral,flight.vertical,flight.rotation,radius);
+        auto origin=Muzzle(pose,static_cast<uint32_t>(i));
+        Vector3 target{},normal{};
+        if(!trace(origin,launchDistance,static_cast<uint32_t>(i),target,normal)) continue;
+        const auto delta=Add(target,Scale(origin,-1));
+        if(Dot(delta,delta)<16 || !std::isfinite(Dot(delta,delta)) || Dot(normal,normal)<0.5f) continue;
+        // Reconcile the small muzzle displacement caused by aiming the body.
+        targets_[i]=target;
+        flight=Flight(ShotTimes[i],launchDistance,rail,radius);
+        pose=BuildRailReadyDronePose(rail,launchDistance+flight.forward,
+            flight.lateral,flight.vertical,flight.rotation,radius);
+        origin=Muzzle(pose,static_cast<uint32_t>(i));
+        RailTitleShot shot;
+        shot.id=static_cast<uint32_t>(i+1); shot.origin=shot.position=origin; shot.target=target;
+        shot.duration=std::sqrt(Dot(Add(target,Scale(origin,-1)),Add(target,Scale(origin,-1))))/ShotSpeed;
+        shot.age=age;
+        if(!ClearsVehicle(shot,rail,launchDistance)) continue;
+        normals_[i]=normal; durations_[i]=shot.duration; launched_[i]=true; shots_.push_back(shot);
+        cues_.push_back({RailTitleAttackCueKind::Muzzle,origin}); muzzleFlash_=1;
+    }
+    for(auto& shot:shots_) {
+        shot.age=elapsed-ShotTimes[shot.id-1];
+        const float u=(std::clamp)(shot.age/shot.duration,0.0f,1.0f);
+        shot.position=Add(shot.origin,Scale(Add(shot.target,Scale(shot.origin,-1)),u));
+        if(shot.age>=shot.duration) {
+            auto& impact=impacts_[shot.id-1];
+            impact={shot.target,shot.age-shot.duration,8041u+shot.id,true,normals_[shot.id-1],true};
+            cues_.push_back({RailTitleAttackCueKind::WallImpact,shot.target});
+        }
+    }
+    std::erase_if(shots_,[](const auto& shot){return shot.age>=shot.duration;});
+    for(size_t i=0;i<impacts_.size();++i) if(impacts_[i].seed) {
+        impacts_[i].age=elapsed-ShotTimes[i]-durations_[i];
+        impacts_[i].active=impacts_[i].age<1.5f;
+    }
+    if(muzzleFlash_>0) {
+        const auto flight=Flight(elapsed,playerDistance,rail,radius);
+        const auto pose=BuildRailReadyDronePose(rail,playerDistance+flight.forward,
+            flight.lateral,flight.vertical,flight.rotation,radius);
+        muzzlePosition_=Muzzle(pose,launched_[1]?1:0);
+    }
+}
+
+RailReadyCameraShot EvaluateRailReadyCameraShot(float elapsed) {
+    const float t=std::isfinite(elapsed) ? (std::max)(0.0f,elapsed) : 0.0f;
+    const auto smooth=[&](float a,float b) {
+        const float u=(std::clamp)((t-a)/(b-a),0.0f,1.0f);
+        return u*u*(3.0f-2.0f*u);
+    };
+    RailReadyCameraShot shot;
+    const float reveal=smooth(0.0f,0.64f);
+    const float angle=-2.65f*reveal*(1.0f-smooth(1.65f,2.75f));
+    // Complete the orbit without simultaneously dollying far backwards.
+    // The two aircraft keep their flight paths and real scale; a narrower
+    // forward lens lets their bank and nose direction remain readable.
+    const float radius=8.0f+6.0f*reveal;
+    shot.eyeOffset={std::sin(angle)*radius,
+        5.2f+2.0f*reveal+1.3f*smooth(1.80f,RailTitleGameplayEntry::CameraSettleEnd),
+        -std::cos(angle)*radius};
+    const auto flight=EvaluateRailReadyDroneFlight(t);
+    shot.droneOffset={flight.lateral,flight.vertical,flight.forward};
+    const auto wingman=EvaluateRailReadyDroneFlight(t,1);
+    shot.wingmanOffset={wingman.lateral,wingman.vertical,wingman.forward};
+    shot.focusBlend=reveal;
+    shot.weight=1.0f-smooth(RailTitleGameplayEntry::CameraReleaseBegin,
+        RailTitleGameplayEntry::CameraReleaseEnd);
+    shot.fovY=0.70f+0.28f*reveal-0.22f*smooth(2.20f,RailTitleGameplayEntry::CameraSettleEnd);
+    return shot;
+}
+
+CourseEnemyActorDesc BuildRailReadyDrone(float startDistance,uint32_t droneIndex) {
+    CourseEnemyActorDesc desc;
+    desc.waveId = desc.actorAssetId = droneIndex==1?"start_sentinel_wingman":"start_sentinel";
+    desc.meshId = "twin_shield_hull";
+    desc.spawnDistance = startDistance;
+    const auto flight=EvaluateRailReadyDroneFlight(0.0f,droneIndex);
+    desc.distanceOffset = flight.forward;
+    desc.lateralOffset = flight.lateral;
+    desc.verticalOffset = flight.vertical;
+    desc.radius = 1.65f;
+    desc.hitPoints = 32.0f;
+    desc.lifetime = 3600.0f;
+    desc.firstShotDelay = droneIndex==1?1.4f:1.0f;
+    desc.fireInterval = 1.5f;
+    desc.bulletRadius = 0.42f;
+    desc.localRotation = flight.rotation;
+    desc.combatDefinition = EnemyCombatDefinition::CommercialStandard();
+    desc.combatDefinition.maximumHitPoints = desc.hitPoints;
+    desc.combatDefinition.spawnDurationSeconds = 0.0f;
+    desc.combatDefinition.engageDurationSeconds = 0.4f;
+    desc.behaviorDefinition = EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Assault);
+    desc.behaviorDefinition.entryDurationSeconds = 0.0f;
+    desc.behaviorDefinition.maintainForwardEngagementBand = true;
+    desc.behaviorDefinition.lateralAmplitude = 1.4f;
+    desc.behaviorDefinition.verticalAmplitude = 0.45f;
+    desc.formationDefinition = EnemyFormationDefinition::CommercialDefault(desc.waveId);
+    desc.establishedEntrance = true;
+    return desc;
+}
 void RailTitleGameplayEntry::Begin() {
     if(begun_) return;
     begun_=true;
@@ -825,15 +1187,19 @@ void RailTitleGameplayEntry::Begin() {
     frame_.cameraHandoffWeight=1.0f;
     frame_.reticleProgress=frame_.gaugeProgress=frame_.informationOpacity=frame_.rollingHandoff=0.0f;
     frame_.blockingGameplay=true;
+    frame_.enemyFireAllowed=false;
+    frame_.active=true;
 }
 void RailTitleGameplayEntry::Update(float deltaTime) {
     frame_.reticleStarted=frame_.gaugesStarted=false;
+    frame_.readyStarted=frame_.goStarted=false;
     frame_.travelDeltaTime=0.0f;
-    if(!begun_ || !frame_.blockingGameplay) return;
+    if(!begun_ || !frame_.active) return;
     const double previous=elapsed_;
-    if(std::isfinite(deltaTime)) elapsed_=(std::min)(double(Duration),
+    if(std::isfinite(deltaTime)) elapsed_=(std::min)(double(GoEnd),
         elapsed_+double((std::clamp)(deltaTime,0.0f,0.05f)));
-    frame_.travelDeltaTime=static_cast<float>(elapsed_-previous);
+    frame_.travelDeltaTime=static_cast<float>((std::min)(elapsed_,double(Duration))-
+        (std::min)(previous,double(Duration)));
     const auto ramp=[&](double from,double to) {
         const float t=static_cast<float>((std::clamp)((elapsed_-from)/(to-from),0.0,1.0));
         return t*t*(3.0f-2.0f*t);
@@ -843,13 +1209,21 @@ void RailTitleGameplayEntry::Update(float deltaTime) {
     // Begin while the falling veil is still dense. Camera recovery and rail
     // motion overlap the reveal rather than waiting for a clear, frozen scene.
     frame_.cameraHandoffWeight=1.0f-ramp(double(CameraBegin),double(CameraEnd));
-    frame_.reticleProgress=ramp(0.76,1.10);
-    frame_.gaugeProgress=ramp(0.96,1.26);
-    frame_.informationOpacity=ramp(1.16,double(Duration));
+    frame_.reticleProgress=ramp(0.82,1.38);
+    frame_.gaugeProgress=ramp(1.08,1.74);
+    frame_.informationOpacity=ramp(1.60,2.25);
     frame_.rollingHandoff=ramp(0.12,double(Duration));
-    frame_.reticleStarted=previous<0.76 && elapsed_>=0.76;
-    frame_.gaugesStarted=previous<0.96 && elapsed_>=0.96;
+    frame_.reticleStarted=previous<0.82 && elapsed_>=0.82;
+    frame_.gaugesStarted=previous<1.08 && elapsed_>=1.08;
+    frame_.readyProgress=ramp(double(ReadyBegin),double(Duration));
+    frame_.readyOpacity=ramp(double(ReadyBegin),double(ReadyBegin+0.18f))*(1.0f-ramp(double(Duration-0.20f),double(Duration)));
+    frame_.goOpacity=elapsed_>=double(Duration) ? 1.0f-ramp(double(Duration+0.18f),double(Duration+0.50f)) : 0.0f;
+    frame_.droneTurnProgress=ramp(double(DroneTurnBegin),double(DroneTurnEnd));
+    frame_.readyStarted=previous<double(ReadyBegin) && elapsed_>=double(ReadyBegin);
+    frame_.goStarted=previous<double(Duration) && elapsed_>=double(Duration);
     frame_.blockingGameplay=elapsed_<double(Duration);
+    frame_.enemyFireAllowed=elapsed_>=double(EnemyFireBegin);
+    frame_.active=elapsed_<double(GoEnd);
 }
 std::vector<CourseEventMarker> RailTitleGameplayEntry::DispatchCourseEvents(
     const std::vector<CourseEventMarker>& crossed, bool gameplayEnabled) {
@@ -862,11 +1236,15 @@ std::vector<CourseEventMarker> RailTitleGameplayEntry::DispatchCourseEvents(
 
 void RailTransitionDemo::BeginGameplay() {
     phase_=Phase::Playing; playTime_=transitionTime_=0.0; travelDeltaTime_=0.0f;
+    startupComplete_=false;
 }
-void RailTransitionDemo::Update(float deltaTime, bool gameplayStarted) {
+void RailTransitionDemo::Update(float deltaTime, bool startupComplete) {
     travelDeltaTime_=0.0f;
     const double dt=std::isfinite(deltaTime) ? double((std::clamp)(deltaTime,0.0f,0.05f)) : 0.0;
-    if(phase_==Phase::Playing && gameplayStarted) playTime_+=dt;
+    if(phase_==Phase::Playing) {
+        startupComplete_ |= startupComplete;
+        if(startupComplete_) playTime_+=dt;
+    }
     if(phase_==Phase::Covering) {
         const double previous=transitionTime_;
         transitionTime_=(std::min)(double(CoverDuration),transitionTime_+dt);
@@ -876,8 +1254,8 @@ void RailTransitionDemo::Update(float deltaTime, bool gameplayStarted) {
         if(transitionTime_>=double(RevealDuration)) phase_=Phase::Title;
     }
 }
-bool RailTransitionDemo::RequestReturn() {
-    if(!ButtonVisible()) return false;
+bool RailTransitionDemo::RequestReturn(bool fromResult) {
+    if(Returning() || (!fromResult && !ButtonVisible())) return false;
     phase_=Phase::Covering; transitionTime_=0.0; travelDeltaTime_=0.0f;
     return true;
 }
@@ -890,10 +1268,10 @@ void RailTransitionDemo::CommitTitleSwap() {
 }
 bool RailTransitionDemo::Returning() const { return phase_==Phase::Covering || phase_==Phase::Revealing; }
 bool RailTransitionDemo::RevealingTitle() const { return phase_==Phase::Revealing; }
-bool RailTransitionDemo::ButtonVisible() const { return phase_==Phase::Playing && playTime_>=double(ButtonDelay); }
+bool RailTransitionDemo::ButtonVisible() const { return phase_==Phase::Playing && startupComplete_; }
 float RailTransitionDemo::ButtonOpacity() const {
     if(!ButtonVisible()) return 0.0f;
-    const float t=static_cast<float>((std::clamp)((playTime_-ButtonDelay)/0.25,0.0,1.0));
+    const float t=static_cast<float>((std::clamp)(playTime_/0.25,0.0,1.0));
     return t*t*(3.0f-2.0f*t);
 }
 float RailTransitionDemo::Coverage() const {

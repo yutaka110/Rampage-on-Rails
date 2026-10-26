@@ -11,11 +11,19 @@
 #include "EnemyEncounterPacingDirector.h"
 #include "GrazeScoreSystem.h"
 #include "PlayerDamageSystem.h"
+#include "RailLockVolley.h"
+#include "EnemyProjectileShootDownSystem.h"
+
+class CourseSpawnRuntime;
+class WeaponFeedbackSystem;
 
 enum class EncounterPerformanceScoreKind : uint8_t {
     EnemyDefeat,
     EncounterClear,
     CleanClear,
+    LockSweep,
+    BatteryBreak,
+    ProjectileIntercept,
 };
 
 struct EncounterPerformanceScoreSettings final {
@@ -28,6 +36,9 @@ struct EncounterPerformanceScoreSettings final {
     uint32_t fullSweepBonus = 120;
     float cleanClearMultiplier = 1.50f;
     size_t maximumResultsPerFrame = 16;
+    uint32_t lockSweepScore = 350;
+    uint32_t batteryBreakScore = 250;
+    uint32_t projectileInterceptScore = 220;
 
     bool Validate(std::string* errorMessage = nullptr) const;
 };
@@ -61,6 +72,15 @@ struct EncounterPerformanceScoreRuntimeState final {
     std::vector<uint32_t> defeatedActorIds;
     std::vector<std::string> completedBeatGuids;
     uint64_t revision = 0;
+    std::vector<std::string> showcaseKeys;
+    std::vector<uint32_t> interceptOwnerIds;
+    std::vector<uint64_t> interceptProjectileIds;
+    float interceptWindowRemaining = 0.0f;
+    uint32_t interceptCount = 0;
+    EncounterPerformanceScoreKind showcaseKind = EncounterPerformanceScoreKind::EnemyDefeat;
+    float showcaseSecondsRemaining = 0.0f;
+    uint32_t showcaseCount = 0;
+    uint32_t showcaseScore = 0;
 };
 
 struct EncounterPerformanceScoreInput final {
@@ -70,6 +90,12 @@ struct EncounterPerformanceScoreInput final {
     std::span<const GrazeScoreResult> grazeResults{};
     std::span<const PlayerDamageResult> damageResults{};
     bool gameplayActive = true;
+    bool showcasesEnabled = false;
+    float deltaTime = 0.0f;
+    const CourseSpawnRuntime* runtime = nullptr;
+    const WeaponFeedbackSystem* weaponFeedback = nullptr;
+    std::span<const RailLockVolleyResult> lockVolleys{};
+    std::span<const EnemyProjectileShootDownResult> shootDownResults{};
 };
 
 // Adds the missing run-level reward layer above hit/graze scoring. Difficulty
@@ -98,6 +124,10 @@ private:
         const EnemyEncounterPacingFrame& pacing,
         const EnemyEncounterPacingEvent& event);
     void AddResult(EncounterPerformanceScoreResult result, size_t maximumResults);
+    void UpdateShowcases(const EncounterPerformanceScoreInput& input,
+        const EncounterPerformanceScoreSettings& settings);
+    void AwardShowcase(EncounterPerformanceScoreKind kind, const std::string& key,
+        uint32_t count, uint32_t score, size_t maximumResults);
 
     EncounterPerformanceScoreRuntimeState state_{};
     std::vector<EncounterPerformanceScoreResult> resultsThisFrame_;

@@ -1,4 +1,4 @@
-#include "EnemyCombatSystem.h"
+﻿#include "EnemyCombatSystem.h"
 
 #include "CourseSpawnRuntime.h"
 
@@ -110,6 +110,11 @@ EnemyCombatDefinition ResolveEnemyCombatDefinition(
                     definition.attackCommitSeconds);
         }
     }
+    if (RailMothership::IsCombatActor(actorDescription.actorAssetId)) {
+        definition.pauseAttackDuringHitReact = false;
+        definition.hitReactSeconds = 0.04f;
+        definition.spawnDurationSeconds = 0.65f;
+    }
     std::string validationError;
     if (!definition.Validate(&validationError)) {
         definition = EnemyCombatDefinition::LegacyCompatible();
@@ -142,7 +147,7 @@ void EnemyCombatSystem::InitializeActor(CourseEnemyActor& actor) {
             actor.combatDefinition.telegraphLeadSeconds);
     }
     ApplyPhaseGates(actor);
-    QueueEvent(actor, EnemyCombatEventKind::Spawned);
+    if(actor.desc.stationaryActivationDistance<0) QueueEvent(actor, EnemyCombatEventKind::Spawned);
 }
 
 void EnemyCombatSystem::Update(CourseSpawnRuntime& runtime,
@@ -166,6 +171,7 @@ void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors, float d
     frameStats_ = {};
 
     for (CourseEnemyActor& actor : actors) {
+        if(actor.stationaryDormant) continue;
         if (!actor.combatState.initialized) {
             InitializeActor(actor);
         }
@@ -294,7 +300,9 @@ bool EnemyCombatSystem::SubmitDamageResultActors(std::span<CourseEnemyActor> act
     EnemyCombatRuntimeState& state = actor->combatState;
     state.currentHitPoints = (std::max)(0.0f, damageResult.remainingHitPoints);
     state.lastDamageShotId = damageResult.shotId;
-    state.hitFlash = 1.0f;
+    // The lock laser owns a short, localized contact flash. A full-body white
+    // wash would hide both the metal faces and the subsequent core cut.
+    state.hitFlash = feedbackEvent && feedbackEvent->lockOnContact ? 0.18f : 1.0f;
     actor->desc.hitPoints = state.currentHitPoints;
     const HitFeedbackKind feedbackKind = feedbackEvent != nullptr
         ? feedbackEvent->feedbackKind
@@ -309,12 +317,23 @@ bool EnemyCombatSystem::SubmitDamageResultActors(std::span<CourseEnemyActor> act
             state.phase != EnemyCombatPhase::Retired) {
             EnterPhase(*actor, EnemyCombatPhase::Dying,
                 EnemyCombatEventKind::Defeated, false);
+            actor->defeatedPose.primaryDestruction=feedbackEvent && !feedbackEvent->lockOnContact &&
+                feedbackEvent->damageType==WeaponDamageType::Energy;
+            if(actor->hasDefeatedPose && feedbackEvent) {
+                ConfigureTwinShieldDroneDestructionHit(actor->defeatedPose,
+                    feedbackEvent->worldPosition,feedbackEvent->incomingDirection,actor->actorId);
+            }
         }
         if (!state.defeatEventPublished) {
             QueueEvent(*actor, EnemyCombatEventKind::Defeated,
                 damageResult.shotId, damageResult.appliedDamage, feedbackKind);
             state.defeatEventPublished = true;
         }
+    } else if (RailMothership::IsCombatActor(actor->desc.actorAssetId)) {
+        // Armour flashes on impact, but rapid primary hits never reset its
+        // warning or cooldown. Damage and the defeat event remain authoritative.
+        QueueEvent(*actor, EnemyCombatEventKind::HitReacted,
+            damageResult.shotId, damageResult.appliedDamage, feedbackKind);
     } else {
         state.resumePhase = EnemyCombatPhase::Recovering;
         EnterPhase(*actor, EnemyCombatPhase::HitReact,
@@ -373,6 +392,10 @@ void EnemyCombatSystem::EnterPhase(
     EnemyCombatRuntimeState& state = actor.combatState;
     if (state.phase == phase) {
         return;
+    }
+    if(phase==EnemyCombatPhase::Dying && actor.desc.meshId=="twin_shield_hull") {
+        actor.hasDefeatedPose=actor.weaponMount.ready;
+        if(actor.hasDefeatedPose) actor.defeatedPose=actor.weaponMount.dronePose;
     }
     state.phase = phase;
     state.phaseElapsedSeconds = 0.0f;

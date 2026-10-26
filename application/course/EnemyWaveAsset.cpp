@@ -39,6 +39,15 @@ bool EnemyWaveAsset::LoadFromFile(const std::string& path, std::string* errorMes
             if (parts.size() >= 3) {
                 loaded.displayName = parts[2];
             }
+        } else if (parts[0] == "deployment") {
+            if(parts.size()!=2) { if(errorMessage) *errorMessage="Invalid deployment row";return false; }
+            if(parts[1]=="automatic") loaded.entrySource=EnemyEntrySource::Automatic;
+            else if(parts[1]=="carrier") loaded.entrySource=EnemyEntrySource::Carrier;
+            else if(parts[1]=="rock_left") loaded.entrySource=EnemyEntrySource::RockLeft;
+            else if(parts[1]=="rock_right") loaded.entrySource=EnemyEntrySource::RockRight;
+            else if(parts[1]=="high") loaded.entrySource=EnemyEntrySource::High;
+            else if(parts[1]=="side_opening") loaded.entrySource=EnemyEntrySource::SideOpening;
+            else {if(errorMessage) *errorMessage="Unknown enemy deployment source";return false;}
         } else if (parts[0] == "formation") {
             if (parts.size() < 4) {
                 if (errorMessage != nullptr) {

@@ -1,4 +1,5 @@
 #include "EngineContext.h"
+#include "AppSceneResources.h"
 
 #include <cassert>
 #include <d3d12.h>
@@ -58,6 +59,13 @@ bool EngineContext::Initialize(HWND hwnd, UINT width, UINT height, bool enableDe
     // Descriptor heaps（AppMain の static g_descHeaps をここへ移す）
     heaps_.Initialize(device, /*rtv*/ 128, /*dsv*/ 32, /*srv*/ 4096);
 
+    // Reserve fixed application descriptors before the first dynamic SRV.
+    // In particular ImGui owns slot 0; allocating scene depth there lets font
+    // initialization silently replace the depth SRV used by fog and AO.
+    heaps_.srv.Reserve(AppSceneResources::kMaterialTextureSrvBaseIndex +
+        AppSceneResources::kMaterialTextureSrvCount);
+    heaps_.srv.ReserveRange(3200, 896);
+
     // DepthStencil + DSV
     depthStencil_ = CreateDepthStencilTextureResource(device, (int32_t)width, (int32_t)height);
 
@@ -96,6 +104,33 @@ bool EngineContext::Initialize(HWND hwnd, UINT width, UINT height, bool enableDe
     assert(fenceEvent_ != nullptr);
 
     fenceValue_ = 0;
+    return true;
+}
+
+bool EngineContext::ResizeSceneDepth(UINT width, UINT height) {
+    if (width == 0 || height == 0 || !dev_.GetDevice() ||
+        mainDsvIndex_ == UINT32_MAX || readOnlyDsvIndex_ == UINT32_MAX) return false;
+    if (depthStencil_) {
+        const auto desc = depthStencil_->GetDesc();
+        if (desc.Width == width && desc.Height == height) return true;
+    }
+    auto depth = CreateDepthStencilTextureResource(dev_.GetDevice(),
+        static_cast<int32_t>(width), static_cast<int32_t>(height));
+    if (!depth) return false;
+    auto* device = dev_.GetDevice();
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+    dsv.Format = DXGI_FORMAT_D24_UNORM_S8_UINT;
+    dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
+    device->CreateDepthStencilView(depth.Get(), &dsv, heaps_.dsv.GetHandle(mainDsvIndex_).cpu);
+    dsv.Flags = D3D12_DSV_FLAG_READ_ONLY_DEPTH | D3D12_DSV_FLAG_READ_ONLY_STENCIL;
+    device->CreateDepthStencilView(depth.Get(), &dsv, heaps_.dsv.GetHandle(readOnlyDsvIndex_).cpu);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srv.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(depth.Get(), &srv, depthSrv_.cpu);
+    depthStencil_ = std::move(depth);
     return true;
 }
 

@@ -1,0 +1,7 @@
+# Fixed ground battery: visible charge, three shootable energy rounds.
+actor|short_turret|Short Run Ground Battery|siege_turret|5.0|56|9|0.82|0.52|0.24|1|turret_readable_spread
+combat|2.8|0.40|38|turret_readable_spread
+movement|0
+behavior|turret|0.14|0.16|0.20|0.85|2.8|0.18|0.30|0|0|0|true
+engagement_band|false|38|58|82|14|2.2|44|10
+attack_pass|false|0.35|0.90|0.30

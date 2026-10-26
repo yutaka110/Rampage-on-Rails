@@ -85,6 +85,8 @@ ConstantBuffer<SpotLight> gSpotLight : register(b4);
 ConstantBuffer<CascadeShadowData> gCascadeShadow : register(b5);
 ConstantBuffer<TerrainPbrLibraryConstants> gTerrainPbr : register(b8);
 #include "TitleLighting.hlsli"
+#include "SunfallLighting.hlsli"
+#include "CaveLighting.hlsli"
 
 Texture2DArray<float4> gTerrainBaseColorArray : register(t0);
 TextureCube<float4> gEnvironmentTexture : register(t1);
@@ -250,7 +252,7 @@ static float3 EvaluateEnvironmentIbl(
         prefilteredEnvironment *
         (f0 * environmentBrdf.x + environmentBrdf.y);
 
-    float multiBounceAo = ao + (1.0f - ao) * saturate(baseColor * 0.35f);
+    float3 multiBounceAo = ao + (1.0f - ao) * saturate(baseColor * 0.35f);
     float intensity = lerp(0.32f, 1.0f, saturate(skyFillStrength));
     return (diffuseIbl * multiBounceAo + specularIbl * ao) * intensity;
 }
@@ -620,6 +622,10 @@ static TerrainPbrSurface SampleTerrainPbrSurface(
         normal.y);
     float wetNoise = 1.0f - TerrainNoise(worldPosition * 0.31f + 43.0f);
     float wetWeight = (1.0f - floorWeight) * smoothstep(0.46f, 0.82f, wetNoise) * 0.78f;
+    float dryStone=gMaterial.specularMode==14 ? 1.0f :
+        (sunfallSky.x>0.5f ? sunfallSky.y : 0.0f);
+    dryStone = max(dryStone, GameplayCaveWeight(worldPosition) * 0.95f);
+    wetWeight*=lerp(1.0f,0.12f,dryStone);
     float4 weights = float4(
         max(1.0f - floorWeight - wetWeight, 0.001f),
         max(wetWeight, 0.001f),
@@ -870,8 +876,9 @@ static float SampleCascadeShadow(float3 worldPosition, float3 normal, float3 lig
     {
         return 1.0f;
     }
+    if (gCascadeShadow.parameters.z > 1.5f && GameplayCaveWeight(worldPosition) < 0.001f) return 1.0f;
 
-    uint cascadeIndex = SelectCascade(worldPosition);
+    uint cascadeIndex = gCascadeShadow.parameters.z > 1.5f ? 0u : SelectCascade(worldPosition);
     float4 lightClip = mul(float4(worldPosition, 1.0f), gCascadeShadow.lightViewProjection[cascadeIndex]);
     if (abs(lightClip.w) < 1.0e-5f)
     {
@@ -912,14 +919,16 @@ PixelShaderOutput main(VertexShaderOutput input)
     PixelShaderOutput output;
 
     float3 normal = SafeNormalize(input.normal);
+    float caveAmount = GameplayCaveWeight(input.worldPosition);
     float2 terrainUv = input.texcoord;
     float2 surfaceAttributes = DecodeTerrainSurfaceAttributes(terrainUv);
     // Authored title OBJ UVs carry ordinary coordinates / cave depth, whereas
     // streamed gameplay terrain packs contact AO and rock variation into UVs.
     bool titleLandscape = titleSubject.w > 0.5f &&
         (gMaterial.specularMode == 6 || gMaterial.specularMode == 7 || gMaterial.specularMode == 9);
-    float contactAo = titleLandscape ? 0.0f : surfaceAttributes.x;
-    float rockVariation = titleLandscape ? 0.5f : surfaceAttributes.y;
+    bool authoredLandscape = titleLandscape || gMaterial.specularMode == 14;
+    float contactAo = authoredLandscape ? 0.0f : surfaceAttributes.x;
+    float rockVariation = authoredLandscape ? 0.5f : surfaceAttributes.y;
     TerrainPbrSurface pbrSurface =
         SampleTerrainPbrSurface(input.worldPosition, normal);
     float4 texColor = pbrSurface.baseColor;
@@ -943,6 +952,9 @@ PixelShaderOutput main(VertexShaderOutput input)
     float skyFillStrength = saturate(gMaterial.skyFillStrength);
     float floorSandShadowStrength = saturate(gMaterial.floorSandShadowStrength);
     float backlightRimBoost = saturate(gMaterial.backlightRimBoost);
+    detailNormalStrength *= lerp(1.0f, 0.65f, caveAmount);
+    microDetailStrength *= lerp(1.0f, 0.65f, caveAmount);
+    cavityAoStrength *= lerp(1.0f, 0.70f, caveAmount);
     detailNormalStrength *= lerp(0.72f, 1.28f, saturate(pbrSurface.detailNormalStrength));
     specularStrength *= lerp(1.18f, 0.20f, saturate(pbrSurface.roughness));
     {
@@ -955,8 +967,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         float2 pbrSlope = pbrSurface.mappedNormal.xy;
         normal = SafeNormalize(
             normal +
-            tangent * pbrSlope.x * pbrSurface.normalStrength +
-            bitangent * pbrSlope.y * pbrSurface.normalStrength);
+            (tangent * pbrSlope.x + bitangent * pbrSlope.y) * pbrSurface.normalStrength * lerp(1.0f, 0.65f, caveAmount));
     }
     float cameraDistance = distance(cameraWorldPosition, input.worldPosition);
     float wallMaskBeforeDetail = WallDetailMask(normal);
@@ -1053,6 +1064,8 @@ PixelShaderOutput main(VertexShaderOutput input)
     ao *= lerp(1.0f, 0.20f, rootContact);
 
     float3 sandstone = texColor.rgb * gMaterial.color.rgb;
+    float stoneLuminance = dot(sandstone, float3(0.2126f, 0.7152f, 0.0722f));
+    sandstone = lerp(sandstone, stoneLuminance.xxx, caveAmount * 0.22f);
     float3 warmHigh = float3(1.15f, 0.92f, 0.62f);
     float3 coolLow = float3(0.55f, 0.38f, 0.25f);
     float3 rockColor = lerp(coolLow, warmHigh, saturate(noise * 0.9f + 0.12f));
@@ -1092,11 +1105,19 @@ PixelShaderOutput main(VertexShaderOutput input)
         wallWetRidgeMask +
         floorWaterFilmMask * 0.72f +
         pbrSurface.wetness * 0.18f);
+    float dryStone=gMaterial.specularMode==14 ? 1.0f :
+        (sunfallSky.x>0.5f ? sunfallSky.y : 0.0f);
+    dryStone = max(dryStone, caveAmount * 0.95f);
+    wetCanyonMask*=lerp(1.0f,0.18f,dryStone);
     float wetDarkenMask = saturate(wallWetRidgeMask * 0.74f + floorWaterFilmMask * 0.24f);
+    wetDarkenMask *= lerp(1.0f, 0.30f, caveAmount);
     float3 wetStoneTint = lerp(float3(0.42f, 0.38f, 0.34f), float3(0.55f, 0.53f, 0.47f), rockVariation);
     rockColor = lerp(rockColor, rockColor * wetStoneTint, wetDarkenMask * 0.32f);
     float3 distantAirColor = lerp(float3(0.58f, 0.61f, 0.61f), float3(0.86f, 0.88f, 0.85f), distanceAir);
-    rockColor = lerp(rockColor, distantAirColor * (0.70f + rockVariation * 0.08f), distantWallAtmosphere * 0.42f);
+    // Outdoor air is composited once after lighting. Baking grey haze into
+    // the albedo as well erases mineral colour when display exposure is fixed.
+    float legacyAirWeight=1.0f-(sunfallSky.x>0.5f ? sunfallSky.y : 0.0f);
+    rockColor = lerp(rockColor, distantAirColor * (0.70f + rockVariation * 0.08f), distantWallAtmosphere * 0.42f * legacyAirWeight);
     ao = lerp(ao, 0.82f, distantWallAtmosphere * 0.48f);
 
     if (gMaterial.enableLighting == 0)
@@ -1115,6 +1136,9 @@ PixelShaderOutput main(VertexShaderOutput input)
     float titleShadow = titleLandscape ? TitleGroundShadow(input.worldPosition,SafeNormalize(input.normal)) : 0.0f;
     float shadowVisibility = titleLandscape ? 1.0f-titleShadow :
         SampleCascadeShadow(input.worldPosition, normal, lightDir);
+    // Reuse the dust volume's local shadow map inside the cave. Preserve the
+    // existing outdoor presentation when full cascades are disabled.
+    if (gCascadeShadow.parameters.z > 1.5f) shadowVisibility = lerp(1.0f, shadowVisibility, caveAmount);
 
     float wetSurface = saturate(
         wetCanyonMask * 0.78f +
@@ -1127,6 +1151,13 @@ PixelShaderOutput main(VertexShaderOutput input)
         roughness,
         min(roughness + 0.10f, 1.0f),
         saturate(dryGrain * 0.18f + distantWallAtmosphere * 0.24f));
+    roughness=max(roughness,lerp(0.045f,0.62f,dryStone));
+    roughness = max(roughness, caveAmount * 0.72f);
+    // A pixel covers many normal-map facets in the distance. Integrate their
+    // variance into roughness instead of producing isolated mirror-white dots.
+    float3 normalDx=ddx(normal),normalDy=ddy(normal);
+    float normalVariance=min(0.25f,0.5f*(dot(normalDx,normalDx)+dot(normalDy,normalDy)));
+    roughness=sqrt(saturate(roughness*roughness+normalVariance));
     float metallic = saturate(pbrSurface.metallic);
     float3 f0 = lerp(
         float3(0.04f, 0.04f, 0.04f),
@@ -1157,6 +1188,12 @@ PixelShaderOutput main(VertexShaderOutput input)
         roughness,
         ao,
         skyFillStrength);
+    float openingProximity = 0.0f;
+    float3 openingIrradiance = 0.0f;
+    [branch] if (caveAmount > 0.001f)
+        openingIrradiance = CaveOpeningIrradiance(input.worldPosition, SafeNormalize(input.normal), openingProximity);
+    directLighting *= lerp(1.0f, 0.05f + openingProximity * 0.55f, caveAmount);
+    environmentLighting *= lerp(1.0f, 0.22f, caveAmount);
     if (titleLandscape) {
         // The title uses a clear-colour sky instead of the gameplay skybox.
         // Supply its diffuse sky irradiance alongside the shared specular IBL
@@ -1166,8 +1203,35 @@ PixelShaderOutput main(VertexShaderOutput input)
         environmentLighting *= 1.0f-titleShadow*0.65f;
     }
     float3 lit = directLighting + environmentLighting;
+    // Low-chroma diffuse bounce keeps the combat space readable. Warm light
+    // grows around real terrain openings instead of lighting the whole ceiling.
+    float3 caveAlbedo = lerp(rockColor, sandstone, 0.65f);
+    float caveBounceHemisphere = lerp(0.82f, 1.18f, saturate(input.normal.y * 0.5f + 0.5f));
+    // Lift exposed shadow midtones between openings, without raising the
+    // opening highlights or filling cracks and rock/floor contact shadows.
+    // A neutral second bounce leaves the warmer portal light distinct.
+    float caveInteriorFill = 1.0f - smoothstep(0.12f, 0.65f, openingProximity);
+    float caveSurfaceVisibility = smoothstep(0.20f, 0.80f, ao) * (1.0f - rootContact * 0.65f);
+    float caveFillHemisphere = lerp(0.65f, 1.0f, saturate(input.normal.y * 0.5f + 0.5f));
+    float3 caveBounce = float3(0.43f, 0.41f, 0.37f) * caveBounceHemisphere;
+    caveBounce += float3(0.12f, 0.12f, 0.12f) * caveInteriorFill * caveSurfaceVisibility * caveFillHemisphere;
+    lit += caveAmount * caveAlbedo * lerp(0.70f, 1.0f, ao) *
+        (caveBounce + openingIrradiance);
+    if(sunfallSky.x>0.5f && !titleLandscape) {
+        float3 sky=SunfallSkyIrradiance(SafeNormalize(input.normal),lightDir,
+            gDirectionalLight.color.rgb,gDirectionalLight.intensity);
+        // Procedural dark crevices already tint rockColor; do not bake those
+        // directional shadows a second time into the broad sky bounce.
+        float3 bounceAlbedo=lerp(rockColor,sandstone,0.40f);
+        float shadowFill=lerp(1.10f,0.75f,saturate(nDotL*shadowVisibility));
+        lit+=bounceAlbedo*(1.0f-metallic)*sky*lerp(0.65f,1.0f,ao)*sunfallSky.y*sunfallSky.z*shadowFill;
+        float3 reflectedSky=SunfallSkyRadiance(reflect(-viewDir,normal),lightDir,
+            gDirectionalLight.color.rgb,gDirectionalLight.intensity);
+        float2 envBrdf=EnvironmentBrdfApprox(roughness,nDotV);
+        lit+=reflectedSky*(f0*envBrdf.x+envBrdf.y)*sunfallSky.y*0.32f*lerp(0.55f,1.0f,ao);
+    }
     float3 canyonAirLight = lerp(float3(0.42f, 0.46f, 0.47f), float3(0.76f, 0.78f, 0.76f), distanceAir);
-    lit = lerp(lit, canyonAirLight, distantWallAtmosphere * 0.26f);
+    if(sunfallSky.x<0.5f) lit = lerp(lit, canyonAirLight, distantWallAtmosphere * 0.26f);
 
     float silhouetteBase = 1.0f - saturate(dot(normal, viewDir));
     float silhouette = Pow2(silhouetteBase) * lerp(1.0f, silhouetteBase, 0.35f);
@@ -1181,8 +1245,24 @@ PixelShaderOutput main(VertexShaderOutput input)
     float rim = silhouette * (0.24f + boostedBackLight + grazingLight * (0.22f + backlightRimBoost * 0.16f * wallRimMask)) * rimStrength;
     rim *= lerp(1.0f, 1.34f, edgeOnlyRim * backlightRimBoost);
     rim *= 1.0f + highFrequencyDetail * wallRimMask * 0.28f;
+    // This artistic rim predates linear display output. Broad outdoor sky
+    // bounce now supplies readability; keep the rim from bleaching the rock.
+    if(sunfallSky.x>0.5f) rim*=lerp(1.0f,0.35f,sunfallSky.y);
+    rim *= lerp(1.0f, 0.04f * shadowVisibility, caveAmount);
     float3 rimTint = lerp(float3(1.08f, 0.94f, 0.78f), float3(0.72f, 0.84f, 1.02f), saturate(wetCanyonMask * 0.72f + backlightRimBoost * 0.18f));
     lit += gDirectionalLight.color.rgb * rimTint * rim * gDirectionalLight.intensity;
+
+    [unroll] for(int source=0;source<2;++source) {
+        float3 boostDirection;
+        float3 boostEnergy=RailBoostRadiance(input.worldPosition,source,boostDirection);
+        lit+=rockColor*boostEnergy*saturate(dot(normal,boostDirection))*0.35f;
+    }
+
+    // READY contact light shares the actual wall position used by sparks and dust.
+    if (!titleLandscape && titleRailImpact.w > 0.0f) {
+        lit += rockColor * TitleImpactRadiance(input.worldPosition) *
+            saturate(dot(normal, TitleImpactDirection(input.worldPosition))) * 0.48f;
+    }
 
     if (titleLandscape) {
         if (gMaterial.specularMode == 7) {

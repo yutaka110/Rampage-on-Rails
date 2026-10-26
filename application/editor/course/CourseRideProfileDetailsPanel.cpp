@@ -1,5 +1,9 @@
 #include "CourseRideProfileDetailsPanel.h"
 
+#if defined(_MSC_VER)
+#pragma execution_character_set("utf-8")
+#endif
+
 #include "../../externals/imgui/imgui.h"
 
 #include <algorithm>
@@ -28,6 +32,21 @@ constexpr CourseRideSpeedMode kSpeedModes[]{
     CourseRideSpeedMode::Cinematic,
     CourseRideSpeedMode::Recovery,
 };
+
+const char* SpeedModeLabel(CourseRideSpeedMode mode) {
+    switch (mode) {
+    case CourseRideSpeedMode::Inherit: return "コース設定を継承";
+    case CourseRideSpeedMode::Cruise: return "通常走行";
+    case CourseRideSpeedMode::Combat: return "戦闘";
+    case CourseRideSpeedMode::HighSpeed: return "高速走行";
+    case CourseRideSpeedMode::Tunnel: return "トンネル";
+    case CourseRideSpeedMode::Boss: return "ボス戦";
+    case CourseRideSpeedMode::Setpiece: return "特殊演出";
+    case CourseRideSpeedMode::Cinematic: return "映像演出";
+    case CourseRideSpeedMode::Recovery: return "復帰";
+    }
+    return "不明";
+}
 
 } // namespace
 
@@ -77,19 +96,19 @@ void CourseRideProfileDetailsPanel::Draw(
     const CourseRideProfileDefinition* source =
         FindProfile(context.course, guid);
     if (source == nullptr) {
-        ImGui::TextDisabled("Selected Ride Profile no longer exists.");
+        ImGui::TextDisabled("選択した走行設定は存在しません。");
         return;
     }
 
-    ImGui::TextUnformatted("Course Ride Profile");
+    ImGui::TextUnformatted("区間の走行設定");
     ImGui::TextDisabled("GUID: %s", source->editorGuid.c_str());
-    ImGui::Text("Range %.2f - %.2f  (%.2f m)",
+    ImGui::Text("範囲: %.2f〜%.2f m（長さ %.2f m）",
         buffer_.startDistance,
         buffer_.endDistance,
         buffer_.endDistance - buffer_.startDistance);
     if (continuousEditActive_) {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.35f, 0.88f, 1.0f, 1.0f), "LIVE PREVIEW");
+        ImGui::TextColored(ImVec4(0.35f, 0.88f, 1.0f, 1.0f), "調整をプレビュー中");
     }
 
     const bool canEdit = context.canMutateAuthoring && !buffer_.editorLocked;
@@ -107,7 +126,7 @@ void CourseRideProfileDetailsPanel::Draw(
 
     ImGui::BeginDisabled(!canEdit);
     const bool nameChanged = ImGui::InputText(
-        "Display Name", displayNameBuffer_.data(), displayNameBuffer_.size());
+        "表示名", displayNameBuffer_.data(), displayNameBuffer_.size());
     if (nameChanged) ReadTextBuffers();
     if (ImGui::IsItemActivated()) BeginContinuousEdit(context);
     if (nameChanged) RefreshPreview(context);
@@ -117,21 +136,21 @@ void CourseRideProfileDetailsPanel::Draw(
 
     const float maximumDistance = (std::max)(
         context.railLength, buffer_.endDistance + 1.0f);
-    editFloat("Start Distance", &buffer_.startDistance, 0.5f, 0.0f,
+    editFloat("開始距離", &buffer_.startDistance, 0.5f, 0.0f,
         maximumDistance, "Move Ride Profile Start");
     buffer_.startDistance = (std::clamp)(
         buffer_.startDistance, 0.0f, buffer_.endDistance - 0.001f);
-    editFloat("End Distance", &buffer_.endDistance, 0.5f,
+    editFloat("終了距離", &buffer_.endDistance, 0.5f,
         buffer_.startDistance + 0.001f, maximumDistance,
         "Move Ride Profile End");
     buffer_.endDistance = (std::max)(
         buffer_.endDistance, buffer_.startDistance + 0.001f);
 
     if (ImGui::BeginCombo(
-            "Speed Mode", ToCourseRideSpeedModeString(buffer_.speedMode))) {
+            "走行モード", SpeedModeLabel(buffer_.speedMode))) {
         for (const CourseRideSpeedMode mode : kSpeedModes) {
             if (ImGui::Selectable(
-                    ToCourseRideSpeedModeString(mode), mode == buffer_.speedMode)) {
+                    SpeedModeLabel(mode), mode == buffer_.speedMode)) {
                 CourseRideProfileDefinition changed = buffer_;
                 changed.speedMode = mode;
                 CommitProfile(context, changed, "Set Ride Profile Speed Mode");
@@ -139,48 +158,49 @@ void CourseRideProfileDetailsPanel::Draw(
         }
         ImGui::EndCombo();
     }
-    editFloat("Speed Multiplier", &buffer_.speedMultiplier, 0.01f,
+    editFloat("速度の倍率", &buffer_.speedMultiplier, 0.01f,
         0.0f, 4.0f, "Edit Ride Speed Multiplier");
-    editFloat("Target Speed (-1 = upstream)", &buffer_.targetSpeedOverride,
+    editFloat("目標速度", &buffer_.targetSpeedOverride,
         0.25f, -1.0f, 1000.0f, "Edit Ride Target Speed");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("-1の場合は、区間に入る前の速度設定を継承します。");
 
-    ImGui::SeparatorText("Motion Envelope");
-    editFloat("Acceleration Scale", &buffer_.accelerationScale,
+    ImGui::SeparatorText("加減速の調整");
+    editFloat("加速の倍率", &buffer_.accelerationScale,
         0.01f, 0.05f, 4.0f, "Edit Ride Acceleration Scale");
-    editFloat("Braking Scale", &buffer_.brakingScale,
+    editFloat("減速の倍率", &buffer_.brakingScale,
         0.01f, 0.05f, 4.0f, "Edit Ride Braking Scale");
-    editFloat("Maximum Jerk", &buffer_.maximumJerk,
+    editFloat("加速度変化の上限", &buffer_.maximumJerk,
         1.0f, 0.1f, 2000.0f, "Edit Ride Maximum Jerk");
-    editFloat("Corner Entry Look Ahead", &buffer_.cornerEntryLookAheadDistance,
+    editFloat("カーブ先読み距離", &buffer_.cornerEntryLookAheadDistance,
         0.5f, 0.1f, 1000.0f, "Edit Ride Corner Look Ahead");
-    editFloat("Corner Speed Scale", &buffer_.cornerSpeedScale,
+    editFloat("カーブ速度の倍率", &buffer_.cornerSpeedScale,
         0.01f, 0.1f, 2.0f, "Edit Ride Corner Speed Scale");
 
-    ImGui::SeparatorText("Turn Feel");
-    editFloat("Turn Anticipation", &buffer_.turnAnticipationDistance,
+    ImGui::SeparatorText("曲がり方の調整");
+    editFloat("旋回の先読み距離", &buffer_.turnAnticipationDistance,
         0.5f, 0.0f, 500.0f, "Edit Ride Turn Anticipation");
-    editFloat("Visual Bank Scale", &buffer_.visualBankScale,
+    editFloat("車体傾きの倍率", &buffer_.visualBankScale,
         0.01f, 0.0f, 4.0f, "Edit Ride Bank Scale");
-    editFloat("Maximum Bank Degrees", &buffer_.maximumVisualBankDegrees,
+    editFloat("車体傾きの上限角", &buffer_.maximumVisualBankDegrees,
         0.25f, 0.0f, 60.0f, "Edit Ride Maximum Bank");
 
-    ImGui::SeparatorText("Transitions");
+    ImGui::SeparatorText("区間の切り替え");
     const float intervalLength = (std::max)(
         0.001f, buffer_.endDistance - buffer_.startDistance);
-    editFloat("Blend In Distance", &buffer_.blendInDistance,
+    editFloat("入りの切替距離", &buffer_.blendInDistance,
         0.25f, 0.0f, intervalLength, "Edit Ride Blend In");
     buffer_.blendInDistance = (std::clamp)(
         buffer_.blendInDistance, 0.0f, intervalLength);
-    editFloat("Blend Out Distance", &buffer_.blendOutDistance,
+    editFloat("戻りの切替距離", &buffer_.blendOutDistance,
         0.25f, 0.0f, intervalLength, "Edit Ride Blend Out");
     buffer_.blendOutDistance = (std::clamp)(
         buffer_.blendOutDistance, 0.0f, intervalLength);
 
-    ImGui::SeparatorText("Camera Intent");
+    ImGui::SeparatorText("区間で使用するカメラ");
     const char* cameraLabel = buffer_.cameraShotId.empty()
-        ? "None" : buffer_.cameraShotId.c_str();
-    if (ImGui::BeginCombo("Camera Shot", cameraLabel)) {
-        if (ImGui::Selectable("None", buffer_.cameraShotId.empty())) {
+        ? "なし" : buffer_.cameraShotId.c_str();
+    if (ImGui::BeginCombo("カメラ区間", cameraLabel)) {
+        if (ImGui::Selectable("なし", buffer_.cameraShotId.empty())) {
             CourseRideProfileDefinition changed = buffer_;
             changed.cameraShotId.clear();
             CommitProfile(context, changed, "Clear Ride Camera Shot");
@@ -198,7 +218,7 @@ void CourseRideProfileDetailsPanel::Draw(
         ImGui::EndCombo();
     }
     const bool cameraTextChanged = ImGui::InputText(
-        "Camera Shot ID", cameraShotBuffer_.data(), cameraShotBuffer_.size());
+        "カメラ区間ID", cameraShotBuffer_.data(), cameraShotBuffer_.size());
     if (cameraTextChanged) ReadTextBuffers();
     if (ImGui::IsItemActivated()) BeginContinuousEdit(context);
     if (cameraTextChanged) RefreshPreview(context);
@@ -207,7 +227,7 @@ void CourseRideProfileDetailsPanel::Draw(
     }
 
     bool enabled = buffer_.enabled;
-    if (ImGui::Checkbox("Gameplay Enabled", &enabled)) {
+    if (ImGui::Checkbox("ゲーム内で有効", &enabled)) {
         CourseRideProfileDefinition changed = buffer_;
         changed.enabled = enabled;
         CommitProfile(context, changed, "Set Ride Profile Gameplay State");
@@ -216,34 +236,34 @@ void CourseRideProfileDetailsPanel::Draw(
 
     bool visible = buffer_.editorVisible;
     ImGui::BeginDisabled(!context.canMutateAuthoring);
-    if (ImGui::Checkbox("Editor Visible", &visible)) {
+    if (ImGui::Checkbox("マップに表示", &visible)) {
         CourseRideProfileDefinition changed = buffer_;
         changed.editorVisible = visible;
         CommitProfile(context, changed, "Set Ride Profile Visibility");
     }
     bool locked = buffer_.editorLocked;
-    if (ImGui::Checkbox("Editor Locked", &locked)) {
+    if (ImGui::Checkbox("編集をロック", &locked)) {
         CourseRideProfileDefinition changed = buffer_;
         changed.editorLocked = locked;
         CommitProfile(context, changed, "Set Ride Profile Lock");
     }
     ImGui::EndDisabled();
 
-    ImGui::SeparatorText("Preview");
-    if (ImGui::Button("Jump Start")) {
+    ImGui::SeparatorText("プレビュー");
+    if (ImGui::Button("開始位置")) {
         context.sequencer->SetPreviewPosition(buffer_.startDistance, true);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Jump Mid")) {
+    if (ImGui::Button("中央位置")) {
         context.sequencer->SetPreviewPosition(
             (buffer_.startDistance + buffer_.endDistance) * 0.5f, true);
     }
     ImGui::SameLine();
-    if (ImGui::Button("Jump End")) {
+    if (ImGui::Button("終了位置")) {
         context.sequencer->SetPreviewPosition(buffer_.endDistance, true);
     }
     ImGui::TextDisabled(
-        "Preview distance: %.2f", context.sequencer->PreviewPosition());
+        "確認位置: %.2f m", context.sequencer->PreviewPosition());
 
     std::string validationError;
     if (!buffer_.Validate(&validationError)) {
@@ -298,7 +318,7 @@ void CourseRideProfileDetailsPanel::RefreshPreview(
     profile->editorGuid = selectedGuid_;
     context.course->SortForRuntime();
     previewApplied_ = true;
-    lastMessage_ = "Live Ride Profile preview active.";
+    lastMessage_ = "走行設定の調整をプレビュー中です。";
 }
 
 void CourseRideProfileDetailsPanel::RestorePreview(CourseAsset* course) {
@@ -330,13 +350,13 @@ bool CourseRideProfileDetailsPanel::CommitProfile(
     std::string_view label) {
     if (context.course == nullptr || context.bridge == nullptr ||
         context.sequencer == nullptr || !context.canMutateAuthoring) {
-        lastMessage_ = "Ride Profile authoring is currently read-only.";
+        lastMessage_ = "現在は走行設定を編集できません。";
         return false;
     }
     const CourseRideProfileDefinition* current =
         FindProfile(context.course, selectedGuid_);
     if (current == nullptr) {
-        lastMessage_ = "Selected Ride Profile no longer exists.";
+        lastMessage_ = "選択した走行設定は存在しません。";
         return false;
     }
     CourseRideProfileDefinition changed = profile;

@@ -72,7 +72,8 @@ void CourseRailTrackMeshBakePipeline::Reset() {
 bool CourseRailTrackMeshBakePipeline::Bake(
     const CourseRailTrackDefinitionAsset& definition,
     const RailPath& railPath,
-    std::string* errorMessage) {
+    std::string* errorMessage,
+    float rearPresentationLength) {
     CourseRailTrackMeshBakeResult next{};
     next.definition = definition;
     next.assetId = definition.assetId;
@@ -197,6 +198,39 @@ bool CourseRailTrackMeshBakePipeline::Bake(
         }
     }
 
+    // Optional immutable scenery beyond the playable start. Neither RailPath,
+    // course markers nor the vehicle's distance are shifted by this extension.
+    const float rearLength=std::isfinite(rearPresentationLength)
+        ? (std::clamp)(rearPresentationLength,0.0f,240.0f) : 0.0f;
+    const auto origin=railPath.Evaluate(0.0f);
+    const auto appendRear=[&](CourseRailTrackMeshPart part,float begin,float end,
+            float lateral,float vertical,Vector3 scale,Vector4 color,uint32_t ordinal) {
+        CourseRailTrackBakedInstance instance;
+        instance.part=part; instance.meshId=definition.trackUnitMeshId;
+        instance.startDistance=begin;instance.endDistance=end;instance.detailOrdinal=ordinal;
+        instance.color=color;
+        const auto center=Add(origin.position,Add(Scale(origin.tangent,(begin+end)*0.5f),
+            Add(Scale(origin.right,lateral),Scale(origin.up,vertical))));
+        instance.worldMatrix=MakeBasisWorld(origin.right,origin.up,origin.tangent,scale,center);
+        next.instances.push_back(std::move(instance));
+    };
+    for(uint32_t i=0;i<static_cast<uint32_t>(std::ceil(rearLength/definition.bakeSegmentLength));++i) {
+        const float end=-static_cast<float>(i)*definition.bakeSegmentLength;
+        const float begin=-(std::min)(rearLength,(i+1)*definition.bakeSegmentLength);
+        for(int side:{-1,1}) {
+            appendRear(side<0?CourseRailTrackMeshPart::LeftRail:CourseRailTrackMeshPart::RightRail,
+                begin,end,side*halfGauge,definition.railHeadVerticalOffset,
+                {definition.railHeadWidth,definition.railHeadHeight,end-begin},definition.railColor,i);
+            ++next.railSegmentCount;
+        }
+    }
+    for(uint32_t i=1;i<=static_cast<uint32_t>(std::floor(rearLength/definition.sleeperSpacing));++i) {
+        const float d=-static_cast<float>(i)*definition.sleeperSpacing;
+        appendRear(CourseRailTrackMeshPart::Sleeper,d,d,0,
+            definition.railHeadVerticalOffset+definition.sleeperVerticalOffset,
+            {definition.sleeperLength,definition.sleeperHeight,definition.sleeperWidth},definition.sleeperColor,i);
+        ++next.sleeperCount;
+    }
     std::stable_sort(next.instances.begin(), next.instances.end(),
         [](const CourseRailTrackBakedInstance& a,
            const CourseRailTrackBakedInstance& b) {
@@ -207,6 +241,7 @@ bool CourseRailTrackMeshBakePipeline::Bake(
     HashFloat(fingerprint, definition.trackGauge);
     HashFloat(fingerprint, definition.bakeSegmentLength);
     HashFloat(fingerprint, next.railLength);
+    if(rearLength>0.0f) HashFloat(fingerprint,rearLength);
     const RailPathSample first = EvaluateOpen(railPath, 0.0f);
     const RailPathSample last = EvaluateOpen(railPath, next.railLength);
     HashBytes(fingerprint, &first.position, sizeof(first.position));

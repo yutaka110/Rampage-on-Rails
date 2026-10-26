@@ -365,21 +365,49 @@ void CourseEventDispatcher::ApplyBulletPatternAsset(
     }
 }
 
+std::vector<CourseEnemyActorDesc> CourseEventDispatcher::GroundBatteryPlacements(const CourseAsset& course) {
+    std::vector<CourseEnemyActorDesc> placements;
+    for(const auto& event:course.events) {
+        if(event.type!="enemy_wave" || event.payload!="route:turret") continue;
+        const auto* wave=LoadEnemyWave(event.id);
+        if(!wave) continue;
+        for(const auto& unit:wave->units) {
+            const auto* asset=LoadActorAsset(unit.actorAssetId);
+            if(!asset || asset->id!="short_turret") continue;
+            CourseEnemyActorDesc desc{};ApplyActorAsset(desc,*asset);
+            desc.spawnDistance=event.distance;desc.distanceOffset=unit.distanceOffset;
+            desc.lateralOffset=unit.lateralOffset;desc.verticalOffset=unit.verticalOffset;
+            placements.push_back(std::move(desc));
+        }
+    }
+    return placements;
+}
+
+void CourseEventDispatcher::PlaceGroundBatteries(const CourseAsset& course,CourseSpawnRuntime& runtime) {
+    for(auto event:course.events) {
+        if(event.type!="enemy_wave" || event.payload!="route:turret") continue;
+        event.payload="preplaced:turret";
+        Dispatch({event},runtime,0);
+    }
+}
+
 void CourseEventDispatcher::SpawnEnemyWave(
     const CourseEventMarker& event,
     const EnemyWaveAsset& wave,
     CourseSpawnRuntime& spawnRuntime) {
     for (const EnemyWaveUnit& unit : wave.units) {
         CourseEnemyActorDesc desc{};
-        desc.waveId = event.id;
+        desc.waveId = event.payload == "route:adaptive" || event.payload == "route:support" ? event.editorGuid : event.id;
         if (wave.formationDefinition.has_value()) {
             desc.formationDefinition = *wave.formationDefinition;
-            // One Wave asset can be instantiated more than once; the event id
-            // is the runtime-stable formation identity for this occurrence.
-            desc.formationDefinition.definitionId = event.id;
+            // Adaptive instances retain a distinct occurrence identity even
+            // when they load the same left/right wave asset.
+            desc.formationDefinition.definitionId = desc.waveId;
         }
         desc.role = unit.role;
         desc.spawnDistance = event.distance;
+        desc.entrySource = wave.entrySource;
+        if(event.payload=="preplaced:turret") desc.stationaryActivationDistance=event.distance;
         const std::string actorAssetId = !unit.actorAssetId.empty()
             ? unit.actorAssetId
             : DefaultActorAssetForRole(unit.role);

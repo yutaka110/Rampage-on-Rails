@@ -20,3 +20,12 @@ Periodic low-frequency resonances, seeded Fourier noise and wheel-joint taps
 provide rail rumble and soft wind without recordings or external samples.
 Playback fades in and out, changes pitch gently during the start orbit and
 stops on the gameplay handoff. Other gameplay sounds are unaffected.
+
+## Manual boost ignition
+
+`rail_boost_ignition.wav` is original deterministic synthesis from
+`python tools/generate_rail_boost_audio.py`: a low mechanical engagement,
+rising motor tone and brief filtered pressure rush. No recordings or external
+samples are used. Mono 48,000 Hz, 16-bit PCM, 0.34 seconds, peak 0.78.
+It plays once per permitted boost start; the continuous rolling bed then
+follows actual excess speed. Pausing does not retrigger the ignition.

@@ -1,6 +1,7 @@
 #include "GameSessionRetryCoordinator.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace {
@@ -290,7 +291,12 @@ bool GameSessionRetryCoordinator::ValidateWaveCheckpoint(
     if (program == nullptr ||
         checkpoint_.wave.programFingerprint != program->sourceFingerprint ||
         checkpoint_.wave.wavePhases.size() != program->waves.size() ||
-        checkpoint_.wave.waveActiveSeconds.size() != program->waves.size()) {
+        checkpoint_.wave.waveActiveSeconds.size() != program->waves.size() ||
+        (!checkpoint_.wave.waveDistanceOffsets.empty() &&
+         checkpoint_.wave.waveDistanceOffsets.size() != program->waves.size()) ||
+        !std::isfinite(checkpoint_.wave.clearRecoverySeconds) || checkpoint_.wave.clearRecoverySeconds < 0.0f ||
+        std::any_of(checkpoint_.wave.waveDistanceOffsets.begin(), checkpoint_.wave.waveDistanceOffsets.end(),
+            [program](float offset) { return !std::isfinite(offset) || std::abs(offset) > program->railLength; })) {
         SetError(errorMessage, "Wave checkpoint does not match the current cooked ProgramAsset.");
         return false;
     }

@@ -155,8 +155,17 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
             enemy.desc.verticalOffset);
         anchor.screenRadius = (std::max)(input.settings.enemyScreenRadius, enemy.desc.radius * 12.0f);
         anchor.forwardDistance = distance - input.playerDistance;
+        if (input.viewRelativeTargeting) {
+            const auto delta = Subtract(anchor.worldPosition, input.cameraPosition);
+            const auto& f = input.viewForward;
+            anchor.forwardDistance = delta.x*f.x + delta.y*f.y + delta.z*f.z;
+        }
         anchor.priority = 1.0f;
-        anchor.maxStack = 1;
+        const bool weaponPart=RailMothership::PartIndex(enemy.desc.actorAssetId)>=0;
+        anchor.maxStack = weaponPart ? (std::min)(4,input.settings.maxLocks) :
+            (enemy.desc.actorAssetId=="short_mothership_core" ? input.settings.maxLocks : 1);
+        anchor.stackAcquireIntervalSeconds = weaponPart ? 0.22f :
+            (enemy.desc.actorAssetId=="short_mothership_core" ? 0.12f : 0.0f);
         anchor.lineOfSightBlocked = ResolveLineOfSightBlock(
             *input.spawnRuntime,
             *input.railPath,
@@ -189,6 +198,11 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
         const float size = (std::max)(obstacle.desc.halfExtents.x, obstacle.desc.halfExtents.y);
         anchor.screenRadius = (std::max)(input.settings.obstacleScreenRadius, size * 8.0f);
         anchor.forwardDistance = distance - input.playerDistance;
+        if (input.viewRelativeTargeting) {
+            const auto delta = Subtract(anchor.worldPosition, input.cameraPosition);
+            const auto& f = input.viewForward;
+            anchor.forwardDistance = delta.x*f.x + delta.y*f.y + delta.z*f.z;
+        }
         anchor.priority = 0.8f;
         anchor.maxStack = 1;
         anchor.lineOfSightBlocked = ResolveLineOfSightBlock(

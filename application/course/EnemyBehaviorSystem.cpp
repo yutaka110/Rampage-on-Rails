@@ -361,10 +361,11 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
     hasPreviousPlayerDistance_ = true;
     for (CourseEnemyActor& actor : actors) {
         if (!actor.behaviorState.initialized) InitializeActor(actor);
+        if(actor.stationaryDormant) continue;
         EnemyBehaviorRuntimeState& state = actor.behaviorState;
         const EnemyBehaviorDefinition& definition = actor.behaviorDefinition;
         ++frame_.activeActors;
-        if (!definition.commercialBehavior) continue;
+        if (!definition.commercialBehavior || actor.startupFlightControlled) continue;
 
         const bool combatDisabled = actor.combatState.initialized &&
             (actor.combatState.phase == EnemyCombatPhase::Dying ||
@@ -625,6 +626,10 @@ void EnemyBehaviorSystem::ApplyMovement(
 
 bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
         float playerDistance, float playerForwardSpeed) {
+    if(actor.startupFlightControlled) return false;
+    if(deltaTime>0 && actor.terrainIngress.finished &&
+        actor.terrainIngress.elapsed-actor.terrainIngress.delay-actor.terrainIngress.duration<deltaTime)
+        return false; // The flight already advanced this frame's complete pose.
     bool bandCorrection = false;
     EnemyBehaviorRuntimeState& state = actor.behaviorState;
     const EnemyBehaviorDefinition& definition = actor.behaviorDefinition;
@@ -736,7 +741,7 @@ bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
             ? 1.25f * std::sin(t * 0.31f + identity * 1.37f) +
                 0.55f * std::sin(t * 0.77f + identity * 2.13f) : 0.0f;
     }
-    if (state.state == EnemyBehaviorState::Evading &&
+    if (definition.movementEnabled && state.state == EnemyBehaviorState::Evading &&
         !definition.choreographedAttackPass && !individualHover) {
         const float evadeProgress = actor.behaviorDefinition.evadeDurationSeconds > 0.0f
             ? Saturate(state.stateElapsedSeconds /

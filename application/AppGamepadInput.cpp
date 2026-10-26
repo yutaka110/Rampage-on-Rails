@@ -118,6 +118,7 @@ AppGamepadFrame AppGamepadInput::Poll() noexcept {
         XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE);
 
     const uint16_t buttons = state.Gamepad.wButtons;
+    frame.boostHeld = (buttons & XINPUT_GAMEPAD_LEFT_THUMB) != 0;
     const uint16_t edgeBaseline = newlyConnected ? buttons : previousButtons_;
     frame.toggleSkeletonPressed =
         IsPressed(buttons, edgeBaseline, XINPUT_GAMEPAD_A);

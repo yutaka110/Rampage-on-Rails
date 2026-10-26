@@ -1,0 +1,7 @@
+# A light boss: eight locks may stack onto its exposed rear reactor.
+actor|short_mothership_core|Carrier Rear Reactor|mothership_core|6.5|680|240|1|0.34|0.06|1|mothership_readable_spread
+combat|3.0|1.0|42|mothership_readable_spread
+movement|0
+behavior|boss|0.65|0.4|0.3|1.0|3.0|0.2|0.45|0|0|0|true
+engagement_band|true|68|82|108|22|2.4|55|10
+attack_pass|false|0.35|0.90|0.30

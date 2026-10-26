@@ -87,6 +87,7 @@ void EnemyFormationSystem::BeginFrame(CourseSpawnRuntime& runtime) {
 void EnemyFormationSystem::BeginFrameActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime) {
     for (CourseEnemyActor& actor : actors) {
+        if(actor.startupFlightControlled) continue;
         EnemyFormationMemberRuntimeState& member = actor.formationState;
         if (!member.initialized) continue;
         actor.desc.distanceOffset -= member.appliedForwardOffset;
@@ -140,6 +141,7 @@ void EnemyFormationSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         ? (std::clamp)(deltaTime, 0.0f, 0.25f) : 0.0f;
     std::unordered_map<std::string, std::vector<CourseEnemyActor*>> groups;
     for (CourseEnemyActor& actor : actors) {
+        if(actor.startupFlightControlled) continue;
         const std::string formationId = FormationId(actor);
         const bool explicitlyAuthored =
             !actor.desc.formationDefinition.definitionId.empty();
@@ -326,6 +328,7 @@ void EnemyFormationSystem::ApplyHoverSpacing(std::span<CourseEnemyActor> actors,
         return Vector2{lateral/depth,vertical/depth};
     };
     for(auto& actor:actors) {
+        if(actor.startupFlightControlled) continue;
         const auto& behavior=actor.behaviorDefinition;
         auto& member=actor.formationState;
         const bool hovering=actor.desc.meshId=="twin_shield_hull" &&

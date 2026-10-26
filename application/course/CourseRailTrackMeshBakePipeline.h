@@ -48,7 +48,8 @@ public:
     bool Bake(
         const CourseRailTrackDefinitionAsset& definition,
         const RailPath& railPath,
-        std::string* errorMessage = nullptr);
+        std::string* errorMessage = nullptr,
+        float rearPresentationLength = 0.0f);
 
     const CourseRailTrackMeshBakeResult& Result() const noexcept { return result_; }
 

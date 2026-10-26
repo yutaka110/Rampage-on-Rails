@@ -48,7 +48,9 @@ float4 main(PSInput input) : SV_TARGET
     float exponentialMask = 1.0f - exp(-rangeMask * rangeMask * max(gFogDensity, 0.0f) * 1.45f);
     float farBoostMask = smoothstep(saturate(gFogDepthBoostStart), 1.0f, rangeMask);
     float depthBoost = farBoostMask * max(gFogDepthBoost, 0.0f) * (0.35f + rangeMask * 0.65f);
-    float skyMask = smoothstep(0.988f, 1.0f, deviceDepth) * 0.26f;
+    // With near=0.1, depth 0.988 is only about eight world units away.
+    // Reserve sky treatment for the clear depth, not nearby combat geometry.
+    float skyMask = smoothstep(0.999995f, 1.0f, deviceDepth) * 0.26f;
 
     float3 fogColor = saturate(float3(gFogColorR, gFogColorG, gFogColorB));
     float verticalLift = smoothstep(0.48f, 1.0f, uv.y);
@@ -74,6 +76,8 @@ float4 main(PSInput input) : SV_TARGET
         smoothstep(0.18f, 0.84f, rangeMask);
 
     float fogMask = saturate(max(exponentialMask + depthBoost, skyMask) * gIntensity + floorLayer * 0.18f);
+    fogMask *= smoothstep(max(nearPlane + 1.0f, gFogStart * 0.50f),
+        max(gFogStart, nearPlane + 2.0f), linearDepth);
     fogMask = min(fogMask, 0.52f + openingGlow * 0.12f);
     float3 liftedFog =
         fogColor +
@@ -97,5 +101,5 @@ float4 main(PSInput input) : SV_TARGET
     float3 whiteHot = float3(1.0f, 0.965f, 0.90f);
     result += whiteHot * openingGlow * 0.26f;
     result += float3(0.22f, 0.30f, 0.36f) * floorLayer * coolFloor * 0.11f;
-    return float4(saturate(result), color.a);
+    return float4(max(result,0.0f), color.a);
 }

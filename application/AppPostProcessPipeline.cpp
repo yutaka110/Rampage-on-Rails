@@ -1,6 +1,8 @@
 #include "AppPostProcessPipeline.h"
 
 #include <string>
+#include <algorithm>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -8,6 +10,9 @@
 #include "AppImGuiLayer.h"
 #include "AppPipelines.h"
 #include "AppVfxRenderTargets.h"
+#include "AppSceneResources.h"
+#include "AppRuntimeState.h"
+#include "terrain/TerrainChunkManager.h"
 #include "PostProcessStack.h"
 #include "graphics/RenderGraph.h"
 
@@ -246,19 +251,115 @@ void BuildPassParams(const PostProcessPass& postPass, float passParams[kPostProc
     }
 }
 
+void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sceneInput) {
+    ctx.renderGraph->DeclareTransientRenderTarget("SunfallVolume",0.5f,DXGI_FORMAT_R16G16B16A16_FLOAT);
+    ctx.renderGraph->DeclareTransientRenderTarget("SunfallColor",1.0f,DXGI_FORMAT_R16G16B16A16_FLOAT);
+    ctx.renderGraph->AddPass({"Atmosphere.SunfallVolume",ge3::graphics::RenderPassLayer::PostProcess,
+        {{"SceneDepth",ge3::graphics::RenderResourceAccessType::ReadDepth},
+         {"SunfallShadow",ge3::graphics::RenderResourceAccessType::ReadSrv},
+         {"SunfallVolume",ge3::graphics::RenderResourceAccessType::WriteRtv}},"",
+        [ctx](ge3::graphics::RenderPassContext& pass) {
+            const auto& settings=ctx.runtimeState->sunfall;
+            if(!ctx.scene->mappedCascadeShadow || !ctx.appPipelines->GetSunfallVolumePSO() ||
+                ctx.depthTextureHandle.ptr==0 || ctx.scene->cascadeShadowSrvGpuHandles[0].ptr==0) return;
+            SunfallFrameConstants constants;
+            auto vp=ctx.frameState->viewProjectionMatrix;
+            constants.inverseViewProjection=Inverse(vp);
+            constants.lightViewProjection=ctx.scene->mappedCascadeShadow->lightViewProjection[0];
+            const auto eye=ctx.frameState->cameraWorldPosition;
+            constants.cameraAndTime={eye.x,eye.y,eye.z,ctx.beamTime};
+            const auto& sun=ctx.runtimeState->directionalLightData;
+            constants.sunDirectionAndStrength={sun.direction.x,sun.direction.y,sun.direction.z,
+                (std::clamp)(sun.intensity,0.0f,6.0f)};
+            constants.sunColorAndDensity={sun.color.x,sun.color.y,sun.color.z,
+                (std::clamp)(settings.density,0.0f,0.008f)};
+            constants.rangeHeightAndGround={(std::clamp)(settings.maxDistance,40.0f,240.0f),
+                (std::clamp)(settings.heightFalloff,4.0f,100.0f),ctx.sunfallGroundHeight,ctx.sunfallOutdoorBlend};
+            constants.windAndShadow={settings.windSpeed*0.8f,settings.windSpeed*0.35f,
+                ctx.scene->mappedCascadeShadow->parameters.x,
+                ctx.terrainChunkManager && !ctx.terrainChunkManager->RenderChunks().empty() ? 1.0f : 0.0f};
+            ID3D12DescriptorHeap* heaps[]={ctx.srvDescriptorHeap};
+            pass.commandList->SetDescriptorHeaps(1,heaps);
+            pass.commandList->SetGraphicsRootSignature(ctx.appPipelines->GetSunfallRootSignature());
+            pass.commandList->SetPipelineState(ctx.appPipelines->GetSunfallVolumePSO());
+            pass.commandList->SetGraphicsRootDescriptorTable(0,ctx.depthTextureHandle);
+            pass.commandList->SetGraphicsRootDescriptorTable(1,ctx.scene->cascadeShadowSrvGpuHandles[0]);
+            pass.commandList->SetGraphicsRoot32BitConstants(2,52,&constants,0);
+            pass.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            pass.commandList->DrawInstanced(3,1,0,0);
+        }});
+    ctx.renderGraph->AddPass({"Atmosphere.SunfallComposite",ge3::graphics::RenderPassLayer::PostProcess,
+        {{sceneInput,ge3::graphics::RenderResourceAccessType::ReadSrv},
+         {"SunfallVolume",ge3::graphics::RenderResourceAccessType::ReadSrv},
+         {"SceneDepth",ge3::graphics::RenderResourceAccessType::ReadDepth},
+         {"SunfallColor",ge3::graphics::RenderResourceAccessType::WriteRtv}},"",
+        [ctx,sceneInput](ge3::graphics::RenderPassContext& pass) {
+            // Real projection planes, not a second hard-coded depth convention.
+            const auto& p=ctx.frameState->projMatrix.m;
+            const float nearPlane=-p[3][2]/p[2][2];
+            const float farPlane=-p[3][2]/(p[2][2]-1.0f);
+            const auto& sun=ctx.runtimeState->directionalLightData;
+            const float params[16]={(std::clamp)(ctx.runtimeState->sunfall.strength,0.0f,1.0f),nearPlane,farPlane,
+                ctx.sunfallOutdoorBlend,sun.color.x,sun.color.y,sun.color.z,sun.intensity};
+            ctx.vfxRenderTargets->ExecuteDebugPreviewPass(pass.commandList,"SunfallColor",
+                ctx.appPipelines->GetCompositeRootSignature(),ctx.appPipelines->GetSunfallCompositePSO(),
+                ctx.vfxRenderTargets->GetSrvHandle(sceneInput),ctx.vfxRenderTargets->GetSrvHandle("SunfallVolume"),
+                ctx.depthTextureHandle,params);
+        }});
+}
+
 } // namespace
 
+PostProcessExecutionPlan AppPostProcessPipeline::BuildExecutionPlan(const PostProcessStack& stack,bool sunfall) {
+    if(!sunfall) return stack.BuildExecutionPlan();
+    auto passes=stack.Passes();
+    auto tone=std::find_if(passes.begin(),passes.end(),[](const auto& p){return p.pipeline=="ToneMapping";});
+    auto glow=std::find_if(passes.begin(),passes.end(),[](const auto& p){return p.pipeline=="GlowComposite";});
+    if(tone!=passes.end() && glow!=passes.end() && tone<glow &&
+        tone->outputResource=="PostProcessSwapOutput" && glow->outputResource=="PostProcessSwapOutput" &&
+        tone->inputResource=="PostProcessOutput" && glow->tertiaryInputResource=="PostProcessOutput") {
+        auto tonePass=*tone;
+        const auto insertion=static_cast<size_t>(glow-passes.begin());
+        passes.erase(tone);
+        passes.insert(passes.begin()+insertion,std::move(tonePass));
+    }
+    PostProcessStack adapted=stack;
+    std::string error;
+    if(!adapted.ReplacePasses(std::move(passes),&error)) return stack.BuildExecutionPlan();
+    return adapted.BuildExecutionPlan();
+}
+
 void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx) const {
-    const PostProcessExecutionPlan executionPlan = ctx.postProcessStack->BuildExecutionPlan();
+    const bool sunfall=ctx.sunfallActive && ctx.runtimeState && ctx.runtimeState->sunfall.enabled;
+    const PostProcessExecutionPlan executionPlan = BuildExecutionPlan(*ctx.postProcessStack,sunfall);
     const std::string finalOutputResource =
         executionPlan.finalOutputResource.empty() ? "SceneColor" : executionPlan.finalOutputResource;
+    std::unordered_map<std::string,std::string> aliases;
+    if(sunfall && !executionPlan.passes.empty()) {
+        RegisterSunfall(ctx,"SceneColor");
+        aliases["SceneColor"]="SunfallColor";
+    }
+    bool beforeTone=true;
+    const bool hasTone=std::any_of(executionPlan.passes.begin(),executionPlan.passes.end(),
+        [](const auto& item){return item.pass.pipeline=="ToneMapping";});
     for (const PostProcessExecutionPass& executionPass : executionPlan.passes) {
-        const PostProcessPass& postPass = executionPass.pass;
+        PostProcessPass postPass = executionPass.pass;
+        const auto resolve=[&](std::string& name) {const auto found=aliases.find(name);if(found!=aliases.end()) name=found->second;};
+        resolve(postPass.inputResource);resolve(postPass.secondaryInputResource);resolve(postPass.tertiaryInputResource);
+        if(postPass.pipeline=="ToneMapping") beforeTone=false;
+        const bool hdr=sunfall && beforeTone && (hasTone || &executionPass!=&executionPlan.passes.back());
+        if(sunfall && postPass.pipeline=="BloomExtract") {
+            postPass.inputResource="SunfallColor";
+            postPass.secondaryInputResource="VfxAccumulation";
+        }
+        const auto logicalOutput=postPass.outputResource;
+        if(hdr) postPass.outputResource="SunfallHdr."+logicalOutput;
+        aliases[logicalOutput]=postPass.outputResource;
 
         ctx.renderGraph->DeclareTransientRenderTarget(
             postPass.outputResource,
             postPass.resolutionScale,
-            DXGI_FORMAT_R8G8B8A8_UNORM);
+            hdr ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM);
         std::vector<ge3::graphics::RenderPassResourceAccess> accesses = {
             {postPass.inputResource, ge3::graphics::RenderResourceAccessType::ReadSrv},
             {postPass.outputResource, ge3::graphics::RenderResourceAccessType::WriteRtv},
@@ -276,15 +377,38 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
             ge3::graphics::RenderPassLayer::PostProcess,
             std::move(accesses),
             "",
-            [ctx, postPass](ge3::graphics::RenderPassContext& passContext) {
+            [ctx, postPass, hdr](ge3::graphics::RenderPassContext& passContext) {
                 ID3D12DescriptorHeap* descriptorHeaps[] = { ctx.srvDescriptorHeap };
                 passContext.commandList->SetDescriptorHeaps(1, descriptorHeaps);
-                ID3D12PipelineState* pipelineState = ResolvePostProcessPso(*ctx.appPipelines, postPass.pipeline);
+                ID3D12PipelineState* pipelineState = hdr ? ctx.appPipelines->GetHdrPostProcessPSO(postPass.pipeline) :
+                    ResolvePostProcessPso(*ctx.appPipelines, postPass.pipeline);
                 if (pipelineState == nullptr) {
                     return;
                 }
                 float passParams[kPostProcessParamCount] = {};
                 BuildPassParams(postPass, passParams);
+                if(ctx.sunfallActive && postPass.pipeline=="BloomExtract") {
+                    passParams[5]=passParams[1];passParams[6]=passParams[2];
+                    passParams[1]=0.90f;passParams[2]=1.65f;passParams[4]=1.0f;
+                }
+                if(ctx.sunfallActive && postPass.pipeline=="GlowComposite") {
+                    // Warm neutral light shares the sun's palette; weapon cores
+                    // keep their own colours in the final VFX composition.
+                    passParams[1]*=0.65f;
+                    passParams[2]=passParams[3]=passParams[4]=1.0f;
+                }
+                if(ctx.sunfallActive && postPass.pipeline=="ToneMapping") {
+                    passParams[1]*=ctx.sunfallExposure;
+                    passParams[2]=1.0f; // Linear HDR -> display sRGB on the UNORM target.
+                }
+                if(ctx.sunfallActive && postPass.pipeline=="DistanceFog") {
+                    // Real shadowed sunlight replaces the screen-fixed glow.
+                    passParams[0]*=0.65f*(1.0f-ctx.sunfallOutdoorBlend*0.85f);
+                    passParams[11]=passParams[12]=0.0f;
+                    passParams[13]*=0.40f*(1.0f-ctx.sunfallOutdoorBlend);
+                    passParams[14]*=0.60f*(1.0f-ctx.sunfallOutdoorBlend*0.75f);
+                    passParams[15]*=1.0f-ctx.sunfallOutdoorBlend*0.85f;
+                }
                 if (postPass.pipeline == "AccretionComposite") {
                     passParams[2] = ctx.beamTime;
                     uint32_t targetWidth = 0;
@@ -340,6 +464,38 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                         passParams);
                 }
         }});
+    }
+
+    if (ctx.HasRailBoostBlur()) {
+        // Resolve through a separate target, then copy to the normal logical
+        // output. Both the fullscreen and editor viewport therefore see the
+        // effect, with no simultaneous sampling/writing of the same texture.
+        ctx.renderGraph->DeclareTransientRenderTarget("RailBoostBlurred",1.0f,DXGI_FORMAT_R8G8B8A8_UNORM);
+        ctx.renderGraph->AddPass({"PostProcess.RailBoostPeripheralBlur",ge3::graphics::RenderPassLayer::PostProcess,
+            {{finalOutputResource,ge3::graphics::RenderResourceAccessType::ReadSrv},
+             {"RailBoostProtection",ge3::graphics::RenderResourceAccessType::ReadSrv},
+             {"RailBoostBlurred",ge3::graphics::RenderResourceAccessType::WriteRtv}},"",
+            [ctx,finalOutputResource](ge3::graphics::RenderPassContext& pass) {
+                // Mode -1 packs its optical pulse and two exhaust projections
+                // into the existing constants; no extra fullscreen pass.
+                const float params[16]={0,0,0,1,ctx.railBoostBlurStrength,-1,ctx.railBoostIgnitionShock,0,
+                    ctx.railBoostBlurFocus.x,ctx.railBoostBlurFocus.y,
+                    ctx.railBoostLensSources[0].x,ctx.railBoostLensSources[0].y,
+                    ctx.railBoostLensSources[1].x,ctx.railBoostLensSources[1].y,
+                    ctx.railBoostLensVisibility[0],ctx.railBoostLensVisibility[1]};
+                ctx.vfxRenderTargets->ExecutePostProcessPass(pass.commandList,"RailBoostBlurred",
+                    ctx.appPipelines->GetCompositeRootSignature(),ctx.appPipelines->GetCompositePSO(),
+                    finalOutputResource,"RailBoostProtection",finalOutputResource,params);
+            }});
+        ctx.renderGraph->AddPass({"PostProcess.RailBoostResolve",ge3::graphics::RenderPassLayer::PostProcess,
+            {{"RailBoostBlurred",ge3::graphics::RenderResourceAccessType::ReadSrv},
+             {finalOutputResource,ge3::graphics::RenderResourceAccessType::WriteRtv}},"",
+            [ctx,finalOutputResource](ge3::graphics::RenderPassContext& pass) {
+                const float params[16]={0,0,0,1,0,-2};
+                ctx.vfxRenderTargets->ExecutePostProcessPass(pass.commandList,finalOutputResource,
+                    ctx.appPipelines->GetCompositeRootSignature(),ctx.appPipelines->GetCompositePSO(),
+                    "RailBoostBlurred","RailBoostBlurred","RailBoostBlurred",params);
+            }});
     }
 
     const bool editorViewportCompositedByImGui =

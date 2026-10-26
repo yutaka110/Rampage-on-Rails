@@ -12,6 +12,10 @@ struct Material
     float environmentCoefficient;
     int32_t specularMode;
     float pad_; // Mode 8: gameplay/title exposure ratio; otherwise padding.
+    float4 caveSurface; // Mode 15: colour/roughness; mode 10: world-to-part X column.
+    float4 caveResponse; // Mode 15: response; mode 10: world-to-part Y column.
+    float4 railLightingOrigin; // Mode 15: rail origin/distance; mode 10: world-to-part Z column.
+    float3 railLightingAxis; // Mode 15: rail gradient; mode 10: shield side, left/right attachment.
 };
 
 struct DirectionalLight
@@ -88,7 +92,7 @@ static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int
 {
     // Authored matte stone/paint: keep diffuse lighting, without washing out
     // fracture marks under the camera-facing spot light. 0/1 retain Phong/Blinn.
-    if (specularMode >= 2) return 0.0f;
+    if (specularMode >= 2 && specularMode != 15) return 0.0f;
     float power = max(shininess, 1.0f);
     if (specularMode == 0)
     {
@@ -101,6 +105,8 @@ static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int
 }
 
 #include "TitleLighting.hlsli"
+#include "SunfallLighting.hlsli"
+#include "CaveLighting.hlsli"
 
 // Mode 10 uses the existing normal SRV (t4); alpha carries linear roughness.
 // Other models continue to use their existing material modes and shader path.
@@ -135,6 +141,40 @@ static float3 DroneDirect(float3 base, float metal, float rough, float3 N, float
     return ((1.0f-F)*(1.0f-metal)*base/3.14159265f + D*G*F/max(4.0f*nv*max(nl,0.001f),0.001f))*radiance*nl;
 }
 
+// Small authored ambient occlusion volumes, not scene raycasts or a screen-space
+// outline. Positions are runtime left-handed model coordinates (front is -Z).
+static float DroneContactVisibility(float3 worldPosition, float3 shapeN)
+{
+    if (dot(gMaterial.caveSurface.xyz, gMaterial.caveSurface.xyz) < 1e-8f) return 1.0f;
+    float4 p = float4(worldPosition, 1.0f);
+    float3 local = float3(dot(p, gMaterial.caveSurface), dot(p, gMaterial.caveResponse),
+        dot(p, gMaterial.railLightingOrigin));
+    float3 localN = SafeNormalize(float3(
+        dot(shapeN, SafeNormalize(gMaterial.caveSurface.xyz)),
+        dot(shapeN, SafeNormalize(gMaterial.caveResponse.xyz)),
+        dot(shapeN, SafeNormalize(gMaterial.railLightingOrigin.xyz))));
+    float side = gMaterial.railLightingAxis.x;
+    float attachment = side < -0.5f || (abs(side) < 0.5f && local.x < 0.0f)
+        ? gMaterial.railLightingAxis.y : gMaterial.railLightingAxis.z;
+    float shade = 0.10f * smoothstep(0.05f, 0.85f, -localN.y);
+    if (abs(side) > 0.5f) {
+        // The inner thickness and rear mounting pad sit close to the hull.
+        float mount = 1.0f - smoothstep(0.22f, 0.58f, abs(local.y + 0.04f));
+        float inner = saturate(-side * localN.x);
+        float rear = smoothstep(-0.08f, 0.15f, local.z);
+        shade += attachment * mount * (0.20f * inner + 0.16f * rear);
+    } else {
+        float joint = (1.0f - smoothstep(0.12f, 0.34f, abs(abs(local.x) - 0.78f))) *
+            (1.0f - smoothstep(0.18f, 0.46f, abs(local.y + 0.10f))) *
+            (1.0f - smoothstep(0.22f, 0.48f, abs(local.z)));
+        float radius = length(local.xy);
+        float recess = smoothstep(0.16f, 0.23f, radius) *
+            (1.0f - smoothstep(0.34f, 0.44f, radius)) * smoothstep(0.48f, 0.63f, -local.z);
+        shade += 0.23f * joint * attachment + 0.16f * recess;
+    }
+    return max(0.68f, 1.0f - shade);
+}
+
 static float CartSurfaceNoise(float2 p)
 {
     float2 cell=floor(p), f=frac(p);
@@ -150,6 +190,71 @@ static float CartSurfaceNoise(float2 p)
 // ------------------------------------------------------------
 // PS Main
 // ------------------------------------------------------------
+static float3 CaveSubjectLighting(float3 base, float metal, float rough,
+    float3 N, float3 shapeN, float3 V, float3 worldPosition, float contactVisibility)
+{
+    float openingProximity;
+    float3 opening = CaveOpeningIrradiance(worldPosition, shapeN, openingProximity);
+    // Broad rock bounce is neutral; the same openings as the terrain provide
+    // warm directional gradients. Downward faces and running gear stay shaded.
+    float hemisphere = lerp(0.38f, 1.0f, saturate(shapeN.y * 0.5f + 0.5f));
+    float3 irradiance = float3(0.46f, 0.44f, 0.40f) * hemisphere + opening * 0.62f;
+    float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base, metal);
+    float3 lit = (base * (1.0f - metal) + f0 * 0.75f) * irradiance * contactVisibility;
+    lit += DroneDirect(base, metal, rough, N, V, SafeNormalize(-gDirectionalLight.direction),
+        gDirectionalLight.color.rgb * gDirectionalLight.intensity * (0.04f + openingProximity * 0.38f));
+    float3 reflected = gEnvironmentTexture.SampleLevel(gSampler, reflect(-V, N), rough * 4.0f).rgb;
+    lit += reflected * f0 * 0.06f * contactVisibility;
+    return lit;
+}
+
+static float3 RailBoostSurfaceLighting(float3 base,float metal,float rough,float3 N,float3 V,float3 worldPosition)
+{
+    float3 lighting=0.0f;
+    [unroll] for(int source=0;source<2;++source) {
+        float3 L;
+        float3 energy=RailBoostRadiance(worldPosition,source,L);
+        [branch] if(any(energy>0.0f))
+            lighting+=DroneDirect(base,metal,max(rough,0.30f),N,V,L,energy);
+    }
+    return lighting;
+}
+
+static float3 RailSurfaceLighting(float3 base, float metal, float rough,
+    float3 N, float3 V, float3 worldPosition, float contactVisibility, float caveWeight)
+{
+    // Evaluate derivatives before the varying cave/sky branch at the exit.
+    float3 dx = ddx(N), dy = ddy(N);
+    float variance = min(0.25f, 0.5f * (dot(dx, dx) + dot(dy, dy)));
+    float filteredRoughness = sqrt(saturate(rough * rough + variance));
+    float3 caveLit = 0.0f;
+    [branch] if (caveWeight > 0.0f)
+        caveLit = CaveSubjectLighting(base, metal, rough, N, N, V, worldPosition, contactVisibility);
+    float3 outdoorLit = 0.0f;
+    [branch] if (caveWeight < 1.0f) {
+        float3 L = SafeNormalize(-gDirectionalLight.direction);
+        float3 sun = gDirectionalLight.color.rgb * gDirectionalLight.intensity;
+        // Integrate the geometric normal variation of distant, subpixel rails
+        // into roughness so reflections do not become a continuous white line.
+        outdoorLit = DroneDirect(base, metal, filteredRoughness, N, V, L, sun);
+        float3 sky = SunfallSkyIrradiance(N, L, gDirectionalLight.color.rgb, gDirectionalLight.intensity);
+        float3 reflection = SunfallSkyRadiance(reflect(-V, N), L,
+            gDirectionalLight.color.rgb, gDirectionalLight.intensity);
+        if (sunfallSky.x < 0.5f) {
+            sky = float3(0.35f, 0.35f, 0.33f);
+            reflection = gEnvironmentTexture.SampleLevel(gSampler, reflect(-V, N), filteredRoughness * 4.0f).rgb;
+        }
+        float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base, metal);
+        // The albedo, metalness and roughness remain fixed across the exit.
+        // Only incident sky/sun energy changes; no legacy additive white gloss.
+        outdoorLit += (base * (1.0f - metal) * 0.65f + f0 * 0.45f) * sky * contactVisibility;
+        outdoorLit += f0 * lerp(reflection, sky, filteredRoughness * filteredRoughness) *
+            (0.18f * (1.0f - filteredRoughness * 0.5f)) * contactVisibility;
+    }
+    return lerp(outdoorLit, caveLit, caveWeight)+
+        RailBoostSurfaceLighting(base,metal,filteredRoughness,N,V,worldPosition);
+}
+
 PixelShaderOutput main(VertexShaderOutput input)
 {
     PixelShaderOutput output;
@@ -161,6 +266,34 @@ PixelShaderOutput main(VertexShaderOutput input)
 
     float3 baseRgb = texColor.rgb * gMaterial.color.rgb;
     float baseA = texColor.a * gMaterial.color.a;
+    float caveSurfaceWeight = 0.0f;
+    float3 caveSurfaceLit = 0.0f;
+    if (gMaterial.specularMode == 15) {
+        if (gMaterial.caveResponse.z > 0.5f && gMaterial.enableLighting != 0) {
+            float along = gMaterial.railLightingOrigin.w + dot(input.worldPosition -
+                gMaterial.railLightingOrigin.xyz, gMaterial.railLightingAxis);
+            float3 N = SafeNormalize(input.normal);
+            float3 V = SafeNormalize(cameraWorldPosition - input.worldPosition);
+            output.color = float4(RailSurfaceLighting(texColor.rgb * gMaterial.caveSurface.rgb,
+                gMaterial.caveResponse.x, gMaterial.caveSurface.w, N, V, input.worldPosition,
+                gMaterial.caveResponse.y, GameplayCaveWeightAtDistance(along)), baseA);
+            return output;
+        }
+        caveSurfaceWeight = GameplayCaveWeight(input.worldPosition);
+        [branch] if (caveSurfaceWeight > 0.001f) {
+            float3 N = SafeNormalize(input.normal);
+            float3 V = SafeNormalize(cameraWorldPosition - input.worldPosition);
+            float3 caveBase = texColor.rgb * gMaterial.caveSurface.rgb;
+            caveSurfaceLit = CaveSubjectLighting(caveBase, gMaterial.caveResponse.x,
+                gMaterial.caveSurface.w, N, N, V, input.worldPosition, gMaterial.caveResponse.y);
+            // Deep inside the cave, skip the legacy sun/point/spot rig entirely.
+            [branch] if (caveSurfaceWeight >= 0.999f) {
+                output.color = float4(caveSurfaceLit+RailBoostSurfaceLighting(caveBase,gMaterial.caveResponse.x,
+                    gMaterial.caveSurface.w,N,V,input.worldPosition),baseA);
+                return output;
+            }
+        }
+    }
 
     if (gMaterial.specularMode == 11) {
         float3 core = baseRgb*max(gMaterial.pad_,1.0f);
@@ -175,45 +308,61 @@ PixelShaderOutput main(VertexShaderOutput input)
         float rough = clamp(surface.a,0.30f,0.90f);
         float painted = saturate((texColor.r-texColor.b)*4.0f);
         float metal = lerp(saturate(gMaterial.environmentCoefficient),0.10f,painted);
-        float3 lit = DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(-gDirectionalLight.direction),
-            gDirectionalLight.color.rgb*gDirectionalLight.intensity);
-        float3 toPoint = gPointLight.position-input.worldPosition;
-        float pointAtten = pow(saturate(1.0f-length(toPoint)/max(gPointLight.radius,0.001f)),gPointLight.decay);
-        lit += DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(toPoint),gPointLight.color.rgb*gPointLight.intensity*pointAtten);
-        float3 toSpot = gSpotLight.position-input.worldPosition;
-        float spotAtten = pow(saturate(1.0f-length(toSpot)/max(gSpotLight.distance,0.001f)),gSpotLight.decay);
-        spotAtten *= saturate((dot(-SafeNormalize(toSpot),SafeNormalize(gSpotLight.direction))-gSpotLight.cosAngle)/max(1.0f-gSpotLight.cosAngle,0.0001f));
-        lit += DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(toSpot),gSpotLight.color.rgb*gSpotLight.intensity*spotAtten);
-        float3 reflected = gEnvironmentTexture.SampleLevel(gSampler,reflect(-V,N),rough*4.0f).rgb;
-        float3 f0 = lerp(float3(0.04f,0.04f,0.04f),baseRgb,metal);
-        float rim = pow(1.0f-saturate(abs(dot(N,V))),3.0f);
-        if (titleSubject.w > 0.5f) {
-            lit += reflected*f0*(1.0f-rough*0.55f) + baseRgb*0.38f;
-            lit += float3(0.18f,0.20f,0.22f)*rim;
-        } else {
-            // Cool upper-side key separates the metal from warm cave rock.
-            // Keep the mapped GGX response so opposing faces stay distinct.
-            float3 right=SafeNormalize(cross(float3(0,1,0),V));
-            float3 fill=SafeNormalize(V+right*0.70f+float3(0,0.85f,0));
-            lit += DroneDirect(baseRgb,metal,rough,N,V,fill,float3(4.2f,4.9f,5.8f));
-            // A broad soft frontal source reveals the sensor housing and shield
-            // faces at gameplay distance, rather than lighting only the bevels.
-            float3 front=SafeNormalize(V+right*0.20f+float3(0,0.25f,0));
-            lit += DroneDirect(baseRgb,metal,max(rough,0.55f),N,V,front,float3(2.2f,2.4f,2.7f));
-            float3 bounce=SafeNormalize(V*0.45f-right*0.65f-float3(0,0.40f,0));
-            lit += DroneDirect(baseRgb,metal,rough,N,V,bounce,float3(0.90f,0.73f,0.57f));
+        float caveAmount = GameplayCaveWeight(input.worldPosition);
+        float3 lit = 0.0f;
+        [branch] if (caveAmount < 0.999f) {
+            lit = DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(-gDirectionalLight.direction),
+                gDirectionalLight.color.rgb*gDirectionalLight.intensity);
+            float3 toPoint = gPointLight.position-input.worldPosition;
+            float pointAtten = pow(saturate(1.0f-length(toPoint)/max(gPointLight.radius,0.001f)),gPointLight.decay);
+            lit += DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(toPoint),gPointLight.color.rgb*gPointLight.intensity*pointAtten);
+            float3 toSpot = gSpotLight.position-input.worldPosition;
+            float spotAtten = pow(saturate(1.0f-length(toSpot)/max(gSpotLight.distance,0.001f)),gSpotLight.decay);
+            spotAtten *= saturate((dot(-SafeNormalize(toSpot),SafeNormalize(gSpotLight.direction))-gSpotLight.cosAngle)/max(1.0f-gSpotLight.cosAngle,0.0001f));
+            lit += DroneDirect(baseRgb,metal,rough,N,V,SafeNormalize(toSpot),gSpotLight.color.rgb*gSpotLight.intensity*spotAtten);
+            float3 reflected = gEnvironmentTexture.SampleLevel(gSampler,reflect(-V,N),rough*4.0f).rgb;
+            float3 f0 = lerp(float3(0.04f,0.04f,0.04f),baseRgb,metal);
+            float rim = pow(1.0f-saturate(abs(dot(N,V))),3.0f);
+            if (titleSubject.w > 0.5f) {
+                lit += reflected*f0*(1.0f-rough*0.55f) + baseRgb*0.38f;
+                lit += float3(0.18f,0.20f,0.22f)*rim;
+            } else {
+                // Cool upper-side key separates the metal from warm cave rock.
+                // Keep the mapped GGX response so opposing faces stay distinct.
+                float3 right=SafeNormalize(cross(float3(0,1,0),V));
+                float3 fill=SafeNormalize(V+right*0.70f+float3(0,0.85f,0));
+                lit += DroneDirect(baseRgb,metal,rough,N,V,fill,float3(4.2f,4.9f,5.8f));
+                // A broad soft frontal source reveals the sensor housing and shield
+                // faces at gameplay distance, rather than lighting only the bevels.
+                float3 front=SafeNormalize(V+right*0.20f+float3(0,0.25f,0));
+                lit += DroneDirect(baseRgb,metal,max(rough,0.55f),N,V,front,float3(2.2f,2.4f,2.7f));
+                float3 bounce=SafeNormalize(V*0.45f-right*0.65f-float3(0,0.40f,0));
+                lit += DroneDirect(baseRgb,metal,rough,N,V,bounce,float3(0.90f,0.73f,0.57f));
 
-            // Broad fill and edge reflection use the geometric normal: normal
-            // map scratches must not become a noisy glowing outline.
-            float3 shapeN=SafeNormalize(input.normal);
-            float skyFacing=saturate(shapeN.y*0.5f+0.5f);
-            float ambient=lerp(0.15f,0.34f,skyFacing);
-            lit += baseRgb*ambient + reflected*f0*(0.55f-rough*0.12f);
-            lit += f0*float3(0.18f,0.22f,0.28f)*lerp(0.50f,1.0f,skyFacing);
-            float3 edgeLight=SafeNormalize(-V*0.45f+right*0.90f+float3(0,0.70f,0));
-            float edge=pow(1.0f-saturate(abs(dot(shapeN,V))),2.8f);
-            edge *= smoothstep(-0.20f,0.65f,dot(shapeN,edgeLight));
-            lit += float3(0.20f,0.30f,0.40f)*edge*lerp(0.65f,1.0f,skyFacing);
+                // Broad fill and edge reflection use the geometric normal: normal
+                // map scratches must not become a noisy glowing outline.
+                float3 shapeN=SafeNormalize(input.normal);
+                float skyFacing=saturate(shapeN.y*0.5f+0.5f);
+                float ambient=lerp(0.15f,0.34f,skyFacing);
+                lit += baseRgb*ambient + reflected*f0*(0.55f-rough*0.12f);
+                lit += f0*float3(0.18f,0.22f,0.28f)*lerp(0.50f,1.0f,skyFacing);
+                float3 edgeLight=SafeNormalize(-V*0.45f+right*0.90f+float3(0,0.70f,0));
+                float edge=pow(1.0f-saturate(abs(dot(shapeN,V))),2.8f);
+                edge *= smoothstep(-0.20f,0.65f,dot(shapeN,edgeLight));
+                lit += float3(0.20f,0.30f,0.40f)*edge*lerp(0.65f,1.0f,skyFacing);
+            }
+        }
+        [branch] if (caveAmount > 0.001f) {
+            float3 shapeN = SafeNormalize(input.normal);
+            float contact = DroneContactVisibility(input.worldPosition, shapeN);
+            float3 caveLit = CaveSubjectLighting(baseRgb, metal, rough, N, shapeN, V, input.worldPosition, contact);
+            // Preserve the readable ambient floor. A higher, oblique soft key
+            // separates bevels/front/side instead of adding a frontal wash.
+            float3 right = SafeNormalize(cross(float3(0,1,0), V));
+            float3 key = SafeNormalize(V * 0.65f + right * 0.85f + float3(0,1.30f,0));
+            caveLit += DroneDirect(baseRgb, metal, max(rough, 0.48f), N, V, key,
+                float3(1.90f,2.10f,2.20f) * lerp(0.78f, 1.0f, contact));
+            lit = lerp(lit, caveLit, caveAmount);
         }
         lit = lerp(lit,float3(1.4f,1.15f,0.80f),saturate(gMaterial.pad_)*0.85f);
         if (titleSubject.w > 0.5f) lit = TitleAtmosphere(lit,input.worldPosition);
@@ -260,14 +409,26 @@ PixelShaderOutput main(VertexShaderOutput input)
         }
         float3 paint = DroneDirect(surfaceBase,metal,rough,N,V,L,
             gDirectionalLight.color.rgb*gDirectionalLight.intensity);
+        float caveAmount = GameplayCaveWeight(input.worldPosition);
+        float openingProximity = 0.0f;
+        float3 openingIrradiance = 0.0f;
+        [branch] if (caveAmount > 0.001f)
+            openingIrradiance = CaveOpeningIrradiance(input.worldPosition, N, openingProximity);
+        paint *= lerp(1.0f, 0.08f + openingProximity * 0.60f, caveAmount);
         float hemisphere = lerp(0.48f,1.0f,saturate(N.y*0.5f+0.5f));
         float cavity = wheel ? 0.80f : lerp(0.62f,1.0f,
             smoothstep(0.60f,2.8f,input.worldPosition.y-titleSubject.y));
-        float3 sky = TitleSkyIrradiance()*hemisphere*cavity;
+        float3 skyIrradiance=TitleSkyIrradiance();
+        if(sunfallSky.x>0.5f) skyIrradiance=lerp(skyIrradiance,
+            SunfallSkyIrradiance(N,L,gDirectionalLight.color.rgb,gDirectionalLight.intensity),sunfallSky.y);
+        float3 sky = skyIrradiance*hemisphere*cavity;
+        sky = lerp(sky, (float3(0.26f, 0.25f, 0.23f) + openingIrradiance) * hemisphere * cavity, caveAmount);
         float3 f0 = lerp(float3(0.04f,0.04f,0.04f),surfaceBase,metal);
         float3 reflected = gEnvironmentTexture.SampleLevel(gSampler,reflect(-V,N),rough*4.0f).rgb;
+        reflected *= lerp(1.0f, 0.18f, caveAmount);
         paint += surfaceBase*sky*0.42f*(1.0f-metal) + f0*(sky*0.24f+reflected*0.16f);
         if(!wheel) paint *= max(gMaterial.pad_,0.0001f);
+        paint+=RailBoostSurfaceLighting(surfaceBase,metal,rough,N,V,input.worldPosition);
         if (titleSubject.w > 0.5f) {
             paint *= TitleCaveExposure();
             paint += DroneDirect(surfaceBase,metal,rough,N,V,TitleImpactDirection(input.worldPosition),
@@ -426,6 +587,13 @@ PixelShaderOutput main(VertexShaderOutput input)
 
     }
 
+    if(sunfallSky.x>0.5f && gMaterial.enableLighting!=0 &&
+        gMaterial.specularMode!=3 && gMaterial.specularMode!=4 && gMaterial.specularMode!=5) {
+        float3 sky=SunfallSkyIrradiance(SafeNormalize(input.normal),SafeNormalize(-gDirectionalLight.direction),
+            gDirectionalLight.color.rgb,gDirectionalLight.intensity);
+        outRgb+=baseRgb*sky*sunfallSky.y*sunfallSky.z*0.75f;
+    }
+
     if (gMaterial.environmentCoefficient > 0.0f)
     {
         float3 N = SafeNormalize(input.normal);
@@ -452,6 +620,12 @@ PixelShaderOutput main(VertexShaderOutput input)
     // the sphere's texture or scene lighting. The owning attack gates them.
     if (gMaterial.specularMode == 5)
         outRgb = gMaterial.color.rgb * 1.6f;
+    if (gMaterial.specularMode == 15) {
+        outRgb = lerp(outRgb, caveSurfaceLit, caveSurfaceWeight);
+        outRgb+=RailBoostSurfaceLighting(lerp(baseRgb,texColor.rgb*gMaterial.caveSurface.rgb,caveSurfaceWeight),
+            gMaterial.caveResponse.x,gMaterial.caveSurface.w,SafeNormalize(input.normal),
+            SafeNormalize(cameraWorldPosition-input.worldPosition),input.worldPosition);
+    }
     output.color = float4(outRgb, baseA);
     return output;
 }

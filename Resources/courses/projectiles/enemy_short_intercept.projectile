@@ -1,0 +1,2 @@
+# Slow three-round interception beat; all normal dodging and interrupts remain valid.
+projectile|enemy_short_intercept|Interception Energy Orb|predictive|24|0|24|0|1|1.8|0|0.72|6.0|6|1.0|0.48|0.12|1|enemy_projectile_trail|ice_impact|shootdown,interrupt,lean|1|2.3

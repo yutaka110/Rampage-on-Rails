@@ -61,6 +61,17 @@ struct AppFrameGraphBuildContext {
     const EffectRuntimeFrame* effectRuntime = nullptr;
     ParticleRenderFallback primaryParticleFx{};
     float beamTime = 0.0f;
+    bool sunfallActive = false;
+    float sunfallGroundHeight = 0.0f;
+    float sunfallExposure = 1.0f;
+    float sunfallOutdoorBlend = 0.0f;
+    // Smoothed world-boost envelope + short ignition; zero allocates no boost targets.
+    float railBoostBlurStrength = 0.0f;
+    Vector2 railBoostBlurFocus{0.5f,0.42f};
+    float railBoostIgnitionShock=0.0f;
+    Vector2 railBoostLensSources[2]{};
+    float railBoostLensVisibility[2]{};
+    bool HasRailBoostBlur() const { return railBoostBlurStrength > 0.002f || railBoostIgnitionShock > 0.002f; }
     // Presentation-only; zero keeps the normal render path allocation-free.
     float railFilmBurnProgress = 0.0f;
     // Incoming reveal uses a quieter optical treatment than outgoing blackout.

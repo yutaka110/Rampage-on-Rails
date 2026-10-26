@@ -444,6 +444,63 @@ float4 PresentSandTransition(float2 uv) {
 float4 main(PSInput input) : SV_TARGET
 {
     float2 uv = saturate(input.uv);
+    // Boost uses this same shader in both the Release and editor viewport.
+    // Mode -2 is a pure copy; -1 blurs display colour before HUD/VFX overlays.
+    if (gAux5 < -1.5f) return gSceneColor.Sample(gSampler,uv);
+    if (gAux5 < -0.5f) {
+        uint width,height;
+        gSceneColor.GetDimensions(width,height);
+        float2 size=float2(width,height),texel=1.0f/size;
+        float4 original=gSceneColor.Sample(gSampler,uv);
+        float edge=max(abs(uv.x-0.5f),abs(uv.y-0.5f))*2.0f;
+        float peripheral=smoothstep(0.46f,0.94f,edge);
+        float strength=saturate(gAux4);
+        float shock=saturate(gAux6);
+        if(peripheral*strength<0.001f && shock<0.001f) return original;
+        // Preserve the exact subject silhouettes and a two-pixel guard band.
+        float protect=gVfxAccumulation.Sample(gSampler,uv).r;
+        protect=max(protect,gVfxAccumulation.Sample(gSampler,uv+float2(texel.x*2,0)).r);
+        protect=max(protect,gVfxAccumulation.Sample(gSampler,uv-float2(texel.x*2,0)).r);
+        protect=max(protect,gVfxAccumulation.Sample(gSampler,uv+float2(0,texel.y*2)).r);
+        protect=max(protect,gVfxAccumulation.Sample(gSampler,uv-float2(0,texel.y*2)).r);
+        float3 color=original.rgb;
+        if(protect<=0.01f && peripheral*strength>0.001f) {
+            float2 radial=(uv-gTunnelFocus)*size;
+            float radialLength=length(radial);
+            // Wider shutter at full speed, still zero at the aim center.
+            // Keep the same eight scene taps as the original boost pass.
+            float shutter=min((26.0f+shock*8.0f)*height/1080.0f,radialLength*0.10f)*strength*peripheral;
+            float2 direction=radial/max(radialLength,0.001f)*texel;
+            float3 sum=original.rgb;
+            float weights=1.0f;
+            [unroll] for(int i=1;i<8;++i) {
+                float2 sampleUv=saturate(uv-direction*shutter*(float(i)/7.0f));
+                // Reject protected taps too; an enemy leaves no blurred copy.
+                float accepted=1.0f-step(0.01f,gVfxAccumulation.Sample(gSampler,sampleUv).r);
+                float weight=accepted*(1.0f-float(i)*0.055f);
+                sum+=gSceneColor.Sample(gSampler,sampleUv).rgb*weight;
+                weights+=weight;
+            }
+            color=lerp(original.rgb,sum/weights,0.90f*peripheral);
+        }
+        if(shock>0.001f) {
+            // A neutral display-space lift, after tone mapping: black stays
+            // black and highlights roll off instead of clipping to white.
+            // HUD and shootable world-projectile overlays are drawn later.
+            float response=lerp(1.0f,0.25f,step(0.01f,protect));
+            color+=color*(1.0f-saturate(color))*(0.22f*shock*response);
+            float aspect=float(width)/max(float(height),1.0f);
+            float2 source0=(uv-gImpactScreen)*float2(aspect*5.0f,8.0f);
+            float2 source1=(uv-float2(gLensLeak,gLensAge))*float2(aspect*5.0f,8.0f);
+            // Just a thin lens bloom at the actual roots; the world plume and
+            // surface reflections supply the sustained energy and colour.
+            float halo=exp(-dot(source0,source0))*saturate(gTunnelShade)+
+                exp(-dot(source1,source1))*saturate(gCollapseDust);
+            color+=(1.0f-saturate(color))*float3(0.045f,0.14f,0.19f)*halo*shock*response;
+        }
+        return float4(color,original.a);
+    }
+
     // Mode 1 presents the already composed scene + HUD exactly once. Do not
     // apply the normal luminance fallback or add VFX again during blackout.
     if (gAux5 > 0.5f) {

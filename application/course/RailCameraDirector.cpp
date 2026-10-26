@@ -147,6 +147,13 @@ void AppendMode(std::string& mode, const char* label) {
     }
 }
 
+bool IsCameraThreat(const CourseEnemyActor& actor) {
+    return actor.desc.hitPoints > 0.0f && !actor.entranceExitState.exitComplete &&
+        actor.entranceExitState.phase != EnemyEntranceExitPhase::Exited &&
+        (!actor.combatState.initialized || (actor.combatState.currentHitPoints > 0.0f &&
+         actor.combatState.phase != EnemyCombatPhase::Dying && actor.combatState.phase != EnemyCombatPhase::Retired));
+}
+
 float Degrees(float value) {
     return value * kPi / 180.0f;
 }
@@ -609,6 +616,9 @@ void RailCameraDirector::Reset() {
 
 void RailCameraDirector::NotifyCourseEvents(const std::vector<CourseEventMarker>& events) {
     for (const CourseEventMarker& event : events) {
+        // Route patrols belong to continuous travel, not a repeated wave reveal.
+        // Living targets still use the ordinary smoothed framing/safety path.
+        if(event.type=="enemy_wave" && event.payload.starts_with("route:")) continue;
         if (encounterFramingSettings_.enabled) {
             const std::string eventName = event.id.empty() ? event.type : event.id;
             if (event.type == "enemy_wave") {
@@ -718,7 +728,7 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     frame.rig = SmoothRig(targetRig, input.deltaTime);
 
     const RailPathSample cameraSample = input.railPath->Evaluate(input.distance);
-    const RailPathSample lookSample = input.railPath->Evaluate(input.distance + frame.rig.lookAheadDistance);
+    const RailPathSample lookSample = input.railPath->EvaluateExtended(input.distance + frame.rig.lookAheadDistance);
     frame.position = Add(
         Add(
             Add(cameraSample.position, Scale(cameraSample.up, frame.rig.verticalOffset)),
@@ -790,6 +800,111 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame.rig.roll = Lerp(frame.rig.roll, rig.roll, handoffWeight);
         AppendMode(frame.mode, "Title Handoff");
     }
+    const float carrierWeight=std::isfinite(input.mothershipCameraWeight)
+        ? (std::clamp)(input.mothershipCameraWeight,0.0f,1.0f) : 0.0f;
+    const float carrierHero=std::isfinite(input.mothershipHeroWeight)
+        ? (std::clamp)(input.mothershipHeroWeight,0.0f,1.0f) : 0.0f;
+    if(carrierWeight>0.0f) {
+        // A dedicated wide reveal keeps the cart low in frame and gives the
+        // passing hull breathing room. Terrain and vehicle safety still run.
+        const Vector3 revealEye=Add(cameraSample.position,Add(
+            Scale(cameraSample.tangent,Lerp(-42.0f,-12.0f,carrierHero)),Add(
+            Scale(cameraSample.up,Lerp(11.0f,15.0f,carrierHero)),
+            Scale(cameraSample.right,Lerp(3.0f,12.0f,carrierHero)))));
+        frame.position=LerpVector3(frame.position,revealEye,carrierWeight);
+        const Vector3 cart=Add(cameraSample.position,Scale(cameraSample.up,3.0f));
+        const Vector3 cartDirection=NormalizeOr(Subtract(cart,frame.position),cameraSample.tangent);
+        const Vector3 shipDirection=NormalizeOr(Subtract(input.mothershipCameraSubject,frame.position),cameraSample.tangent);
+        const float cartShare=0.35f*(1.0f-carrierHero);
+        const Vector3 direction=NormalizeOr(Add(Scale(cartDirection,cartShare),
+            Scale(shipDirection,1.0f-cartShare)),cameraSample.tangent);
+        frame.target=LerpVector3(frame.target,Add(frame.position,Scale(direction,65.0f)),carrierWeight);
+        frame.baseTarget=frame.target;
+        frame.rig.fovY=Lerp(frame.rig.fovY,Degrees(Lerp(64.0f,48.0f,carrierHero)),carrierWeight);
+        frame.rig.roll*=1.0f-carrierWeight;
+        AppendMode(frame.mode,"Carrier Reveal");
+    }
+    const float startWeight=std::isfinite(input.startupCameraWeight)
+        ? (std::clamp)(input.startupCameraWeight,0.0f,1.0f) : 0.0f;
+    if(startWeight>0.0f) {
+        const auto toWorld=[&](Vector3 local) {
+            return Add(cameraSample.position,Add(Scale(cameraSample.right,local.x),
+                Add(Scale(cameraSample.up,local.y),Scale(cameraSample.tangent,local.z))));
+        };
+        const Vector3 eye=toWorld(input.startupCameraEyeOffset);
+        const auto subject=[&](uint32_t actorId,Vector3 fallback) {
+            Vector3 drone=toWorld(fallback);
+            if(input.spawnRuntime==nullptr || actorId==0) return drone;
+            for(const auto& actor:input.spawnRuntime->Enemies()) {
+                if(actor.actorId!=actorId) continue;
+                drone=ResolveRailLocal(*input.railPath,actor.desc.spawnDistance,
+                    actor.desc.distanceOffset,actor.desc.lateralOffset,actor.desc.verticalOffset);
+                const float distance=actor.desc.spawnDistance+actor.desc.distanceOffset;
+                if(distance<0.0f)
+                    drone=Add(drone,Scale(input.railPath->Evaluate(0.0f).tangent,distance));
+                break;
+            }
+            return drone;
+        };
+        const Vector3 drone=subject(input.startupCameraDroneId,input.startupCameraDroneOffset);
+        // Bisect viewing directions rather than world positions: a distant
+        // drone must not push the nearer cart off the opposite screen edge.
+        const Vector3 cartDirection=NormalizeOr(Subtract(toWorld({0,5.8f,0}),eye),cameraSample.tangent);
+        Vector3 droneDirection=NormalizeOr(Subtract(drone,eye),cameraSample.tangent);
+        if(input.startupCameraWingmanId!=0) {
+            const Vector3 wingman=subject(input.startupCameraWingmanId,input.startupCameraWingmanOffset);
+            const Vector3 wingmanDirection=NormalizeOr(Subtract(wingman,eye),droneDirection);
+            // Lead the eye with the first pass; a small group bias leaves room
+            // for the staggered second silhouette without switching subjects.
+            droneDirection=NormalizeOr(Add(Scale(droneDirection,0.78f),
+                Scale(wingmanDirection,0.22f)),droneDirection);
+        }
+        const Vector3 trackingDirection=NormalizeOr(Add(Scale(cartDirection,0.48f),
+            Scale(droneDirection,0.52f)),cameraSample.tangent);
+        const Vector3 trackingTarget=Add(eye,Scale(trackingDirection,32.0f));
+        const Vector3 departureTarget=toWorld({0.0f,2.0f,14.0f});
+        const Vector3 target=LerpVector3(departureTarget,trackingTarget,
+            (std::clamp)(input.startupCameraFocusBlend,0.0f,1.0f));
+        frame.position=LerpVector3(frame.position,eye,startWeight);
+        frame.target=LerpVector3(frame.target,target,startWeight);
+        frame.baseTarget=frame.target;
+        frame.rig.fovY=Lerp(frame.rig.fovY,input.startupCameraFovY,startWeight);
+        frame.rig.roll*=1.0f-startWeight;
+        frame.forward=NormalizeOr(Subtract(frame.target,frame.position),cameraSample.tangent);
+        AppendMode(frame.mode,"READY Pursuit");
+    }
+    // Explicit camera sections own the pose, while the common collision,
+    // visibility and comfort passes below still inspect the final result.
+    if (frame.authoredView.mode != CourseCameraViewMode::Inherit && frame.authoredView.Validate()) {
+        const auto& view = frame.authoredView;
+        const float w = SmoothStep(frame.cinematicShotWeight) *
+            (1.0f - (std::max)({handoffWeight, carrierWeight, startWeight}));
+        frame.authoredViewWeight = w;
+        const Vector3 baseForward = NormalizeOr(Subtract(frame.target, frame.position), cameraSample.tangent);
+        const float yaw = std::atan2(Dot(baseForward, cameraSample.right), Dot(baseForward, cameraSample.tangent));
+        const float pitch = std::asin((std::clamp)(Dot(baseForward, cameraSample.up), -1.0f, 1.0f));
+        // Interpolate angles rather than opposite look-at points: a 180-degree
+        // turn must never pass through a zero direction or flip in one frame.
+        // Authored yaw chooses the turn side, including an exact rear view.
+        // A shortest-arc choice would alternate sides as base yaw crosses zero.
+        const float blendedYaw = Lerp(yaw, view.yaw, w);
+        const float blendedPitch = Lerp(pitch, view.pitch, w);
+        const Vector3 direction = Add(Scale(cameraSample.up, std::sin(blendedPitch)),
+            Add(Scale(cameraSample.tangent, std::cos(blendedPitch) * std::cos(blendedYaw)),
+                Scale(cameraSample.right, std::cos(blendedPitch) * std::sin(blendedYaw))));
+        const Vector3 eye = Add(cameraSample.position,
+            Add(Scale(cameraSample.right, view.positionOffset.x),
+                Add(Scale(cameraSample.up, view.positionOffset.y), Scale(cameraSample.tangent, view.positionOffset.z))));
+        frame.position = LerpVector3(frame.position, eye, w);
+        frame.target = Add(frame.position, Scale(direction, 54.0f));
+        frame.baseTarget = frame.target;
+        frame.rig.fovY = Lerp(frame.rig.fovY, view.fovY, w);
+        if (view.mode == CourseCameraViewMode::Custom)
+            frame.rig.roll = Lerp(frame.rig.roll, 0.0f, w);
+        frame.hideVehicle = view.hideVehicle && w > 0.75f;
+        frame.viewRelativeTargeting = w > 0.0f;
+        AppendMode(frame.mode, ToCourseCameraViewModeString(view.mode));
+    }
     ApplyVehicleFraming(frame, input, cameraSample);
     // Collision and sight checks must inspect the corrected/transitioned pose.
     ApplyCameraCollisionProtection(frame, input, cameraSample, frame.mode);
@@ -810,7 +925,8 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame.target = Add(frame.target, input.cameraInertiaPresentationTargetOffset);
     }
 
-    const float cameraShakeScale = 1.0f - aimFocusBlend_ * aimFocusSettings_.shakeSuppression;
+    const float cameraShakeScale = (1.0f - aimFocusBlend_ * aimFocusSettings_.shakeSuppression)*
+        (1.0f-0.9f*carrierWeight);
     if (shakeTime_ > 0.0f && shakeAmplitude_ > 0.0f) {
         const float envelope = (std::clamp)(shakeTime_, 0.0f, 1.0f);
         const float phaseA = std::sin(directorTime_ * 38.0f);
@@ -848,7 +964,7 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
 void RailCameraDirector::MeasureVehicleFraming(
     RailCameraDirectorFrame& frame,
     const RailCameraDirectorFrameInput& input) const {
-    if (!input.vehicleFramingActive) return;
+    if (!input.vehicleFramingActive || frame.authoredViewWeight > 0.0f) return;
     const float aspect = input.viewportHeight > 0 && input.viewportWidth > 0
         ? static_cast<float>(input.viewportWidth) / input.viewportHeight
         : 16.0f / 9.0f;
@@ -878,7 +994,7 @@ void RailCameraDirector::ApplyVehicleFraming(
     RailCameraDirectorFrame& frame,
     const RailCameraDirectorFrameInput& input,
     const RailPathSample& cameraSample) {
-    if (!input.vehicleFramingActive) {
+    if (!input.vehicleFramingActive || frame.authoredViewWeight > 0.0f) {
         vehicleFramingPullback_ = 0.0f;
         vehicleFramingLift_ = 0.0f;
         return;
@@ -937,15 +1053,22 @@ void RailCameraDirector::ApplyVehicleFraming(
     }
     vehicleFramingLift_ = (std::max)(
         (std::clamp)(lift, 0.0f, 8.0f), vehicleFramingLift_ * decay);
-    const Vector3 correction = Add(
-        Scale(forward, -vehicleFramingPullback_), Scale(up, vehicleFramingLift_));
+    // During the boss portrait, ship composition owns the frame. Retain the
+    // vehicle solver's history and restore it continuously for gameplay.
+    const float hero=std::isfinite(input.mothershipHeroWeight)
+        ? (std::clamp)(input.mothershipHeroWeight,0.0f,1.0f) : 0.0f;
+    const float carrier=std::isfinite(input.mothershipCameraWeight)
+        ? (std::clamp)(input.mothershipCameraWeight,0.0f,1.0f) : 0.0f;
+    const float retention=1.0f-hero*carrier;
+    const Vector3 correction = Scale(Add(
+        Scale(forward, -vehicleFramingPullback_), Scale(up, vehicleFramingLift_)),retention);
     frame.position = Add(frame.position, correction);
     frame.target = Add(frame.target, correction);
     frame.baseTarget = Add(frame.baseTarget, correction);
     frame.forward = forward;
     frame.up = rolledUp;
-    frame.vehicleFramingPullback = vehicleFramingPullback_;
-    frame.vehicleFramingLift = vehicleFramingLift_;
+    frame.vehicleFramingPullback = vehicleFramingPullback_*retention;
+    frame.vehicleFramingLift = vehicleFramingLift_*retention;
 }
 
 CourseCameraKey RailCameraDirector::SmoothRig(const CourseCameraKey& target, float deltaTime) {
@@ -1014,6 +1137,7 @@ void RailCameraDirector::ApplyEncounterFramingRules(
 
     if (input.spawnRuntime != nullptr) {
         for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+            if (!IsCameraThreat(enemy)) continue;
             const float actorDistance = ActorDistance(enemy.desc.spawnDistance, enemy.desc.distanceOffset);
             const float forward = actorDistance - input.distance;
             if (forward < encounterFramingSettings_.minForwardDistance ||
@@ -1203,7 +1327,7 @@ void RailCameraDirector::UpdateLookAtTarget(
         input.railPath->Length() > 0.0f;
     if (!canUseRuntime) {
         lookAtBlend_ = 0.0f;
-        smoothedLookAtTarget_ = frame.target;
+        smoothedLookAtTarget_ = {};
         hasSmoothedLookAtTarget_ = true;
         return;
     }
@@ -1241,6 +1365,7 @@ void RailCameraDirector::UpdateLookAtTarget(
             bool resolved = false;
             if (token.target.kind == RailLockTargetKind::Enemy) {
                 for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+                    if (!IsCameraThreat(enemy)) continue;
                     if (enemy.actorId != token.target.actorId) {
                         continue;
                     }
@@ -1290,6 +1415,7 @@ void RailCameraDirector::UpdateLookAtTarget(
 
     if (totalWeight <= 0.001f) {
         for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+            if (!IsCameraThreat(enemy)) continue;
             const float distance = ActorDistance(enemy.desc.spawnDistance, enemy.desc.distanceOffset);
             if (!actorInRange(distance)) {
                 continue;
@@ -1361,21 +1487,26 @@ void RailCameraDirector::UpdateLookAtTarget(
         frame.lookAtWeight = totalWeight;
     }
 
+    // Smooth the final correction (including its release weight) in the
+    // moving rail frame. World-space lag and a second unsmoothed blend used
+    // to kick the gaze when a group appeared or its last target disappeared.
+    const Vector3 worldOffset = Scale(Subtract(desiredTarget, frame.baseTarget), lookAtBlend_);
+    const Vector3 desiredOffset{Dot(worldOffset, cameraSample.right),
+        Dot(worldOffset, cameraSample.up), Dot(worldOffset, cameraSample.tangent)};
     if (!hasSmoothedLookAtTarget_) {
-        smoothedLookAtTarget_ = desiredTarget;
+        smoothedLookAtTarget_ = {};
         hasSmoothedLookAtTarget_ = true;
-    } else {
-        smoothedLookAtTarget_ = LerpVector3(
-            smoothedLookAtTarget_,
-            desiredTarget,
-            (std::clamp)(blendT, 0.0f, 1.0f));
     }
-
+    Vector3 correction = Scale(Subtract(desiredOffset, smoothedLookAtTarget_),
+        (std::clamp)(blendT, 0.0f, 1.0f));
+    const float correctionLength = Length(correction);
+    const float maximumStep = 24.0f * dt;
+    if (correctionLength > maximumStep && correctionLength > 0.0f)
+        correction = Scale(correction, maximumStep / correctionLength);
+    smoothedLookAtTarget_ = Add(smoothedLookAtTarget_, correction);
     frame.lookAtBlend = lookAtBlend_;
-    frame.target = LerpVector3(
-        frame.baseTarget,
-        smoothedLookAtTarget_,
-        (std::clamp)(lookAtBlend_, 0.0f, 1.0f));
+    frame.target = Add(frame.baseTarget, Add(Scale(cameraSample.right, smoothedLookAtTarget_.x),
+        Add(Scale(cameraSample.up, smoothedLookAtTarget_.y), Scale(cameraSample.tangent, smoothedLookAtTarget_.z))));
     frame.forward = NormalizeOr(Subtract(frame.target, frame.position), cameraSample.tangent);
 }
 
@@ -1434,6 +1565,7 @@ void RailCameraDirector::ApplyCompositionSafety(
         for (const RailLockToken& token : *input.lockTokens) {
             if (token.target.kind == RailLockTargetKind::Enemy) {
                 for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+                    if (!IsCameraThreat(enemy)) continue;
                     if (enemy.actorId != token.target.actorId) {
                         continue;
                     }
@@ -1476,6 +1608,7 @@ void RailCameraDirector::ApplyCompositionSafety(
     }
 
     for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+        if (!IsCameraThreat(enemy)) continue;
         const float actorDistance = ActorDistance(enemy.desc.spawnDistance, enemy.desc.distanceOffset);
         if (!inForwardRange(actorDistance)) {
             continue;
@@ -1681,6 +1814,7 @@ void RailCameraDirector::ApplyLineOfSightSafety(
         for (const RailLockToken& token : *input.lockTokens) {
             if (token.target.kind == RailLockTargetKind::Enemy) {
                 for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+                    if (!IsCameraThreat(enemy)) continue;
                     if (enemy.actorId != token.target.actorId) {
                         continue;
                     }
@@ -1724,6 +1858,7 @@ void RailCameraDirector::ApplyLineOfSightSafety(
     }
 
     for (const CourseEnemyActor& enemy : input.spawnRuntime->Enemies()) {
+        if (!IsCameraThreat(enemy)) continue;
         const float actorDistance = ActorDistance(enemy.desc.spawnDistance, enemy.desc.distanceOffset);
         if (!inForwardRange(actorDistance)) {
             continue;
@@ -2020,7 +2155,7 @@ void RailCameraDirector::ApplySegmentTransitionPolish(
             Scale(to.tangent, Dot(offset, from.tangent))));
     };
     const auto cameraAnchor = input.railPath->Evaluate(input.distance);
-    const auto targetAnchor = input.railPath->Evaluate(input.distance + frame.rig.lookAheadDistance);
+    const auto targetAnchor = input.railPath->EvaluateExtended(input.distance + frame.rig.lookAheadDistance);
     frame.position = blendVectorWithLimit(
         transport(segmentTransitionStartFrame_.position, segmentTransitionCameraAnchor_, cameraAnchor),
         frame.position,
@@ -2099,6 +2234,14 @@ void RailCameraDirector::ApplyCinematicShotDirecting(
     if (shotState.weight <= 0.0f && !preferredShotId.empty()) {
         shotState = course->EvaluateCinematicCameraShot(distance);
     }
+    // A locally authored explicit section can override a ride-profile request.
+    // Preserve the existing preferred-shot contract for inherited accents.
+    if (!preferredShotId.empty()) {
+        const auto section = course->EvaluateCinematicCameraShot(distance);
+        if (section.weight > 0 && section.shot.view.mode != CourseCameraViewMode::Inherit &&
+            section.shot.view.priority >= shotState.shot.view.priority)
+            shotState = section;
+    }
     if (shotState.weight <= 0.0f) {
         return;
     }
@@ -2109,6 +2252,7 @@ void RailCameraDirector::ApplyCinematicShotDirecting(
         w = (std::min)(w, (std::clamp)(preferredShotWeight, 0.0f, 1.0f));
     }
     frame.cinematicShotWeight = w;
+    frame.authoredView = shot.view;
     frame.cinematicShotId = shot.id.empty() ? "-" : shot.id;
     frame.cinematicShotPresetId = shotState.presetId.empty() ? "-" : shotState.presetId;
     frame.cinematicShotBlendAssetId = shotState.blendAssetId.empty() ? "-" : shotState.blendAssetId;

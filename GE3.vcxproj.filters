@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="ソース ファイル">
@@ -809,6 +809,9 @@
     <ClCompile Include="application\editor\course\CourseMap3DViewportController.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
+    <ClCompile Include="application\editor\course\CourseMapCameraEditTool.cpp">
+      <Filter>ソース ファイル\application\editor</Filter>
+    </ClCompile>
     <ClCompile Include="application\editor\course\CourseMap3DViewportRenderer.cpp">
       <Filter>ソース ファイル\application\editor</Filter>
     </ClCompile>
@@ -1083,6 +1086,9 @@
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyEntranceExitDirector.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
+    <ClCompile Include="application\course\RailEnemyIngress.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
     <ClCompile Include="application\course\EnemyAttackCoordinator.cpp">
@@ -1523,6 +1529,7 @@
     <FxCompile Include="Resources\TrailMeshBuild.CS.hlsl" />
     <FxCompile Include="Resources\FullscreenComposite.VS.hlsl" />
     <FxCompile Include="Resources\FullscreenComposite.PS.hlsl" />
+    <None Include="Resources\RailBoostMask.PS.hlsl" />
     <FxCompile Include="Resources\WarpTunnelGenerate.PS.hlsl" />
     <FxCompile Include="Resources\WarpTunnelComposite.PS.hlsl" />
     <FxCompile Include="Resources\DissolveMask.PS.hlsl" />
@@ -1859,6 +1866,9 @@
     <ClInclude Include="application\course\EnemyEntranceExitDirector.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailEnemyIngress.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\EnemyAttackCoordinator.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -1996,6 +2006,10 @@
     </ClInclude>
     <ClInclude Include="application\course\RailTitleScene.h" />
     <ClInclude Include="application\course\TwinShieldDronePose.h" />
+    <ClInclude Include="application\course\TwinShieldDroneShading.h" />
+    <ClInclude Include="application\course\RailPulseShotPresentation.h" />
+    <ClInclude Include="application\course\RailPrimaryKillPresentation.h" />
+    <ClInclude Include="application\course\TwinShieldDroneKillFlash.h" />
     <ClInclude Include="application\course\RailShooterHudRenderer.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -2098,6 +2112,9 @@
     <ClInclude Include="application\course\RailLockOnTypes.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailLockReticlePresentation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailLockResolver.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -2108,6 +2125,24 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailSpeedDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailManualBoost.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailBoostPresentation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailTurretGeometry.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailMothershipBattle.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailMothershipPresentation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailShortCourse.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailRideDirector.h">
@@ -2839,6 +2874,9 @@
     <ClInclude Include="application\editor\course\CourseRideProfileDetailsPanel.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
+    <ClInclude Include="application\editor\course\CourseCameraCompositionController.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
     <ClInclude Include="application\editor\course\CourseCameraShotDetailsPanel.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
@@ -2900,6 +2938,9 @@
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CourseMap3DViewportController.h">
+      <Filter>ヘッダー ファイル\application\editor</Filter>
+    </ClInclude>
+    <ClInclude Include="application\editor\course\CourseMapCameraEditTool.h">
       <Filter>ヘッダー ファイル\application\editor</Filter>
     </ClInclude>
     <ClInclude Include="application\editor\course\CourseMap3DViewportRenderer.h">

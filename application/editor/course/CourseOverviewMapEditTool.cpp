@@ -71,7 +71,9 @@ void CourseOverviewMapEditTool::Tick(const CourseOverviewMapEditInput& input) {
     }
     if (input.cancelPressed) Cancel("Overview drag cancelled.");
     if (state_.dragging) {
-        if (input.primaryDown) UpdateDrag(input.mapPosition);
+        // The release can arrive before another held-button frame. Include its
+        // final position so short drags do not commit the previous preview.
+        if (input.primaryDown || input.primaryReleased) UpdateDrag(input.mapPosition);
         if (input.primaryReleased) CommitDrag();
         return;
     }
@@ -111,6 +113,8 @@ void CourseOverviewMapEditTool::Cancel(std::string message) {
 }
 
 bool CourseOverviewMapEditTool::CanMutate(CourseOverviewMapItemKind kind) const {
+    if (kind == CourseOverviewMapItemKind::RailControlPoint && !editableRail_) return false;
+    if ((kind == CourseOverviewMapItemKind::EnemyPlacement || kind == CourseOverviewMapItemKind::Wave) && !editableEncounters_) return false;
     if (kind == CourseOverviewMapItemKind::EnemyPlacement) {
         return enemies_ != nullptr && enemies_->State().bound &&
             enemies_->State().authoringAllowed &&

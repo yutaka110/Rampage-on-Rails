@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <span>
 #include <string>
 #include <string_view>
@@ -11,6 +12,7 @@
 
 #include "CourseAsset.h"
 #include "TwinShieldDronePose.h"
+#include "RailMothershipPresentation.h"
 #include "../terrain/RailPath.h"
 #include "utils/math/MathUtils.h"
 #include "utils/math/Vector.h"
@@ -45,7 +47,18 @@ bool IsCourseMeshRenderEligible(
 
 // These authored OBJ surfaces share the gameplay terrain PBR pipeline.
 bool IsTitleLandscapeMesh(std::string_view meshId);
+bool IsGameplayLandscapeMesh(std::string_view meshId);
 Material BuildTitleLandscapePbrMaterial(std::string_view meshId);
+Material BuildGameplayLandscapePbrMaterial(std::string_view meshId = {});
+Material BuildRailStartupRearMaterial(const Material& gameplayTerrain);
+
+struct RailStartupRearScenery final {
+    const char* meshId;
+    const char* modelId;
+    Vector3 position{}, rotation{}, scale{1,1,1};
+};
+float RailStartupRearFloorHeight(float forwardDistance);
+std::array<RailStartupRearScenery,3> BuildRailStartupRearScenery(const RailPath& railPath);
 
 struct CourseMeshRenderItem {
     CourseMeshRenderKind kind = CourseMeshRenderKind::Obstacle;
@@ -68,9 +81,13 @@ class CourseMeshRenderQueue {
 public:
     bool Initialize(Microsoft::WRL::ComPtr<ID3D12Device> device, size_t capacity = 128);
     void Reset();
+    void SyncStartupRearMaterial(const Material& gameplayTerrain);
     void AppendTwinShieldDrone(const TwinShieldDronePose& pose,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix, const Matrix4x4& projMatrix);
+    void AppendMothership(const RailMothership::Frame& carrier,
+        std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix);
     void SyncFromCourseRuntime(
         const CourseSpawnRuntime& runtime,
         const CourseAsset* course,
@@ -80,13 +97,16 @@ public:
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix,
         const EnemyCombatPresentationBridge* enemyPresentation = nullptr,
-        const EnemyEncounterReadabilityDirector* enemyReadability = nullptr);
+        const EnemyEncounterReadabilityDirector* enemyReadability = nullptr,
+        bool includeStartupRearScenery = false);
 
     const std::vector<CourseMeshRenderItem>& Items() const { return items_; }
     size_t Capacity() const { return items_.size(); }
     size_t VisibleCount() const { return visibleCount_; }
 
 private:
+    void AddStartupRearScenery(const RailPath& railPath,
+        std::span<const CourseMeshModelBinding> models, const Matrix4x4& viewProjection);
     void WriteTwinShieldDrone(CourseMeshRenderItem& hull,
         const TwinShieldDronePose& pose, std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewProjection);

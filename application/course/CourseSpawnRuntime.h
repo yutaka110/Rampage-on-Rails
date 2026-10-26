@@ -1,6 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
+#include <functional>
+#include "RailMothershipPresentation.h"
+#include "RailEnemyIngress.h"
 #include <span>
 #include <string_view>
 #include <string>
@@ -53,6 +56,9 @@ struct CourseEnemyFireSafetySettings {
 };
 
 struct CourseEnemyFireSafetyFrameInput {
+    std::span<const RailEnemyIngressRoute> ingressRoutes{};
+    // One-time placement against the visible resident terrain, not the SDF.
+    std::function<bool(const RailPathSample&,float,float&)> groundSupportQuery;
     const RailTravelPredictionInput* travelPredictionInput = nullptr;
     const EnemyCombatPresentationSettings* presentationSettings = nullptr;
     const EnemyEncounterReadabilityDirector* readability = nullptr;
@@ -60,6 +66,7 @@ struct CourseEnemyFireSafetyFrameInput {
     bool cameraStableForAiming = true;
     bool cameraHardTransition = false;
     float playerDistance = 0.0f;
+    float playerSpeed = 0.0f;
     float playerLateralOffset = 0.0f;
     float playerVerticalOffset = 4.0f;
     float deltaTime = 0.016f;
@@ -89,6 +96,7 @@ struct CourseEnemyFireSafetyStats {
 };
 
 struct CourseEnemyActorDesc {
+    EnemyEntrySource entrySource = EnemyEntrySource::Automatic;
     std::string waveId;
     // Stable schema-v7 placement identity. Empty for legacy/event-spawned actors.
     std::string sourcePlacementGuid;
@@ -127,6 +135,9 @@ struct CourseEnemyActorDesc {
     EnemyFormationDefinition formationDefinition{};
     bool previewOnly = false;
     bool suppressFire = false;
+    bool establishedEntrance = false; // Already visible during a gated start sequence.
+    // Preplaced scenery is visible before its combat activation marker.
+    float stationaryActivationDistance = -1.0f;
 };
 
 struct CourseObstacleActorDesc {
@@ -192,10 +203,22 @@ struct CourseEnemyActor {
     bool encounterPacingAttackAllowed = true;
     uint32_t actorId = 0;
 
+    bool startupFlightControlled = false;
+    RailMothership::Deployment carrierDeployment{};
+    RailEnemyIngressState terrainIngress{};
+    bool groundPlacementResolved = false;
+    bool stationaryDormant = false;
+    // Captured at lethal damage before live targeting clears its weapon pose.
+    TwinShieldDronePose defeatedPose{};
+    bool hasDefeatedPose = false;
+
     // Repeating front drones stay alive until defeated, including after their
     // source section/Wave has completed. Only scene reset clears them outright.
     bool HoldsCombatPositionUntilResolved() const {
-        return desc.meshId == "twin_shield_hull" &&
+        const bool persistentFrontDrone = desc.meshId == "twin_shield_hull" ||
+            desc.actorAssetId == "short_interceptor" || desc.meshId == "combat_sniper_hull" ||
+            RailMothership::IsCombatActor(desc.actorAssetId);
+        return persistentFrontDrone &&
             behaviorDefinition.commercialBehavior &&
             behaviorDefinition.maintainForwardEngagementBand &&
             !behaviorDefinition.choreographedAttackPass;
@@ -303,12 +326,21 @@ public:
     bool DeferEnemyAttackForUnreachableLaunch(uint32_t actorId);
 
     bool SpawnEnemyActor(CourseEnemyActorDesc desc, std::string* errorMessage = nullptr);
+    bool SetEnemyLocalRotation(uint32_t actorId, Vector3 rotation);
+    // Own the real actor's entrance without running combat or formation AI.
+    bool SetEnemyStartupFlight(uint32_t actorId, float playerDistance,
+        float forward, float lateral, float vertical, Vector3 rotation,
+        bool releaseToCombat = false, float playerSpeed = 0.0f);
+    // Stage newly spawned short-course actors at the actual carrier sockets.
+    void StageCarrierDeployments(float playerDistance, const RailMothership::Frame& carrier);
+    void UpdateCarrierDeployments(float deltaTime, float playerDistance, float playerSpeed);
+    void UpdateTerrainIngresses(float deltaTime, const CourseEnemyFireSafetyFrameInput& input);
     bool SpawnObstacle(CourseObstacleActorDesc desc, std::string* errorMessage = nullptr);
     void SpawnVfxCue(CourseVfxCueDesc desc);
     void SubmitPendingVfx(EffectRuntime& effectRuntime, const RailPath& railPath);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw, const RailPath& railPath) const;
 
-    size_t ActiveEnemyCount() const { return enemies_.size(); }
+    size_t ActiveEnemyCount() const;
     size_t ActiveBulletCount() const { return bullets_.size(); }
     size_t ActiveObstacleCount() const { return obstacles_.size(); }
     size_t ActiveVfxCueCount() const { return vfxCues_.size(); }

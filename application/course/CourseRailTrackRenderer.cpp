@@ -1,6 +1,7 @@
 #include "CourseRailTrackRenderer.h"
 
 #include "utils/dx12/BufferHelper.h"
+#include "../CaveSubjectMaterial.h"
 
 #include <algorithm>
 #include <cmath>
@@ -110,6 +111,8 @@ void CourseRailTrackRenderer::Sync(
             item->sortDistance = found->startDistance;
             item->visible = true;
             WriteItem(*item, model, found->worldMatrix, viewProjection, found->color);
+            *item->materialData = WithContinuousRailLighting(*item->materialData,
+                found->worldMatrix, found->startDistance, found->endDistance);
             if (item->kind == CourseMeshRenderKind::TrackRail)
                 ++stats_.visibleRailInstances;
             else if (item->kind == CourseMeshRenderKind::TrackSleeper)
@@ -181,5 +184,9 @@ void CourseRailTrackRenderer::WriteItem(
     item.materialData->environmentCoefficient = 0.24f;
     item.materialData->specularMode = 1;
     item.materialData->shininess = item.kind == CourseMeshRenderKind::VehicleWheel ? 10.0f : 22.0f;
+    const bool iron = item.kind == CourseMeshRenderKind::TrackRail || item.kind == CourseMeshRenderKind::VehicleWheel;
+    const bool wheel = item.kind == CourseMeshRenderKind::VehicleWheel;
+    *item.materialData = WithCaveSurfaceLighting(*item.materialData, {color.x, color.y, color.z},
+        iron ? 0.56f : 0.82f, iron ? 0.70f : 0.0f, wheel ? 0.62f : 0.90f);
     item.useMaterialOverride = true;
 }

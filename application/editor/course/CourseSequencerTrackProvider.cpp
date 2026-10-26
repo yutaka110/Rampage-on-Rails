@@ -100,7 +100,7 @@ std::string CourseSequencerTrackProvider::EncodeCameraShot(
     const CourseCinematicCameraShot& shot) {
     std::ostringstream stream;
     stream.precision(9);
-    stream << "camera-shot-v1 " << std::quoted(shot.id) << ' '
+    stream << "camera-shot-v2 " << std::quoted(shot.id) << ' '
         << std::quoted(shot.mode) << ' ' << std::quoted(shot.presetId) << ' '
         << std::quoted(shot.blendAssetId) << ' ' << shot.startDistance << ' '
         << shot.endDistance << ' ' << shot.blendInDistance << ' '
@@ -108,7 +108,11 @@ std::string CourseSequencerTrackProvider::EncodeCameraShot(
         << shot.backDistanceOffset << ' ' << shot.verticalOffset << ' '
         << shot.lateralOffset << ' ' << shot.lookAheadOffset << ' '
         << shot.lookUpOffset << ' ' << shot.lookForwardOffset << ' '
-        << shot.fovOffset << ' ' << shot.rollOffset << ' ' << shot.shakeAmount;
+        << shot.fovOffset << ' ' << shot.rollOffset << ' ' << shot.shakeAmount << ' '
+        << static_cast<int>(shot.view.mode) << ' '
+        << shot.view.positionOffset.x << ' ' << shot.view.positionOffset.y << ' ' << shot.view.positionOffset.z << ' '
+        << shot.view.yaw << ' ' << shot.view.pitch << ' ' << shot.view.fovY << ' '
+        << shot.view.hideVehicle << ' ' << shot.view.priority;
     return stream.str();
 }
 
@@ -118,7 +122,7 @@ bool CourseSequencerTrackProvider::DecodeCameraShot(
     std::string& errorMessage) {
     std::istringstream stream{std::string(payload)};
     std::string version;
-    if (!(stream >> version) || version != "camera-shot-v1" ||
+    if (!(stream >> version) || (version != "camera-shot-v1" && version != "camera-shot-v2") ||
         !(stream >> std::quoted(shot.id) >> std::quoted(shot.mode) >>
             std::quoted(shot.presetId) >> std::quoted(shot.blendAssetId) >>
             shot.startDistance >> shot.endDistance >> shot.blendInDistance >>
@@ -128,6 +132,19 @@ bool CourseSequencerTrackProvider::DecodeCameraShot(
             shot.rollOffset >> shot.shakeAmount)) {
         errorMessage = "Malformed Course Camera Shot Sequencer payload.";
         return false;
+    }
+    shot.view = {};
+    if (version == "camera-shot-v2") {
+        int mode = 0, hidden = 0;
+        if (!(stream >> mode >> shot.view.positionOffset.x >> shot.view.positionOffset.y >> shot.view.positionOffset.z
+            >> shot.view.yaw >> shot.view.pitch >> shot.view.fovY >> hidden >> shot.view.priority) ||
+            mode < 0 || mode > static_cast<int>(CourseCameraViewMode::Custom) || hidden < 0 || hidden > 1) {
+            errorMessage = "Malformed Camera View payload.";
+            return false;
+        }
+        shot.view.mode = static_cast<CourseCameraViewMode>(mode);
+        shot.view.hideVehicle = hidden != 0;
+        if (!shot.view.Validate(&errorMessage)) return false;
     }
     if (shot.id.empty() || !std::isfinite(shot.startDistance) ||
         !std::isfinite(shot.endDistance) || shot.endDistance <= shot.startDistance ||
@@ -394,7 +411,7 @@ bool CourseSequencerTrackProvider::SetKeyTime(
     } else if (StartsWith(id, "shot:")) {
         if (auto* value = FindMutable(course_->cinematicCameraShots, [&](const auto& item) { return item.id == AfterPrefix(id, "shot:"); })) {
             CourseCinematicCameraShot restored = *value;
-            if (StartsWith(state.payload, "camera-shot-v1") &&
+            if (StartsWith(state.payload, "camera-shot-v") &&
                 !DecodeCameraShot(state.payload, restored, errorMessage)) return false;
             restored.id = AfterPrefix(id, "shot:");
             restored.startDistance = static_cast<float>((std::max)(0.0, state.time));
@@ -435,6 +452,13 @@ bool CourseSequencerTrackProvider::RemoveKey(
 bool CourseSequencerTrackProvider::InsertKey(
     const EditorSequencerKeyState& state,
     std::string& errorMessage) {
+    if (StartsWith(state.handle.keyId, "shot:") && StartsWith(state.payload, "camera-shot-v")) {
+        CourseCinematicCameraShot shot;
+        if (!DecodeCameraShot(state.payload, shot, errorMessage)) return false;
+        shot.id = AfterPrefix(state.handle.keyId, "shot:");
+        course_->cinematicCameraShots.push_back(shot);
+        return SetKeyTime(state, errorMessage);
+    }
     const auto found = cloneTemplates_.find(state.payload);
     if (found == cloneTemplates_.end()) {
         errorMessage = "Course Sequencer clone template is unavailable.";

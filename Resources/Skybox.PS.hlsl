@@ -1,11 +1,21 @@
 #include "Skybox.hlsli"
+#include "SunfallLighting.hlsli"
 
 TextureCube<float4> gTexture : register(t0);
 SamplerState gSampler : register(s0);
+cbuffer Sunlight : register(b1) {
+    float4 gSunDirectionAndEnabled;
+    float4 gSunColorAndIntensity;
+};
 
 float4 main(VertexShaderOutput input) : SV_TARGET0
 {
     float3 dir = normalize(input.texcoord);
+    if(gSunDirectionAndEnabled.w>0.5f) {
+        float3 toSun=normalize(-gSunDirectionAndEnabled.xyz);
+        float3 daylight=SunfallSkyRadiance(dir,toSun,gSunColorAndIntensity.rgb,gSunColorAndIntensity.w);
+        return float4(daylight,1);
+    }
     float horizon = saturate(dir.y * 0.5f + 0.5f);
     float sunCore = pow(saturate(dot(dir, normalize(float3(0.05f, 0.24f, 0.97f)))), 24.0f);
     float sunBloom = pow(saturate(dot(dir, normalize(float3(0.03f, 0.16f, 0.99f)))), 1.55f);

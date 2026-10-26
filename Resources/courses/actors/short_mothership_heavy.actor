@@ -1,0 +1,7 @@
+# Miniboss starboard weapon. A slower, tougher projectile costs more interception time.
+actor|short_mothership_heavy|Carrier Heavy Battery|siege_turret|3.8|360|240|1|0.42|0.08|1|mothership_heavy
+combat|3.6|0.58|24|mothership_heavy
+movement|0
+behavior|boss|0.65|0.40|0.30|1.25|2.6|0.20|0.35|0|0|0|true
+engagement_band|true|68|78|90|18|2.4|55|10
+attack_pass|false|0.35|0.90|0.30

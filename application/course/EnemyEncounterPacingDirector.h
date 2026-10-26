@@ -9,6 +9,7 @@
 #include "EnemyEncounterBeatDefinition.h"
 
 class CourseSpawnRuntime;
+class CourseGameplayWaveRuntimeBridge;
 struct CourseAsset;
 struct EnemyEncounterReadabilityFrame;
 
@@ -37,6 +38,7 @@ struct EnemyEncounterPacingInput final {
     float currentDistance = 0.0f;
     float deltaTime = 0.016f;
     bool gameplayActive = true;
+    const CourseGameplayWaveRuntimeBridge* waveRuntime = nullptr;
 };
 
 struct EnemyEncounterPacingFrame final {

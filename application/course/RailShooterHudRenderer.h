@@ -5,7 +5,10 @@
 #include <vector>
 
 #include "RailShooterHudDefinitionAsset.h"
+#include "GameSessionSystem.h"
 #include "RailShooterHudPresentationBridge.h"
+
+struct EncounterPerformanceScoreRuntimeState;
 
 enum class RailShooterHudDrawCommandKind : uint8_t {
     Rectangle,
@@ -20,11 +23,17 @@ enum class RailShooterHudTextAlignment : uint8_t {
     Center,
 };
 
+enum class RailShooterHudTextStyle : uint8_t {
+    Body,
+    StartCue,
+};
+
 struct RailShooterHudDrawCommand final {
     RailShooterHudDrawCommandKind kind =
         RailShooterHudDrawCommandKind::Rectangle;
     RailShooterHudTextAlignment textAlignment =
         RailShooterHudTextAlignment::Left;
+    RailShooterHudTextStyle textStyle = RailShooterHudTextStyle::Body;
     float x = 0.0f;
     float y = 0.0f;
     float width = 0.0f;
@@ -49,7 +58,16 @@ struct RailShooterHudRenderInput final {
     bool titleLogoAvailable = true;
     float startupGaugeProgress = 1.0f;
     float startupInformationOpacity = 1.0f;
+    float readyOpacity = 0.0f, readyProgress = 0.0f, goOpacity = 0.0f;
+    bool startCueActive = false;
     Vector2 titleTransitionFocus{0.5f,0.4f};
+    const GameSessionRuntimeState* resultSession=nullptr;
+    bool shortRun=false;
+    bool bossVisible=false;
+    float bossHealth=1.0f;
+    const EncounterPerformanceScoreRuntimeState* encounterScore=nullptr;
+    bool miniBossParts=false;
+    std::array<float,2> miniBossPartHealth{};
 };
 
 struct RailShooterHudRenderFrame final {

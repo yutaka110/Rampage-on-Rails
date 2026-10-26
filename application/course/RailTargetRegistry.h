@@ -13,6 +13,8 @@ struct RailTargetRegistryFrameInput {
     float playerDistance = 0.0f;
     RailLockSettings settings{};
     Vector3 cameraPosition{};
+    bool viewRelativeTargeting = false;
+    Vector3 viewForward{0, 0, 1};
 };
 
 class RailTargetRegistry {

@@ -1,5 +1,9 @@
 #include "CourseRailDetailsPanel.h"
 
+#if defined(_MSC_VER)
+#pragma execution_character_set("utf-8")
+#endif
+
 #include <algorithm>
 #include <cmath>
 
@@ -12,13 +16,17 @@ template <typename Owner, typename Settings>
 void ApplyValidatedSettings(Owner& owner, const Settings& candidate) {
     std::string error;
     if (!owner.SetSettings(candidate, &error)) {
-        ImGui::TextWrapped("Settings rejected: %s", error.c_str());
+        ImGui::TextWrapped("設定を反映できません: %s", error.c_str());
     }
 }
 
 
 constexpr std::string_view kPointPrefix = "course-rail-point:";
 constexpr std::string_view kSegmentPrefix = "course-rail-segment:";
+
+const char* GizmoHandleLabel(CourseRailGizmoHandle handle) {
+    return handle == CourseRailGizmoHandle::None ? "なし" : ToString(handle);
+}
 
 Vector3 Subtract(const Vector3& a, const Vector3& b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
@@ -45,12 +53,12 @@ void CourseRailDetailsPanel::Draw(const CourseRailDetailsPanelContext& context) 
     const EditorObjectHandle* primary =
         context.selection != nullptr ? context.selection->Primary() : nullptr;
     if (context.controller == nullptr || primary == nullptr) {
-        ImGui::TextUnformatted("Course Rail details are unavailable.");
+        ImGui::TextUnformatted("レールの詳細設定を表示できません。");
         return;
     }
     if (continuousEditActive_ && ImGui::IsKeyPressed(ImGuiKey_Escape)) {
         CancelEdit();
-        lastMessage_ = "Rail Details edit cancelled.";
+        lastMessage_ = "レールの調整を取り消しました。";
     }
     if (IsPointHandle(primary)) {
         DrawPoint(context, primary->stableId.substr(kPointPrefix.size()));
@@ -162,14 +170,14 @@ void CourseRailDetailsPanel::DrawPoint(
     const std::optional<uint32_t> pointIndex = model != nullptr
         ? model->FindPointIndex(guid) : std::nullopt;
     if (!pointIndex.has_value()) {
-        ImGui::TextUnformatted("Selected rail control point no longer exists.");
+        ImGui::TextUnformatted("選択した制御点は存在しません。");
         return;
     }
     const bool canMutate = context.canMutateAuthoring &&
         context.controller->State().authoringAllowed;
-    ImGui::Text("Rail Control Point %u", *pointIndex);
+    ImGui::Text("レール制御点 %u", *pointIndex);
     ImGui::TextDisabled("GUID: %s", selectedGuid_.c_str());
-    ImGui::Text("Rail length: %.3f", model->Length());
+    ImGui::Text("レール全長: %.3f m", model->Length());
     ImGui::Separator();
     ImGui::BeginDisabled(!canMutate);
 
@@ -183,23 +191,24 @@ void CourseRailDetailsPanel::DrawPoint(
     };
 
     float position[3]{buffer_.position.x, buffer_.position.y, buffer_.position.z};
-    const bool positionChanged = ImGui::DragFloat3("Position", position, 0.1f, 0.0f, 0.0f, "%.3f");
+    const bool positionChanged = ImGui::DragFloat3("位置（X / Y / Z）", position, 0.1f, 0.0f, 0.0f, "%.3f");
     if (positionChanged) buffer_.position = {position[0], position[1], position[2]};
     continuous(positionChanged, "Edit Rail Point Position");
 
     const bool radiusChanged = ImGui::DragFloat(
-        "Corridor Radius", &buffer_.corridorRadius, 0.1f, 0.01f, 10000.0f, "%.3f");
+        "通路の半径", &buffer_.corridorRadius, 0.1f, 0.01f, 10000.0f, "%.3f");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("この制御点付近で、レールを中心とした通路の広さを指定します。");
     buffer_.corridorRadius = (std::max)(buffer_.corridorRadius, 0.01f);
     continuous(radiusChanged, "Edit Rail Corridor Radius");
 
     const bool speedChanged = ImGui::DragFloat(
-        "Rail Speed", &buffer_.speed, 0.1f, 0.0f, 10000.0f, "%.3f");
+        "走行速度", &buffer_.speed, 0.1f, 0.0f, 10000.0f, "%.3f");
     buffer_.speed = (std::max)(buffer_.speed, 0.0f);
     continuous(speedChanged, "Edit Rail Speed");
 
     int tangentMode = static_cast<int>(buffer_.tangentMode);
-    const char* tangentModes[] = {"Auto", "Mirrored", "Broken"};
-    if (ImGui::Combo("Tangent Mode", &tangentMode, tangentModes, 3)) {
+    const char* tangentModes[] = {"自動", "対称に連動", "個別に調整"};
+    if (ImGui::Combo("接線の種類", &tangentMode, tangentModes, 3)) {
         RailPathControlPoint changed = buffer_;
         const RailPath& path = model->RuntimePath();
         if (buffer_.tangentMode == RailPathTangentMode::Auto && tangentMode != 0) {
@@ -220,12 +229,14 @@ void CourseRailDetailsPanel::DrawPoint(
         }
         CommitPoint(context, changed, "Change Rail Tangent Mode");
     }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(
+        "自動: 前後の点から滑らかな接線を作ります。\n対称に連動: 入る側と出る側を同じ長さ・反対方向で連動します。\n個別に調整: 両側の接線を別々に設定します。");
 
     if (buffer_.tangentMode != RailPathTangentMode::Auto) {
         float incoming[3]{buffer_.incomingTangent.x, buffer_.incomingTangent.y,
             buffer_.incomingTangent.z};
         const bool incomingChanged = ImGui::DragFloat3(
-            "Incoming Tangent", incoming, 0.1f, 0.0f, 0.0f, "%.3f");
+            "入る側の接線", incoming, 0.1f, 0.0f, 0.0f, "%.3f");
         if (incomingChanged) {
             buffer_.incomingTangent = {incoming[0], incoming[1], incoming[2]};
             if (buffer_.tangentMode == RailPathTangentMode::Mirrored) {
@@ -237,7 +248,7 @@ void CourseRailDetailsPanel::DrawPoint(
         float outgoing[3]{buffer_.outgoingTangent.x, buffer_.outgoingTangent.y,
             buffer_.outgoingTangent.z};
         const bool outgoingChanged = ImGui::DragFloat3(
-            "Outgoing Tangent", outgoing, 0.1f, 0.0f, 0.0f, "%.3f");
+            "出る側の接線", outgoing, 0.1f, 0.0f, 0.0f, "%.3f");
         if (outgoingChanged) {
             buffer_.outgoingTangent = {outgoing[0], outgoing[1], outgoing[2]};
             if (buffer_.tangentMode == RailPathTangentMode::Mirrored) {
@@ -250,21 +261,21 @@ void CourseRailDetailsPanel::DrawPoint(
             model->RuntimePath().TangentHandlePosition(*pointIndex, true), buffer_.position);
         const Vector3 outgoing = Subtract(
             model->RuntimePath().TangentHandlePosition(*pointIndex, false), buffer_.position);
-        ImGui::TextDisabled("Auto Incoming: %.3f, %.3f, %.3f", incoming.x, incoming.y, incoming.z);
-        ImGui::TextDisabled("Auto Outgoing: %.3f, %.3f, %.3f", outgoing.x, outgoing.y, outgoing.z);
+        ImGui::TextDisabled("自動接線・入る側: %.3f, %.3f, %.3f", incoming.x, incoming.y, incoming.z);
+        ImGui::TextDisabled("自動接線・出る側: %.3f, %.3f, %.3f", outgoing.x, outgoing.y, outgoing.z);
     }
 
     ImGui::Separator();
-    if (ImGui::Button("Insert Adjacent")) InsertAdjacent(context, *pointIndex);
+    if (ImGui::Button("隣の区間に点を追加")) InsertAdjacent(context, *pointIndex);
     ImGui::SameLine();
-    if (ImGui::Button("Delete Point")) RemovePoint(context, guid);
-    if (ImGui::Button("Copy Values")) {
+    if (ImGui::Button("制御点を削除")) RemovePoint(context, guid);
+    if (ImGui::Button("値をコピー")) {
         clipboard_ = buffer_;
-        lastMessage_ = "Rail point values copied.";
+        lastMessage_ = "制御点の値をコピーしました。";
     }
     ImGui::SameLine();
     ImGui::BeginDisabled(!clipboard_.has_value());
-    if (ImGui::Button("Paste Values") && clipboard_.has_value()) {
+    if (ImGui::Button("値を貼り付け") && clipboard_.has_value()) {
         RailPathControlPoint pasted = *clipboard_;
         pasted.editorGuid = selectedGuid_;
         CommitPoint(context, pasted, "Paste Rail Point Values");
@@ -279,18 +290,18 @@ void CourseRailDetailsPanel::DrawSegment(
     const CourseRailAuthoringModel* model = context.controller->Model();
     const CourseRailSegment* segment = model != nullptr ? model->FindSegment(guid) : nullptr;
     if (segment == nullptr) {
-        ImGui::TextUnformatted("Selected rail segment no longer exists.");
+        ImGui::TextUnformatted("選択したレール区間は存在しません。");
         return;
     }
-    ImGui::Text("Rail Segment %u", segment->pointIndex);
+    ImGui::Text("レール区間 %u", segment->pointIndex);
     ImGui::TextDisabled("GUID: %s", segment->guid.c_str());
-    ImGui::Text("Start distance: %.3f", segment->startDistance);
-    ImGui::Text("Length: %.3f", segment->length);
-    ImGui::Text("Start point: %s", segment->startPointGuid.c_str());
-    ImGui::Text("End point: %s", segment->endPointGuid.c_str());
+    ImGui::Text("開始距離: %.3f m", segment->startDistance);
+    ImGui::Text("区間の長さ: %.3f m", segment->length);
+    ImGui::Text("開始の制御点: %s", segment->startPointGuid.c_str());
+    ImGui::Text("終了の制御点: %s", segment->endPointGuid.c_str());
     ImGui::BeginDisabled(!context.canMutateAuthoring ||
         !context.controller->State().authoringAllowed);
-    if (ImGui::Button("Insert Point At Midpoint")) {
+    if (ImGui::Button("区間の中央に点を追加")) {
         const RailPathSample sample = model->RuntimePath().EvaluateSegmentAt(segment->pointIndex, 0.5f);
         CourseRailMutationRequest request{};
         request.kind = CourseRailMutationKind::InsertPoint;
@@ -311,17 +322,18 @@ void CourseRailDetailsPanel::DrawTransformSettings(
     const CourseRailDetailsPanelContext& context) {
     if (context.transformGizmo == nullptr) return;
     ImGui::Separator();
-    if (!ImGui::CollapsingHeader("Rail Transform Gizmo", ImGuiTreeNodeFlags_DefaultOpen)) return;
+    if (!ImGui::CollapsingHeader("レールの移動ハンドル", ImGuiTreeNodeFlags_DefaultOpen)) return;
     CourseRailTransformGizmoSettings settings = context.transformGizmo->Settings();
     int space = settings.space == EditorTransformGizmoSpace::World ? 0 : 1;
-    const char* spaces[] = {"World", "Rail Local"};
-    if (ImGui::Combo("Space", &space, spaces, 2)) {
+    const char* spaces[] = {"ワールド基準", "レール基準"};
+    if (ImGui::Combo("座標の基準", &space, spaces, 2)) {
         settings.space = space == 0
             ? EditorTransformGizmoSpace::World : EditorTransformGizmoSpace::Local;
     }
-    ImGui::Checkbox("Grid Snap", &settings.snapEnabled);
-    ImGui::DragFloat("Grid Size", &settings.gridSize, 0.1f, 0.01f, 1000.0f, "%.3f");
-    ImGui::SliderFloat("Handle Scale", &settings.handleLengthScale, 0.1f, 4.0f, "%.2f");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("ワールド基準: マップ全体のXYZ軸。\nレール基準: レールの左右・上下・進行方向に沿った軸。");
+    ImGui::Checkbox("グリッドに合わせる", &settings.snapEnabled);
+    ImGui::DragFloat("グリッド間隔", &settings.gridSize, 0.1f, 0.01f, 1000.0f, "%.3f");
+    ImGui::SliderFloat("ハンドルの大きさ", &settings.handleLengthScale, 0.1f, 4.0f, "%.2f");
     ApplyValidatedSettings(*context.transformGizmo, settings);
     if (context.viewportTool != nullptr) {
         CourseRailViewportEditSettings toolSettings = context.viewportTool->Settings();
@@ -329,10 +341,10 @@ void CourseRailDetailsPanel::DrawTransformSettings(
         toolSettings.gridSize = settings.gridSize;
         ApplyValidatedSettings(*context.viewportTool, toolSettings);
     }
-    ImGui::Text("Selected points: %u", context.transformGizmo->State().selectedPointCount);
-    ImGui::Text("Hover: %s  Active: %s",
-        ToString(context.transformGizmo->State().hovered),
-        ToString(context.transformGizmo->State().active));
+    ImGui::Text("選択中の制御点: %u", context.transformGizmo->State().selectedPointCount);
+    ImGui::Text("選択候補: %s / 操作中: %s",
+        GizmoHandleLabel(context.transformGizmo->State().hovered),
+        GizmoHandleLabel(context.transformGizmo->State().active));
 }
 
 void CourseRailDetailsPanel::InsertAdjacent(
@@ -385,7 +397,7 @@ void CourseRailDetailsPanel::SelectPoint(
     handle.stableId = std::string(kPointPrefix) + std::string(guid);
     handle.localIndex = *index;
     handle.generation = static_cast<uint32_t>(context.controller->State().mutationRevision);
-    handle.displayName = "Rail Control Point";
+    handle.displayName = "レール制御点";
     context.selection->SetPrimary(std::move(handle));
 }
 

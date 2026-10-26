@@ -1,2 +1,3 @@
-# visual|id|projectileDefinitionId|style|coreEffect|haloEffect|coreRGBA|haloRGBA|trailRGBA|coreScale|haloScale|minAngular|maxWorld|threatScale|pulseAmp|pulseHz|trailLength|trailWidth|enabled
-visual|visual_direct_magenta|enemy_direct_readable|bolt|enemy_projectile_core|enemy_projectile_halo|1.0|1.0|1.0|1.0|1.0|0.06|0.72|0.90|1.0|0.04|0.56|0.68|1.65|2.45|0.0048|4.5|1.18|0.10|2.1|9.0|0.48|true
+# Orange-core energy sphere: stable solid silhouette, compact halo and short tail.
+# Visuals only; projectile IDs, collision and flight remain authored separately.
+visual|visual_direct_magenta|enemy_direct_readable|orb|enemy_projectile_core|enemy_projectile_halo|1.0|1.0|1.0|1.0|1.0|0.20|0.025|0.40|1.0|0.32|0.045|0.55|1.65|1.35|0.0048|4.5|1.0|0.0|2.1|3.0|0.28|true
