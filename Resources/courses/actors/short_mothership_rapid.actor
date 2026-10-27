@@ -3,5 +3,5 @@ actor|short_mothership_rapid|Carrier Rapid Battery|siege_turret|3.4|240|240|0.12
 combat|1.6|0.42|34|mothership_rapid
 movement|0
 behavior|boss|0.65|0.30|0.22|0.65|1.15|0.20|0.30|0|0|0|true
-engagement_band|true|68|78|90|18|2.4|55|10
+engagement_band|true|40|50|60|18|2.4|55|10
 attack_pass|false|0.35|0.90|0.30

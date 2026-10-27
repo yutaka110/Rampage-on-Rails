@@ -374,6 +374,14 @@ void CourseSpawnRuntime::Update(float deltaTime) {
     Update(deltaTime, safetyInput);
 }
 
+void CourseSpawnRuntime::UpdateDefeatPresentation(float deltaTime, CourseEnemyFireSafetyFrameInput safetyInput) {
+    if(!std::isfinite(deltaTime) || deltaTime<=0) return;
+    for(auto& enemy:enemies_) enemy.desc.suppressFire=true;
+    safetyInput.cameraAllowsEnemyFire=false;
+    safetyInput.deltaTime=deltaTime;
+    Update(deltaTime,safetyInput);
+}
+
 void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput) {
     const drone_perf::Scope profile(drone_perf::Stage::Spawn);
     const float dt = (std::max)(0.0f, deltaTime);
@@ -398,6 +406,23 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     enemyEntranceExitDirector_.BeginFrame(*this);
     enemyFormationSystem_.BeginFrame(*this);
     UpdateTerrainIngresses(dt,safetyInput);
+
+    const auto placeCarrierWeapons = [&]() {
+        for (auto& actor : enemies_) {
+            if (RailMothership::PartIndex(actor.desc.actorAssetId)<0 || actor.desc.hitPoints<=0) continue;
+            auto& state=actor.behaviorState;
+            actor.desc.distanceOffset=safetyInput.playerDistance+RailMothership::PartForwardDistance-actor.desc.spawnDistance;
+            state.integratedForwardOffset=actor.desc.distanceOffset-state.authoredForwardOffset-state.behaviorForwardOffset;
+            state.engagementBandForwardDistance=RailMothership::PartForwardDistance;
+            state.engagementBandVelocity=(std::max)(0.0f,safetyInput.playerSpeed);
+            actor.desc.lateralOffset=state.authoredLateralOffset;
+            actor.desc.verticalOffset=state.authoredVerticalOffset;
+            state.behaviorLateralOffset=state.behaviorVerticalOffset=state.safetyLateralOffset=0;
+        }
+    };
+    // Both weapons belong to one pursuing hull. Authored spawn distance or
+    // independent engagement smoothing must never strand either out of range.
+    placeCarrierWeapons();
 
     EnemyCombatFrameInput combatInput{};
     combatInput.deltaTime = dt;
@@ -479,6 +504,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     enemyBehaviorSystem_.Update(*this, behaviorInput);
     enemyFormationSystem_.Update(*this, dt, safetyInput.railPath, &safetyInput);
     enemyEntranceExitDirector_.Update(*this, dt);
+    placeCarrierWeapons();
     // Check the final staged pose, not just Behavior's pre-formation position.
     EnforceEnemyEngagementClearance(safetyInput);
     fireSafetyStats_ = {};
@@ -958,9 +984,9 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
         desc.role=carrierPart==0?"carrier_rapid_part":"carrier_heavy_part";
         // The two sockets share one travelling frame instead of independently
         // drifting to different engagement distances.
-        desc.behaviorDefinition.engagementBandPreferredForwardDistance=78;
-        desc.behaviorDefinition.engagementBandMinimumForwardDistance=68;
-        desc.behaviorDefinition.engagementBandMaximumForwardDistance=90;
+        desc.behaviorDefinition.engagementBandPreferredForwardDistance=RailMothership::PartForwardDistance;
+        desc.behaviorDefinition.engagementBandMinimumForwardDistance=40;
+        desc.behaviorDefinition.engagementBandMaximumForwardDistance=60;
     }
     desc.lifetime = (std::max)(0.1f, desc.lifetime);
     desc.radius = (std::max)(0.05f, desc.radius);

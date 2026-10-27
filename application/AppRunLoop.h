@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "course/RailTitleScene.h"
 #include "course/RailLockVolley.h"
 #include "course/RailPulseShotPresentation.h"
@@ -49,6 +49,8 @@
 #include "course/RailShooterHudRuntimeModel.h"
 #include "course/RailShooterHudPresentationBridge.h"
 #include "course/RailShooterHudRenderer.h"
+#include "course/RailGameOverScene.h"
+#include "course/RailRetryPresentationCheckpoint.h"
 #include "course/RailDodgeSystem.h"
 #include "course/RailPlayerMovementSystem.h"
 #include "course/RailPlayerVehicleMountSystem.h"
@@ -314,6 +316,8 @@ private:
         const Vector3& cameraUp);
     void ResetEnemyProjectilePresentation(bool resetGrazeState = true);
     bool WasKeyPressed(int virtualKey);
+    void UpdateRailGameOver(float deltaTime);
+    bool RetryRailCheckpoint();
 
     DebugCamera& debugCamera_;
     // The free editor camera and the possessed game-camera view must not
@@ -357,9 +361,18 @@ private:
     CourseCollisionSystem railShooterCollisionSystem_;
     SectionCheckpointSystem railShooterCheckpointSystem_;
     GameSessionSystem railShooterGameSession_{};
+    RailGameOverScene railGameOverScene_{};
+    std::unique_ptr<CourseSpawnRuntime> railGameOverWorld_;
+    std::chrono::steady_clock::time_point railGameOverLastUpdate_{};
+    bool railGameOverHasLastUpdate_=false;
     GameSessionPresentationBridge railShooterSessionPresentation_{};
     GameSessionPresentationSettings railShooterSessionPresentationSettings_{};
     GameSessionRetryCoordinator railShooterRetryCoordinator_{};
+    RailRetryPresentationCheckpoint railRetryPresentation_{};
+    bool railFirstPlayableCheckpointPending_=true;
+    RailRetryFollowBindings BindRailRetryFollowers();
+    bool CaptureRailCheckpoint(const std::string& id);
+    void LogRailRetryBoundary(const char* boundary);
     RailShooterHudDefinitionAsset railShooterHudDefinition_ =
         RailShooterHudDefinitionAsset::Defaults();
     RailShooterHudRuntimeModel railShooterHudRuntimeModel_{};

@@ -80,7 +80,7 @@ constexpr double kRailFramePacingLogThresholdMs = 8.0;
 // dimensions; duplicating the old 256px height caused geometry to sample the
 // Japanese glyph rows instead of the solid-white and marker cells.
 constexpr uint32_t kRailHudAtlasWidth = 1024;
-constexpr uint32_t kRailHudAtlasHeight = 1536;
+constexpr uint32_t kRailHudAtlasHeight = 2048;
 // The font/marker region ends at y=512. Leave a transparent sampling gutter.
 constexpr uint32_t kTitleLogoAtlasX = 32;
 constexpr uint32_t kTitleLogoAtlasY = 544;
@@ -1920,6 +1920,7 @@ void AppRunLoop::ApplyRailShooterCourse() {
     // snapshot. Stop first so the next preview starts from the new source.
     coursePreviewSimulationSystem_.Stop();
     coursePreviewActorRuntimeBridge_.Reset();
+    railGameOverScene_.Reset();railGameOverWorld_.reset();railGameOverHasLastUpdate_=false;
     railShooterRetryCoordinator_.Unbind();
     railShooterGameplayWaveBridge_.Unbind();
     railShooterHudDefinition_ = RailShooterHudDefinitionAsset::Defaults();
@@ -1976,7 +1977,7 @@ void AppRunLoop::ApplyRailShooterCourse() {
     }
     railShooterCourseRuntime_.Bind(&railShooterCourse_);
     railShooterCourseRuntime_.SetTraversalEndDistance(IsRailShortCourse(railShooterCoursePath_)
-        ? ShortRunFinishDistance(railPath_.Length()) : -1.0f);
+        ? ShortRunTravelEndDistance(railPath_.Length()) : -1.0f);
     railShooterCourseRuntime_.Reset(runtimeState_.terrain.previewDistance);
     railShooterSpawnRuntime_.Reset();
     if(IsRailShortCourse(railShooterCoursePath_))
@@ -2163,6 +2164,7 @@ void AppRunLoop::ApplyRailShooterCourse() {
     railShooterCheckpointSystem_.Reset(&railShooterCourse_, runtimeState_.terrain.previewDistance);
     GameSessionDefinition sessionDefinition = IsRailShortCourse(railShooterCoursePath_)
         ? ShortRunSessionDefinition() : GameSessionDefinition::RailShooterDefaults();
+    sessionDefinition.unlimitedCheckpointRetries=true;
     if (!railShooterCourse_.name.empty()) {
         sessionDefinition.sessionId = railShooterCourse_.name;
     }
@@ -2203,13 +2205,9 @@ void AppRunLoop::ApplyRailShooterCourse() {
                     &railEncounterPerformanceScoreSystem_},
                 &sessionError)) {
             OutputDebugStringA(("[GameSessionRetry] Bind failed: " + sessionError + "\n").c_str());
-        } else if (railShooterInitialized_) {
-            (void)railShooterRetryCoordinator_.CaptureCheckpoint(
-                railShooterCourseRuntime_.Distance(),
-                "course_start",
-                nullptr);
         }
     }
+    railRetryPresentation_.Reset();railFirstPlayableCheckpointPending_=true;
     StopGameSessionPresentation();
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
@@ -2412,12 +2410,7 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     }
     railEnemyEncounterPacingDirector_.Reset(&railShooterSpawnRuntime_);
     railEncounterPerformanceScoreSystem_.Reset();
-    if (railShooterRetryCoordinator_.IsBound()) {
-        (void)railShooterRetryCoordinator_.CaptureCheckpoint(
-            railShooterDistance_,
-            "authoring_teleport",
-            nullptr);
-    }
+    railRetryPresentation_.Reset();railFirstPlayableCheckpointPending_=true;
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
     railEnemyEncounterCameraCompositionBridge_.Reset();
@@ -3285,6 +3278,11 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
         0x958B, 0x9593, 0x95D8, 0x9632, 0x963B, 0x9650, 0x967A, 0x969C, 0x9762,
         0x3057, 0x308B, 0x30A6, 0x30AA, 0x30AF, 0x30B2, 0x30B9, 0x30C3, 0x30DE, 0x30E0, 0x30EA, 0x30ED, 0x30F3, 0x4F5C, 0x52D5, 0x59CB, 0x5B9A, 0x623B, 0x629E, 0x62BC, 0x64CD, 0x6589, 0x660E, 0x6C7A, 0x7167, 0x79FB, 0x8AAC, 0x9078, 0x9577, 0x96E2,
     };
+    // Native HUD glyphs used by the game-over scene (not the ImGui atlas).
+    for(char32_t cp:std::u32string_view(U"トロッコが大破しました制限時間を過ぎました任務を継続できませんリトライタイトルに戻る最後のチェックポイントから再開利用選択決定マウス↑↓：・"))
+        submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
+    std::sort(submissionJapaneseCodepoints.begin(),submissionJapaneseCodepoints.end());
+    submissionJapaneseCodepoints.erase(std::unique(submissionJapaneseCodepoints.begin(),submissionJapaneseCodepoints.end()),submissionJapaneseCodepoints.end());
     submissionHudFontReady_ = false;
     submissionHudGlyphs_ = {};
     submissionStartCueGlyphs_.clear();
@@ -3396,7 +3394,7 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
     // remains in the existing Japanese font; enlarging its 26px atlas for
     // READY produced a soft, rounded heading instead of a strong start cue.
     constexpr int kStartCueAtlasY = 1216;
-    constexpr int kStartCueBitmapHeight = 256;
+    constexpr int kStartCueBitmapHeight = 768;
     constexpr float kStartCuePixelHeight = 128.0f;
     static_assert(kStartCueAtlasY > kTitleLogoAtlasY+kTitleLogoAtlasHeight);
     static_assert(kStartCueAtlasY+kStartCueBitmapHeight <= kRailHudAtlasHeight);
@@ -3408,8 +3406,8 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
             cueFontFile.seekg(0,std::ios::beg);
             std::vector<unsigned char> font(static_cast<size_t>(bytes));
             std::vector<unsigned char> bitmap(kRailHudAtlasWidth*kStartCueBitmapHeight,0);
-            int codepoints[]{'R','E','A','D','Y','G','O'};
-            std::array<stbtt_packedchar,7> glyphs{};
+            int codepoints[]{'R','E','A','D','Y','G','O','M','V',' '};
+            std::array<stbtt_packedchar,10> glyphs{};
             stbtt_pack_context context{};
             if(cueFontFile.read(reinterpret_cast<char*>(font.data()),bytes) &&
                stbtt_PackBegin(&context,bitmap.data(),kRailHudAtlasWidth,
@@ -3531,7 +3529,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     };
     // The title backdrop must stay fully opaque at the viewport edges. Sample
     // inside the solid texel block instead of filtering its transparent border.
-    const Vector4 uvWhite = railTitleScreenVisible_
+    const Vector4 uvWhite = (railTitleScreenVisible_ || railGameOverScene_.Active())
         ? uv(3.5f, 115.5f, 0.0f, 0.0f)
         : uv(0.0f, 112.0f, 8.0f, 8.0f);
     const Vector4 uvCircle = uv(16.0f, 88.0f, 32.0f, 32.0f);
@@ -4145,7 +4143,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 barWidth * sessionHud.healthNormalized, barHeight,
                 uvWhite, healthColor);
         addText(
-            HudUtf8(u8"\u6b8b\u6a5f ") + std::to_string(sessionHud.retriesRemaining),
+            railShooterGameSession_.Definition().unlimitedCheckpointRetries?HudUtf8(u8"リトライ 無制限"):
+                HudUtf8(u8"\u6b8b\u6a5f ") + std::to_string(sessionHud.retriesRemaining),
             left + 10.0f * sessionScale,
             top + 58.0f * sessionScale,
             0.62f * sessionScale,
@@ -4228,6 +4227,9 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.definition = &railShooterHudDefinition_;
     hudRenderInput.presentation = &railShooterHudPresentation_.Frame();
     hudRenderInput.resultSession=&railShooterGameSession_.State();
+    hudRenderInput.gameOver=&railGameOverScene_.Frame();
+    hudRenderInput.checkpointRetryAvailable=railShooterRetryCoordinator_.CanRetry();
+    hudRenderInput.unlimitedCheckpointRetries=railShooterGameSession_.Definition().unlimitedCheckpointRetries;
     hudRenderInput.shortRun=IsRailShortCourse(railShooterCoursePath_);
     hudRenderInput.bossVisible=hudRenderInput.shortRun && railMothershipBattle_.Current().battleActive;
     hudRenderInput.bossHealth=railMothershipBattle_.Current().battleHealth;
@@ -4311,6 +4313,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             }
         }
     };
+    if(railGameOverScene_.Active() && !railTitleScreenVisible_) railLockOnHudAtlasVertexCount_=0;
     emitHudCommands(railShooterHudRenderer_.Frame().commands);
 
     RailShooterDefensePromptRenderInput defensePromptInput{};
@@ -4323,8 +4326,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     defensePromptInput.viewportHeight = hudHeight;
     defensePromptInput.settings = railShooterDefensePromptRendererSettings_;
     railShooterDefensePromptRenderer_.Update(defensePromptInput);
-    emitHudCommands(railShooterDefensePromptRenderer_.Frame().commands);
-    if(!railTitleScreenVisible_) {
+    if(!railGameOverScene_.Active()) emitHudCommands(railShooterDefensePromptRenderer_.Frame().commands);
+    if(!railTitleScreenVisible_ && !railGameOverScene_.Active()) {
         const float carrierHudAlpha=1.0f-0.90f*railMothershipReveal_.Current().heroWeight;
         for(uint32_t index=0;index<railLockOnHudAtlasVertexCount_;++index)
             railLockOnHudAtlasMappedVertices_[index].color.w*=carrierHudAlpha;
@@ -4359,8 +4362,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const bool hasEnemyOrbs=!railTitleScreenVisible_ && std::any_of(enemyBulletFrame.proxies.begin(),enemyBulletFrame.proxies.end(),
         [](const auto& p){return p.spriteBacked;});
     const bool hudVisible=imguiLayer_.EditorViewportOverlay().LayerVisible(editor::EditorViewportOverlayLayerId::GameplayHud);
-    if(!hudVisible) railLockOnHudAtlasVertexCount_=0;
-    const bool hasWorldEffects=hasEnemyOrbs || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    if(!hudVisible && !railGameOverScene_.Active()) railLockOnHudAtlasVertexCount_=0;
+    const bool hasWorldEffects=railGameOverScene_.Active() || hasEnemyOrbs || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     if (hasWorldEffects) {
         // Suppress every gameplay overlay, including the reticle built above.
         if (railTitleScreenVisible_) railLockOnHudAtlasVertexCount_ = 0;
@@ -4573,6 +4576,20 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     {0.48f,0.40f,0.30f,puff.opacity},1000.0f+2.0f*float(puff.seed)});
             }
         }
+        if(railGameOverScene_.Active() && !railTitleScreenVisible_) {
+            const auto& wreck=railGameOverScene_.Frame();
+            for(size_t i=0;i<wreck.smokeCount;++i) {
+                const auto& puff=wreck.smoke[i];
+                billboards.push_back({puff.center,Scale(right,puff.radius),Scale(up,puff.radius*1.55f),
+                    puff.blast?Vector4{0.065f,0.060f,0.055f,puff.opacity}:Vector4{0.12f,0.11f,0.095f,puff.opacity},
+                    700.0f+2.0f*float(puff.seed),wreck.blastOrigin,wreck.blastLight});
+            }
+            for(size_t i=0;i<wreck.dustCount;++i) {
+                const auto& puff=wreck.dust[i];
+                billboards.push_back({puff.center,Scale(right,puff.radius*1.5f),Scale(up,puff.radius*0.85f),
+                    {0.59f,0.43f,0.27f,puff.opacity},1000.0f+2.0f*float(puff.seed)});
+            }
+        }
         const Vector3 eye=frameState_.cameraWorldPosition;
         std::sort(billboards.begin(),billboards.end(),[&](const auto& a,const auto& b) {
             const auto da=Add(a.center,Scale(eye,-1)),db=Add(b.center,Scale(eye,-1));
@@ -4634,6 +4651,35 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
             dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
         };
+        if(railGameOverScene_.Active() && !railTitleScreenVisible_) {
+            const auto& wreck=railGameOverScene_.Frame();
+            for(size_t i=0;i<wreck.sparkCount;++i) {
+                const auto& spark=wreck.sparks[i];
+                const auto delta=Add(spark.head,Scale(spark.tail,-1));
+                const auto middle=Scale(Add(spark.head,spark.tail),0.5f);
+                const auto side=NormalizeOr(Cross(delta,Add(eye,Scale(middle,-1))),right);
+                glowQuad(middle,Scale(delta,0.5f),Scale(side,0.065f),32.0f,{3.4f,1.40f,0.16f,spark.opacity});
+                glowQuad(middle,Scale(delta,0.5f),Scale(side,0.023f),32.0f,{4.3f,3.10f,1.5f,spark.opacity*0.95f});
+            }
+            if(wreck.shock.opacity>0) {
+                const auto& wave=wreck.shock;
+                const uint32_t phase=uint32_t((std::clamp)(wave.phase,0.0f,1.0f)*31+0.5f);
+                glowQuad(wave.center,Scale(wave.right,wave.radius),Scale(wave.forward,wave.radius),36.0f,
+                    {2.4f,0.95f,0.18f,wave.opacity},float(2*phase));
+            }
+            for(size_t i=0;i<wreck.fireCount;++i) {
+                const auto& fire=wreck.fire[i];
+                const auto h=Scale(Add(Scale(right,std::cos(fire.rotation)),Scale(up,std::sin(fire.rotation))),fire.radius);
+                const auto v=Scale(Add(Scale(up,std::cos(fire.rotation)),Scale(right,-std::sin(fire.rotation))),fire.radius*fire.aspect);
+                const uint32_t step=uint32_t((std::clamp)(fire.phase,0.0f,1.0f)*31+0.5f);
+                glowQuad(fire.center,h,v,30.0f,{1,1,1,fire.opacity},float(2*(step+32*fire.variant)));
+            }
+            for(size_t i=0;i<wreck.debrisCount;++i) {
+                const auto& chip=wreck.debris[i];
+                glowQuad(chip.center,Scale(right,chip.radius),Scale(up,chip.radius*0.65f),32.0f,
+                    {0.95f,0.68f,0.34f,chip.opacity});
+            }
+        }
         const auto orbTail=[&](Vector3 center,Vector3 tail,Vector3 direction,float radius,float opacity,float animationUvY) {
             const auto head=Add(center,Scale(direction,-radius*0.55f));
             const auto delta=Add(head,Scale(tail,-1)),middle=Scale(Add(tail,head),0.5f);
@@ -7176,12 +7222,7 @@ void AppRunLoop::EnterRailShooterScene() {
         }
     }
     railShooterSessionPresentation_.Reset();
-    if (railShooterRetryCoordinator_.IsBound()) {
-        (void)railShooterRetryCoordinator_.CaptureCheckpoint(
-            railShooterDistance_,
-            "course_start",
-            nullptr);
-    }
+    railRetryPresentation_.Reset();railFirstPlayableCheckpointPending_=true;
     railEnemyAttackTelegraphSystem_.Reset();
     StopRailEnemyAttackFeedback();
     railShooterLockOnSystem_.Reset(); railLockVolley_.Reset(); railPulseShots_.Reset(); railPrimaryKills_.Reset(); railBoostVfx_.Reset(); audio_.Stop(railBoostIgnitionSound_);
@@ -7318,6 +7359,7 @@ bool AppRunLoop::HandleTitleScreenMessage(
 }
 
 void AppRunLoop::BeginRailGameplayEntry() {
+    railRetryPresentation_.Reset();railFirstPlayableCheckpointPending_=true;
     railTitleGameplayEntry_.Begin();
     railReadyDroneActorIds_ = {};
     railReadyDroneSalvo_.Reset();
@@ -7333,6 +7375,7 @@ void AppRunLoop::BeginRailGameplayEntry() {
 }
 
 void AppRunLoop::RestartRailRun() {
+    railGameOverScene_.Reset();railGameOverWorld_.reset();railGameOverHasLastUpdate_=false;
     StopRailEnemyAttackFeedback();
     StopGameSessionPresentation();
     runtimeState_.terrain.previewDistance=UsesCanyonPresentation(railShooterCoursePath_)?160.0f:0.0f;
@@ -7346,6 +7389,7 @@ void AppRunLoop::RestartRailRun() {
 }
 
 void AppRunLoop::ReturnToDemoTitle() {
+    railGameOverScene_.Reset();railGameOverWorld_.reset();railGameOverHasLastUpdate_=false;
     if(!railTransitionDemo_.NeedsTitleSwap()) return;
     StopRailEnemyAttackFeedback();
     ClearShowcaseEffects();
@@ -7565,6 +7609,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterHasLastUpdateTime_ = false;
         return;
     }
+    if (!coursePreviewSimulationSystem_.IsActive() &&
+        railShooterGameSession_.State().outcome==GameSessionOutcome::Defeat) {
+        const auto now=std::chrono::steady_clock::now();
+        const float dt=railGameOverHasLastUpdate_?std::chrono::duration<float>(now-railGameOverLastUpdate_).count():0.0f;
+        railGameOverLastUpdate_=now;railGameOverHasLastUpdate_=true;
+        UpdateRailGameOver(dt);
+        return;
+    }
     ++railShooterFrameIndex_;
     ResetRailPerfFrame(railShooterFrameIndex_, railShooterDistance_);
     const RailWorldRaycast::FrameCacheScope raycastFrameCache(&terrainCollisionWorld_);
@@ -7604,7 +7656,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         realGameplayDeltaTime:0.0f);
     const auto& entryFrame=railTitleGameplayEntry_.Frame();
     const bool titleStartupBlocked = entryFrame.blockingGameplay;
-    const bool titleEntryBlocked = titleStartupBlocked || railTransitionDemo_.Returning();
+    // Complete the last intro travel slice, then checkpoint the fully warmed
+    // rig before consuming the first playable step or starting the demo timer.
+    const bool gameplayJustUnlocked=wasTitleStartupBlocked && !titleStartupBlocked;
+    const bool titleEntryBlocked = titleStartupBlocked || gameplayJustUnlocked || railTransitionDemo_.Returning();
     if(entryFrame.readyStarted) {
         (void)audio_.Play(railReadySound_,0.24f);
         (void)audio_.Play(railDroneFlybySound_,0.42f);
@@ -8199,18 +8254,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     railShooterSpeedDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
     if(!titleEntryBlocked) railShooterCheckpointSystem_.Update(&railShooterCourse_, railShooterDistance_);
     const SectionCheckpointStats& checkpointStats = railShooterCheckpointSystem_.LastStats();
-    if (!coursePreviewOwnsRail && !titleEntryBlocked && checkpointStats.enteredSectionThisFrame &&
-        railShooterRetryCoordinator_.IsBound()) {
-        std::string retryCheckpointError;
-        if (!railShooterRetryCoordinator_.CaptureCheckpoint(
-            checkpointStats.checkpointDistance,
-            checkpointStats.currentSectionName,
-            &retryCheckpointError)) {
-            OutputDebugStringA(
-                ("[GameSessionRetry] Checkpoint capture skipped: " +
-                 retryCheckpointError + "\n").c_str());
-        }
-    }
+    // Defer checkpoint capture until the complete body/camera follower update.
+    // Its distance must describe this same vehicle snapshot, not a section's
+    // earlier authored boundary.
     railShooterEventDispatcher_.Dispatch(
         encounterOutput.dispatchEvents,
         railShooterSpawnRuntime_,
@@ -9242,7 +9288,6 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 railShooterRuntimeProgram_.waves.end(),
                 [](const CourseRuntimeWaveNode& wave) { return wave.enabled; }));
         }
-        if(!titleEntryBlocked) railShooterGameSession_.Update(sessionInput);
         bool sessionKeyboardAllowed =
             hwnd_ == nullptr || GetForegroundWindow() == hwnd_;
 #if defined(GE3_ENABLE_IMGUI) && GE3_ENABLE_IMGUI
@@ -9251,6 +9296,28 @@ void AppRunLoop::UpdateRailShooterFrame() {
             sessionKeyboardAllowed = false;
         }
 #endif
+        // Demo builds intentionally show the defeat sequence two seconds
+        // after gameplay becomes controllable. Use the attempt clock so title,
+        // READY/GO and pause time do not count, and checkpoint retry rearms it.
+        constexpr float demoDefeatSeconds=2.0f;
+        const auto& demoState=railShooterGameSession_.State();
+        if(!titleEntryBlocked && sessionDeltaTime>0.0f &&
+            demoState.phase==GameSessionPhase::Playing &&
+            demoState.attemptElapsedSeconds+sessionDeltaTime>=demoDefeatSeconds) {
+            const float before=demoState.playerHealth;
+            const float elapsed=demoState.attemptElapsedSeconds+sessionDeltaTime;
+            (void)railShooterGameSession_.ApplyPlayerDamage(before,"demo_game_over_2s");
+            auto log=app::OpenRotatingLog("logs/rail_game_over_demo.log");
+            if(log) log<<"Demo defeat: attempt="<<demoState.attemptIndex<<" gameplaySeconds="<<elapsed
+                <<" HP "<<before<<" -> "<<demoState.playerHealth<<'\n';
+        }
+        if(!titleEntryBlocked) railShooterGameSession_.Update(sessionInput);
+        // Enter the wreck on the fatal frame. Otherwise this frame can draw
+        // the generic result card before the camera/HUD handoff begins.
+        if(railShooterGameSession_.State().outcome==GameSessionOutcome::Defeat) {
+            UpdateRailGameOver(0.0f);
+            return;
+        }
         const bool pauseRequested =
             !titleEntryBlocked && sessionKeyboardAllowed && WasKeyPressed('P');
         const bool retryRequested =
@@ -9290,57 +9357,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
             }
             return;
         }
-        const bool checkpointRequested=resultAction==RailRunResultAction::Checkpoint ||
-            (railShooterGameSession_.State().phase==GameSessionPhase::Defeat && retryRequested);
-        if (checkpointRequested && railShooterRetryCoordinator_.CanRetry()) {
-            std::string retryError;
-            const GameSessionRetryResult retry =
-                railShooterRetryCoordinator_.Retry(&retryError);
-            if (retry.succeeded) {
-                railShooterDistance_ = retry.restoredDistance;
-                runtimeState_.terrain.previewDistance = retry.restoredDistance;
-                railShooterPlayerVehicleMount_.Reset();
-                railShooterVehicleBodyCollision_.Reset();
-                railShooterVehicleCollisionFeedback_.Reset();
-                railShooterCombatMountBridge_.Reset();
-                railShooterCameraMountBridge_.Reset();
-                railShooterOccupantClearance_.Reset();
-                railShooterEvasionConstraintResolver_.Reset();
-                railShooterMountedEvasionPresentation_.Reset();
-                railShooterOccupantActor_.Reset();
-                railShooterEvasionFeedback_.Reset();
-                railShooterPlayerLateralOffset_ =
-                    railShooterVehicleMovement_.Definition().mounts.player.x;
-                railShooterPlayerVerticalOffset_ =
-                    railShooterVehicleMovement_.Definition().bodyVerticalOffset +
-                    railShooterVehicleMovement_.Definition().mounts.player.y;
-                railShooterVehiclePresentation_.Reset();
-                railShooterVehicleRideDynamics_.Reset();
-                railShooterTrackContactPose_.Reset();
-                railShooterCameraInertia_.Reset();
-                railShooterVehicleActor_.Reset();
-                railShooterVehicleRenderer_.Reset();
-                railShooterVehicleAudioBridge_.Reset();
-                railEnemyCombatPresentationBridge_.Reset();
-                ResetEnemyProjectilePresentation(false);
-                railPlayerDamagePresentationBridge_.Reset();
-                railEnemyAttackTelegraphSystem_.Reset();
-                StopRailEnemyAttackFeedback();
-                railShooterCombatFeelSystem_.Reset();
-                railShooterEncounterDirector_.Reset();
-                railEnemyEncounterCameraCompositionBridge_.Reset();
-                railShooterCameraDirector_.Reset();
-                railShooterLockOnSystem_.Reset(); railLockVolley_.Reset();
-                railShooterSpeedDirector_.Reset();
-                railShooterRideDirector_.Reset();
-                railShooterTrackFeedbackDirector_.Reset();
-                railShooterRideMotionEnvelope_.Reset();
-                railPulseShots_.Reset(); railPrimaryKills_.Reset(); railBoostVfx_.Reset(); audio_.Stop(railBoostIgnitionSound_);
-                OutputDebugStringA(("[GameSessionRetry] " + retry.message + "\n").c_str());
-            } else {
-                OutputDebugStringA(("[GameSessionRetry] " + retryError + "\n").c_str());
-            }
-        }
+        const bool checkpointRequested=resultAction==RailRunResultAction::Checkpoint;
+        if (checkpointRequested) (void)RetryRailCheckpoint();
         GameSessionPresentationInput presentationInput{};
         presentationInput.definition = &railShooterGameSession_.Definition();
         presentationInput.state = &railShooterGameSession_.State();
@@ -9533,6 +9551,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
         lastEditorViewportMode_ = viewportMode;
         lastEditorViewportSessionSerial_ =
             playSession.SessionSerial();
+    }
+
+    if(!coursePreviewOwnsRail && !coursePreviewFrozen && !entryFrame.blockingGameplay &&
+        !railTransitionDemo_.Returning() && railShooterRetryCoordinator_.IsBound() &&
+        (railFirstPlayableCheckpointPending_ || checkpointStats.enteredSectionThisFrame)) {
+        (void)CaptureRailCheckpoint(railFirstPlayableCheckpointPending_?"gameplay_start":checkpointStats.currentSectionName);
     }
 
     const auto vfxUpdateStart = RailPerfClock::now();
@@ -10920,7 +10944,7 @@ void AppRunLoop::DispatchEnemyProjectilePresentation(
     const bool previewActive = coursePreviewActorRuntimeBridge_.Active();
     const CourseSpawnRuntime& presentationRuntime = previewActive
         ? coursePreviewActorRuntimeBridge_.Runtime()
-        : railShooterSpawnRuntime_;
+        : railGameOverScene_.Active() && railGameOverWorld_ ? *railGameOverWorld_ : railShooterSpawnRuntime_;
     if (std::isfinite(deltaTime) && deltaTime > 0.0f) {
         railEnemyProjectilePresentationTime_ +=
             (std::min)(deltaTime, 0.25f);
@@ -10959,7 +10983,7 @@ void AppRunLoop::DispatchEnemyProjectilePresentation(
             windowHeight_);
     vfxRenderInput.verticalFovRadians = runtimeState_.camera.fovY;
     vfxRenderInput.viewportHeightPixels = projectileMetrics.height;
-    vfxRenderInput.gameplayActive = gameplayActive || previewActive;
+    vfxRenderInput.gameplayActive = gameplayActive || previewActive || railGameOverScene_.Active();
     vfxRenderInput.settings = railEnemyProjectileVfxRendererSettings_;
     vfxRenderInput.settings.orbSpritesEnabled = appPipelines_.GetTitleDustPSO()!=nullptr && appPipelines_.GetTitleTracerPSO()!=nullptr;
     vfxRenderInput.readabilitySettings =
@@ -13475,7 +13499,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const CourseSpawnRuntime& coursePresentationRuntime =
         coursePreviewActorRuntimeBridge_.Active()
         ? coursePreviewActorRuntimeBridge_.Runtime()
-        : railShooterSpawnRuntime_;
+        : railGameOverScene_.Active() && railGameOverWorld_ ? *railGameOverWorld_ : railShooterSpawnRuntime_;
     const EnemyCombatPresentationBridge* enemyCombatPresentation =
         coursePreviewActorRuntimeBridge_.Active()
         ? nullptr
@@ -13641,11 +13665,12 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             railTitleScene_.SceneryDistance(),railTitleScene_.SceneryPath(),frameState_.viewMatrix,frameState_.projMatrix,nullptr,nullptr,
             &railTitleScene_.Pursuer());
     } else {
-    auto cameraVehicleFrame = railShooterVehicleRenderer_.Frame();
-    auto cameraOccupantFrame = railShooterOccupantActor_.Frame();
-    if (imguiLayer_.CameraComposition().Active()
+    const bool wreckActive=railGameOverScene_.Active();
+    auto cameraVehicleFrame = wreckActive?railGameOverScene_.Frame().vehicle:railShooterVehicleRenderer_.Frame();
+    auto cameraOccupantFrame = wreckActive?railGameOverScene_.Frame().occupant:railShooterOccupantActor_.Frame();
+    if (!wreckActive && (imguiLayer_.CameraComposition().Active()
             ? imguiLayer_.CameraComposition().HideVehicle()
-            : railShooterCameraDirector_.LastFrame().hideVehicle) {
+            : railShooterCameraDirector_.LastFrame().hideVehicle)) {
         cameraVehicleFrame.visible = false;
         cameraOccupantFrame.visible = false;
     }
@@ -13655,10 +13680,12 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         frameState_.projMatrix);
     scene_.SyncCourseRailTrackRenderer(
         railShooterTrackMeshBake_.Result(),
-        railShooterCourseRuntime_.Distance(),
-        &railShooterWheelContactPresentation_.Frame(),
+        wreckActive?railGameOverScene_.Frame().trackDistance:railShooterCourseRuntime_.Distance(),
+        wreckActive?&railGameOverScene_.Frame().wheels:&railShooterWheelContactPresentation_.Frame(),
         frameState_.viewMatrix,
-        frameState_.projMatrix);
+        frameState_.projMatrix,wreckActive?&railGameOverScene_.Frame().sidePanel:nullptr,
+        wreckActive?std::span(railGameOverScene_.Frame().fractures.data(),railGameOverScene_.Frame().fractureCount):
+            std::span<const RailVehicleRenderFrame>{});
     scene_.SyncRailVehicleOccupantActorFrame(
         cameraOccupantFrame,
         frameState_.viewMatrix,

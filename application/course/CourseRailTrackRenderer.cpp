@@ -53,7 +53,8 @@ void CourseRailTrackRenderer::Sync(
     const RailVehicleWheelContactPresentationFrame* wheels,
     std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewMatrix,
-    const Matrix4x4& projMatrix) {
+    const Matrix4x4& projMatrix,const RailVehicleRenderFrame* detachedPanel,
+    std::span<const RailVehicleRenderFrame> fractures) {
     Reset();
     stats_.revision = ++revision_;
     stats_.sourceValid = baked.valid;
@@ -70,9 +71,9 @@ void CourseRailTrackRenderer::Sync(
             [](const CourseRailTrackBakedInstance& item, float distance) {
                 return item.endDistance < distance;
             });
-        const size_t staticBudget = wheels != nullptr && wheels->valid && items_.size() >= 4
-            ? items_.size() - 4
-            : items_.size();
+        const size_t reserved=(wheels && wheels->valid?4u:0u)+(detachedPanel && detachedPanel->visible?1u:0u)+
+            std::count_if(fractures.begin(),fractures.end(),[](const auto& part){return part.visible;});
+        const size_t staticBudget=items_.size()-(std::min)(reserved,items_.size());
         for (; found != baked.instances.end() &&
                found->startDistance <= maximumDistance; ++found) {
             const float delta = std::abs(found->startDistance-currentDistance);
@@ -142,6 +143,13 @@ void CourseRailTrackRenderer::Sync(
             ++stats_.visibleWheelInstances;
         }
     }
+    if(detachedPanel) AppendVehiclePart(*detachedPanel,models,viewMatrix,projMatrix);
+    for(const auto& part:fractures) {
+        const RailVehicleWheelContactVisual* sourceWheel=nullptr;
+        if(wheels && wheels->valid) for(const auto& wheel:wheels->wheels)
+            if(wheel.meshId==part.meshId) {sourceWheel=&wheel;break;}
+        AppendVehiclePart(part,models,viewMatrix,projMatrix,sourceWheel);
+    }
 }
 
 CourseMeshRenderItem* CourseRailTrackRenderer::AllocateItem() {
@@ -150,6 +158,21 @@ CourseMeshRenderItem* CourseRailTrackRenderer::AllocateItem() {
     item.visible = false;
     item.useMaterialOverride = false;
     return &item;
+}
+
+void CourseRailTrackRenderer::AppendVehiclePart(const RailVehicleRenderFrame& frame,
+    std::span<const CourseMeshModelBinding> models,const Matrix4x4& view,const Matrix4x4& projection,const RailVehicleWheelContactVisual* wheel) {
+    if(!frame.visible || models.empty()) return;
+    const auto found=std::find_if(models.begin(),models.end(),[&](const auto& model){return model.loaded && model.name==frame.meshId;});
+    if(found==models.end()) return;
+    auto* item=AllocateItem();if(!item) return;
+    item->kind=wheel?CourseMeshRenderKind::VehicleWheel:CourseMeshRenderKind::Obstacle;
+    item->name="rail_vehicle_fragment";item->meshId=frame.meshId;
+    item->modelIndex=static_cast<uint32_t>(found-models.begin());item->visible=true;
+    WriteItem(*item,*found,frame.worldMatrix,Multiply(view,projection),wheel?wheel->color:Vector4{1,1,1,1});
+    // Solid body pieces retain their paint/trim; wheels keep their iron override.
+    item->useMaterialOverride=wheel!=nullptr;
+    if(wheel) ++stats_.visibleWheelInstances;
 }
 
 uint32_t CourseRailTrackRenderer::ResolveModelIndex(

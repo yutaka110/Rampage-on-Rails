@@ -10,6 +10,7 @@
 #include "CourseMeshRenderQueue.h"
 #include "CourseRailTrackMeshBakePipeline.h"
 #include "RailVehicleWheelContactPresentationBridge.h"
+#include "RailVehicleRenderer.h"
 
 struct CourseRailTrackRenderStats final {
     bool sourceValid = false;
@@ -38,10 +39,16 @@ public:
         const RailVehicleWheelContactPresentationFrame* wheels,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix,
-        const Matrix4x4& projMatrix);
+        const Matrix4x4& projMatrix,
+        const RailVehicleRenderFrame* detachedPanel=nullptr,
+        std::span<const RailVehicleRenderFrame> fractures={});
 
     const std::vector<CourseMeshRenderItem>& Items() const noexcept { return items_; }
     const CourseRailTrackRenderStats& Stats() const noexcept { return stats_; }
+    void AppendVehiclePart(const RailVehicleRenderFrame& frame,
+        std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& view,const Matrix4x4& projection,
+        const RailVehicleWheelContactVisual* wheel=nullptr);
 
 private:
     CourseMeshRenderItem* AllocateItem();

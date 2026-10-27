@@ -21,6 +21,11 @@ inline GameSessionDefinition ShortRunSessionDefinition() {
 inline float ShortRunFinishDistance(float railLength) {
     return (std::min)(3800.0f, railLength);
 }
+inline float ShortRunTravelEndDistance(float railLength) {
+    // The result gate and the track end are separate. Continue pursuing live
+    // enemies beyond the gate; session truth decides when to show the result.
+    return (std::max)(ShortRunFinishDistance(railLength),railLength-180.0f);
+}
 inline CourseGameplayWaveRuntimeSettings ShortRunWaveSettings() {
     CourseGameplayWaveRuntimeSettings settings;
     settings.earlyClearAdvanceEnabled = true;

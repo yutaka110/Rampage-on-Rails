@@ -70,6 +70,7 @@ struct GameSessionDefinition final {
     bool defeatTakesPriority = true;
     uint32_t eventHistoryCapacity = 128;
     bool timeLimitPerAttempt = false;
+    bool unlimitedCheckpointRetries = false;
 
     static GameSessionDefinition RailShooterDefaults();
     bool Validate(std::string* errorMessage = nullptr) const;

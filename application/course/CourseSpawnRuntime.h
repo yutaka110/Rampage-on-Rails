@@ -321,6 +321,8 @@ public:
         std::string* errorMessage = nullptr);
     void Update(float deltaTime);
     void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput);
+    // Call on a cinematic copy: preserve existing motion without new shots.
+    void UpdateDefeatPresentation(float deltaTime, CourseEnemyFireSafetyFrameInput safetyInput);
     void EnforceEnemyEngagementClearance(const CourseEnemyFireSafetyFrameInput& safetyInput);
     bool InvalidateEnemyAttackWarning(uint32_t actorId);
     bool DeferEnemyAttackForUnreachableLaunch(uint32_t actorId);

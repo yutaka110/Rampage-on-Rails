@@ -3,6 +3,8 @@
 #include "../course/RailMothershipBattle.h"
 #include "../course/CourseValidation.h"
 #include "../course/RailShortCourse.h"
+#include "../course/RailGameOverScene.h"
+#include "../course/RailRetryPresentationCheckpoint.h"
 #include <cstdlib>
 #include <map>
 #include <numbers>
@@ -37795,10 +37797,10 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
                 const auto anchor=RailMothership::Add(s.position,RailMothership::Add(
                     RailMothership::Scale(s.right,actor.desc.lateralOffset),RailMothership::Scale(s.up,actor.desc.verticalOffset)));
                 runner.Expect(std::abs(socket.x-anchor.x)+std::abs(socket.y-anchor.y)+std::abs(socket.z-anchor.z)<0.01f,
-                    "weapon actors and hull sockets remain attached throughout travel");
+                    "weapon actors and hull sockets remain attached throughout travel step="+std::to_string(step)+" part="+actor.desc.actorAssetId+" socket="+std::to_string(socket.x)+","+std::to_string(socket.y)+","+std::to_string(socket.z)+" anchor="+std::to_string(anchor.x)+","+std::to_string(anchor.y)+","+std::to_string(anchor.z));
                 if(step==6*fps) {
-                    RailAimState aim;aim.valid=true;aim.maxDistance=92;const auto player=rail.Evaluate(at+4);
-                    aim.worldRayOrigin=RailMothership::Add(player.position,RailMothership::Scale(player.up,4));
+                    RailAimState aim;aim.valid=true;aim.maxDistance=120;
+                    aim.worldRayOrigin=view.gameplayPosition;
                     aim.worldRayDirection=unit(Vector3{anchor.x-aim.worldRayOrigin.x,anchor.y-aim.worldRayOrigin.y,anchor.z-aim.worldRayOrigin.z});
                     RailWorldRaycastInput ray;ray.aim=&aim;ray.railPath=&rail;ray.spawnRuntime=&spawn;ray.playerDistance=at;ray.includeProceduralTerrain=false;
                     const auto contact=RailWorldRaycast::Query(ray);
@@ -37806,7 +37808,11 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
                 }
             }
             RailTargetRegistryFrameInput ti;ti.spawnRuntime=&spawn;ti.railPath=&rail;ti.playerDistance=at;registry.Build(ti);
-            runner.Expect(registry.Anchors().size()==ship.remainingParts &&
+            const auto targetable=std::count_if(spawn.Enemies().begin(),spawn.Enemies().end(),[](const auto& a){
+                return a.desc.hitPoints>0 && a.combatState.canBeTargeted &&
+                    (!a.entranceExitState.initialized || a.entranceExitState.targetable);
+            });
+            runner.Expect(registry.Anchors().size()==size_t(targetable) &&
                 std::all_of(registry.Anchors().begin(),registry.Anchors().end(),[](const auto& a){return a.maxStack==4 && a.stackAcquireIntervalSeconds==0.22f;}),
                 "only live parts can receive up to four timed locks each");
             // Exercise real emitted projectiles with the ordinary gun damage;
@@ -37828,8 +37834,8 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
             }
         }
         runner.Expect(chipApplied && rapidIntercept && heavyIntercept,"normal damage and both interception choices remain functional without dodging");
-        CourseSpawnRuntime restored;runner.Expect(restored.RestoreCheckpoint(partialSave,false,&error) && restored.Enemies().size()==1,
-            "retry snapshot preserves the broken part and the survivor without restoring hostile bullets");
+        CourseSpawnRuntime restored;const bool retryRestored=restored.RestoreCheckpoint(partialSave,false,&error);runner.Expect(retryRestored && restored.Bullets().empty() && std::count_if(restored.Enemies().begin(),restored.Enemies().end(),[](const auto& a){return a.desc.hitPoints>0;})==1,
+            "retry snapshot preserves the broken part and the survivor error="+error+" restored="+std::to_string(restored.Enemies().size()));
         RailMothership::Battle retry;retry.Update(reveal.Current(),restored,CourseGameplayWavePhase::Active,rail,3700,dt);
         runner.Expect(retry.Current().remainingParts==1 && retry.Current().partHealth[first]==0,"retry cannot resurrect a destroyed weapon");
         runner.Expect(hit(1-first,1000,300).destroyed,"the remaining part can be broken");
@@ -37853,6 +37859,1269 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
 }
 
 
+
+void TestCarrierPursuitReachability(RegressionRunner& runner) {
+    std::string error;CourseAsset course;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"pursuit course loads");
+    RailPath rail;course.ApplyToRailPath(rail);
+    const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    runner.Expect(cooked.succeeded,"pursuit course compiles");
+    RailVehicleControlDefinitionAsset preset;
+    runner.Expect(preset.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),"actual vehicle preset loads");
+    std::ofstream metrics("logs/miniboss_pursuit_reachability.csv");
+    metrics<<"fps,boost,distance,speed,maxCameraHitDistance,ordinaryHits\n";
+    for(int fps:{30,60,120}) for(bool boost:{false,true}) {
+        const float dt=1.0f/fps;
+        CourseRuntime travel;travel.Bind(&course);travel.SetTraversalEndDistance(ShortRunTravelEndDistance(rail.Length()));travel.Reset(3780);
+        RailVehicleMovementSystem vehicle;vehicle.Initialize(preset.vehicle,&error);vehicle.Reset(3780,18,&rail);
+        RailSpeedDirector speed;speed.Configure(preset.speedPolicy);RailRideDirector ride;RailRideMotionEnvelope envelope;
+        CourseSpawnRuntime spawn;CourseGameplayWaveRuntimeBridge waves;waves.Configure(ShortRunWaveSettings());waves.Bind(&cooked.program,&spawn,3780,&error);
+        auto checkpoint=waves.CaptureCheckpoint();checkpoint.playerDistance=3780;
+        for(size_t i=0;i<checkpoint.wavePhases.size();++i) {
+            const auto& wave=cooked.program.waves[i];
+            checkpoint.wavePhases[i]=wave.waveGuid==RailMothership::BossWaveId?CourseGameplayWavePhase::Active:CourseGameplayWavePhase::Completed;
+            if(wave.waveGuid!=RailMothership::BossWaveId) for(auto ai:wave.actorIndices)checkpoint.defeatedPlacementGuids.push_back(cooked.program.actors[ai].placementGuid);
+        }
+        runner.Expect(waves.RestoreCheckpoint(checkpoint,&error),"pursuit checkpoint restores");
+        RailCameraDirector camera;CourseCollisionSystem collision;
+        runner.Expect(collision.LoadWeaponDefinitions("Resources/weapons",&error),"actual ordinary weapon loads");
+        float maxDistance=0;unsigned ordinaryHits=0;
+        for(int step=0;step<30*fps;++step) {
+            speed.SetManualBoostInput(boost,true);
+            RailSpeedDirectorFrameInput si;si.course=&course;si.railPath=&rail;si.distance=travel.Distance();si.deltaTime=dt;
+            si.section=travel.CurrentSection();si.rideProfile=course.FindRideProfile(si.distance);
+            const auto wanted=speed.Evaluate(si);
+            RailVehicleMovementInput move;move.deltaTime=dt;move.courseRuntime=&travel;move.railPath=&rail;
+            RailRideDirectorInput ri;ri.course=&course;ri.railPath=&rail;ri.distance=travel.Distance();ri.baseRequestedSpeed=wanted.requestedSpeed;
+            const auto& intent=ride.Evaluate(ri);RailRideMotionEnvelopeInput ei;ei.vehicleDefinition=&vehicle.Definition();ei.vehicleState=&vehicle.State();
+            ei.ride=&intent;ei.railPath=&rail;ei.normalSpeedScale=speed.Settings().normalSpeedScale;ei.manualBoostMultiplier=speed.ManualBoost().SpeedMultiplier();
+            const auto& limit=envelope.Evaluate(ei);move.requestedSpeed=limit.requestedSpeed;move.manualBoostMultiplier=limit.manualBoostMultiplier;
+            move.motionEnvelopeActive=true;move.accelerationLimit=limit.accelerationLimit;move.brakingLimit=limit.brakingLimit;move.jerkLimit=limit.jerkLimit;
+            const auto moved=vehicle.Update(move);
+            runner.Expect(moved.state.speed>1 && !moved.state.atCourseEnd,"live miniboss never stops the cart at the old clear gate, with or without boost");
+            CourseEnemyFireSafetyFrameInput safety;safety.playerDistance=travel.Distance();safety.playerSpeed=moved.state.speed;safety.railPath=&rail;safety.cameraAllowsEnemyFire=false;
+            spawn.Update(dt,safety);
+            RailCameraDirectorFrameInput ci;ci.course=&course;ci.railPath=&rail;ci.spawnRuntime=&spawn;ci.section=travel.CurrentSection();
+            ci.distance=travel.Distance();ci.deltaTime=dt;ci.railSpeed=moved.state.speed;ci.viewportWidth=1600;ci.viewportHeight=900;
+            const auto view=camera.Evaluate(ci);
+            if(step<2*fps || step%fps)continue;
+            const auto unit=[](Vector3 v){const float n=std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);return Vector3{v.x/n,v.y/n,v.z/n};};
+            const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
+            const auto f=unit(Vector3{view.gameplayTarget.x-view.gameplayPosition.x,view.gameplayTarget.y-view.gameplayPosition.y,view.gameplayTarget.z-view.gameplayPosition.z});
+            const auto r=unit(cross(view.gameplayUp,f)),u=cross(f,r);Matrix4x4 world=MakeIdentity4x4();
+            const Vector3 rows[]={r,u,f,view.gameplayPosition};for(int i=0;i<4;++i){world.m[i][0]=rows[i].x;world.m[i][1]=rows[i].y;world.m[i][2]=rows[i].z;}
+            Matrix4x4 vp=Multiply(Inverse(world),MakePerspectiveFovMatrix(view.fovY,1600.0f/900,0.1f,1500));
+            for(const auto& actor:spawn.Enemies()) {
+                const auto sample=rail.Evaluate(actor.desc.spawnDistance+actor.desc.distanceOffset);
+                const auto anchor=RailMothership::Add(sample.position,RailMothership::Add(RailMothership::Scale(sample.right,actor.desc.lateralOffset),RailMothership::Scale(sample.up,actor.desc.verticalOffset)));
+                const float w=anchor.x*vp.m[0][3]+anchor.y*vp.m[1][3]+anchor.z*vp.m[2][3]+vp.m[3][3];
+                const Vector3 ndc{(anchor.x*vp.m[0][0]+anchor.y*vp.m[1][0]+anchor.z*vp.m[2][0]+vp.m[3][0])/w,
+                    (anchor.x*vp.m[0][1]+anchor.y*vp.m[1][1]+anchor.z*vp.m[2][1]+vp.m[3][1])/w,0};
+                runner.Expect(std::abs(ndc.x)<0.95f && std::abs(ndc.y)<0.9f,"weapons inside gameplay view fps="+std::to_string(fps)+" step="+std::to_string(step)+" part="+actor.desc.actorAssetId+" ndc="+std::to_string(ndc.x)+","+std::to_string(ndc.y)+" distance="+std::to_string(travel.Distance()));
+                RailAimRayBuildInput ai;ai.viewportWidth=1600;ai.viewportHeight=900;ai.pixelPosition={(ndc.x+1)*800,(1-ndc.y)*450};
+                ai.gameplayViewProjection=vp;ai.gameplayCameraPosition=view.gameplayPosition;ai.maxDistance=120;
+                auto aim=BuildRailAimState(ai);RailWorldRaycastInput ray;ray.aim=&aim;ray.railPath=&rail;ray.spawnRuntime=&spawn;ray.course=&course;ray.playerDistance=travel.Distance();ray.includeProceduralTerrain=false;
+                const auto contact=RailWorldRaycast::Query(ray);
+                runner.Expect(contact.hit && contact.actorId==actor.actorId,"camera ray reaches actual 92m target step="+std::to_string(step)+" part="+actor.desc.actorAssetId+" target="+std::to_string(actor.actorId)+" got="+std::to_string(contact.actorId)+" kind="+std::to_string(int(contact.kind))+" cameraZ="+std::to_string(view.gameplayPosition.z)+" targetZ="+std::to_string(anchor.z)+" ndc="+std::to_string(ndc.x)+","+std::to_string(ndc.y));
+                const auto cart=rail.Evaluate(travel.Distance());
+                const float muzzleDistance=std::sqrt((contact.position.x-cart.position.x)*(contact.position.x-cart.position.x)+
+                    (contact.position.y-cart.position.y-4)*(contact.position.y-cart.position.y-4)+
+                    (contact.position.z-cart.position.z-3.4f)*(contact.position.z-cart.position.z-3.4f));
+                runner.Expect(muzzleDistance<92,"muzzle range="+std::to_string(muzzleDistance)+" fps="+std::to_string(fps)+" step="+std::to_string(step)+" at="+std::to_string(travel.Distance())+" forward="+std::to_string(actor.desc.spawnDistance+actor.desc.distanceOffset-travel.Distance())+" cart="+std::to_string(cart.position.x)+","+std::to_string(cart.position.y)+","+std::to_string(cart.position.z)+" hit="+std::to_string(contact.position.x)+","+std::to_string(contact.position.y)+","+std::to_string(contact.position.z));
+                maxDistance=(std::max)(maxDistance,contact.distance);
+                if(step==3*fps) {
+                    ApplyRailAimHit(aim,contact);CourseCollisionFrameInput shot;shot.deltaTime=0.1f;shot.course=&course;shot.railPath=&rail;shot.worldAim=&aim;
+                    shot.player.distance=travel.Distance();shot.weapon.triggerHeld=true;shot.externalBodyCollisionAuthority=true;
+                    const auto result=collision.Update(spawn,shot);
+                    runner.Expect(result.playerShotEnemyHits>0 && collision.LastDamageResult().damageApplied,"ordinary shooting applies real damage to both visible parts while pursuing");
+                    ++ordinaryHits;
+                }
+            }
+        }
+        runner.Expect(travel.Distance()>4000 && ordinaryHits==2,"pursuit crosses the old stop and both weapons accept ordinary damage");
+        metrics<<fps<<','<<boost<<','<<travel.Distance()<<','<<vehicle.State().speed<<','<<maxDistance<<','<<ordinaryHits<<'\n';metrics.flush();
+    }
+}
+
+void TestRailCheckpointFollowReplay(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    for(int fps:{30,60,120}) {
+        const float dt=1.0f/fps;
+        CourseAsset course;course.name="moving gameplay checkpoint";
+        course.railPoints={{{0,0,0},18,30},{{0,0,300},18,30},{{80,12,650},18,30},{{100,0,1200},18,30}};
+        RailPath path;course.ApplyToRailPath(path);
+        CourseRailTrackMeshBakePipeline renderedTrack;
+        renderedTrack.Bake(CourseRailTrackDefinitionAsset::MineCartDefaults(),path);
+        RailVehicleTrackContactPoseSettings contactSettings;
+        CourseRuntime runtime;runtime.Bind(&course);runtime.Reset(160);
+        RailVehicleMovementSystem vehicle;vehicle.Reset(160,0,&path);
+        auto live=std::make_unique<RailRetryFollowState>();live->entry.Begin();
+        const auto follow=[&](float step) {
+            const auto& state=vehicle.State();const auto& definition=vehicle.Definition();
+            RailRideDirectorInput rideInput;rideInput.course=&course;rideInput.railPath=&path;rideInput.distance=state.distance;rideInput.baseRequestedSpeed=30;
+            const auto& ride=live->ride.Evaluate(rideInput);
+            RailVehicleTrackContactPoseInput contact;contact.definition=&definition;contact.state=&state;contact.railPath=&path;
+            const auto& contacts=live->trackContact.Solve(contact);
+            RailVehicleRideDynamicsInput dynamics;dynamics.definition=&definition;dynamics.state=&state;dynamics.ride=&ride;dynamics.deltaTime=step;
+            const auto& motion=live->rideDynamics.Update(dynamics);
+            RailVehiclePresentationInput visual;visual.definition=&definition;visual.state=&state;visual.deltaTime=step;visual.rideDynamics=&motion;visual.trackContactPose=&contacts;
+            live->vehicle.Update(visual);
+            RailVehicleWheelContactPresentationInput wheels;wheels.contacts=&contacts;wheels.vehiclePresentation=&live->vehicle.Frame();
+            live->wheels.Update(wheels);
+            RailVehicleCameraInertiaInput inertia;inertia.definition=&definition;inertia.state=&state;inertia.trackContact=&contacts;inertia.rideDynamics=&motion;inertia.ride=&ride;inertia.deltaTime=step;
+            const auto& lag=live->cameraInertia.Update(inertia);
+            RailVehicleActorInput actor;actor.vehicleDefinition=&definition;actor.vehicleState=&state;actor.presentation=&live->vehicle.Frame();
+            live->actor.Update(actor);
+            RailCameraDirectorFrameInput camera;camera.course=&course;camera.railPath=&path;camera.distance=state.distance;camera.deltaTime=step;camera.railSpeed=state.speed;
+            camera.cameraInertiaActive=lag.active;camera.cameraInertiaGameplayPositionOffset=lag.gameplayPositionOffset;
+            camera.cameraInertiaGameplayTargetOffset=lag.gameplayTargetOffset;camera.cameraInertiaFovOffsetRadians=lag.fovOffsetRadians;
+            const auto view=live->camera.Evaluate(camera);
+            live->eye=view.position;
+            auto cameraWorld=Basis(Unit(Cross(view.up,view.forward)),view.up,view.forward,view.position);
+            live->view=Inverse(cameraWorld);
+            live->projection=MakePerspectiveFovMatrix(view.fovY,16.0f/9.0f,0.1f,5000);
+            live->cameraFov=view.fovY;
+            RailVehicleRenderInput render;render.actor=&live->actor.Frame();render.cameraWorldPosition=live->eye;
+            live->renderer.Update(render);++live->frameIndex;
+        };
+        RailVehicleMovementInput move;move.deltaTime=dt;move.requestedSpeed=30;move.courseRuntime=&runtime;move.railPath=&path;
+        for(int tick=0;tick<fps*6 && live->entry.Frame().blockingGameplay;++tick) {
+            live->entry.Update(dt);move.deltaTime=live->entry.Frame().travelDeltaTime;vehicle.Update(move);follow(move.deltaTime);
+        }
+        GameSessionSystem session;auto rules=GameSessionDefinition::RailShooterDefaults();rules.unlimitedCheckpointRetries=true;
+        std::string error;session.Initialize(rules,path.Length(),&error);session.Start(vehicle.State().distance,&error);
+        CourseSpawnRuntime spawn;CourseGameplayWaveRuntimeBridge waves;CourseCollisionSystem collision;SectionCheckpointSystem sections;
+        sections.Reset(&course,vehicle.State().distance);
+        RailPlayerMovementSystem player;RailDodgeSystem dodge;GrazeScoreSystem graze;RailVehicleMountedEvasionSystem evasion;
+        GameSessionRetryCoordinator coordinator;
+        runner.Expect(coordinator.Bind({&session,&runtime,&waves,&spawn,&collision,&sections,&course,&player,&dodge,&vehicle,&path,&graze,&evasion},&error) &&
+            coordinator.CaptureCheckpoint(vehicle.State().distance,"gameplay_start",&error),"capture a moving checkpoint after READY travel: "+error);
+        const auto& checkpoint=coordinator.Checkpoint();
+        RailRetryPresentationCheckpoint followers;followers.Capture(checkpoint.runIndex,checkpoint.revision,BindRailRetryFollowState(*live));
+        const float startDistance=vehicle.State().distance,startSpeed=vehicle.State().speed,startEntry=live->entry.Elapsed();
+        const auto startEye=live->eye;
+        runner.Expect(startDistance>250 && startSpeed>20 && !live->entry.Frame().blockingGameplay && session.State().attemptElapsedSeconds==0,
+            "the first retry point is warmed and controllable, rather than the stopped pre-READY position");
+        float referenceDistance=0,referenceSpeed=0,referenceBank=0;Vector3 referenceEye{};
+        Matrix4x4 referenceBody{},referenceWreck{};float referenceImpact=0;
+        for(int attempt=0;attempt<3;++attempt) {
+            if(attempt>0) {
+                runner.Expect(coordinator.Retry(&error).succeeded,"core retry restores the moving checkpoint: "+error);
+                GameSessionPresentationBridge sessionView;
+                PrimeRailRetrySessionPresentation(sessionView,session);
+                runner.Expect(sessionView.Frame().cues.empty() && sessionView.Frame().screenFlashIntensity==0 &&
+                    !sessionView.Frame().hapticsActive,"retry cannot replay the old defeat or inject a new camera kick after followers restore");
+                *live=RailRetryFollowState{};
+                runner.Expect(followers.Restore(checkpoint.runIndex,checkpoint.revision,BindRailRetryFollowState(*live)),
+                    "body, spring velocities, camera histories and entry clock restore as one matching snapshot");
+                runner.Expect(std::abs(vehicle.State().distance-startDistance)<0.0001f && std::abs(runtime.Distance()-startDistance)<0.0001f &&
+                    std::abs(vehicle.State().speed-startSpeed)<0.0001f && std::abs(live->entry.Elapsed()-startEntry)<0.00001f &&
+                    Dot(Add(live->eye,Mul(startEye,-1)),Add(live->eye,Mul(startEye,-1)))<0.000001f && session.State().attemptElapsedSeconds==0,
+                    "retry begins at the same position, speed, camera and clock as the first controllable frame");
+            }
+            for(int tick=0;tick<fps*2;++tick) {
+                live->entry.Update(dt);move.deltaTime=dt;vehicle.Update(move);follow(dt);
+                session.Update({dt,vehicle.State().distance});
+            }
+            session.ApplyPlayerDamage(1000);session.Update({0,vehicle.State().distance});
+            auto wreck=std::make_unique<RailGameOverScene>();const auto& cam=live->camera.LastFrame();
+            wreck->Begin(session.State(),vehicle.State(),live->actor.Frame(),live->renderer.Frame(),live->wheels.Frame(),live->occupant.Frame(),
+                live->eye,cam.forward,path,cam.up,cam.fovY,&renderedTrack.Result(),&contactSettings,
+                [](Vector3 p,float,TerrainGroundSurfaceHit& hit){hit={{p.x,-0.35f,p.z},{0,1,0}};return true;});
+            for(int tick=0;tick<fps*2;++tick) wreck->Update(dt,path,true,{});
+            if(attempt==0) {
+                referenceDistance=vehicle.State().distance;referenceSpeed=vehicle.State().speed;referenceBank=live->vehicle.Frame().visualBankDegrees;
+                referenceEye=live->eye;referenceBody=live->renderer.Frame().worldMatrix;
+                referenceWreck=wreck->Frame().vehicle.worldMatrix;referenceImpact=wreck->Frame().groundContactTime;
+            } else {
+                runner.Expect(std::abs(vehicle.State().distance-referenceDistance)<0.0001f && std::abs(vehicle.State().speed-referenceSpeed)<0.0001f &&
+                    std::abs(live->vehicle.Frame().visualBankDegrees-referenceBank)<0.0001f &&
+                    Dot(Add(live->eye,Mul(referenceEye,-1)),Add(live->eye,Mul(referenceEye,-1)))<0.000001f &&
+                    std::abs(wreck->Frame().groundContactTime-referenceImpact)<0.00001f,
+                    "two seconds after retry the death position, speed, body bank, camera and ground-contact timing match the first attempt");
+                for(int row=0;row<4;++row) for(int col=0;col<4;++col)
+                    runner.Expect(std::abs(live->renderer.Frame().worldMatrix.m[row][col]-referenceBody.m[row][col])<0.0001f &&
+                        std::abs(wreck->Frame().vehicle.worldMatrix.m[row][col]-referenceWreck.m[row][col])<0.0001f,
+                        "repeated retries reproduce the rendered body and derailment transform, including follower history");
+            }
+        }
+        const float unchanged=live->cameraFov;
+        runner.Expect(!followers.Restore(checkpoint.runIndex+1,checkpoint.revision,BindRailRetryFollowState(*live)) &&
+            !followers.Restore(checkpoint.runIndex,checkpoint.revision+1,BindRailRetryFollowState(*live)) && live->cameraFov==unchanged,
+            "a stale course or checkpoint revision cannot restore old follower state");
+        followers.Reset();
+        runner.Expect(!followers.Matches(checkpoint.runIndex,checkpoint.revision),"new course entry invalidates the old follow-state checkpoint");
+    }
+}
+
+
+void TestRailGameOverRenderedRailContact(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    RailPath path;path.SetControlPoints({{{0,0,0},18,35},{{25,8,180},18,35},{{-20,22,380},18,35},{{80,15,650},18,35}});
+    auto track=CourseRailTrackDefinitionAsset::MineCartDefaults();track.trackGauge=4.2f;track.railHeadVerticalOffset=0.6f;
+    CourseRailTrackMeshBakePipeline bake;std::string error;
+    runner.Expect(bake.Bake(track,path,&error,90),"curved rendered track bakes with a rear continuation: "+error);
+    RailVehicleMovementSystem movement;movement.Reset(145,35,&path);
+    RailVehicleTrackContactPoseSettings settings;settings.trackGauge=track.trackGauge;settings.railHeadVerticalOffset=track.railHeadVerticalOffset;
+    RailVehicleTrackContactPoseSolver solver;RailVehicleTrackContactPoseInput solve;
+    solve.definition=&movement.Definition();solve.state=&movement.State();solve.railPath=&path;solve.settings=settings;
+    const auto contacts=solver.Solve(solve);
+    RailVehiclePresentationBridge visual;RailVehiclePresentationInput vi;
+    vi.definition=&movement.Definition();vi.state=&movement.State();vi.trackContactPose=&contacts;vi.deltaTime=0.1f;
+    visual.Update(vi);
+    RailVehicleWheelContactPresentationBridge wheels;RailVehicleWheelContactPresentationInput wi;
+    wi.contacts=&contacts;wi.vehiclePresentation=&visual.Frame();wheels.Update(wi);
+    RailVehicleActor actor;RailVehicleActorInput ai;ai.vehicleDefinition=&movement.Definition();ai.vehicleState=&movement.State();ai.presentation=&visual.Frame();actor.Update(ai);
+    const auto sample=path.Evaluate(movement.State().distance);
+    const auto eye=Add(actor.Frame().position,Add(Mul(sample.tangent,-15),Mul(sample.up,5)));
+    RailVehicleRenderer vehicle;RailVehicleRenderInput render;render.actor=&actor.Frame();render.cameraWorldPosition=eye;vehicle.Update(render);
+    GameSessionRuntimeState session;session.phase=GameSessionPhase::Defeat;session.outcome=GameSessionOutcome::Defeat;
+    session.endReason=GameSessionEndReason::PlayerDestroyed;session.canRetry=true;
+    const auto distanceToRail=[&](Vector3 p,size_t side) {
+        float best=10000;
+        for(const auto& segment:bake.Result().instances) {
+            if(segment.part!=(side?CourseRailTrackMeshPart::RightRail:CourseRailTrackMeshPart::LeftRail)) continue;
+            const auto a=Point({0,0.5f,-0.5f},segment.worldMatrix),b=Point({0,0.5f,0.5f},segment.worldMatrix);
+            const auto ab=Add(b,Mul(a,-1)),ap=Add(p,Mul(a,-1));
+            const float u=(std::clamp)(Dot(ap,ab)/(std::max)(0.00001f,Dot(ab,ab)),0.0f,1.0f);
+            const auto gap=Add(ap,Mul(ab,-u));best=(std::min)(best,std::sqrt(Dot(gap,gap)));
+        }
+        return best;
+    };
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();
+        scene->Begin(session,movement.State(),actor.Frame(),vehicle.Frame(),wheels.Frame(),{},eye,sample.tangent,path,sample.up,0.94f,&bake.Result(),&settings);
+        for(int row=0;row<4;++row) for(int col=0;col<4;++col)
+            runner.Expect(std::abs(scene->Frame().vehicle.worldMatrix.m[row][col]-vehicle.Frame().worldMatrix.m[row][col])<0.0001f,
+                "sampling rendered rail heads preserves the initial body pose without a fatal-frame snap");
+        float previousDistance=movement.State().distance;std::array<Vector3,4> releasedLocal{};bool haveRelease=false;
+        for(int tick=0;tick<fps*3;++tick) {
+            scene->Update(1.0f/fps,path,true,{});const auto& f=scene->Frame();const float t=f.elapsed;
+            runner.Expect(f.trackDistance>=previousDistance-0.0001f,"track presentation advances with the wreck instead of keeping the frozen gameplay culling centre");
+            previousDistance=f.trackDistance;
+            if(t>0.27f && t<RailGameOverScene::DetachBegin) {
+                for(size_t i=0;i<4;++i) if(f.wheels.wheels[i].supported) {
+                    const auto& wheel=f.wheels.wheels[i];
+                    runner.Expect(distanceToRail(wheel.railContact,i%2)<0.0003f,
+                        "supported wheels remain on the actual rendered rail-head top throughout curves, grades and one-sided lift");
+                    const auto gap=Add(wheel.axleCenter,Mul(wheel.railContact,-1));
+                    runner.Expect(std::abs(std::sqrt(Dot(gap,gap))-0.62f)<0.0003f,
+                        "wheel axle stays one visual radius from its rail contact instead of floating above the track");
+                }
+            }
+            if(t>RailGameOverScene::CameraMoveEnd && t<RailGameOverScene::DerailBegin) {
+                const auto axis=path.EvaluateExtended(f.trackDistance);
+                const auto offset=Add(f.cameraEye,Mul(f.cameraTarget,-1));
+                runner.Expect(std::abs(Dot(offset,axis.right))<0.001f && Dot(offset,axis.tangent)<-17,
+                    "failure camera stays behind the current rail without a sideways orbit");
+            }
+            if(t>=RailGameOverScene::DetachBegin) {
+                auto body=f.vehicle.worldMatrix;const auto inverse=Inverse(body);
+                for(size_t i=0;i<4;++i) {
+                    if(f.wheelDetached && i==RailVehicleBreakaway::WheelIndex) continue;
+                    const auto local=Point(f.wheels.wheels[i].axleCenter,inverse);
+                    if(!haveRelease) releasedLocal[i]=local;
+                    const auto delta=Add(local,Mul(releasedLocal[i],-1));
+                    runner.Expect(Dot(delta,delta)<0.00001f,"the three retained wheels stay rigidly attached through fall, rebound and skid");
+                }
+                haveRelease=true;
+            }
+        }
+        runner.Expect(haveRelease && movement.State().distance==145 && movement.State().speed==35,
+            "rendered rail contact changes only cinematic presentation and preserves retry authority");
+    }
+}
+
+
+void TestRailGameOverTerrainCameraLanding(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    // Exercise the same mapped terrain constants used by production drawing.
+    std::array<TransformationMatrix,2> transforms{};
+    std::array<TerrainRenderChunk,3> chunks{};chunks[0].mappedTransform=&transforms[0];chunks[2].mappedTransform=&transforms[1];
+    for(float eyeX:{0.0f,3.0f,-7.0f}) {
+        auto camera=Basis({1,0,0},{0,1,0},{0,0,1},{eyeX,6,86});
+        const auto vp=Multiply(Inverse(camera),MakePerspectiveFovMatrix(1.05f,16.0f/9.0f,0.1f,5000));
+        SyncTerrainRenderChunkCamera(chunks,vp);
+        for(const auto& transform:transforms) for(int row=0;row<4;++row) for(int col=0;col<4;++col)
+            runner.Expect(transform.WVP.m[row][col]==vp.m[row][col] &&
+                transform.World.m[row][col]==(row==col?1.0f:0.0f),
+                "resident terrain uses the same final camera as rails and actors while simulation is frozen");
+    }
+    RailPath path;path.SetControlPoints({{{0,0,0},18,30},{{0,0,300},18,30},{{0,0,600},18,30}});
+    TerrainChunkDebugInfo chunk;chunk.startDistance=64;chunk.endDistance=192;chunk.seed=7;
+    TerrainGenerationSettings generation;
+    const auto rendered=BuildTerrainChunkGeometry(chunk,path,generation);
+    TerrainGroundSurface renderedFloor(rendered.groundTriangles);int checked=0;
+    for(float distance:{90.0f,120.0f,150.0f}) for(float lateral:{-2.0f,0.0f,2.0f}) {
+        auto anchor=path.Evaluate(distance);anchor.position=Add(anchor.position,Mul(anchor.right,lateral));
+        float height=0;TerrainGroundSurfaceHit hit;
+        const bool reference=TraceTerrainGroundSupport(rendered.groundTriangles,anchor,0,0,height);
+        const bool sampled=renderedFloor.Sample(anchor.position,hit,anchor.position.y+29);
+        runner.Expect(reference==sampled,"terrain height queries respect the actual generated floor footprint and openings");
+        if(sampled) {
+            ++checked;
+            runner.Expect(std::abs(hit.position.y-(anchor.position.y+height))<0.001f && hit.normal.y>=0.55f,
+                "landing height and normal come from visible floor triangles, matching the independent support trace");
+        }
+    }
+    runner.Expect(checked>0 && renderedFloor.TriangleCount()>0,"generated terrain supplies real landing geometry");
+    TerrainGroundSurfaceHit missingHit;
+    runner.Expect(!renderedFloor.Sample({10000,0,10000},missingHit),"missing floor never invents a landing height");
+    // An edited, sloping floor deliberately differs from the old rail-bed plane.
+    const auto floor=[](float x,float z){return -2.0f+0.06f*x+0.012f*(z-100);};
+    const Vector3 a{-30,floor(-30,70),70},b{30,floor(30,70),70};
+    const Vector3 c{30,floor(30,190),190},d{-30,floor(-30,190),190};
+    const Vector3 roofA{-30,8,70},roofB{30,8,70},roofC{30,8,190},roofD{-30,8,190};
+    auto surface=std::make_shared<TerrainGroundSurface>(std::vector<TerrainGroundTriangle>{{a,b,c},{a,c,d},{roofA,roofB,roofC},{roofA,roofC,roofD}});
+    TerrainGroundSurfaceHit belowRoof;
+    runner.Expect(surface->Sample({0,2,100},belowRoof,2) && belowRoof.position.y<0,
+        "a downward landing probe ignores overhead tunnel ceilings and chooses the floor below the cart");
+    RailVehicleRuntimeState state;state.initialized=true;state.distance=100;state.speed=30;
+    RailVehicleActorFrame actor;actor.active=actor.visible=true;actor.position={0,2,100};
+    RailVehicleRenderFrame body;body.visible=true;body.worldMatrix=MakeTranslateMatrix(actor.position);
+    RailVehicleWheelContactPresentationFrame wheels;wheels.valid=true;
+    for(size_t i=0;i<4;++i) {
+        auto& wheel=wheels.wheels[i];wheel.visible=wheel.supported=true;wheel.railContact={i%2?1.0f:-1.0f,0,i<2?99.0f:101.0f};
+        wheel.axleCenter=Add(wheel.railContact,{0,1,0});wheel.worldMatrix=MakeTranslateMatrix(wheel.axleCenter);
+    }
+    GameSessionRuntimeState session;session.phase=GameSessionPhase::Defeat;session.outcome=GameSessionOutcome::Defeat;
+    session.endReason=GameSessionEndReason::PlayerDestroyed;session.canRetry=true;
+    float referenceTime=-1;
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();
+        scene->Begin(session,state,actor,body,wheels,{}, {0,6,86},{0,0,1},path,{0,1,0},1.05f,nullptr,nullptr,
+            [surface](Vector3 p,float ceiling,TerrainGroundSurfaceHit& hit){return surface->Sample(p,hit,ceiling);});
+        if(referenceTime<0) referenceTime=scene->Frame().groundContactTime;
+        runner.Expect(referenceTime>RailGameOverScene::DetachBegin && referenceTime<RailGameOverScene::FadeBegin &&
+            std::abs(scene->Frame().groundContactTime-referenceTime)<0.00001f,
+            "terrain landing time is deterministic across 30, 60 and 120 fps");
+        bool landed=false,stopped=false;
+        for(int tick=0;tick<fps*5;++tick) {
+            scene->Update(1.0f/fps,path,true,{});const auto& f=scene->Frame();
+            runner.Expect(std::abs(f.cameraFovY-1.05f)<0.000001f,"failure, dolly, landing and blackout preserve the actual gameplay FOV");
+            if(f.grounded && f.elapsed<scene->FadeStartTime()) {
+                landed=true;float clearance=1000;
+                for(float x:{-2.31f,0.0f,2.31f}) for(float y:{-0.68f,0.60f,1.88f}) for(float z:{-3.48f,0.0f,3.48f}) {
+                    const auto p=Point({x,y,z},f.vehicle.worldMatrix);clearance=(std::min)(clearance,p.y-floor(p.x,p.z));
+                }
+                runner.Expect(clearance>=-0.001f && clearance<0.002f &&
+                    std::abs(f.groundContactPoint.y-floor(f.groundContactPoint.x,f.groundContactPoint.z))<0.002f &&
+                    (f.elapsed>=f.groundContactTime+RailGameOverScene::CornerFallDuration || f.groundContactPoint.y<-0.8f),
+                    "the hull and sparks stay on the real slope, including higher ground reached by the stronger launch; clearance="+
+                        std::to_string(clearance)+" heightError="+std::to_string(f.groundContactPoint.y-floor(f.groundContactPoint.x,f.groundContactPoint.z))+
+                        " groundY="+std::to_string(f.groundContactPoint.y));
+            }
+            if(f.stopTime>=0 && f.elapsed>f.stopTime+0.02f && f.elapsed<scene->FadeStartTime()) {
+                stopped=true;runner.Expect(f.speedRatio<0.04f,"strong skid friction starts at actual terrain contact");
+            }
+        }
+        runner.Expect(landed && stopped,"visible terrain contact precedes blackout and arrests the wreck");
+    }
+    auto unsupported=std::make_unique<RailGameOverScene>();
+    unsupported->Begin(session,state,actor,body,wheels,{}, {0,6,86},{0,0,1},path,{0,1,0},1.05f,nullptr,nullptr,
+        [](Vector3,float,TerrainGroundSurfaceHit&){return false;});
+    for(int i=0;i<150;++i) unsupported->Update(1.0f/60,path,true,{});
+    runner.Expect(unsupported->Frame().groundContactTime<0 && !unsupported->Frame().grounded &&
+        unsupported->Frame().speedRatio>0.60f && unsupported->Frame().sparkCount==0,
+        "a missing floor keeps the cart falling without false ground friction, impact sparks or suspension in midair");
+}
+
+
+void TestRailGameOverContinuityAndImpact(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    RailPath path;path.SetControlPoints({{{0,0,0},18,30},{{0,0,600},18,30}});
+    auto authority=std::make_unique<CourseSpawnRuntime>();
+    CourseEnemyActorDesc enemy;enemy.spawnDistance=120;enemy.forwardSpeed=12;
+    enemy.lifetime=20;enemy.firstShotDelay=0;enemy.fireInterval=0.08f;enemy.bulletLifetime=5;
+    runner.Expect(authority->SpawnEnemyActor(enemy),"defeat fixture spawns a moving enemy");
+    CourseEnemyFireSafetyFrameInput input;input.railPath=&path;input.playerDistance=100;
+    authority->Update(0.3f,input);
+    runner.Expect(!authority->Bullets().empty(),"defeat fixture has hostile projectiles");
+    const auto saved=authority->CaptureCheckpoint();
+    auto moving=std::make_unique<CourseSpawnRuntime>(*authority);
+    CourseVfxCueDesc cue;cue.lifetime=2;moving->SpawnVfxCue(cue);
+    const size_t bulletCount=moving->Bullets().size();
+    const auto start=moving->Enemies().front();
+    const float bulletStart=bulletCount?moving->Bullets().front().distanceOffset:0;
+    for(int tick=0;tick<60;++tick) {
+        input.playerDistance=100+float(tick+1)/60*20;
+        moving->UpdateDefeatPresentation(1.0f/60,input);
+        runner.Expect(moving->LastFireSafetyStats().bulletsEmitted==0 && moving->Bullets().size()<=bulletCount,
+            "cinematic enemies cannot fire new hostile bullets");
+    }
+    runner.Expect(moving->Enemies().front().age>start.age+0.99f &&
+        moving->Enemies().front().desc.distanceOffset>start.desc.distanceOffset+10 &&
+        !moving->VfxCues().empty() && moving->VfxCues().front().age>0.99f,
+        "enemies and existing effects continue moving after defeat");
+    runner.Expect(!moving->Bullets().empty() && std::abs(moving->Bullets().front().distanceOffset-bulletStart)>1,
+        "existing hostile projectiles continue their trajectories");
+    runner.Expect(authority->Enemies().front().age==saved.enemies.front().age &&
+        authority->Enemies().front().desc.distanceOffset==saved.enemies.front().desc.distanceOffset &&
+        authority->Enemies().front().desc.hitPoints==saved.enemies.front().desc.hitPoints &&
+        authority->Bullets().size()==saved.bullets.size(),
+        "cinematic motion preserves authoritative actor, damage and projectile state");
+    RailVehicleRuntimeState state;state.initialized=true;state.distance=100;state.speed=30;
+    RailVehicleActorFrame actor;actor.active=actor.visible=true;actor.position={0,2,100};
+    RailVehicleRenderFrame body;body.visible=true;body.worldMatrix=MakeTranslateMatrix(actor.position);
+    RailVehicleWheelContactPresentationFrame wheels;wheels.valid=true;
+    for(size_t i=0;i<4;++i) {
+        auto& wheel=wheels.wheels[i];wheel.visible=wheel.supported=true;
+        wheel.railContact={i%2?1.0f:-1.0f,0,i<2?99.0f:101.0f};
+        wheel.axleCenter=Add(wheel.railContact,{0,1,0});wheel.worldMatrix=MakeTranslateMatrix(wheel.axleCenter);
+    }
+    auto ground=std::make_shared<TerrainGroundSurface>(std::vector<TerrainGroundTriangle>{
+        {{-100,-24,0},{100,-24,0},{100,-24,400}},{{-100,-24,0},{100,-24,400},{-100,-24,400}}});
+    GameSessionRuntimeState defeat;defeat.phase=GameSessionPhase::Defeat;defeat.outcome=GameSessionOutcome::Defeat;
+    defeat.endReason=GameSessionEndReason::PlayerDestroyed;defeat.canRetry=true;
+    float contact=-1;Vector3 referenceEye{};
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();
+        scene->Begin(defeat,state,actor,body,wheels,{}, {0,6,86},{0,0,1},path,{0,1,0},1.05f,nullptr,nullptr,
+            [ground](Vector3 p,float ceiling,TerrainGroundSurfaceHit& hit){return ground->Sample(p,hit,ceiling);});
+        if(contact<0) contact=scene->Frame().groundContactTime;
+        runner.Expect(contact>RailGameOverScene::FadeBegin && contact<4.5f &&
+            std::abs(contact-scene->Frame().groundContactTime)<0.00001f,
+            "deep-floor impact is found beyond the former fade boundary at every display rate");
+        runner.Expect(scene->FadeStartTime()>=contact+1.14f,"real terrain contact receives a visible hold before fade");
+        bool dust=false,fragments=false,flash=false,stopped=false;Vector3 previousEye{};float previousT=0;
+        for(int tick=0;tick<fps*8;++tick) {
+            scene->Update(1.0f/fps,path,true,{});const auto& f=scene->Frame();
+            if(f.elapsed<contact) runner.Expect(f.dustCount==0 && f.debrisCount==0 && f.blackout==0,
+                "no fake impact dust, fragments or blackout before real ground contact");
+            if(f.elapsed>RailGameOverScene::DetachBegin+0.12f && f.elapsed<contact-0.12f) {
+                runner.Expect(f.cameraEye.z>previousEye.z && f.cameraFovY==1.05f,
+                    "camera retains forward inertia during the fall and preserves gameplay FOV");
+                runner.Expect(f.vehicle.worldMatrix.m[0][1]<-0.7f,"airborne damping prevents endless barrel rolls");
+            }
+            if(f.elapsed>=contact && f.elapsed<contact+0.30f) {
+                dust|=f.dustCount>10;fragments|=f.debrisCount>0;flash|=f.impactFlash>0.15f;
+                runner.Expect((f.grounded || f.bouncing) && std::abs(f.groundContactPoint.y+24)<0.002f,
+                    "impact particles belong to the actual terrain contact");
+            }
+            if(f.stopTime>=0 && f.elapsed>f.stopTime+0.02f && f.elapsed<scene->FadeStartTime()) {
+                stopped=true;runner.Expect(f.speedRatio<0.02f,"terrain impact strongly arrests the wreck");
+            }
+            runner.Expect(f.dustCount<=f.dust.size() && f.debrisCount<=f.debris.size(),"impact effects respect fixed budgets");
+            if(previousT<4 && f.elapsed>=4) {
+                const auto delta=Add(f.cameraEye,Mul(referenceEye,-1));
+                if(fps==30) referenceEye=f.cameraEye;
+                else runner.Expect(Dot(delta,delta)<0.30f,"analytical camera inertia is consistent across display rates");
+            }
+            previousEye=f.cameraEye;previousT=f.elapsed;
+        }
+        runner.Expect(dust && fragments && flash && stopped && scene->Frame().menuReady,
+            "deep landing peaks with dust, fragments and flash before the retry menu");
+    }
+    // Reproduce the demo's failure distance using production track and terrain.
+    CourseAsset course;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"landing regression loads the production course");
+    RailPath actualRail;course.ApplyToRailPath(actualRail);TerrainGenerationSettings terrain;
+    terrain.surfaceLongitudinalSteps=24;terrain.surfaceRadialSegments=36;
+    std::vector<TerrainGroundTriangle> triangles;
+    for(uint32_t index=3;index<=5;++index) {
+        TerrainChunkDebugInfo chunk;chunk.startDistance=float(index)*terrain.chunkLength;
+        chunk.endDistance=chunk.startDistance+terrain.chunkLength;
+        uint32_t seed=terrain.seed^(index*747796405u);
+        seed^=seed>>16;seed*=0x7feb352du;seed^=seed>>15;seed*=0x846ca68bu;seed^=seed>>16;chunk.seed=seed;
+        auto rendered=BuildTerrainChunkGeometry(chunk,actualRail,terrain);
+        triangles.insert(triangles.end(),rendered.groundTriangles.begin(),rendered.groundTriangles.end());
+    }
+    auto actualFloor=std::make_shared<TerrainGroundSurface>(std::move(triangles));
+    const auto track=CourseRailTrackDefinitionAsset::MineCartDefaults();CourseRailTrackMeshBakePipeline bake;
+    runner.Expect(bake.Bake(track,actualRail,&error,90),"production wreck track bakes");
+    RailVehicleMovementSystem movement;movement.Reset(272.7f,18.9f,&actualRail);
+    RailVehicleTrackContactPoseSettings settings;RailVehicleTrackContactPoseSolver solver;
+    RailVehicleTrackContactPoseInput solve;solve.definition=&movement.Definition();solve.state=&movement.State();
+    solve.railPath=&actualRail;solve.settings=settings;const auto contacts=solver.Solve(solve);
+    RailVehiclePresentationBridge visual;RailVehiclePresentationInput vi;
+    vi.definition=&movement.Definition();vi.state=&movement.State();vi.trackContactPose=&contacts;vi.deltaTime=0.1f;visual.Update(vi);
+    RailVehicleWheelContactPresentationBridge actualWheels;RailVehicleWheelContactPresentationInput wi;
+    wi.contacts=&contacts;wi.vehiclePresentation=&visual.Frame();actualWheels.Update(wi);
+    RailVehicleActor actualActor;RailVehicleActorInput ai;ai.vehicleDefinition=&movement.Definition();ai.vehicleState=&movement.State();
+    ai.presentation=&visual.Frame();actualActor.Update(ai);
+    const auto anchor=actualRail.Evaluate(movement.State().distance);
+    const auto eye=Add(actualActor.Frame().position,Add(Mul(anchor.tangent,-20),Mul(anchor.up,6)));
+    RailVehicleRenderer vehicle;RailVehicleRenderInput render;render.actor=&actualActor.Frame();render.cameraWorldPosition=eye;vehicle.Update(render);
+    auto actualScene=std::make_unique<RailGameOverScene>();
+    actualScene->Begin(defeat,movement.State(),actualActor.Frame(),vehicle.Frame(),actualWheels.Frame(),{},eye,anchor.tangent,
+        actualRail,anchor.up,0.9f,&bake.Result(),&settings,
+        [actualFloor](Vector3 p,float ceiling,TerrainGroundSurfaceHit& hit){return actualFloor->Sample(p,hit,ceiling);});
+    const float actualContact=actualScene->Frame().groundContactTime;
+    runner.Expect(actualContact>=RailGameOverScene::DetachBegin && actualContact<5.0f &&
+        actualScene->FadeStartTime()>=actualContact+1.14f,"demo cart reaches the production terrain before blackout");
+    std::ofstream metrics("generated/gameover-impact-production.csv");
+    const float actualLanding=actualScene->Frame().recontactTime,actualStop=actualScene->Frame().stopTime;
+    float actualPeak=0;Vector3 actualLandPosition{},actualStopPosition{};bool measuredLand=false;
+    std::array<ModelData,RailVehicleBreakaway::FractureParts.size()> actualFragments;
+    for(size_t i=0;i<actualFragments.size();++i) actualFragments[i]=BuildRailVehicleFractureModelData(i);
+    bool actualShattered=false;float minimumFragmentGap=1000;
+    for(int tick=0;tick<840;++tick) {
+        actualScene->Update(1.0f/120,actualRail,true,{});const auto& f=actualScene->Frame();
+        if(f.fractureCount>0) {
+            actualShattered=true;
+            runner.Expect(f.fractureCount==RailVehicleBreakaway::FinalPieceCount && !f.vehicle.visible && f.cameraFovY==0.9f,
+                "production course replaces the cart with twelve solid pieces while preserving the normal lens");
+            for(size_t i=0;i<actualFragments.size();++i) {
+                float top=-10000;
+                for(const auto& v:actualFragments[i].vertices) top=(std::max)(top,Point({v.position.x,v.position.y,v.position.z},f.fractures[i].worldMatrix).y);
+                for(const auto& v:actualFragments[i].vertices) {
+                    const auto p=Point({v.position.x,v.position.y,v.position.z},f.fractures[i].worldMatrix);TerrainGroundSurfaceHit hit;
+                    if(actualFloor->Sample(p,hit,top+0.1f)) minimumFragmentGap=(std::min)(minimumFragmentGap,p.y-hit.position.y);
+                }
+            }
+        }
+        if(f.bouncing) {
+            const auto forward=Unit(Add(f.cameraTarget,Mul(f.cameraEye,-1)));
+            const auto right=Unit(Cross(f.cameraUp,forward)),up=Cross(forward,right);
+            for(float x:{-2.31f,2.31f}) for(float y:{-0.68f,1.88f}) for(float z:{-3.48f,3.48f}) {
+                const auto offset=Add(Point({x,y,z},f.vehicle.worldMatrix),Mul(f.cameraEye,-1));const float depth=Dot(offset,forward);
+                runner.Expect(f.cameraFovY==0.9f && depth>0 && std::abs(Dot(offset,up)/(depth*std::tan(f.cameraFovY*0.5f)))<0.92f &&
+                    std::abs(Dot(offset,right)/(depth*std::tan(f.cameraFovY*0.5f)*16/9))<0.96f,
+                    "the sharper tumbling rebound stays fully framed on the production terrain with the normal lens");
+            }
+            float gap=1000;
+            const float ceiling=Origin(f.vehicle.worldMatrix).y+0.05f;
+            for(float x:{-2.31f,0.0f,2.31f}) for(float y:{-0.68f,0.60f,1.88f}) for(float z:{-3.48f,0.0f,3.48f}) {
+                const auto point=Point({x,y,z},f.vehicle.worldMatrix);TerrainGroundSurfaceHit hit;
+                if(actualFloor->Sample(point,hit,ceiling)) gap=(std::min)(gap,point.y-hit.position.y);
+            }
+            if(gap<1000) actualPeak=(std::max)(actualPeak,gap);
+        }
+        if(!measuredLand && actualLanding>=0 && f.elapsed>=actualLanding) {actualLandPosition=Origin(f.vehicle.worldMatrix);measuredLand=true;}
+        if(actualStop>=0 && f.elapsed>=actualStop) actualStopPosition=Origin(f.vehicle.worldMatrix);
+    }
+    for(int tick=0;tick<360;++tick) actualScene->Update(1.0f/120,actualRail,true,{});
+    const auto actualSlip=Add(actualStopPosition,Mul(actualLandPosition,-1));
+    const float actualDistance=std::sqrt(actualSlip.x*actualSlip.x+actualSlip.z*actualSlip.z);
+    metrics<<"contact,blast,recontact,stop,fade,triangles,peak_clearance,world_slide\n"<<actualContact<<','<<actualScene->Frame().secondaryContactTime<<','
+        <<actualLanding<<','<<actualStop<<','<<actualScene->FadeStartTime()<<','<<actualFloor->TriangleCount()<<','<<actualPeak<<','<<actualDistance<<'\n';
+    runner.Expect(measuredLand && actualPeak>1.5f && actualPeak<3.5f && actualDistance>2.0f && actualDistance<3.0f,
+        "production terrain preserves a visibly large hop and a grounded 2-to-3-metre skid");
+    runner.Expect(actualScene->Frame().menuReady,"production wreck reaches the retry menu after contact");
+    runner.Expect(actualShattered && minimumFragmentGap>=-0.08f,
+        "production fragments remain above the rendered ground within eight-centimetre contact tolerance; gap="+std::to_string(minimumFragmentGap));
+    std::ofstream finalMetrics("generated/gameover-finale-production.csv");
+    finalMetrics<<"shatter,fade,minimum_fragment_gap\n"<<actualScene->ShatterTime()<<','<<actualScene->FadeStartTime()<<','<<minimumFragmentGap<<'\n';
+    RailLockVolley volley;RailLockToken token;token.target={RailLockTargetKind::Enemy,saved.enemies.front().actorId};
+    WeaponShot shot;shot.shotId=9001;shot.range=200;shot.damage=100;RailLockSettings lockSettings;
+    runner.Expect(volley.Enqueue(std::span(&token,1),std::span(&shot,1),{0,0,100},path,*authority,lockSettings)==1,
+        "a committed lock laser exists on the fatal frame");
+    for(int i=0;i<120;++i) {
+        volley.UpdateDefeatPresentation(1.0f/60);
+        runner.Expect(volley.Hits().empty() && volley.Completed().empty(),"remaining lasers cannot award damage or score");
+    }
+    runner.Expect(!volley.Visible() && authority->Enemies().front().desc.hitPoints==saved.enemies.front().desc.hitPoints,
+        "committed lasers finish and fade without changing enemy health");
+}
+
+void TestRailGameOverBreakawayAndRebound(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    const auto intact=BuildRailVehicleModelDataForSubmission();
+    const auto shell=BuildRailVehicleBreakawayModelData(false),panel=BuildRailVehicleBreakawayModelData(true);
+    // Compare every material-tagged triangle, not only counts: the detached
+    // panel and remaining body must partition the original visible geometry.
+    const auto triangles=[](const ModelData& model) {
+        std::vector<std::array<int,10>> result;
+        for(const auto& sub:model.subMeshes) for(uint32_t i=sub.indexStart;i<sub.indexStart+sub.indexCount;i+=3) {
+            std::array<std::array<int,3>,3> points;
+            for(int j=0;j<3;++j) {
+                const auto p=model.vertices[model.indices[i+j]].position;
+                points[j]={int(std::lround(p.x*10000)),int(std::lround(p.y*10000)),int(std::lround(p.z*10000))};
+            }
+            std::sort(points.begin(),points.end());std::array<int,10> key{};
+            for(int j=0;j<9;++j) key[j]=points[j/3][j%3];key[9]=int(sub.materialIndex);result.push_back(key);
+        }
+        std::sort(result.begin(),result.end());return result;
+    };
+    auto split=triangles(shell);const auto loose=triangles(panel);split.insert(split.end(),loose.begin(),loose.end());std::sort(split.begin(),split.end());
+    runner.Expect(split==triangles(intact) && !loose.empty(),"panel and remaining cart exactly partition the painted body and safety trim without overlap");
+    for(const auto* model:{&shell,&panel}) runner.Expect(ValidateModelDataMaterialLayout(*model) &&
+        ValidateModelGeometryOrientation(*model) && AuditModelClosedSurface(*model).IsValid(),
+        "both breakaway meshes remain closed renderable multi-material solids");
+    RailPath rail;rail.SetControlPoints({{{0,0,0},18,30},{{0,0,600},18,30}});
+    auto track=CourseRailTrackDefinitionAsset::MineCartDefaults();CourseRailTrackMeshBakePipeline bake;std::string error;
+    runner.Expect(bake.Bake(track,rail,&error,90),"breakaway fixture bakes the rendered rails");
+    RailVehicleMovementSystem movement;movement.Reset(100,30,&rail);
+    RailVehicleTrackContactPoseSettings settings;RailVehicleTrackContactPoseSolver solver;RailVehicleTrackContactPoseInput solve;
+    solve.definition=&movement.Definition();solve.state=&movement.State();solve.railPath=&rail;solve.settings=settings;
+    const auto contacts=solver.Solve(solve);
+    RailVehiclePresentationBridge visual;RailVehiclePresentationInput vi;vi.definition=&movement.Definition();vi.state=&movement.State();
+    vi.trackContactPose=&contacts;vi.deltaTime=0.1f;visual.Update(vi);
+    RailVehicleWheelContactPresentationBridge wheels;RailVehicleWheelContactPresentationInput wi;wi.contacts=&contacts;wi.vehiclePresentation=&visual.Frame();wheels.Update(wi);
+    RailVehicleActor actor;RailVehicleActorInput ai;ai.vehicleDefinition=&movement.Definition();ai.vehicleState=&movement.State();ai.presentation=&visual.Frame();actor.Update(ai);
+    RailVehicleRenderer vehicle;RailVehicleRenderInput ri;ri.actor=&actor.Frame();ri.cameraWorldPosition={0,6,80};vehicle.Update(ri);
+    GameSessionRuntimeState defeat;defeat.phase=GameSessionPhase::Defeat;defeat.outcome=GameSessionOutcome::Defeat;
+    defeat.endReason=GameSessionEndReason::PlayerDestroyed;defeat.canRetry=true;
+    const auto begin=[&](RailGameOverScene& scene){scene.Begin(defeat,movement.State(),actor.Frame(),vehicle.Frame(),wheels.Frame(),{},
+        {0,6,80},{0,0,1},rail,{0,1,0},1.05f,&bake.Result(),&settings,
+        [](Vector3 p,float,TerrainGroundSurfaceHit& hit){hit={{p.x,-6,p.z},{0,1,0}};return true;});};
+    const auto gap=[&](const Matrix4x4& world){float minimum=1000;for(float x:{-2.31f,0.0f,2.31f})
+        for(float y:{-0.68f,0.60f,1.88f}) for(float z:{-3.48f,0.0f,3.48f}) minimum=(std::min)(minimum,Point({x,y,z},world).y+6);return minimum;};
+    std::ofstream report("generated/gameover-breakaway-motion.csv");report<<"fps,t,body_x,body_y,body_z,wheel_x,wheel_y,panel_x,panel_y,bounce,grounded\n";
+    std::array<RailGameOverFrame,3> reference{};
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();begin(*scene);
+        bool separatedWheel=false,separatedPanel=false,twisted=false,noseDown=false,bounced=false,settled=false,skid=false;
+        bool hinged=false,opened=false,cornerSeen=false,landedAfterHop=false;
+        Vector3 firstCorner{},slideStart{};float firstOppositeHeight=0,lastOppositeHeight=0,maxSlide=0;
+        float wheelReleaseY=0;bool measuredWheel=false;
+        std::array<Vector3,4> rigid{};auto inverse=vehicle.Frame().worldMatrix;inverse=Inverse(inverse);
+        for(size_t i=0;i<4;++i) rigid[i]=Point(wheels.Frame().wheels[i].axleCenter,inverse);
+        Vector3 previousBody{};float previousT=0;int sampleIndex=0;bool capturedRigid=false;
+        for(int tick=0;tick<fps*5;++tick) {
+            scene->Update(1.0f/fps,rail,true,{});const auto& f=scene->Frame();const auto body=Origin(f.vehicle.worldMatrix);
+            auto inv=f.vehicle.worldMatrix;inv=Inverse(inv);
+            const auto wheel=Origin(f.wheels.wheels[RailVehicleBreakaway::WheelIndex].worldMatrix);
+            const auto plank=Point(RailVehicleBreakaway::PanelCentre,f.sidePanel.worldMatrix);
+            if(!capturedRigid && f.elapsed>=RailGameOverScene::DetachBegin) {
+                for(size_t i=0;i<4;++i) rigid[i]=Point(f.wheels.wheels[i].axleCenter,inv);
+                capturedRigid=true;
+            }
+            report<<fps<<','<<f.elapsed<<','<<body.x<<','<<body.y<<','<<body.z<<','<<wheel.x<<','<<wheel.y<<','<<plank.x<<','<<plank.y<<','<<f.bouncing<<','<<f.grounded<<'\n';
+            runner.Expect(f.cameraFovY==1.05f,"breakaway and rebound preserve the gameplay lens");
+            runner.Expect(f.wheelDetached==(f.elapsed>=RailGameOverScene::WheelDetachTime) &&
+                f.sidePanelDetached==(f.elapsed>=RailGameOverScene::PanelDetachTime),"parts separate at staggered authored release times");
+            if(f.sidePanelPeeling) {
+                hinged=true;runner.Expect(f.sidePanel.visible && !f.sidePanelDetached && f.vehicle.meshId==RailVehicleBreakaway::DamagedMesh,
+                    "one hinged panel replaces the original shell before tearing free");
+                for(float y:{RailVehicleBreakaway::PanelMinimum.y,RailVehicleBreakaway::PanelMaximum.y}) {
+                    const Vector3 local{RailVehicleBreakaway::PanelCentre.x,y,RailVehicleBreakaway::PanelMinimum.z};
+                    const auto delta=Add(Point(local,f.sidePanel.worldMatrix),Mul(Point(local,f.vehicle.worldMatrix),-1));
+                    runner.Expect(Dot(delta,delta)<0.000001f,"the whole rear edge stays attached while the panel peels open");
+                }
+                const Vector3 front{RailVehicleBreakaway::PanelCentre.x,RailVehicleBreakaway::PanelCentre.y,RailVehicleBreakaway::PanelMaximum.z};
+                const auto delta=Add(Point(front,f.sidePanel.worldMatrix),Mul(Point(front,f.vehicle.worldMatrix),-1));
+                opened|=Dot(delta,delta)>1.0f;
+            }
+            if(f.wheelDetached && !measuredWheel) {wheelReleaseY=wheel.y;measuredWheel=true;}
+            if(f.wheelDetached && f.elapsed<RailGameOverScene::WheelDetachTime+0.30f)
+                runner.Expect(wheel.y<=wheelReleaseY+0.03f,"the heavy wheel leaves along a low arc without the old upward launch");
+            if(f.cornerContact) {
+                if(!cornerSeen) {
+                    float minimum=1000;
+                    for(float x:{-2.31f,2.31f}) for(float y:{-0.68f,1.88f}) for(float z:{-3.48f,3.48f}) {
+                        const float height=Point({x,y,z},f.vehicle.worldMatrix).y;
+                        if(height<minimum) {minimum=height;firstCorner={x,y,z};}
+                    }
+                    firstOppositeHeight=Point({firstCorner.x,firstCorner.y,-firstCorner.z},f.vehicle.worldMatrix).y;
+                    cornerSeen=true;
+                }
+                runner.Expect(f.grounded && !f.bouncing && std::abs(Point(firstCorner,f.vehicle.worldMatrix).y+6)<0.002f,
+                    "the first corner stays grounded while the opposite side falls");
+                lastOppositeHeight=Point({firstCorner.x,firstCorner.y,-firstCorner.z},f.vehicle.worldMatrix).y;
+            }
+            if(f.groundContactTime>=0) runner.Expect(std::abs(f.secondaryContactTime-f.groundContactTime-RailGameOverScene::CornerFallDuration)<0.00001f,
+                "the opposite side makes a distinct later contact");
+            if(f.recontactTime>=0 && f.elapsed>=f.recontactTime && !landedAfterHop) {
+                slideStart=body;landedAfterHop=true;
+            }
+            if(landedAfterHop && f.elapsed<scene->FadeStartTime()) maxSlide=(std::max)(maxSlide,std::sqrt((body.x-slideStart.x)*(body.x-slideStart.x)+(body.z-slideStart.z)*(body.z-slideStart.z)));
+            if(f.elapsed>RailGameOverScene::DetachBegin+0.30f && f.elapsed<f.groundContactTime) {
+                noseDown|=f.vehicle.worldMatrix.m[2][1]<-0.08f;twisted|=f.vehicle.worldMatrix.m[2][0]>0.05f;
+                runner.Expect(body.z>previousBody.z && body.x>previousBody.x,"twisting fall retains forward and sideways momentum");
+            }
+            if(f.elapsed>RailGameOverScene::WheelDetachTime+0.25f) {
+                const auto offset=Add(Point(wheel,inv),Mul(rigid[RailVehicleBreakaway::WheelIndex],-1));separatedWheel|=Dot(offset,offset)>0.25f;
+                for(size_t i=0;i<4;++i) if(i!=RailVehicleBreakaway::WheelIndex) {
+                    const auto delta=Add(Point(f.wheels.wheels[i].axleCenter,inv),Mul(rigid[i],-1));
+                    runner.Expect(Dot(delta,delta)<0.0001f,"the other three wheels remain on the cart through tumble and rebound");
+                }
+            }
+            if(f.sidePanelDetached) {
+                runner.Expect(f.vehicle.meshId==RailVehicleBreakaway::DamagedMesh && f.sidePanel.meshId==RailVehicleBreakaway::PanelMesh,
+                    "the detached plank is removed from the source mesh and drawn once with its original materials");
+                const auto offset=Add(plank,Mul(Point(RailVehicleBreakaway::PanelCentre,f.vehicle.worldMatrix),-1));separatedPanel|=Dot(offset,offset)>0.25f;
+                for(const auto& vertex:panel.vertices) runner.Expect(Point({vertex.position.x,vertex.position.y,vertex.position.z},f.sidePanel.worldMatrix).y>=-6.08f,
+                    "the detached side panel cannot fall through the actual floor");
+            }
+            if(f.bouncing) {bounced=true;runner.Expect(!f.grounded && gap(f.vehicle.worldMatrix)>-0.001f && gap(f.vehicle.worldMatrix)<=3.5f,
+                "terrain contact produces one sharp bounded rebound without penetrating the floor");}
+            if(f.recontactTime>=0 && f.elapsed>f.recontactTime+0.05f && f.elapsed<scene->FadeStartTime()) {
+                settled=true;runner.Expect(f.grounded && std::abs(gap(f.vehicle.worldMatrix))<0.002f,"the rebound returns to the actual terrain for the final skid");
+                skid|=body.z>previousBody.z+0.00001f;
+            }
+            if(sampleIndex<3 && previousT<float(sampleIndex+2) && f.elapsed>=float(sampleIndex+2)) {
+                if(fps==30) reference[sampleIndex]=f;
+                else {
+                    const auto d=Add(wheel,Mul(Origin(reference[sampleIndex].wheels.wheels[RailVehicleBreakaway::WheelIndex].worldMatrix),-1));
+                    runner.Expect(Dot(d,d)<1.0f,"piece trajectories stay consistent across 30, 60 and 120 fps");
+                }
+                ++sampleIndex;
+            }
+            previousBody=body;previousT=f.elapsed;
+        }
+        runner.Expect(hinged && opened && cornerSeen && firstOppositeHeight-lastOppositeHeight>0.15f && maxSlide>=2.0f && maxSlide<=3.0f,
+            "the panel tears from one held edge, the far end falls after corner contact, and a readable skid remains after the hop");
+        runner.Expect(separatedWheel && separatedPanel && noseDown && twisted && bounced && settled && skid,
+            "one wheel and one plank detach while the forward twisting fall ends in a sharp rebound and skid");
+        scene->Reset();begin(*scene);
+        runner.Expect(!scene->Frame().wheelDetached && !scene->Frame().sidePanel.visible && scene->Frame().vehicle.meshId==vehicle.Frame().meshId,
+            "retry restores the intact body and all four original wheels");
+    }
+}
+
+void TestRailGameOverBlastHopAndStop(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    RailPath path;path.SetControlPoints({{{0,0,0},18,30},{{0,0,700},18,30}});
+    const auto floor=[](float x,float z){return -12+0.02f*x+0.01f*(z-100);};
+    const Vector3 a{-120,floor(-120,-100),-100},b{120,floor(120,-100),-100};
+    const Vector3 c{120,floor(120,700),700},d{-120,floor(-120,700),700};
+    auto ground=std::make_shared<TerrainGroundSurface>(std::vector<TerrainGroundTriangle>{{a,b,c},{a,c,d}});
+    RailVehicleRuntimeState state;state.initialized=true;state.distance=100;state.speed=18.9f;
+    RailVehicleActorFrame actor;actor.active=actor.visible=true;actor.position={0,2,100};
+    RailVehicleRenderFrame body;body.visible=true;body.meshId=RailVehicleBreakaway::IntactMesh;body.worldMatrix=MakeTranslateMatrix(actor.position);
+    RailVehicleWheelContactPresentationFrame wheels;wheels.valid=true;wheels.visibleWheelCount=4;
+    for(size_t i=0;i<4;++i) {
+        auto& w=wheels.wheels[i];w.visible=w.supported=true;
+        w.railContact={i%2?1.9f:-1.9f,0,i<2?96.8f:103.2f};w.axleCenter=Add(w.railContact,{0,0.62f,0});
+        w.worldMatrix=MakeAffineMatrix(Vector3{0.42f,1.24f,1.24f},Vector3{},w.axleCenter);
+    }
+    GameSessionRuntimeState defeat;defeat.phase=GameSessionPhase::Defeat;defeat.outcome=GameSessionOutcome::Defeat;
+    defeat.endReason=GameSessionEndReason::PlayerDestroyed;defeat.canRetry=true;
+    const auto begin=[&](RailGameOverScene& scene){scene.Begin(defeat,state,actor,body,wheels,{}, {0,6,80},{0,0,1},path,{0,1,0},1.05f,nullptr,nullptr,
+        [ground](Vector3 p,float ceiling,TerrainGroundSurfaceHit& hit){return ground->Sample(p,hit,ceiling);});};
+    const auto clearance=[&](const Matrix4x4& world){float gap=1000;
+        for(float x:{-2.31f,0.0f,2.31f}) for(float y:{-0.68f,0.60f,1.88f}) for(float z:{-3.48f,0.0f,3.48f}) {
+            const auto p=Point({x,y,z},world);gap=(std::min)(gap,p.y-floor(p.x,p.z));
+        }return gap;};
+    float referenceRecontact=-1,referenceStop=-1;
+    std::ofstream metrics("generated/gameover-blast-hop.csv");metrics<<"fps,first_contact,blast,recontact,stop,fade,peak_clearance,slide_metres,max_up_speed,max_down_edge_speed,orientation_agreement,small_fire,final_fire\n";
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();begin(*scene);
+        const float blast=scene->Frame().secondaryContactTime,landing=scene->Frame().recontactTime,stop=scene->Frame().stopTime;
+        runner.Expect(blast>scene->Frame().groundContactTime && landing>blast+0.4f && landing<blast+0.80f && stop>landing,
+            "the second terrain contact launches one ballistic hop followed by a finite skid");
+        if(referenceRecontact<0) {referenceRecontact=landing;referenceStop=stop;}
+        runner.Expect(std::abs(landing-referenceRecontact)<0.00001f && std::abs(stop-referenceStop)<0.00001f,
+            "terrain recontact and friction stop are solved independently of display frame rate");
+        runner.Expect(scene->FadeStartTime()>=stop+0.17f,"blackout starts only after the cart has fully stopped");
+        bool fire=false,soot=false,landed=false,frozen=false,shock=false,edgeDust=false;int jumps=0;bool priorJump=false;
+        float fireRadius=0,finalFireRadius=0,firstHopScreenY=0,highestHopScreenY=-100,maxUp=0,minDown=0,minOrientation=1;Vector3 previousHop{},hopRight{};float previousHopTime=0,previousGap=0;
+        float peak=0,maxScalar=0;Vector3 hopStart{},hopEnd{};Matrix4x4 stoppedWorld{};
+        for(int tick=0;tick<fps*8;++tick) {
+            scene->Update(1.0f/fps,path,true,{});const auto& f=scene->Frame();
+            runner.Expect(f.cameraFovY==1.05f,"localized explosion and large rebound preserve gameplay FOV");
+            const size_t majorFire=std::count_if(f.fire.begin(),f.fire.begin()+f.fireCount,[](const auto& fire){return !fire.fault;});
+            if(f.elapsed<blast) runner.Expect(majorFire==0 && !f.bouncing,"neither the main fireball nor large hop can precede the side impact");
+            if(majorFire && !f.shattered) {
+                fire=true;runner.Expect(f.elapsed>=blast && f.elapsed<blast+0.23f,"the first contact has only one short, small localized rupture");
+                for(size_t i=0;i<f.fireCount;++i) {
+                    if(f.fire[i].fault) continue;
+                    fireRadius=(std::max)(fireRadius,f.fire[i].radius);
+                    const auto offset=Add(f.fire[i].center,Mul(f.blastOrigin,-1));
+                    runner.Expect(Dot(offset,offset)<1.3f && f.fire[i].radius<1.0f,
+                        "the fire remains rooted at the rear housing instead of covering the whole cart");
+                }
+            }
+            if(f.elapsed<landing) runner.Expect(f.shock.opacity==0,"the broad explosion wave is reserved for recontact");
+            if(f.shock.opacity>0) {
+                shock=true;runner.Expect(f.shattered && f.elapsed>=landing && f.elapsed<landing+0.27f &&
+                    std::abs(f.shock.center.y-floor(f.shock.center.x,f.shock.center.z))<0.10f,
+                    "the broken blast front expands on the real ground only after detonation");
+            }
+            if(f.elapsed>blast+0.20f && f.elapsed<blast+0.50f) soot|=f.smokeCount>0;
+            if(f.elapsed>f.groundContactTime && f.elapsed<blast) edgeDust|=f.dustCount>0;
+            if(f.shattered) for(size_t i=0;i<f.fireCount;++i) finalFireRadius=(std::max)(finalFireRadius,f.fire[i].radius);
+            const auto cameraForward=Unit(Add(f.cameraTarget,Mul(f.cameraEye,-1)));
+            const auto cameraRight=Unit(Cross(f.cameraUp,cameraForward)),cameraUp=Cross(cameraForward,cameraRight);
+            const auto centreOffset=Add(Origin(f.vehicle.worldMatrix),Mul(f.cameraEye,-1));
+            const float screenY=Dot(centreOffset,cameraUp)/(Dot(centreOffset,cameraForward)*std::tan(f.cameraFovY*0.5f));
+            if(f.bouncing && !priorJump) {++jumps;hopStart=Origin(f.vehicle.worldMatrix);firstHopScreenY=screenY;
+                hopRight=Unit({f.vehicle.worldMatrix.m[0][0],f.vehicle.worldMatrix.m[0][1],f.vehicle.worldMatrix.m[0][2]});}
+            if(f.bouncing && priorJump) {
+                const float velocity=(Origin(f.vehicle.worldMatrix).y-previousHop.y)/(f.elapsed-previousHopTime);
+                maxUp=(std::max)(maxUp,velocity);minDown=(std::min)(minDown,(clearance(f.vehicle.worldMatrix)-previousGap)/(f.elapsed-previousHopTime));
+                minOrientation=(std::min)(minOrientation,Dot(hopRight,Unit({f.vehicle.worldMatrix.m[0][0],f.vehicle.worldMatrix.m[0][1],f.vehicle.worldMatrix.m[0][2]})));
+            }
+            if(f.bouncing) {peak=(std::max)(peak,clearance(f.vehicle.worldMatrix));hopEnd=Origin(f.vehicle.worldMatrix);
+                highestHopScreenY=(std::max)(highestHopScreenY,screenY);
+                runner.Expect(clearance(f.vehicle.worldMatrix)>=-0.002f,"the ballistic hull stays above actual terrain until recontact");
+                for(float x:{-2.31f,2.31f}) for(float y:{-0.68f,1.88f}) for(float z:{-3.48f,3.48f}) {
+                    const auto offset=Add(Point({x,y,z},f.vehicle.worldMatrix),Mul(f.cameraEye,-1));
+                    const float depth=Dot(offset,cameraForward);
+                    runner.Expect(depth>0 && std::abs(Dot(offset,cameraUp)/(depth*std::tan(f.cameraFovY*0.5f)))<0.90f &&
+                        std::abs(Dot(offset,cameraRight)/(depth*std::tan(f.cameraFovY*0.5f)*16/9))<0.95f,
+                        "the larger hop stays framed by the unchanged gameplay lens");
+                }
+            }
+            if(f.elapsed>=landing && f.elapsed<scene->FadeStartTime()) {
+                landed=true;runner.Expect(f.grounded && !f.bouncing && std::abs(clearance(f.vehicle.worldMatrix))<0.003f,
+                    "recontact and the entire ground skid remain supported on the rendered sloping floor");
+                maxScalar=(std::max)(maxScalar,f.slideDistance);
+            }
+            if(f.elapsed>stop+0.02f && f.elapsed<scene->FadeStartTime()) {
+                runner.Expect(f.speedRatio==0 && std::abs(f.slideDistance-2.5f)<0.0001f && f.blackout==0,
+                    "2.5 metres of sliding ends at exact rest before blackout");
+                if(!frozen) {stoppedWorld=f.vehicle.worldMatrix;frozen=true;}
+                for(int i=0;i<4;++i) for(int j=0;j<4;++j) runner.Expect(std::abs(stoppedWorld.m[i][j]-f.vehicle.worldMatrix.m[i][j])<0.00001f,
+                    "the resting cart does not keep drifting while waiting for fade");
+            }
+            runner.Expect(f.fireCount<=f.fire.size() && f.smokeCount<=f.smoke.size() && f.sparkCount<=f.sparks.size() &&
+                f.dustCount<=f.dust.size() && f.debrisCount<=f.debris.size(),"blast and both landings respect fixed particle budgets");
+            priorJump=f.bouncing;previousHop=Origin(f.vehicle.worldMatrix);previousHopTime=f.elapsed;previousGap=clearance(f.vehicle.worldMatrix);
+        }
+        metrics<<fps<<','<<scene->Frame().groundContactTime<<','<<blast<<','<<landing<<','<<stop<<','<<scene->FadeStartTime()<<','<<peak<<','<<maxScalar<<','<<maxUp<<','<<minDown<<','<<minOrientation<<','<<fireRadius<<','<<finalFireRadius<<'\n';
+        runner.Expect(fire && soot && edgeDust && jumps==1 && peak>1.5f && peak<3.5f && maxUp>12 && minDown< -10 && minOrientation<0.90f && hopEnd.x>hopStart.x+0.5f && hopEnd.z>hopStart.z+1.0f &&
+            landed && frozen && std::abs(maxScalar-2.5f)<0.0001f && scene->Frame().menuReady,
+            "a small first rupture launches one high, fast tumbling rebound while real recontact owns the breakup and finite skid; peak="+std::to_string(peak)+" up="+std::to_string(maxUp)+" down="+std::to_string(minDown)+" turn="+std::to_string(minOrientation));
+        runner.Expect(shock && fireRadius>0.80f && fireRadius<1.0f && finalFireRadius>fireRadius*3.2f && highestHopScreenY-firstHopScreenY>0.07f,
+            "a clear upward screen motion separates the small first rupture from the single large fireball and ground wave on recontact");
+        scene->Reset();begin(*scene);runner.Expect(scene->Frame().fireCount==0 && scene->Frame().slideDistance==0 && !scene->Frame().bouncing,
+            "retry clears the explosion, rebound and skid presentation");
+    }
+}
+
+void TestRailGameOverAlternatingFaults(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    RailPath path;path.SetControlPoints({{{0,0,0},18,30},{{0,0,700},18,30}});
+    const auto floor=[](float x,float z){return -12+0.02f*x+0.01f*(z-100);};
+    const Vector3 a{-120,floor(-120,-100),-100},b{120,floor(120,-100),-100};
+    const Vector3 c{120,floor(120,700),700},d{-120,floor(-120,700),700};
+    auto ground=std::make_shared<TerrainGroundSurface>(std::vector<TerrainGroundTriangle>{{a,b,c},{a,c,d}});
+    RailVehicleRuntimeState state;state.initialized=true;state.distance=100;state.speed=18.9f;
+    RailVehicleActorFrame actor;actor.active=actor.visible=true;actor.position={0,2,100};
+    RailVehicleRenderFrame body;body.visible=true;body.meshId=RailVehicleBreakaway::IntactMesh;body.worldMatrix=MakeTranslateMatrix(actor.position);
+    RailVehicleWheelContactPresentationFrame wheels;wheels.valid=true;wheels.visibleWheelCount=4;
+    for(size_t i=0;i<4;++i) {
+        auto& w=wheels.wheels[i];w.visible=w.supported=true;w.meshId="course_rail.wheel_proxy";
+        w.railContact={i%2?1.9f:-1.9f,0,i<2?96.8f:103.2f};w.axleCenter=Add(w.railContact,{0,0.62f,0});
+        w.worldMatrix=MakeAffineMatrix(Vector3{0.42f,1.24f,1.24f},Vector3{},w.axleCenter);
+    }
+    GameSessionRuntimeState defeat;defeat.phase=GameSessionPhase::Defeat;defeat.outcome=GameSessionOutcome::Defeat;
+    defeat.endReason=GameSessionEndReason::PlayerDestroyed;defeat.canRetry=true;
+    const auto begin=[&](RailGameOverScene& scene){scene.Begin(defeat,state,actor,body,wheels,{}, {0,6,80},{0,0,1},path,{0,1,0},1.05f,nullptr,nullptr,
+        [ground](Vector3 p,float ceiling,TerrainGroundSurfaceHit& hit){return ground->Sample(p,hit,ceiling);});};
+
+    std::ofstream metrics("generated/gameover-alternating-faults.csv");
+    metrics<<"fps,pulse,side,time,peak_radius\n";
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();begin(*scene);
+        std::array<bool,6> visible{};std::array<float,6> peak{};size_t heard=0;
+        for(int tick=0;tick<fps*2;++tick) {
+            const size_t before=scene->Frame().faultBurstCount;
+            scene->Update(1.0f/fps,path,true,{});const auto& f=scene->Frame();
+            const size_t expected=std::count_if(RailGameOverScene::FaultBursts.begin(),RailGameOverScene::FaultBursts.end(),
+                [&](const auto& burst){return burst.time<=f.elapsed;});
+            runner.Expect(f.faultBurstCount==expected && f.faultBurstCount>=before,
+                "one monotonic edge per authored rupture drives synchronized sound without repeated playback");
+            heard+=f.faultBurstCount-before;
+            for(size_t i=0;i<f.fireCount;++i) if(f.fire[i].fault) {
+                runner.Expect(f.faultBurstCount>0 && f.elapsed<RailGameOverScene::DerailBegin,
+                    "short failure bursts belong to the unstable on-rail phase");
+                const size_t pulse=f.faultBurstCount-1;const auto& event=RailGameOverScene::FaultBursts[pulse];
+                const auto& wheel=f.wheels.wheels[event.side<0?0:1];
+                const auto root=Add(wheel.axleCenter,{event.side*0.30f,0.12f,0});
+                const auto offset=Add(f.fire[i].center,Mul(root,-1));
+                runner.Expect(Dot(offset,offset)<0.10f && f.fire[i].radius<0.85f && f.fire[i].opacity<=0.88f,
+                    "each small rupture stays at the current wheel mount on the alternating side instead of lagging behind the moving cart");
+                visible[pulse]=true;peak[pulse]=(std::max)(peak[pulse],f.fire[i].radius);
+            }
+            if(f.elapsed<RailGameOverScene::DetachBegin) runner.Expect(f.shock.opacity==0 && f.dustCount==0 && f.debrisCount==0,
+                "mechanical fault pulses do not trigger ground impact dust or the large explosion");
+            if(f.elapsed>1.40f) runner.Expect(std::none_of(f.fire.begin(),f.fire.begin()+f.fireCount,[](const auto& fire){return fire.fault;}),
+                "micro flames finish before the forceful derail release");
+            runner.Expect(f.cameraFovY==1.05f && f.vehicle.visible && f.fireCount<=f.fire.size() && f.sparkCount<=f.sparks.size() && f.smokeCount<=f.smoke.size(),
+                "alternating damage keeps the gameplay lens and intact vehicle within bounded particle pools");
+            const auto count=f.faultBurstCount;scene->Update(0,path,true,{});
+            runner.Expect(scene->Frame().faultBurstCount==count,"a paused cinematic cannot retrigger rupture audio");
+        }
+        runner.Expect(heard==6 && std::all_of(visible.begin(),visible.end(),[](bool v){return v;}) && peak.back()>peak.front()*1.10f,
+            "six visible left-right pulses build in strength before the derailment at every display rate");
+        for(size_t i=0;i<visible.size();++i) {
+            const auto& event=RailGameOverScene::FaultBursts[i];
+            runner.Expect(event.side==(i%2?1.0f:-1.0f) && (i==0 || event.time-RailGameOverScene::FaultBursts[i-1].time<=0.241f),
+                "faults strictly alternate left-right with an accelerating rhythm");
+            metrics<<fps<<','<<i<<','<<event.side<<','<<event.time<<','<<peak[i]<<'\n';
+        }
+        scene->Reset();begin(*scene);runner.Expect(scene->Frame().faultBurstCount==0 && scene->Frame().fireCount==0,
+            "checkpoint retry rearms every failure pulse and clears old fire");
+    }
+}
+
+void TestRailGameOverDerailMomentum(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    RailPath path;path.SetControlPoints({{{0,0,0},18,30},{{0,0,700},18,30}});
+    const auto floor=[](float x,float z){return -12+0.02f*x+0.01f*(z-100);};
+    const Vector3 a{-120,floor(-120,-100),-100},b{120,floor(120,-100),-100};
+    const Vector3 c{120,floor(120,700),700},d{-120,floor(-120,700),700};
+    auto ground=std::make_shared<TerrainGroundSurface>(std::vector<TerrainGroundTriangle>{{a,b,c},{a,c,d}});
+    RailVehicleRuntimeState state;state.initialized=true;state.distance=100;state.speed=18.9f;
+    RailVehicleActorFrame actor;actor.active=actor.visible=true;actor.position={0,2,100};
+    RailVehicleRenderFrame body;body.visible=true;body.meshId=RailVehicleBreakaway::IntactMesh;body.worldMatrix=MakeTranslateMatrix(actor.position);
+    RailVehicleWheelContactPresentationFrame wheels;wheels.valid=true;wheels.visibleWheelCount=4;
+    for(size_t i=0;i<4;++i) {
+        auto& w=wheels.wheels[i];w.visible=w.supported=true;w.meshId="course_rail.wheel_proxy";
+        w.railContact={i%2?1.9f:-1.9f,0,i<2?96.8f:103.2f};w.axleCenter=Add(w.railContact,{0,0.62f,0});
+        w.worldMatrix=MakeAffineMatrix(Vector3{0.42f,1.24f,1.24f},Vector3{},w.axleCenter);
+    }
+    GameSessionRuntimeState defeat;defeat.phase=GameSessionPhase::Defeat;defeat.outcome=GameSessionOutcome::Defeat;
+    defeat.endReason=GameSessionEndReason::PlayerDestroyed;defeat.canRetry=true;
+    const auto begin=[&](RailGameOverScene& scene){scene.Begin(defeat,state,actor,body,wheels,{}, {0,6,80},{0,0,1},path,{0,1,0},1.05f,nullptr,nullptr,
+        [ground](Vector3 p,float ceiling,TerrainGroundSurfaceHit& hit){return ground->Sample(p,hit,ceiling);});};
+
+    std::ofstream metrics("generated/gameover-derail-momentum.csv");
+    metrics<<"fps,forward_retention,side_velocity,travel_first_200ms,first_contact,shatter\n";
+    Vector3 reference{};
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();begin(*scene);
+        const auto advance=[&](float target){while(scene->Frame().elapsed+1.0001f/fps<target) scene->Update(1.0f/fps,path,true,{});
+            scene->Update((std::max)(0.0f,target-scene->Frame().elapsed),path,true,{});};
+        advance(RailGameOverScene::DetachBegin-0.001f);const auto attached=scene->Frame();
+        runner.Expect(attached.wheels.wheels[1].supported && attached.wheels.wheels[3].supported && attached.vehicle.visible,
+            "the loaded wheel pair stays on the rail until the forceful release");
+        advance(RailGameOverScene::DetachBegin);const auto release=scene->Frame();
+        const auto jump=Add(Origin(release.vehicle.worldMatrix),Mul(Origin(attached.vehicle.worldMatrix),-1));
+        runner.Expect(Dot(jump,jump)<0.003f,"stronger release preserves positional continuity at the wheel pivot");
+        advance(RailGameOverScene::DetachBegin+0.10f);const auto flight=scene->Frame();
+        const auto velocity=Mul(Add(Origin(flight.vehicle.worldMatrix),Mul(Origin(release.vehicle.worldMatrix),-1)),10);
+        runner.Expect(!flight.grounded && !flight.bouncing && flight.vehicle.visible && velocity.z/state.speed>0.90f && velocity.x>12.0f,
+            "the first 100ms retain over ninety percent of running speed while throwing the cart decisively off the rail");
+        runner.Expect(flight.cameraFovY==release.cameraFovY && flight.cameraFovY==1.05f,
+            "increased derail momentum preserves the normal lens");
+        advance(RailGameOverScene::DetachBegin+0.20f);
+        const auto displacement=Add(Origin(scene->Frame().vehicle.worldMatrix),Mul(Origin(release.vehicle.worldMatrix),-1));
+        runner.Expect(displacement.z>3.4f && displacement.x>2.4f && scene->Frame().vehicle.worldMatrix.m[0][1]<-0.82f,
+            "the cart covers visible forward and sideways distance while tipping rapidly through the first 200ms");
+        if(fps==30) reference=displacement;
+        else {const auto difference=Add(displacement,Mul(reference,-1));runner.Expect(Dot(difference,difference)<0.0001f,
+            "stronger derail trajectories remain identical across display rates");}
+        runner.Expect(scene->ShatterTime()==scene->RecontactTime(),"stronger derail preserves the explosion on actual recontact");
+        metrics<<fps<<','<<velocity.z/state.speed<<','<<velocity.x<<','<<std::sqrt(Dot(displacement,displacement))<<','
+            <<scene->Frame().groundContactTime<<','<<scene->ShatterTime()<<'\n';
+    }
+}
+
+void TestRailGameOverFinalDisassembly(RegressionRunner& runner) {
+    using namespace rail_game_over_detail;
+    RailPath path;path.SetControlPoints({{{0,0,0},18,30},{{0,0,700},18,30}});
+    const auto floor=[](float x,float z){return -12+0.02f*x+0.01f*(z-100);};
+    const Vector3 a{-120,floor(-120,-100),-100},b{120,floor(120,-100),-100};
+    const Vector3 c{120,floor(120,700),700},d{-120,floor(-120,700),700};
+    auto ground=std::make_shared<TerrainGroundSurface>(std::vector<TerrainGroundTriangle>{{a,b,c},{a,c,d}});
+    RailVehicleRuntimeState state;state.initialized=true;state.distance=100;state.speed=18.9f;
+    RailVehicleActorFrame actor;actor.active=actor.visible=true;actor.position={0,2,100};
+    RailVehicleRenderFrame body;body.visible=true;body.meshId=RailVehicleBreakaway::IntactMesh;body.worldMatrix=MakeTranslateMatrix(actor.position);
+    RailVehicleWheelContactPresentationFrame wheels;wheels.valid=true;wheels.visibleWheelCount=4;
+    for(size_t i=0;i<4;++i) {
+        auto& w=wheels.wheels[i];w.visible=w.supported=true;w.meshId="course_rail.wheel_proxy";
+        w.railContact={i%2?1.9f:-1.9f,0,i<2?96.8f:103.2f};w.axleCenter=Add(w.railContact,{0,0.62f,0});
+        w.worldMatrix=MakeAffineMatrix(Vector3{0.42f,1.24f,1.24f},Vector3{},w.axleCenter);
+    }
+    GameSessionRuntimeState defeat;defeat.phase=GameSessionPhase::Defeat;defeat.outcome=GameSessionOutcome::Defeat;
+    defeat.endReason=GameSessionEndReason::PlayerDestroyed;defeat.canRetry=true;
+    const auto begin=[&](RailGameOverScene& scene){scene.Begin(defeat,state,actor,body,wheels,{}, {0,6,80},{0,0,1},path,{0,1,0},1.05f,nullptr,nullptr,
+        [ground](Vector3 p,float ceiling,TerrainGroundSurfaceHit& hit){return ground->Sample(p,hit,ceiling);});};
+
+    std::array<ModelData,RailVehicleBreakaway::FractureParts.size()> meshes;
+    double volume=0;
+    for(size_t i=0;i<meshes.size();++i) {
+        meshes[i]=BuildRailVehicleFractureModelData(i);const auto audit=AuditModelClosedSurface(meshes[i]);
+        runner.Expect(!meshes[i].vertices.empty() && audit.IsValid() && ValidateModelDataMaterialLayout(meshes[i]) &&
+            ValidateModelGeometryOrientation(meshes[i]),"every final cart fragment is a closed lit mesh with original materials");
+        volume+=audit.signedVolume;
+        for(const auto& v:meshes[i].vertices) {
+            const auto& shape=RailVehicleBreakaway::FractureParts[i];
+            runner.Expect(v.position.x>=shape.minimum.x-0.0001f && v.position.x<=shape.maximum.x+0.0001f &&
+                v.position.y>=shape.minimum.y-0.0001f && v.position.y<=shape.maximum.y+0.0001f &&
+                v.position.z>=shape.minimum.z-0.0001f && v.position.z<=shape.maximum.z+0.0001f,
+                "contact bounds contain every rendered fragment vertex");
+        }
+    }
+    const auto original=AuditModelClosedSurface(BuildRailVehicleBreakawayModelData(false));
+    runner.Expect(std::abs(volume-original.signedVolume)/original.signedVolume<0.01,
+        "separated pieces retain the damaged cart's solid geometry instead of duplicating a complete cart");
+    float reference=-1;
+    std::ofstream metrics("generated/gameover-finale.csv");metrics<<"fps,landing,shatter,stop,fade,moving_parts,left_parts,right_parts,forward_carry,peak_fire_radius\n";
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();begin(*scene);
+        const float shatter=scene->ShatterTime();
+        if(reference<0) reference=shatter;
+        runner.Expect(std::abs(shatter-reference)<0.00001f && std::abs(shatter-scene->RecontactTime())<0.00001f && shatter<scene->StopTime() &&
+            scene->FadeStartTime()>=shatter+0.849f && scene->FadeStartTime()>=scene->StopTime()+0.17f,
+            "final disassembly happens on recontact while the cart still has speed, followed by one continuous coast before blackout at every frame rate");
+        const auto advance=[&](float target){while(scene->Frame().elapsed+0.10001f<target) scene->Update(0.1f,path,true,{});
+            scene->Update((std::max)(0.0f,target-scene->Frame().elapsed),path,true,{});};
+        advance(shatter-0.001f);const auto beforeImpact=scene->Frame();
+        runner.Expect(beforeImpact.vehicle.visible && beforeImpact.fractureCount==0 && !beforeImpact.shattered && beforeImpact.bouncing,
+            "the cart remains intact until the actual second landing instead of exploding in midair");
+        advance(shatter);const auto landing=scene->Frame();
+        advance(shatter+0.000002f);const auto source=scene->Frame();
+        runner.Expect(source.fireCount>0 && source.fire[0].radius>=0.8f && source.impactFlash>0.9f && source.speedRatio>0.2f,
+            "fire, impact flash and moving fragments begin on the same contact frame without a stopped pause");
+        runner.Expect(source.shattered && source.fractureCount==RailVehicleBreakaway::FinalPieceCount &&
+            !source.vehicle.visible && !source.occupant.visible && source.sidePanel.visible &&
+            source.wheels.wheels[RailVehicleBreakaway::WheelIndex].visible && source.wheels.visibleWheelCount==1,
+            "one intact-to-pieces swap keeps the previously detached panel and wheel and removes the original cart and rider");
+        constexpr size_t slots[]{0,1,3};
+        for(size_t i=0;i<source.fractureCount;++i) {
+            auto expected=i<meshes.size()?landing.vehicle.worldMatrix:landing.wheels.wheels[slots[i-meshes.size()]].worldMatrix;
+            if(i<meshes.size()) {
+                const auto& shape=RailVehicleBreakaway::FractureParts[i];float minimum=1000;
+                for(float x:{shape.minimum.x,shape.maximum.x}) for(float y:{shape.minimum.y,shape.maximum.y})
+                    for(float z:{shape.minimum.z,shape.maximum.z}) {
+                        const auto p=Point({x,y,z},expected);minimum=(std::min)(minimum,p.y-floor(p.x,p.z));
+                    }
+                runner.Expect(minimum> -0.9f,"only the previously embedded housing needs a bounded terrain separation at release");
+                expected.m[3][1]+=(std::max)(0.0f,-minimum);
+            }
+            for(int r=0;r<4;++r) for(int c=0;c<4;++c)
+                runner.Expect(std::abs(source.fractures[i].worldMatrix.m[r][c]-expected.m[r][c])<0.0002f,
+                    "fragment "+std::to_string(i)+" starts at the landing cart pose with only terrain overlap resolved");
+        }
+        int events=1,moving=0,left=0,right=0;float peakFire=0,forwardCarry=0;bool previouslyShattered=true;
+        bool reachedMenu=false;
+        for(int tick=0;tick<fps*4;++tick) {
+            scene->Update(1.0f/fps,path,true,{});const auto& f=scene->Frame();
+            if(f.shattered && !previouslyShattered) ++events;
+            previouslyShattered=f.shattered;
+            runner.Expect(f.cameraFovY==1.05f,"final explosion preserves the gameplay lens");
+            if(f.elapsed<scene->FadeEndTime()) {
+                runner.Expect(f.fractureCount==RailVehicleBreakaway::FinalPieceCount && !f.vehicle.visible,
+                    "solid fragments replace the original cart until blackout");
+                for(size_t i=0;i<meshes.size();++i) for(const auto& v:meshes[i].vertices) {
+                    const auto p=Point({v.position.x,v.position.y,v.position.z},f.fractures[i].worldMatrix);
+                    runner.Expect(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z) && p.y>=floor(p.x,p.z)-0.003f,
+                        "tumbling fragment "+std::to_string(i)+" at age "+std::to_string(f.elapsed-shatter)+" gap "+std::to_string(p.y-floor(p.x,p.z))+" collides with the same sloping ground as the intact wreck");
+                }
+                if(f.elapsed>shatter+0.29f && f.elapsed<shatter+0.29f+1.01f/fps) {
+                    for(size_t i=0;i<f.fractureCount;++i) {
+                        Vector3 local{};if(i<meshes.size()) local=Mul(Add(RailVehicleBreakaway::FractureParts[i].minimum,RailVehicleBreakaway::FractureParts[i].maximum),0.5f);
+                        const auto displacement=Add(Point(local,f.fractures[i].worldMatrix),Mul(Point(local,source.fractures[i].worldMatrix),-1));
+                        if(Dot(displacement,displacement)>1) ++moving;
+                        if(displacement.x< -0.3f) ++left;
+                        if(displacement.x>0.3f) ++right;
+                        forwardCarry+=displacement.z/float(f.fractureCount);
+                    }
+                }
+                for(size_t i=0;i<f.fireCount;++i) peakFire=(std::max)(peakFire,f.fire[i].radius);
+            } else runner.Expect(f.blackout==1 && f.fractureCount==0 && f.fireCount==0,
+                "full blackout clears all fragment draws and hidden fire");
+            runner.Expect(f.fireCount<=f.fire.size() && f.smokeCount<=f.smoke.size() && f.sparkCount<=f.sparks.size() &&
+                f.debrisCount<=f.debris.size(),"both explosions share bounded particle pools");
+            reachedMenu|=f.menuReady;
+        }
+        runner.Expect(events==1 && moving>=9 && left>=2 && right>=2 && forwardCarry>0.8f && peakFire>3.1f && reachedMenu,
+            "one landing burst carries the independent pieces forward and outward before the menu");
+        metrics<<fps<<','<<scene->RecontactTime()<<','<<shatter<<','<<scene->StopTime()<<','<<scene->FadeStartTime()<<','<<moving<<','<<left<<','<<right<<','<<forwardCarry<<','<<peakFire<<'\n';
+        scene->Reset();begin(*scene);runner.Expect(!scene->Frame().shattered && scene->Frame().fractureCount==0 &&
+            scene->Frame().vehicle.visible && scene->Frame().wheels.visibleWheelCount==4,
+            "retry removes the fragments and restores the intact cart with four wheels");
+    }
+}
+
+void TestRailGameOverScene(RegressionRunner& runner) {
+    RailPath path;path.SetControlPoints({{{0,0,0},18,30},{{0,0,300},18,30},{{0,0,600},18,30}});
+    RailVehicleRuntimeState state;state.initialized=true;state.distance=100;state.speed=30;
+    RailVehicleActorFrame actor;actor.active=actor.visible=true;actor.position={0,2,100};actor.meshId="rail_vehicle.mine_cart";
+    RailVehicleRenderFrame vehicle;vehicle.visible=true;vehicle.worldMatrix=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,0},actor.position);
+    RailVehicleWheelContactPresentationFrame wheels;wheels.valid=true;wheels.visibleWheelCount=4;
+    for(int i=0;i<4;++i) {
+        auto& wheel=wheels.wheels[i];wheel.visible=wheel.supported=true;
+        wheel.axleCenter={i%2?1.0f:-1.0f,1,float(99+i/2*2)};
+        wheel.railContact={wheel.axleCenter.x,0,wheel.axleCenter.z};
+        wheel.worldMatrix=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,0},wheel.axleCenter);
+    }
+    RailVehicleOccupantActorFrame occupant;occupant.visible=true;
+    occupant.position={0,3,100};occupant.worldMatrix=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,0},occupant.position);
+    GameSessionRuntimeState session;session.phase=GameSessionPhase::Defeat;session.outcome=GameSessionOutcome::Defeat;
+    session.endReason=GameSessionEndReason::PlayerDestroyed;session.canRetry=true;
+    session.maximumPlayerHealth=100;
+    const auto begin=[&](RailGameOverScene& scene) {scene.Begin(session,state,actor,vehicle,wheels,occupant,{0,6,86},{0,0,1},path,{0,1,0},0.82f,nullptr,nullptr,
+        [](Vector3 p,float,TerrainGroundSurfaceHit& hit){hit={{p.x,-0.35f,p.z},{0,1,0}};return true;});};
+    std::ofstream momentumMetrics("generated/gameover_momentum_metrics.csv");
+    momentumMetrics<<"fps,time,x,y,z,forward_speed,speed_ratio,grounded,sparks\n";
+    float expectedContactTime=-1;
+    for(int fps:{30,60,120}) {
+        auto scene=std::make_unique<RailGameOverScene>();begin(*scene);
+        // On a shallow floor the faster topple can leave only one airborne
+        // display sample at 30fps. Measure from the exact release pose so no
+        // finite difference straddles rail motion or the first ground impact.
+        auto releaseProbe=std::make_unique<RailGameOverScene>();begin(*releaseProbe);
+        while(releaseProbe->Frame().elapsed+0.10001f<RailGameOverScene::DetachBegin) releaseProbe->Update(0.1f,path,true,{});
+        releaseProbe->Update(RailGameOverScene::DetachBegin-releaseProbe->Frame().elapsed,path,true,{});
+        const auto releaseOrigin=rail_game_over_detail::Origin(releaseProbe->Frame().vehicle.worldMatrix);
+        runner.Expect(scene->Frame().cameraEye.x==0 && scene->Frame().cameraEye.y==6 &&
+            std::abs(scene->Frame().cameraEye.z-86)<0.001f && scene->Frame().cameraBlend==0 &&
+            scene->Frame().hudOpacity==1,"fatal frame retains the gameplay camera and HUD without a cut");
+        RailGameOverInput input;input.enabled=true;input.confirm=true;
+        runner.Expect(scene->Update(0,path,true,input)==RailGameOverAction::None,"fatal gameplay input cannot activate the hidden menu");
+        input.confirm=false;bool effects=false,unstable=false,falling=false;float readyAt=0;
+        Vector3 releasedCamera{};
+        Vector3 previousPosition=rail_game_over_detail::Origin(scene->Frame().vehicle.worldMatrix);
+        float previousTime=0;bool previouslyGrounded=false,airMomentum=false,hardStop=false,contactSparks=false;
+        int groundEvents=0;
+        if(expectedContactTime<0) expectedContactTime=scene->Frame().groundContactTime;
+        runner.Expect(std::abs(expectedContactTime-scene->Frame().groundContactTime)<0.0001f &&
+            expectedContactTime>RailGameOverScene::DetachBegin && expectedContactTime<RailGameOverScene::DetachBegin+0.5f,
+            "first hull contact is solved independently of display frame rate after rail release");
+        for(int tick=0;tick<fps*5;++tick) {
+            scene->Update(1.0f/fps,path,true,input);const auto& f=scene->Frame();
+            const float t=f.elapsed;
+            const auto position=rail_game_over_detail::Origin(f.vehicle.worldMatrix);
+            const float forwardSpeed=(position.z-previousPosition.z)/(t-previousTime);
+            momentumMetrics<<fps<<','<<t<<','<<position.x<<','<<position.y<<','<<position.z<<','<<forwardSpeed<<','<<f.speedRatio<<','<<f.grounded<<','<<f.sparkCount<<'\n';
+            if(t>=RailGameOverScene::DetachBegin && t<f.groundContactTime)
+                runner.Expect(f.speedRatio>0.83f && f.speedRatio<0.85f,"reduced braking retains roughly eighty-four percent coasting speed before the release kick");
+            if(t>RailGameOverScene::DetachBegin+0.0001f && t<f.groundContactTime) {
+                airMomentum=true;
+                const float flightSpeed=(position.z-releaseOrigin.z)/(t-RailGameOverScene::DetachBegin);
+                runner.Expect(flightSpeed>state.speed*0.90f && flightSpeed<state.speed*0.93f && position.x>releaseOrigin.x,
+                    "airborne cart advances forward and sideways without pre-contact friction");
+            }
+            if(f.grounded && !previouslyGrounded) ++groundEvents;
+            if((f.grounded || f.bouncing) && t<f.groundContactTime+0.12f && f.sparkCount>=45) contactSparks=true;
+            if(f.stopTime>=0 && t>f.stopTime+0.02f && t<scene->FadeStartTime()) {
+                hardStop=true;
+                runner.Expect(forwardSpeed>=-0.001f && forwardSpeed<state.speed*0.05f && f.speedRatio<0.04f,
+                    "ground contact arrests the forward skid strongly instead of damping away speed in mid-air");
+                runner.Expect(std::abs(f.vehicle.worldMatrix.m[0][1])>0.95f && std::abs(f.groundContactPoint.y+0.35f)<0.002f,
+                    "cart finishes its topple and the hull stays supported on the presentation rail bed");
+            }
+            runner.Expect(std::isfinite(f.cameraEye.x) && std::isfinite(f.vehicle.worldMatrix.m[3][1]),"wreck pose and camera remain finite");
+            runner.Expect(f.smokeCount<=f.smoke.size() && f.sparkCount<=f.sparks.size(),"wreck particles respect fixed budgets");
+            if(t<0.4f && f.smokeCount>0 && f.sparkCount>0) effects=true;
+            if(t>0.7f && t<1.4f && f.speedRatio<0.95f && f.speedRatio>0.8f && std::abs(f.vehicle.worldMatrix.m[0][1])>0.005f) unstable=true;
+            if(t<RailGameOverScene::FadeBegin) runner.Expect(f.blackout==0 && f.titleOpacity==0 && !f.menuReady,"the wreck is visible before blackout, title and menu");
+            if(t<RailGameOverScene::CameraMoveBegin) {
+                runner.Expect(f.cameraBlend==0 && f.hudOpacity==1 &&
+                    std::abs(f.cameraEye.x)<0.001f && std::abs(f.cameraEye.y-6)<0.001f &&
+                    std::abs((f.vehicle.worldMatrix.m[3][2]-f.cameraEye.z)-14)<0.001f,
+                    "normal camera follows the rail rig during the opening fault beat");
+            }
+            if(t>RailGameOverScene::CameraMoveBegin+0.001f && t<RailGameOverScene::CameraMoveEnd-0.001f)
+                runner.Expect(f.cameraBlend>0 && f.cameraBlend<1 && f.wheels.wheels[0].supported,
+                    "camera moves continuously while every wheel remains on the rail");
+            if(t>=RailGameOverScene::WheelLiftBegin)
+                runner.Expect(f.cameraBlend==1 && f.hudOpacity==0,"wheel lift starts only after camera reveal and HUD fade complete");
+            // The two loaded contact points stay on the rail throughout the
+            // lift. Their opposite wheels visibly separate before release.
+            if(t>RailGameOverScene::WheelLiftBegin+0.20f && t<RailGameOverScene::DetachBegin) {
+                runner.Expect(std::abs(f.wheels.wheels[1].railContact.y)<0.001f &&
+                    std::abs(f.wheels.wheels[3].railContact.y)<0.001f,
+                    "right wheel contact line is the exact roll pivot, rather than the body centre");
+                runner.Expect(f.wheels.wheels[0].railContact.y>0.03f &&
+                    f.wheels.wheels[2].railContact.y>0.03f && f.wheels.wheels[1].supported && !f.wheels.wheels[0].supported,
+                    "camera-facing wheels lift while the opposite side is still supported");
+            }
+            if(t>=RailGameOverScene::CameraMoveEnd && t<RailGameOverScene::DerailBegin) {
+                const auto forward=rail_game_over_detail::Unit(rail_game_over_detail::Add(f.cameraTarget,
+                    rail_game_over_detail::Mul(f.cameraEye,-1)));
+                const auto right=rail_game_over_detail::Unit(rail_game_over_detail::Cross({0,1,0},forward));
+                const auto up=rail_game_over_detail::Cross(forward,right);
+                // The reveal must frame the whole cart before wheel lift,
+                // including narrow and wide display aspect ratios.
+                for(float aspect:{4.0f/3.0f,16.0f/9.0f,21.0f/9.0f})
+                for(float x:{-2.4f,2.4f}) for(float y:{-0.8f,2.4f}) for(float z:{-4.0f,4.0f}) {
+                    const auto corner=rail_game_over_detail::Point({x,y,z},f.vehicle.worldMatrix);
+                    const auto delta=rail_game_over_detail::Add(corner,rail_game_over_detail::Mul(f.cameraEye,-1));
+                    const float depth=rail_game_over_detail::Dot(delta,forward);
+                    runner.Expect(depth>0 && std::abs(rail_game_over_detail::Dot(delta,up))/(depth*std::tan(f.cameraFovY*0.5f))<0.90f &&
+                        std::abs(rail_game_over_detail::Dot(delta,right))/(depth*std::tan(f.cameraFovY*0.5f)*aspect)<0.90f,
+                        "failure camera frames the full cart and wheels with safe margins before derailment");
+                }
+            }
+            for(size_t i=0;i<f.smokeCount;++i)
+                runner.Expect(f.smoke[i].radius<(f.smoke[i].blast?2.0f:0.88f) && f.smoke[i].opacity<=(f.smoke[i].blast?0.78f:0.52f),
+                    "fault smoke retains a bounded translucent footprint");
+            if(t>RailGameOverScene::DerailBegin+0.10f && t<RailGameOverScene::DerailBegin+0.15f) releasedCamera=f.cameraEye;
+            if(t>RailGameOverScene::DetachBegin+0.30f && t<RailGameOverScene::DetachBegin+0.35f) {
+                falling=f.vehicle.worldMatrix.m[3][0]>actor.position.x+0.5f && !f.wheels.wheels[0].supported && !f.wheels.wheels[1].supported;
+                const auto delta=rail_game_over_detail::Add(f.cameraEye,rail_game_over_detail::Mul(releasedCamera,-1));
+                if(t>f.groundContactTime+0.18f)
+                    runner.Expect(delta.z>0.1f,"camera preserves forward follow after release and ground impact");
+                const auto rider=rail_game_over_detail::Add(f.occupant.position,{-f.vehicle.worldMatrix.m[3][0],-f.vehicle.worldMatrix.m[3][1],-f.vehicle.worldMatrix.m[3][2]});
+                runner.Expect(std::abs(rail_game_over_detail::Dot(rider,rider)-1)<0.01f,"rider stays attached to the rolling wreck");
+            }
+            if(t>scene->FadeEndTime()) runner.Expect(f.blackout==1 && f.smokeCount==0 && f.sparkCount==0,"full blackout precedes the title and stops hidden particles");
+            if(f.menuReady && readyAt==0) readyAt=t;
+            previousPosition=position;previousTime=t;previouslyGrounded=f.grounded;
+        }
+        runner.Expect(effects && unstable && falling,"smoke and sparks precede unstable deceleration and derailment at every frame rate");
+        runner.Expect(airMomentum && hardStop && contactSparks && groundEvents==2,
+            "momentum, edge contact, rebound, side contact, sparks and final ground friction occur at every display frame rate");
+        const float menuTime=scene->FadeStartTime()+RailGameOverScene::MenuBegin-RailGameOverScene::FadeBegin+0.25f;
+        runner.Expect(readyAt>=menuTime-0.001f && readyAt<menuTime+1.0f/fps+0.002f,"menu follows the visible skid consistently at 30, 60 and 120 fps");
+        input.confirm=true;runner.Expect(scene->Update(0,path,true,input)==RailGameOverAction::Checkpoint,"default retry selects the checkpoint, never a full restart");
+        input.confirm=false;input.down=true;scene->Update(0,path,true,input);input.down=false;input.confirm=true;
+        runner.Expect(scene->Update(0,path,true,input)==RailGameOverAction::Title,"keyboard navigation reaches the title action");
+        const auto elapsed=scene->Frame().elapsed;scene->Update(0,path,true,{});
+        runner.Expect(scene->Frame().elapsed==elapsed,"pausing or losing focus freezes the cinematic clock");
+        scene->Reset();runner.Expect(!scene->Active() && scene->Frame().blackout==0,"retry clears the entire wreck and blackout");
+    }
+    auto scene=std::make_unique<RailGameOverScene>();begin(*scene);
+    for(int i=0;i<55;++i) scene->Update(0.1f,path,true,{});
+    RailShooterHudRenderer renderer;auto definition=RailShooterHudDefinitionAsset::Defaults();definition.enabled=false;
+    RailShooterHudPresentationFrame presentation; // Deliberately hidden combat HUD.
+    for(auto size:{Vector2{320,180},Vector2{1280,720},Vector2{1024,768},Vector2{2560,1080}}) {
+        RailShooterHudRenderInput in;in.definition=&definition;in.presentation=&presentation;
+        in.viewportWidth=uint32_t(size.x);in.viewportHeight=uint32_t(size.y);in.resultSession=&session;
+        in.gameOver=&scene->Frame();in.checkpointRetryAvailable=true;in.startupInformationOpacity=0;
+        renderer.Update(in);int choices=0;bool title=false;
+        for(const auto& command:renderer.Frame().commands) {
+            if(command.text=="GAME OVER") title=true;
+            if(command.text==Utf8ForTest(u8"リトライ") || command.text==Utf8ForTest(u8"タイトルに戻る")) ++choices;
+            if(command.kind==RailShooterHudDrawCommandKind::Rectangle)
+                runner.Expect(command.x>=0 && command.y>=0 && command.x+command.width<=size.x+0.01f && command.y+command.height<=size.y+0.01f,"game-over geometry fits every supported viewport");
+        }
+        runner.Expect(renderer.Frame().visible && title && choices==2 && renderer.Frame().commands.size()<=definition.maximumDrawCommands,
+            "game over has exactly two choices even when combat HUD is disabled");
+        for(int i=0;i<2;++i) {
+            const auto button=GameOverButton(size.x,size.y,i);RailGameOverInput input;input.enabled=input.pointerValid=input.pointerPressed=true;
+            input.width=size.x;input.height=size.y;input.pointerX=button.x+button.width/2;input.pointerY=button.y+button.height/2;
+            runner.Expect(scene->Update(0,path,true,input)==(i==0?RailGameOverAction::Checkpoint:RailGameOverAction::Title),"pointer hit areas agree with the two drawn buttons");
+        }
+    }
+    // Non-default gameplay lens and bank must survive the fatal frame, not
+    // silently reset to the cinematic lens or an upright horizon.
+    const Vector3 bankedUp{-0.1986693f,0.9800666f,0};
+    scene->Begin(session,state,actor,vehicle,wheels,occupant,{2,6,86},{0,0,1},path,bankedUp,1.05f);
+    runner.Expect(std::abs(scene->Frame().cameraFovY-1.05f)<0.00001f &&
+        rail_game_over_detail::Dot(scene->Frame().cameraUp,bankedUp)>0.99999f,
+        "fatal frame preserves the actual gameplay FOV and camera roll");
+    auto previousCamera=scene->Frame();
+    for(int tick=0;tick<145;++tick) {
+        scene->Update(1.0f/120,path,true,{});const auto& current=scene->Frame();
+        const auto step=rail_game_over_detail::Add(current.cameraEye,rail_game_over_detail::Mul(previousCamera.cameraEye,-1));
+        const auto sight=rail_game_over_detail::Unit(rail_game_over_detail::Add(current.cameraTarget,rail_game_over_detail::Mul(current.cameraEye,-1)));
+        const auto previousSight=rail_game_over_detail::Unit(rail_game_over_detail::Add(previousCamera.cameraTarget,rail_game_over_detail::Mul(previousCamera.cameraEye,-1)));
+        runner.Expect(rail_game_over_detail::Dot(step,step)<1 &&
+            rail_game_over_detail::Dot(sight,previousSight)>0.995f &&
+            std::abs(current.cameraFovY-previousCamera.cameraFovY)<0.02f,
+            "camera position, sight line and lens remain continuous through hold, dolly and arrival");
+        previousCamera=current;
+    }
+    begin(*scene);
+    definition.enabled=true;presentation.visible=true;presentation.healthText=Utf8ForTest(u8"体力 100/100");
+    RailShooterHudRenderInput faultInput;faultInput.definition=&definition;faultInput.presentation=&presentation;
+    faultInput.resultSession=&session;faultInput.gameOver=&scene->Frame();faultInput.viewportWidth=1600;faultInput.viewportHeight=900;
+    const auto healthAlpha=[&]() {
+        renderer.Update(faultInput);float alpha=0;
+        for(const auto& command:renderer.Frame().commands) {
+            runner.Expect(command.text!=presentation.healthText && command.text!="GAME OVER",
+                "opening fault HUD shows zero health without a stale health label or premature result card");
+            if(command.text==Utf8ForTest(u8"体力 0/100")) alpha=(std::max)(alpha,command.color.w);
+        }
+        return alpha;
+    };
+    const float heldHealthAlpha=healthAlpha();
+    for(int i=0;i<7;++i) scene->Update(0.1f,path,true,{});
+    const float fadingHealthAlpha=healthAlpha();
+    for(int i=0;i<5;++i) scene->Update(0.1f,path,true,{});
+    runner.Expect(heldHealthAlpha>0 && fadingHealthAlpha>0 && fadingHealthAlpha<heldHealthAlpha && healthAlpha()==0,
+        "normal HUD stays at failure and fades out during the camera move");
+    session.endReason=GameSessionEndReason::TimeExpired;begin(*scene);
+    for(int i=0;i<20;++i) scene->Update(0.1f,path,false,{});
+    runner.Expect(!scene->Frame().wreck && scene->Frame().smokeCount==0 && scene->Frame().menuReady && scene->Frame().selection==1,
+        "timeouts do not derail the vehicle and unavailable checkpoints leave title navigation usable");
+    GameSessionSystem retry;auto rules=GameSessionDefinition::RailShooterDefaults();rules.startingRetries=0;rules.unlimitedCheckpointRetries=true;
+    std::string error;retry.Initialize(rules,1000,&error);retry.Start(100,&error);retry.RegisterCheckpoint(200,"review");
+    for(int i=0;i<5;++i) {
+        retry.ApplyPlayerDamage(100);retry.Update({0.1f,250});
+        runner.Expect(retry.Retry(&error) && retry.State().courseDistance==200 && retry.State().playerHealth==100,
+            "unlimited checkpoint retry restores position and health beyond the old attempt limit: "+error);
+    }
+}
+
 void TestShortCompleteRun(RegressionRunner& runner) {
     std::string error;
     CourseAsset course;
@@ -37862,7 +39131,7 @@ void TestShortCompleteRun(RegressionRunner& runner) {
         if(issue.severity==CourseValidationSeverity::Error) validationDetails+=issue.message+"; ";
     runner.Expect(!validation.HasErrors(),"short course authoring and dependencies validate: "+validationDetails);
     RailPath rail;course.ApplyToRailPath(rail);
-    runner.Expect(course.sections.size()==8 && ShortRunFinishDistance(rail.Length())>1200 && rail.Length()>4100 && rail.Length()<4300,
+    runner.Expect(course.sections.size()==8 && ShortRunFinishDistance(rail.Length())>1200 && rail.Length()>11000 && rail.Length()<11600,
         "short course has eight authored stages and a bounded complete route");
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
     std::string diagnostics;for(const auto& d:cooked.diagnostics) diagnostics+=d.message+"; ";
@@ -39740,6 +41009,7 @@ int RunEditorCoreRegressionTests() {
           }},
          {"carrier coaster extension", [&]() { TestCarrierBossAndCoaster(runner); }},
          {"carrier miniboss parts", [&]() { TestCarrierMinibossParts(runner); }},
+         {"carrier pursuit reachability", [&]() { TestCarrierPursuitReachability(runner); }},
          {"short complete run flow and pacing", [&]() { TestShortCompleteRun(runner); }},
         {"short run terminal camera and early-clear waves", [&]() { TestShortRunFinishAndEarlyWaves(runner); }},
         {"encounter camera spawn kill and release continuity", [&]() { TestEncounterCameraContinuity(runner); }},
@@ -39752,6 +41022,16 @@ int RunEditorCoreRegressionTests() {
         {"terrain ingress cinematic speed facing and handoff", [&]() { TestTerrainIngressCinematicMotion(runner); }},
         {"mothership blockout camera and bay deployment", [&]() { TestMothershipBlockoutDeployment(runner); }},
         {"short run mixed groups and eight-lock opportunity", [&]() { TestShortRunMixedGroupCombat(runner); }},
+         {"rail game over scene and checkpoint menu", [&]() { TestRailGameOverScene(runner); }},
+         {"rail checkpoint follow state replay", [&]() { TestRailCheckpointFollowReplay(runner); }},
+         {"rail game over rendered rail contact", [&]() { TestRailGameOverRenderedRailContact(runner); }},
+         {"rail game over terrain camera and landing", [&]() { TestRailGameOverTerrainCameraLanding(runner); }},
+         {"rail game over continuity and impact", [&]() { TestRailGameOverContinuityAndImpact(runner); }},
+         {"rail game over breakaway and rebound", [&]() { TestRailGameOverBreakawayAndRebound(runner); }},
+         {"rail game over localized explosion and finite skid", [&]() { TestRailGameOverBlastHopAndStop(runner); }},
+         {"rail game over final disassembly", [&]() { TestRailGameOverFinalDisassembly(runner); }},
+         {"rail game over derail momentum", [&]() { TestRailGameOverDerailMomentum(runner); }},
+         {"rail game over alternating faults", [&]() { TestRailGameOverAlternatingFaults(runner); }},
          {"game session authority", [&]() { TestGameSessionSystem(runner); }},
          {"game session presentation and retry", [&]() {
               TestGameSessionPresentationAndRetry(runner);

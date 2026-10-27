@@ -86,6 +86,14 @@ float4 main(PixelInput input) : SV_TARGET0 {
     float density=Fbm(warped*3.2f+offset);
     float edge=length(warped)+0.40f*(density-0.5f);
     float coverage=1.0f-smoothstep(0.36f,1.02f,edge);
+    if(seed>=700.0f && seed<800.0f) {
+        // Fault soot is thin and non-luminous. Fade the complete quad boundary
+        // as well as the noisy lobe so overlapping puffs never reveal cards.
+        float border=(1-smoothstep(0.72f,0.98f,abs(p.x)))*(1-smoothstep(0.72f,0.98f,abs(p.y)));
+        float alpha=1-exp(-coverage*border*(0.45f+1.25f*density)*input.color.a*1.6f);
+        float lighting=0.55f+0.25f*(1-uv.y)+0.20f*density;
+        return float4(input.color.rgb*lighting,alpha);
+    }
     float opticalDepth=coverage*(0.40f+2.0f*density)*input.color.a;
     float alpha=1.0f-exp(-opticalDepth*2.1f);
     float lighting=0.46f+0.32f*(1.0f-uv.y)+0.52f*density;

@@ -11,6 +11,8 @@
 namespace RailMothership {
 inline constexpr std::array<std::string_view,2> PartActorIds={"short_mothership_rapid","short_mothership_heavy"};
 inline constexpr std::array<float,2> PartLateral={-20.0f,20.0f};
+// Measured from the cart; leave room for the rear camera inside the 92m gun ray.
+inline constexpr float PartForwardDistance=50.0f;
 inline int PartIndex(std::string_view actor) {
     for(int i=0;i<2;++i) if(actor==PartActorIds[i]) return i;
     return -1;

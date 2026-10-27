@@ -1,4 +1,5 @@
-﻿#include "AppSceneResources.h"
+﻿#include "course/RailVehicleBreakawayGeometry.h"
+#include "AppSceneResources.h"
 
 #include <cassert>
 #include <algorithm>
@@ -1193,7 +1194,7 @@ namespace {
         }
     }
 
-    ModelData BuildRailVehicleModelData() {
+    ModelData BuildRailVehicleModelData(bool damaged=false,bool panelOnly=false) {
         ModelData model;
         constexpr const char* kWhiteAlbedo = "Resources/human/white.png";
         model.materials = {
@@ -1214,13 +1215,15 @@ namespace {
             });
         };
         appendPart("cart_body", 0, [&]() {
-            AppendCartBeveledBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 3.15f},0.045f);
-            AppendCartBeveledBox(model, {-2.25f, 0.38f, -3.20f}, {-1.78f, 1.82f, 3.20f},0.05f);
-            AppendCartBeveledBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f},0.05f);
-            AppendCartBeveledBox(model, {-1.78f, 0.38f, -3.20f}, {1.78f, 1.25f, -2.75f},0.045f);
-            AppendCartBeveledBox(model, {-1.78f, 0.38f, 2.75f}, {1.78f, 1.25f, 3.20f},0.045f);
+            if(!panelOnly) AppendCartBeveledBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 3.15f},0.045f);
+            if(!damaged || panelOnly) AppendCartBeveledBox(model,RailVehicleBreakaway::PanelMinimum,RailVehicleBreakaway::PanelMaximum,0.05f);
+            if(!panelOnly) {
+                AppendCartBeveledBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f},0.05f);
+                AppendCartBeveledBox(model, {-1.78f, 0.38f, -3.20f}, {1.78f, 1.25f, -2.75f},0.045f);
+                AppendCartBeveledBox(model, {-1.78f, 0.38f, 2.75f}, {1.78f, 1.25f, 3.20f},0.045f);
+            }
         });
-        appendPart("running_gear", 1, [&]() {
+        if(!panelOnly) appendPart("running_gear", 1, [&]() {
             // Four wheel meshes are intentionally not baked into the body.
             // RailVehicleWheelContactPresentationBridge owns their individual
             // rail-contact transforms and rotation.
@@ -1238,9 +1241,11 @@ namespace {
             }
         });
         appendPart("safety_trim", 2, [&]() {
-            AppendCartBeveledBox(model, {-2.31f, 1.55f, -3.26f}, {-1.72f, 1.88f, 3.26f},0.035f);
-            AppendCartBeveledBox(model, {1.72f, 1.55f, -3.26f}, {2.31f, 1.88f, 3.26f},0.035f);
-            AppendCartBeveledBox(model, {-1.72f, 1.18f, -3.26f}, {1.72f, 1.48f, -2.68f},0.035f);
+            if(!damaged || panelOnly) AppendCartBeveledBox(model,RailVehicleBreakaway::TrimMinimum,RailVehicleBreakaway::TrimMaximum,0.035f);
+            if(!panelOnly) {
+                AppendCartBeveledBox(model, {1.72f, 1.55f, -3.26f}, {2.31f, 1.88f, 3.26f},0.035f);
+                AppendCartBeveledBox(model, {-1.72f, 1.18f, -3.26f}, {1.72f, 1.48f, -2.68f},0.035f);
+            }
         });
         model.rootNode.name = "rail_vehicle_mine_cart_root";
         model.rootNode.transform = {
@@ -1974,6 +1979,41 @@ ModelData BuildTrainingSwordModelDataForSubmission() {
 
 ModelData BuildRailVehicleModelDataForSubmission() {
     return BuildRailVehicleModelData();
+}
+
+ModelData BuildRailVehicleBreakawayModelData(bool panelOnly) {
+    return BuildRailVehicleModelData(true,panelOnly);
+}
+
+ModelData BuildRailVehicleFractureModelData(size_t part) {
+    ModelData model=BuildRailVehicleModelData(true,false);
+    model.vertices.clear();model.indices.clear();model.subMeshes.clear();
+    if(part>=RailVehicleBreakaway::FractureParts.size()) return model;
+    const auto box=[&](Vector3 lo,Vector3 hi,float bevel,uint32_t material) {
+        const auto start=static_cast<uint32_t>(model.indices.size());
+        AppendCartBeveledBox(model,lo,hi,bevel);
+        model.subMeshes.push_back({"fracture",start,static_cast<uint32_t>(model.indices.size())-start,material});
+    };
+    const auto& shape=RailVehicleBreakaway::FractureParts[part];
+    if(part<2) box(shape.minimum,shape.maximum,0.045f,0);
+    else if(part==2) {
+        box({1.78f,0.38f,-3.20f},{2.25f,1.82f,3.20f},0.05f,0);
+        box({1.72f,1.55f,-3.26f},{2.31f,1.88f,3.26f},0.035f,2);
+    } else if(part==3) {
+        box({-1.78f,0.38f,-3.20f},{1.78f,1.25f,-2.75f},0.045f,0);
+        box({-1.72f,1.18f,-3.26f},{1.72f,1.48f,-2.68f},0.035f,2);
+    } else if(part==4) box(shape.minimum,shape.maximum,0.045f,0);
+    else if(part<7) box(shape.minimum,shape.maximum,0.035f,1);
+    else {
+        const auto root=RailBoostExhaust::Root(part==7?-1.0f:1.0f);
+        const float x=root.x,y=root.y,z=root.z;
+        box({x-0.40f,y-0.32f,z},{x+0.40f,y-0.20f,z+1.15f},0.025f,1);
+        box({x-0.40f,y+0.20f,z},{x+0.40f,y+0.32f,z+1.15f},0.025f,1);
+        box({x-0.40f,y-0.22f,z},{x-0.28f,y+0.22f,z+1.15f},0.025f,1);
+        box({x+0.28f,y-0.22f,z},{x+0.40f,y+0.22f,z+1.15f},0.025f,1);
+    }
+    EnsureModelDataMaterialLayout(model);RepairModelGeometryOrientation(model);
+    return model;
 }
 
 Material BuildRailVehicleTitleMaterial(const MaterialData& source, const Material& gameplayMaterial,
@@ -3296,6 +3336,10 @@ bool AppSceneResources::Initialize(
         vfxModelLibrary.push_back({
             name, "<procedural>", name, std::move(modelData), mesh, texture, true});
     };
+    registerProceduralModel(RailVehicleBreakaway::DamagedMesh,BuildRailVehicleBreakawayModelData(false));
+    registerProceduralModel(RailVehicleBreakaway::PanelMesh,BuildRailVehicleBreakawayModelData(true));
+    for(size_t i=0;i<RailVehicleBreakaway::FractureParts.size();++i)
+        registerProceduralModel(RailVehicleBreakaway::FractureParts[i].mesh,BuildRailVehicleFractureModelData(i));
     registerProceduralModel(
         "course_rail.track_unit", BuildCourseRailTrackUnitModelData());
     registerProceduralModel(
@@ -3936,7 +3980,8 @@ void AppSceneResources::SyncCourseRailTrackRenderer(
     float currentDistance,
     const RailVehicleWheelContactPresentationFrame* wheels,
     const Matrix4x4& viewMatrix,
-    const Matrix4x4& projMatrix) {
+    const Matrix4x4& projMatrix,const RailVehicleRenderFrame* detachedPanel,
+    std::span<const RailVehicleRenderFrame> fractures) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3946,7 +3991,7 @@ void AppSceneResources::SyncCourseRailTrackRenderer(
             model.loaded && model.mesh.indexCount > 0 && model.textureGpu.ptr != 0});
     }
     courseRailTrackRenderer.Sync(
-        baked, currentDistance, wheels, bindings, viewMatrix, projMatrix);
+        baked, currentDistance, wheels, bindings, viewMatrix, projMatrix,detachedPanel,fractures);
     if(mappedCamera!=nullptr && mappedCamera->titleSubject.w>0.5f) {
         for(const auto& item:courseRailTrackRenderer.Items()) {
             if(!item.visible || item.materialData==nullptr) continue;
@@ -4382,14 +4427,14 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
         for (AppManagedModelResource& managedModel : vfxModelLibrary) {
             for (AppGpuMaterialResource& gpuMaterial : managedModel.gpuMaterials) {
                 if (mappedCamera != nullptr && mappedCamera->titleSubject.w > 0.5f &&
-                    managedModel.name == "rail_vehicle.mine_cart" && gpuMaterial.mappedConstants != nullptr) {
+                    managedModel.name.starts_with("rail_vehicle.mine_cart") && gpuMaterial.mappedConstants != nullptr) {
                     *gpuMaterial.mappedConstants = BuildRailVehicleTitleMaterial(
                         gpuMaterial.source,runtimeState.materialData,titleVehicleReferenceLight,
                         titleVehicleReferenceNormal,titleVehicleReferenceView,vehicleToneExposure);
                     continue;
                 }
                 syncGpuMaterial(gpuMaterial);
-                if (managedModel.name == "rail_vehicle.mine_cart" && gpuMaterial.mappedConstants != nullptr) {
+                if (managedModel.name.starts_with("rail_vehicle.mine_cart") && gpuMaterial.mappedConstants != nullptr) {
                     // Keep the established warm cart palette inside the cave,
                     // while preserving the original material outside it.
                     const auto& paletteLight = titleVehicleReferenceLight.intensity > 0.0f

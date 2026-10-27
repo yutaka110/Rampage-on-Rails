@@ -9,6 +9,7 @@
 #include "RailShooterHudPresentationBridge.h"
 
 struct EncounterPerformanceScoreRuntimeState;
+struct RailGameOverFrame;
 
 enum class RailShooterHudDrawCommandKind : uint8_t {
     Rectangle,
@@ -68,6 +69,9 @@ struct RailShooterHudRenderInput final {
     const EncounterPerformanceScoreRuntimeState* encounterScore=nullptr;
     bool miniBossParts=false;
     std::array<float,2> miniBossPartHealth{};
+    const RailGameOverFrame* gameOver=nullptr;
+    bool checkpointRetryAvailable=false;
+    bool unlimitedCheckpointRetries=false;
 };
 
 struct RailShooterHudRenderFrame final {

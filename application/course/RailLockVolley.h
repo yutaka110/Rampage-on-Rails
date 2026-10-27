@@ -68,6 +68,7 @@ public:
         Vector3 muzzle,const RailPath& rail,const CourseSpawnRuntime& runtime,const RailLockSettings& settings);
     void Update(float dt,Vector3 muzzle,const RailPath& rail,CourseSpawnRuntime& runtime,
         CourseCollisionSystem& collision,const CourseAsset* course);
+    void UpdateDefeatPresentation(float dt);
     bool Visible() const;
     std::span<const RailLockLaser> Lasers() const {return lasers_;}
     std::span<const DamageResult> Hits() const {return hits_;}

@@ -123,6 +123,21 @@ Vector3 RailLockLaser::Curve(float progress) const {
     return Add(Add(Scale(start,v*v*v),Scale(a,3*v*v*u)),Add(Scale(b,3*v*u*u),Scale(end,u*u*u)));
 }
 void RailLockVolley::Reset(){lasers_.clear();contacts_.clear();batches_.clear();hits_.clear();completed_.clear();nextId_=1;}
+void RailLockVolley::UpdateDefeatPresentation(float dt) {
+    hits_.clear();completed_.clear();batches_.clear();
+    if(!std::isfinite(dt) || dt<=0) return;
+    for(auto& contact:contacts_) contact.age+=dt;
+    std::erase_if(contacts_,[](const auto& c){return c.age>=c.Duration();});
+    for(auto& laser:lasers_) {
+        laser.age+=dt;
+        if(laser.resolved) continue;
+        // Already committed shots finish their visible journey without damage.
+        if(laser.age<laser.delay) continue;
+        laser.launched=true;laser.position=laser.Curve(laser.Progress());
+        if(laser.Progress()>=1) {laser.resolved=true;laser.endedAge=laser.age;}
+    }
+    std::erase_if(lasers_,[](const auto& s){return s.resolved && s.age-s.endedAge>=0.14f;});
+}
 bool RailLockVolley::Visible() const {
     return !contacts_.empty() || std::any_of(lasers_.begin(),lasers_.end(),[](const auto& s){return s.Opacity()>0.001f;});
 }

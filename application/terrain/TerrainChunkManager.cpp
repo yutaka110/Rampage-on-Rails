@@ -5512,8 +5512,8 @@ void TerrainChunkManager::DrawDebrisIndirect(ID3D12GraphicsCommandList* commandL
     }
 }
 
-void TerrainChunkManager::UpdateChunkTransforms(const Matrix4x4& viewProjection) {
-    for (TerrainRenderChunk& chunk : renderChunks_) {
+void SyncTerrainRenderChunkCamera(std::span<TerrainRenderChunk> chunks,const Matrix4x4& viewProjection) {
+    for (TerrainRenderChunk& chunk : chunks) {
         if (chunk.mappedTransform == nullptr) {
             continue;
         }
@@ -5521,6 +5521,14 @@ void TerrainChunkManager::UpdateChunkTransforms(const Matrix4x4& viewProjection)
         chunk.mappedTransform->WVP = viewProjection;
         chunk.mappedTransform->WorldInverseTranspose = MakeIdentity4x4();
     }
+}
+
+void TerrainChunkManager::SyncViewProjection(const Matrix4x4& viewProjection) {
+    SyncTerrainRenderChunkCamera(renderChunks_,viewProjection);
+}
+
+void TerrainChunkManager::UpdateChunkTransforms(const Matrix4x4& viewProjection) {
+    SyncViewProjection(viewProjection);
 }
 
 bool TerrainChunkManager::HasMatchingRenderChunks() const {

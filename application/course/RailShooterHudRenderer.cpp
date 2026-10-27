@@ -1,5 +1,6 @@
 #include "RailShooterHudRenderer.h"
 #include "RailShortCourse.h"
+#include "RailGameOverScene.h"
 #include "EncounterPerformanceScoreSystem.h"
 #include <cmath>
 
@@ -29,8 +30,9 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     next.viewportWidth = input.viewportWidth;
     next.viewportHeight = input.viewportHeight;
     next.revision = ++revision_;
+    const bool gameOver=input.gameOver && input.gameOver->active && !input.showTitleScreen;
     if (input.definition == nullptr || input.presentation == nullptr ||
-        (!input.showTitleScreen &&
+        (!input.showTitleScreen && !gameOver &&
          (!input.definition->enabled || !input.presentation->visible)) ||
         input.viewportWidth < 320 || input.viewportHeight < 180) {
         frame_ = std::move(next);
@@ -83,6 +85,69 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         if(trail>value) rect(x+w*value,y,w*((std::min)(trail,1.0f)-value),h,{1.0f,0.72f,0.32f,color.w*0.85f});
         rect(x, y, w * (std::clamp)(value, 0.0f, 1.0f), h, color);
     };
+
+    if(gameOver && input.resultSession) {
+        const auto& scene=*input.gameOver;
+        const auto& result=*input.resultSession;
+        const float s=(std::min)(width/1600.0f,height/900.0f),cx=width*0.5f,cy=height*0.5f;
+        const auto center=RailShooterHudTextAlignment::Center;
+        if(scene.wreck && scene.hudOpacity>0 && definition.enabled && hud.visible) {
+            // Reuse the normal layout while the gameplay camera is held.
+            // Show the fatal health value immediately, then fade the HUD with
+            // the dolly instead of replacing it with a result card in one frame.
+            auto faultHud=hud;
+            faultHud.playerHealthNormalized=faultHud.playerHealthTrail=0;
+            faultHud.playerHealthCritical=true;
+            faultHud.healthText=Utf8(u8"体力 0/")+std::to_string(int(result.maximumPlayerHealth));
+            faultHud.showBanner=faultHud.showDamageNotice=false;
+            auto faultSession=result;
+            faultSession.phase=GameSessionPhase::Playing;faultSession.outcome=GameSessionOutcome::None;
+            auto faultInput=input;
+            faultInput.gameOver=nullptr;faultInput.presentation=&faultHud;faultInput.resultSession=&faultSession;
+            RailShooterHudRenderer faultLayout;faultLayout.Update(faultInput);
+            for(auto command:faultLayout.Frame().commands) {
+                command.color.w*=scene.hudOpacity;
+                push(std::move(command));
+            }
+        }
+        if(scene.impactFlash>0) {
+            rect(0,0,width,height,{0.65f,0.16f,0.025f,scene.impactFlash*0.18f});
+            rect(0,0,width,9*s,{1.0f,0.38f,0.08f,scene.impactFlash});
+            rect(0,height-9*s,width,9*s,{1.0f,0.38f,0.08f,scene.impactFlash});
+        }
+        // A fully opaque black texel closes the wreck before any menu glyphs.
+        rect(0,0,width,height,{0.006f,0.006f,0.008f,scene.blackout});
+        const float a=scene.titleOpacity,m=scene.menuOpacity;
+        const Vector4 amber{0.94f,0.72f,0.40f,a},white{1,0.96f,0.88f,m},muted{0.60f,0.57f,0.52f,m};
+        text("R U N  T E R M I N A T E D",cx,cy-170*s,0.62f*s,{0.60f,0.48f,0.35f,a},center);
+        RailShooterHudDrawCommand headline;
+        headline.kind=RailShooterHudDrawCommandKind::Text;headline.textAlignment=center;
+        headline.textStyle=RailShooterHudTextStyle::StartCue;headline.text="GAME OVER";
+        headline.x=cx;headline.y=cy-88*s;headline.fontScale=3.6f*s;headline.color=amber;
+        if(a>0) push(std::move(headline));
+        rect(cx-32*s,cy-56*s,64*s,2*s,amber);
+        text(result.endReason==GameSessionEndReason::TimeExpired?Utf8(u8"制限時間を過ぎました"):
+            result.endReason==GameSessionEndReason::PlayerDestroyed?Utf8(u8"トロッコが大破しました"):Utf8(u8"任務を継続できません"),
+            cx,cy-22*s,0.82f*s,{0.74f,0.68f,0.58f,a},center);
+        text("SCORE  "+std::to_string(result.score)+"    /    MAX CHAIN  "+std::to_string(result.maximumCombo),
+            cx,cy+20*s,0.72f*s,muted,center);
+        for(int i=0;i<2;++i) {
+            const auto button=GameOverButton(width,height,i);
+            const bool enabled=i==1 || input.checkpointRetryAvailable;
+            const bool selected=scene.selection==i && enabled;
+            rect(button.x,button.y,button.width,button.height,selected?Vector4{0.17f,0.12f,0.065f,m}:Vector4{0.035f,0.03f,0.025f,m});
+            if(selected) {
+                rect(button.x,button.y,3*s,button.height,{0.94f,0.72f,0.40f,m});
+                text(">",button.x+20*s,button.y+39*s,0.90f*s,{0.94f,0.72f,0.40f,m});
+            }
+            text(i==0?Utf8(u8"リトライ"):Utf8(u8"タイトルに戻る"),cx,button.y+38*s,1.05f*s,enabled?white:muted,center);
+        }
+        text(input.checkpointRetryAvailable?Utf8(u8"リトライ：最後のチェックポイントから再開"):
+            Utf8(u8"チェックポイントからの再開は利用できません"),cx,cy+239*s,0.65f*s,muted,center);
+        text(Utf8(u8"↑ / ↓・W / S：選択    ENTER：決定    マウス：選択 / 決定"),
+            cx,cy+278*s,0.62f*s,muted,center);
+        next.visible=!next.commands.empty();frame_=std::move(next);return;
+    }
 
     if(!input.showTitleScreen && input.resultSession && IsRunResult(*input.resultSession)) {
         const auto& result=*input.resultSession;
@@ -297,7 +362,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     }
     const size_t gaugeEnd=next.commands.size();
     if(definition.showPlayerHealth || definition.showVehicleIntegrity) {
-        text(Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
+        text(input.unlimitedCheckpointRetries?Utf8(u8"リトライ 無制限"):Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
             healthBottom+23*scale,0.54f*scale,muted);
     }
     if(hud.showDamageNotice && hud.damageNoticeAlpha>0) {
@@ -408,10 +473,10 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const float distance=input.resultSession->courseDistance;
         const int stage=distance<380?0:distance<680?1:distance<950?2:distance<1120?3:4;
         const char* stages[]={"FIRST CONTACT / LMB","LOCK BURST / HOLD RMB","INTERCEPT / SHOOT ORBS","BOOST RUN / HOLD E","FINAL PURSUIT"};
-        const int remaining=int((std::max)(0.0f,120.0f-input.resultSession->attemptElapsedSeconds));
+        const int remaining=int((std::max)(0.0f,ShortRunSessionDefinition().timeLimitSeconds-input.resultSession->attemptElapsedSeconds));
         text(std::to_string(stage+1)+" / 5   "+stages[stage],safe,height-90*responsive,0.64f*responsive,textColor);
         text("TIME  "+std::to_string(remaining),safe,height-64*responsive,0.58f*responsive,muted);
-        if(distance>=input.resultSession->courseLength-2.0f && !input.resultSession->combatClearConfirmed)
+        if(distance>=input.resultSession->courseLength-2.0f && !input.resultSession->combatClearConfirmed && !input.miniBossParts)
             text("CLEAR REMAINING HOSTILES",width*0.5f,height*0.24f,0.85f*responsive,warning,center);
     }
     // Keep compact reminders at the edge, not a permanent panel across combat.

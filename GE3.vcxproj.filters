@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="ソース ファイル">
@@ -1413,6 +1413,9 @@
     <ClCompile Include="application\AppRenderResources.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\AppRailGameOver.cpp">
+      <Filter>ソース ファイル\application</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppRunLoop.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -2140,6 +2143,15 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailMothershipPresentation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailGameOverScene.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleBreakawayGeometry.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailRetryPresentationCheckpoint.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailShortCourse.h">
@@ -3057,6 +3069,9 @@
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
     <ClInclude Include="application\terrain\TerrainChunkManager.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
+    <ClInclude Include="application\terrain\TerrainGroundSurface.h">
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailTravelPrediction.h">

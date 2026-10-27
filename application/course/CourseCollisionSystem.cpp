@@ -460,10 +460,23 @@ void CourseCollisionSystem::FirePlayerShot(
     lastDamageResult_ = {};
     lastWeaponFeedbackResult_ = {};
 
-    const RailAimState* aim = input.worldAim;
+    RailAimState shotAim = input.worldAim ? *input.worldAim : RailAimState{};
+    const RailAimState* aim = &shotAim;
     if (aim == nullptr || !aim->valid || !Finite(aim->worldRayOrigin) ||
         !Finite(aim->worldRayDirection)) {
         return;
+    }
+
+    if (input.railPath != nullptr) {
+        // The camera selects the visible point, but weapon reach starts at the
+        // cart's muzzle. Pulling the camera back must not shorten the gun.
+        const auto mount=input.railPath->Evaluate(input.player.distance);
+        shotAim.worldRayOrigin=Add(mount.position,Add(Scale(mount.right,input.player.lateralOffset),
+            Add(Scale(mount.up,input.player.verticalOffset),Scale(mount.tangent,weapon_.muzzleForwardOffset))));
+        const Vector3 delta{shotAim.worldAimPoint.x-shotAim.worldRayOrigin.x,
+            shotAim.worldAimPoint.y-shotAim.worldRayOrigin.y,shotAim.worldAimPoint.z-shotAim.worldRayOrigin.z};
+        shotAim.worldRayDirection=NormalizeOr(delta,aim->worldRayDirection);
+        shotAim.aimDistance=std::sqrt(LengthSquared(delta));
     }
 
     const Vector3 direction = NormalizeOr(aim->worldRayDirection, {0.0f, 0.0f, 1.0f});
