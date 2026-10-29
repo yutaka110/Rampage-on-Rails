@@ -144,6 +144,8 @@ struct EnemyCombatPresentationInput final {
     EnemyCombatPresentationSettings settings{};
     // Called only when a new wreck is created, never during its per-frame fall.
     std::function<bool(Vector3,Vector3,float,Vector3&,Vector3&)> traceDestructionGround;
+    uint32_t counterActorId=0;
+    float counterAmount=0,counterHitPulse=0;
 };
 
 // Converts authoritative combat state/events into procedural model animation,

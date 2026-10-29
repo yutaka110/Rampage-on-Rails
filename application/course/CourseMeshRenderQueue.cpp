@@ -595,7 +595,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             center = Add(center, Scale(sample.right, presentation->lateralOffset));
             center = Add(center, Scale(sample.up, presentation->verticalOffset));
         }
-        const float presentationScale = enemy.desc.meshId=="siege_turret" ? 1.0f : enemy.combatState.initialized
+        const float presentationScale = (enemy.desc.meshId=="siege_turret" || enemy.desc.meshId=="gatling_turret") ? 1.0f : enemy.combatState.initialized
             ? (std::max)(0.0f, enemy.combatState.presentationScale)
             : 1.0f;
         float bridgeScale = presentation != nullptr
@@ -730,7 +730,11 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         // actor. Only its thin navy edge remains visible, separating the
         // silhouette from a bright cave exit without showing an artificial
         // screen-space plate.
-        if (presentation->contrastBackdropStrength > 0.01f) {
+        // An expanded closed mesh is unsafe for an articulated turret: its
+        // barrel/armour surfaces can protrude through the real aiming head.
+        // Turrets already use the lit rim/fill material for separation.
+        if (!RailTurret::IsMesh(enemy.desc.meshId) &&
+            presentation->contrastBackdropStrength > 0.01f) {
             const Vector3 fromCamera{center.x - cameraPosition.x,
                 center.y - cameraPosition.y, center.z - cameraPosition.z};
             const float cameraDistance = std::sqrt(fromCamera.x * fromCamera.x +
@@ -807,11 +811,34 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                         {baseScale,baseScale,baseScale},RotationFromRailTangent(sample.tangent),center,viewProjection);
                 }
             }
+            if(enemy.desc.meshId=="gatling_turret") {
+                const uint32_t rotorIndex=ResolveModelIndex(models,"gatling_turret_rotor",nullptr);
+                if(models[rotorIndex].name=="gatling_turret_rotor")if(auto* rotor=AllocateItem()) {
+                    rotor->kind=CourseMeshRenderKind::Enemy;rotor->sourceActorId=enemy.actorId;
+                    rotor->meshId="gatling_turret_rotor";rotor->modelIndex=rotorIndex;
+                    rotor->visible=models[rotorIndex].loaded && rotor->transformData;
+                    if(rotor->materialData && item->materialData) {
+                        *rotor->materialData=*item->materialData;rotor->useMaterialOverride=true;
+                    }
+                    // Roll around the barrel axis before applying the aimed
+                    // head transform, keeping the pedestal and armour fixed.
+                    const auto head=MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
+                    const auto local=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,RailTurret::GatlingRotation(enemy.age)},
+                        Vector3{0,geometry.muzzleHeight,0});
+                    auto world=Multiply(models[rotorIndex].rootLocal,Multiply(local,head));
+                    if(rotor->transformData) {
+                        rotor->transformData->World=world;
+                        rotor->transformData->WVP=Multiply(world,viewProjection);
+                        rotor->transformData->WorldInverseTranspose=Transpose(Inverse(world));
+                    }
+                }
+            }
             if (presentation && presentation->turretMuzzleActive) {
                 const uint32_t glowIndex = ResolveModelIndex(models,"ball",nullptr);
                 if (models[glowIndex].name == "ball") {
                     const Matrix4x4 head = MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
-                    for (float side : {-1.0f,1.0f}) {
+                    const int barrels=enemy.desc.meshId=="gatling_turret"?6:2;
+                    for (int barrel=0;barrel<barrels;++barrel) {
                         CourseMeshRenderItem* glow = AllocateItem();
                         if (!glow) break;
                         glow->kind = CourseMeshRenderKind::Enemy;
@@ -819,7 +846,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                         glow->meshId = "turret_muzzle_glow";
                         glow->modelIndex = glowIndex;
                         glow->visible = models[glowIndex].loaded && glow->transformData != nullptr;
-                        const Vector3 p{side*geometry.muzzleSide,geometry.muzzleHeight,-geometry.muzzleForward};
+                        const Vector3 p=RailTurret::MuzzleLocal(enemy.desc.meshId,barrel,enemy.age);
                         const Vector3 muzzle{p.x*head.m[0][0]+p.y*head.m[1][0]+p.z*head.m[2][0]+head.m[3][0],
                             p.x*head.m[0][1]+p.y*head.m[1][1]+p.z*head.m[2][1]+head.m[3][1],
                             p.x*head.m[0][2]+p.y*head.m[1][2]+p.z*head.m[2][2]+head.m[3][2]};

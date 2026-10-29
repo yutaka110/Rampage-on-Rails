@@ -1981,6 +1981,8 @@ ModelData BuildRailVehicleModelDataForSubmission() {
     return BuildRailVehicleModelData();
 }
 
+ModelData BuildRailGameOverWheelModelData() { return BuildCourseRailWheelProxyModelData(); }
+
 ModelData BuildRailVehicleBreakawayModelData(bool panelOnly) {
     return BuildRailVehicleModelData(true,panelOnly);
 }
@@ -3224,6 +3226,8 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
     registerCourseMesh("siege_turret_head", "Resources/enemies/SiegeTurretHead", "SiegeTurretHead.obj", "siegeTurret");
     registerCourseMesh("siege_turret", "Resources/enemies/SiegeTurret", "SiegeTurret.obj", "siegeTurret");
+    registerCourseMesh("gatling_turret_head", "Resources/enemies/GatlingTurretHead", "GatlingTurretHead.obj", "siegeTurret");
+    registerCourseMesh("gatling_turret_rotor", "Resources/enemies/GatlingTurretRotor", "GatlingTurretRotor.obj", "siegeTurret");
     registerCourseMesh("combat_turret_base", "Resources/enemies/CombatTurretBase", "CombatTurretBase.obj", "default");
     registerCourseMesh("combat_turret_head", "Resources/enemies/CombatTurretHead", "CombatTurretHead.obj", "default");
     registerCourseMesh("carrier_hull", "Resources/enemies/MothershipBlockout", "MothershipHull.obj", "default");

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <span>
 #include <vector>
 
 #include "EnemyProjectileDefinitionAsset.h"
@@ -56,6 +57,9 @@ struct EnemyProjectileRuntimeState final {
     bool initialized = false;
     bool active = true;
     bool hitConsumed = false;
+    // A committed burst reserves IDs up front; queued rounds are neither
+    // rendered nor collidable until their individual launch time.
+    float launchDelayRemaining = 0.0f;
 };
 
 using CourseBulletActor = EnemyProjectileRuntimeState;
@@ -79,6 +83,7 @@ struct EnemyProjectileFrameInput final {
     float playerDistance = 0.0f;
     float playerLateralOffset = 0.0f;
     float playerVerticalOffset = 4.0f;
+    bool scheduledLaunchesAllowed = true;
 };
 
 struct EnemyProjectileFrame final {
@@ -101,7 +106,8 @@ public:
         std::vector<EnemyProjectileRuntimeState>& projectiles);
     void Update(
         std::vector<EnemyProjectileRuntimeState>& projectiles,
-        const EnemyProjectileFrameInput& input);
+        const EnemyProjectileFrameInput& input,
+        std::span<const CourseEnemyActor> owners = {});
 
     const EnemyProjectileFrame& Frame() const noexcept { return frame_; }
 

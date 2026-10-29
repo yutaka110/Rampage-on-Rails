@@ -1,4 +1,5 @@
 #include "EnemyProjectileShootDownSystem.h"
+#include "RailGatlingAttack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -43,9 +44,42 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::Submit(
     std::vector<EnemyProjectileRuntimeState>& projectiles,
     const RailPath& railPath,
     const EnemyProjectileShootDownRequest& request) {
+    return SubmitRay(projectiles,railPath,request,false);
+}
+
+EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitPrimary(
+    std::vector<EnemyProjectileRuntimeState>& projectiles,
+    const RailPath& railPath,
+    const EnemyProjectileShootDownRequest& request) {
+    auto first=SubmitRay(projectiles,railPath,request,true);
+    if(!first.destroyed)return first;
+    const auto anchor=std::find_if(projectiles.begin(),projectiles.end(),[&](const auto& p) {
+        return p.projectileId==first.projectileId;
+    });
+    if(anchor!=projectiles.end() && first.clashRadius>0) {
+        const auto sample=railPath.Evaluate(anchor->spawnDistance+anchor->distanceOffset);
+        first.clashCenter=Add(sample.position,Add(Scale(sample.right,anchor->lateralOffset),Scale(sample.up,anchor->verticalOffset)));
+        first.clashRadius=RailGatling::ClashRadius;
+        frame_.results.back()=first;
+        const auto second=SubmitRay(projectiles,railPath,request,true,&*anchor);
+        if(second.accepted) {
+            frame_.results.back().clashCenter=first.clashCenter;
+            frame_.results.back().secondaryClash=true;
+        }
+    }
+    lastResult_=first;
+    return first;
+}
+
+EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitRay(
+    std::vector<EnemyProjectileRuntimeState>& projectiles,
+    const RailPath& railPath,
+    const EnemyProjectileShootDownRequest& request,
+    bool primaryPulse,
+    const EnemyProjectileRuntimeState* adjacentTo) {
     lastResult_ = {};
     lastResult_.shotId = request.shotId;
-    ++frame_.shotsEvaluated;
+    if(!adjacentTo)++frame_.shotsEvaluated;
     if (request.shotId == 0 || railPath.Length() <= 0.0f ||
         !Finite(request.rayOrigin) || !Finite(request.rayDirection) ||
         !std::isfinite(request.maximumDistance) ||
@@ -83,19 +117,39 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::Submit(
             Add(sample.position,
                 Scale(sample.right, projectile.lateralOffset)),
             Scale(sample.up, projectile.verticalOffset));
+        if(adjacentTo) {
+            if(projectile.age+.0001f<RailGatling::ClashArmSeconds)continue;
+            if(projectile.ownerActorId!=adjacentTo->ownerActorId ||
+                projectile.attackIntentSequence!=adjacentTo->attackIntentSequence ||
+                projectile.attackTokenId!=adjacentTo->attackTokenId ||
+                projectile.definitionId!=adjacentTo->definitionId)continue;
+            const auto anchorSample=railPath.Evaluate(adjacentTo->spawnDistance+adjacentTo->distanceOffset);
+            const auto anchorCenter=Add(anchorSample.position,Add(Scale(anchorSample.right,adjacentTo->lateralOffset),
+                Scale(anchorSample.up,adjacentTo->verticalOffset)));
+            const auto separation=Subtract(center,anchorCenter);
+            if(Dot(separation,separation)>RailGatling::ClashRadius*RailGatling::ClashRadius)continue;
+        }
         const Vector3 relative = Subtract(center, request.rayOrigin);
         const float projection = Dot(relative, direction);
-        if (projection < 0.0f || projection > distanceLimit) continue;
+        if (adjacentTo && (projection < 0.0f || projection > distanceLimit)) continue;
         const Vector3 closest = Add(request.rayOrigin,
             Scale(direction, projection));
         const Vector3 delta = Subtract(center, closest);
         const float radius = (std::max)(0.05f,
-            projectile.radius * projectile.shootDownRadiusScale);
-        if (Dot(delta, delta) > radius * radius) continue;
+            projectile.radius * projectile.shootDownRadiusScale) +
+            (primaryPulse ? (request.primaryRadius>0 && std::isfinite(request.primaryRadius) ?
+                request.primaryRadius : RailPulseShot::ContactRadius) : 0.0f);
+        // The first contact is a pulse/round collision. Its compact energy
+        // burst may disperse one adjacent round, including a slight sideways
+        // offset between rotating barrels; it is not a second piercing ray.
+        if (!adjacentTo && Dot(delta, delta) > radius * radius) continue;
         const float perpendicularSquared = Dot(delta, delta);
         const float entry = projection - std::sqrt((std::max)(
             0.0f, radius * radius - perpendicularSquared));
-        const float hitDistance = (std::max)(0.0f, entry);
+        const float exit = projection + std::sqrt((std::max)(
+            0.0f, radius * radius - perpendicularSquared));
+        if(!adjacentTo && (exit<0 || entry>distanceLimit))continue;
+        const float hitDistance = adjacentTo ? projection : (std::max)(0.0f, entry);
         if (hitDistance < bestDistance) {
             best = &projectile;
             bestCenter = center;
@@ -105,6 +159,7 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::Submit(
     if (best == nullptr) {
         lastResult_.rejectReason =
             EnemyProjectileShootDownRejectReason::NoTarget;
+        if(adjacentTo)return lastResult_;
         frame_.results.push_back(lastResult_);
         frame_.revision = ++revision_;
         return lastResult_;
@@ -115,11 +170,16 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::Submit(
     lastResult_.projectileId = best->projectileId;
     lastResult_.ownerActorId = best->ownerActorId;
     lastResult_.hitDistance = bestDistance;
-    lastResult_.worldHitPoint = Add(request.rayOrigin,
+    lastResult_.worldHitPoint = adjacentTo ? bestCenter : Add(request.rayOrigin,
         Scale(direction, bestDistance));
     lastResult_.worldHitNormal = NormalizeOr(
         Subtract(lastResult_.worldHitPoint, bestCenter),
         Scale(direction, -1.0f));
+    lastResult_.primaryRadius=primaryPulse && !adjacentTo ?
+        (request.primaryRadius>0 && std::isfinite(request.primaryRadius)?request.primaryRadius:RailPulseShot::ContactRadius) : 0.0f;
+    if(primaryPulse && !adjacentTo && request.focusedGatlingClash &&
+        RailGatling::IsProjectile(best->definitionId) && best->age+.0001f>=RailGatling::ClashArmSeconds)
+        lastResult_.clashRadius=RailGatling::ClashRadius;
     lastResult_.appliedDamage = (std::min)(
         request.damage, best->shootDownHitPoints);
     best->shootDownHitPoints = (std::max)(

@@ -231,6 +231,29 @@ void AppendLifecyclePrimitive(
     const Vector4 primary = WithAlphaScale(burst.primaryColor, fade);
     const Vector4 secondary = WithAlphaScale(burst.secondaryColor, fade * fade);
 
+    if(burst.secondaryClash) {
+        const float link=(std::clamp)(1.0f-age/.25f,0.0f,1.0f);
+        if(link>0)draw.AddLine(burst.clashCenter,burst.worldPosition,
+            WithAlphaScale(burst.secondaryColor,link),WithAlphaScale(burst.primaryColor,link));
+    }
+
+    if(burst.clashRadius>0) {
+        // The secondary contact is instantaneous too: expose the full actual
+        // volume on frame zero, then fade it, rather than showing a ring that
+        // reaches an already-removed neighbour several frames later.
+        const float shellAlpha=(std::clamp)(1.0f-age/.25f,0.0f,1.0f);
+        if(shellAlpha>0) {
+            const auto shell=WithAlphaScale(burst.secondaryColor,shellAlpha*.85f);
+            draw.AddCircle(burst.clashCenter,burst.cameraRight,burst.cameraUp,burst.clashRadius,shell,48);
+            const auto normal=NormalizeOr(Vector3{
+                burst.cameraRight.y*burst.cameraUp.z-burst.cameraRight.z*burst.cameraUp.y,
+                burst.cameraRight.z*burst.cameraUp.x-burst.cameraRight.x*burst.cameraUp.z,
+                burst.cameraRight.x*burst.cameraUp.y-burst.cameraRight.y*burst.cameraUp.x},{0,0,1});
+            draw.AddCircle(burst.clashCenter,burst.cameraRight,normal,burst.clashRadius,WithAlphaScale(shell,.45f),32);
+            draw.AddCircle(burst.clashCenter,burst.cameraUp,normal,burst.clashRadius,WithAlphaScale(shell,.45f),32);
+        }
+    }
+
     if (burst.kind == EnemyProjectileLifecycleVisualKind::Launch) {
         draw.AddCircle(
             burst.worldPosition,
@@ -461,8 +484,10 @@ void EnemyProjectileVfxRenderer::Update(
         const EnemyProjectileScreenSpaceReadabilityResult readability =
             EnemyProjectileScreenSpaceReadabilityPolicy{}.Evaluate(
                 readabilityInput);
-        const float coreRadius = readability.coreRadius;
-        const float haloRadius = readability.haloRadius;
+        const bool boundedBody=visual.style==EnemyProjectileVisualStyle::Orb &&
+            std::isfinite(projectile.interceptionRadius) && projectile.interceptionRadius>0;
+        const float coreRadius = boundedBody ? projectile.interceptionRadius : readability.coreRadius;
+        const float haloRadius = (std::max)(readability.haloRadius,coreRadius*visual.haloRadiusScale);
 
         EnemyProjectileVfxProxy proxy{};
         proxy.projectileId = projectile.projectileId;
@@ -483,8 +508,8 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.haloRadius = haloRadius;
         proxy.trailWidth = readability.trailWidth;
         proxy.distanceFromCamera = cameraDistance;
-        proxy.coreDiameterPixels = readability.coreDiameterPixels;
-        proxy.haloDiameterPixels = readability.haloDiameterPixels;
+        proxy.coreDiameterPixels = readability.coreDiameterPixels*coreRadius/readability.coreRadius;
+        proxy.haloDiameterPixels = readability.haloDiameterPixels*haloRadius/readability.haloRadius;
         proxy.threat = projectile.threat;
         proxy.shootDownEligible = HasDefenseResponse(
             projectile.defenseResponses,
@@ -593,6 +618,9 @@ void EnemyProjectileVfxRenderer::Update(
         LifecycleBurst burst{};
         burst.projectileId = event.projectileId;
         burst.worldPosition = event.worldPosition;
+        burst.clashCenter=event.clashCenter;
+        burst.clashRadius=event.clashRadius;
+        burst.secondaryClash=event.secondaryClash;
         burst.motionDirection = NormalizeOr(
             event.motionDirection, {0.0f, 0.0f, -1.0f});
         burst.color = event.color;
@@ -634,6 +662,9 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.projectileId = burst.projectileId;
         proxy.kind = burst.kind;
         proxy.worldPosition = burst.worldPosition;
+        proxy.clashCenter=burst.clashCenter;
+        proxy.clashRadius=burst.clashRadius;
+        proxy.secondaryClash=burst.secondaryClash;
         proxy.motionDirection = burst.motionDirection;
         proxy.cameraRight = cameraRight;
         proxy.cameraUp = cameraUp;

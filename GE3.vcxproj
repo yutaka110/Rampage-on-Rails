@@ -1516,6 +1516,14 @@
     <ClInclude Include="application\course\RailTurretGeometry.h" />
     <ClInclude Include="application\course\RailMothershipBattle.h" />
     <ClInclude Include="application\course\RailGameOverScene.h" />
+    <ClInclude Include="application\course\RailGameOverDiorama.h" />
+    <ClInclude Include="application\AppInputEdges.h" />
+    <ClInclude Include="application\course\RailAttackWarningPresentation.h" />
+    <ClInclude Include="application\course\RailMinibossCombatDirector.h" />
+    <ClInclude Include="application\course\RailGatlingAttack.h" />
+    <ClInclude Include="application\course\RailGatlingAimCycle.h" />
+    <ClInclude Include="application\course\RailProjectileOrbSurface.h" />
+    <ClInclude Include="application\course\RailEnemyEnergyPalette.h" />
     <ClInclude Include="application\course\RailVehicleBreakawayGeometry.h" />
     <ClInclude Include="application\course\RailRetryPresentationCheckpoint.h" />
     <ClInclude Include="application\course\RailShortCourse.h" />
@@ -1669,6 +1677,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Particle.hlsli" />
+    <None Include="Resources\RailChargeStroke.hlsli" />
     <None Include="Resources\EditorAssetThumbnailPreview.PS.hlsl" />
     <None Include="Resources\EditorAssetThumbnailPreview.VS.hlsl" />
     <None Include="Resources\Spear.PS.hlsl" />

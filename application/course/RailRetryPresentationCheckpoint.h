@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include "RailMinibossCombatDirector.h"
 #include "GameSessionPresentationBridge.h"
 #include "EnemyEncounterReadabilityDirector.h"
 #include "ThreatResponseDirector.h"
@@ -62,6 +63,7 @@ struct RailRetryFollowState final {
     std::array<uint32_t,kRailReadyDroneCount> readyIds{};
     RailMothership::Reveal mothershipReveal{};
     RailMothership::Battle mothershipBattle{};
+    RailMinibossCombatDirector minibossCombat{};
     RailShooterHudRuntimeModel hudRuntime{};
     RailShooterHudPresentationBridge hud{};
     Matrix4x4 view{};
@@ -103,6 +105,7 @@ struct RailRetryFollowBindings final {
     std::array<uint32_t,kRailReadyDroneCount>& readyIds;
     RailMothership::Reveal& mothershipReveal;
     RailMothership::Battle& mothershipBattle;
+    RailMinibossCombatDirector& minibossCombat;
     RailShooterHudRuntimeModel& hudRuntime;
     RailShooterHudPresentationBridge& hud;
     Matrix4x4& view;
@@ -145,6 +148,7 @@ inline RailRetryFollowBindings BindRailRetryFollowState(RailRetryFollowState& st
         .readyIds=state.readyIds,
         .mothershipReveal=state.mothershipReveal,
         .mothershipBattle=state.mothershipBattle,
+        .minibossCombat=state.minibossCombat,
         .hudRuntime=state.hudRuntime,
         .hud=state.hud,
         .view=state.view,
@@ -191,6 +195,7 @@ public:
         saved->readyIds=live.readyIds;
         saved->mothershipReveal=live.mothershipReveal;
         saved->mothershipBattle=live.mothershipBattle;
+        saved->minibossCombat=live.minibossCombat;
         saved->hudRuntime=live.hudRuntime;
         saved->hud=live.hud;
         saved->view=live.view;
@@ -233,6 +238,7 @@ public:
         live.readyIds=state_->readyIds;
         live.mothershipReveal=state_->mothershipReveal;
         live.mothershipBattle=state_->mothershipBattle;
+        live.minibossCombat=state_->minibossCombat;
         live.hudRuntime=state_->hudRuntime;
         live.hud=state_->hud;
         live.view=state_->view;

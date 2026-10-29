@@ -254,7 +254,9 @@ void BuildPassParams(const PostProcessPass& postPass, float passParams[kPostProc
 void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sceneInput) {
     ctx.renderGraph->DeclareTransientRenderTarget("SunfallVolume",0.5f,DXGI_FORMAT_R16G16B16A16_FLOAT);
     ctx.renderGraph->DeclareTransientRenderTarget("SunfallColor",1.0f,DXGI_FORMAT_R16G16B16A16_FLOAT);
-    ctx.renderGraph->AddPass({"Atmosphere.SunfallVolume",ge3::graphics::RenderPassLayer::PostProcess,
+    // All opaque depth is ready in Lighting. Complete the HDR sky here so
+    // read-only-depth VFX can blend over it without being classified as sky.
+    ctx.renderGraph->AddPass({"Atmosphere.SunfallVolume",ge3::graphics::RenderPassLayer::Lighting,
         {{"SceneDepth",ge3::graphics::RenderResourceAccessType::ReadDepth},
          {"SunfallShadow",ge3::graphics::RenderResourceAccessType::ReadSrv},
          {"SunfallVolume",ge3::graphics::RenderResourceAccessType::WriteRtv}},"",
@@ -288,7 +290,7 @@ void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sce
             pass.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             pass.commandList->DrawInstanced(3,1,0,0);
         }});
-    ctx.renderGraph->AddPass({"Atmosphere.SunfallComposite",ge3::graphics::RenderPassLayer::PostProcess,
+    ctx.renderGraph->AddPass({"Atmosphere.SunfallComposite",ge3::graphics::RenderPassLayer::Lighting,
         {{sceneInput,ge3::graphics::RenderResourceAccessType::ReadSrv},
          {"SunfallVolume",ge3::graphics::RenderResourceAccessType::ReadSrv},
          {"SceneDepth",ge3::graphics::RenderResourceAccessType::ReadDepth},
@@ -309,6 +311,22 @@ void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sce
 }
 
 } // namespace
+
+const char* AppPostProcessPipeline::WorldVfxTarget(const AppFrameGraphBuildContext& ctx) {
+    const bool atmosphere=ctx.sunfallActive && ctx.runtimeState &&
+        ctx.runtimeState->sunfall.enabled && ctx.postProcessStack &&
+        !BuildExecutionPlan(*ctx.postProcessStack,true).passes.empty();
+    return atmosphere ? "SunfallColor" : "SceneColor";
+}
+
+void AppPostProcessPipeline::RegisterWorldVfxPass(const AppFrameGraphBuildContext& ctx,
+    const std::string& name,
+    std::function<void(ge3::graphics::RenderPassContext&)> draw) {
+    ctx.renderGraph->AddPass({name,ge3::graphics::RenderPassLayer::Vfx,
+        {{WorldVfxTarget(ctx),ge3::graphics::RenderResourceAccessType::WriteRtv},
+         {"SceneDepth",ge3::graphics::RenderResourceAccessType::ReadDepth}},
+        "SceneDepth",std::move(draw)});
+}
 
 PostProcessExecutionPlan AppPostProcessPipeline::BuildExecutionPlan(const PostProcessStack& stack,bool sunfall) {
     if(!sunfall) return stack.BuildExecutionPlan();

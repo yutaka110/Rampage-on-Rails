@@ -228,6 +228,7 @@ struct AppModelObjectInstance {
 [[nodiscard]] ModelData BuildRailVehicleModelDataForSubmission();
 [[nodiscard]] ModelData BuildRailVehicleBreakawayModelData(bool panelOnly);
 [[nodiscard]] ModelData BuildRailVehicleFractureModelData(size_t part);
+[[nodiscard]] ModelData BuildRailGameOverWheelModelData();
 // Title preview of the original gameplay material under the opening key light.
 [[nodiscard]] Material BuildRailVehicleTitleMaterial(
     const MaterialData& source, const Material& gameplayMaterial,

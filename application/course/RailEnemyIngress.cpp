@@ -111,6 +111,27 @@ Vector3 ProjectToRail(const RailPath& rail,Vector3 world,float seed) {
         if(std::abs(derivative)<.01f) break;
         distance=(std::clamp)(distance-(std::clamp)(error/derivative,-20.0f,20.0f),0.0f,rail.Length());
     }
+    // An exterior flight can be far from its seed on a steep bend. A bounded
+    // Newton step may stop on the wrong cross-section; bracket the normal
+    // plane before projecting, so rendering and hit testing share a position.
+    if(std::abs(along(distance))>0.005f) {
+        for(float radius=32.0f;radius<=rail.Length()*2.0f;radius*=2.0f) {
+            float lo=(std::max)(0.0f,distance-radius);
+            float hi=(std::min)(rail.Length(),distance+radius);
+            float left=along(lo),right=along(hi);
+            if((left<=0 && right>=0) || (left>=0 && right<=0)) {
+                for(int i=0;i<32;++i) {
+                    const float mid=(lo+hi)*0.5f,value=along(mid);
+                    distance=mid;
+                    if(std::abs(value)<0.0005f || hi-lo<0.0005f) break;
+                    if((left<=0 && value<=0) || (left>=0 && value>=0)) {lo=mid;left=value;}
+                    else hi=mid;
+                }
+                break;
+            }
+            if(lo==0.0f && hi==rail.Length()) break;
+        }
+    }
     const auto f=rail.Evaluate(distance);const auto d=Sub(world,f.position);
     return {d.x*f.right.x+d.y*f.right.y+d.z*f.right.z,
         d.x*f.up.x+d.y*f.up.y+d.z*f.up.z,distance};

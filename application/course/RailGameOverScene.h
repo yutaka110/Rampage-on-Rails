@@ -62,9 +62,17 @@ struct RailGameOverButton {
     float x,y,width,height;
     bool Contains(float px,float py) const { return px>=x && px<=x+width && py>=y && py<=y+height; }
 };
+struct RailGameOverLayout {
+    float scale,menuCenterX,centerY;
+    RailGameOverButton preview;
+};
+inline RailGameOverLayout GameOverLayout(float width,float height) {
+    return {(std::min)(width/1600.0f,height/900.0f),width*0.72f,height*0.5f,
+        {width*0.035f,height*0.235f,width*0.445f,height*0.61f}};
+}
 inline RailGameOverButton GameOverButton(float width,float height,int index) {
-    const float s=(std::min)(width/1600.0f,height/900.0f);
-    return {width*0.5f-270*s,height*0.5f+(62+index*76)*s,540*s,60*s};
+    const auto layout=GameOverLayout(width,height);const float s=layout.scale;
+    return {layout.menuCenterX-240*s,layout.centerY+(62+index*76)*s,480*s,60*s};
 }
 
 struct RailGameOverSmoke { Vector3 center{};float radius=0,opacity=0;uint32_t seed=0;bool blast=false; };

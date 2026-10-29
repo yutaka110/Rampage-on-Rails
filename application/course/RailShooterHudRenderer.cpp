@@ -89,7 +89,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     if(gameOver && input.resultSession) {
         const auto& scene=*input.gameOver;
         const auto& result=*input.resultSession;
-        const float s=(std::min)(width/1600.0f,height/900.0f),cx=width*0.5f,cy=height*0.5f;
+        const auto layout=GameOverLayout(width,height);
+        const float s=layout.scale,cx=layout.menuCenterX,cy=layout.centerY;
         const auto center=RailShooterHudTextAlignment::Center;
         if(scene.wreck && scene.hudOpacity>0 && definition.enabled && hud.visible) {
             // Reuse the normal layout while the gameplay camera is held.
@@ -118,6 +119,14 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         // A fully opaque black texel closes the wreck before any menu glyphs.
         rect(0,0,width,height,{0.006f,0.006f,0.008f,scene.blackout});
         const float a=scene.titleOpacity,m=scene.menuOpacity;
+        if(scene.wreck && a>0) {
+            RailShooterHudDrawCommand stillLife;
+            stillLife.kind=RailShooterHudDrawCommandKind::GameOverDiorama;
+            stillLife.x=layout.preview.x;stillLife.y=layout.preview.y;
+            stillLife.width=layout.preview.width;stillLife.height=layout.preview.height;
+            stillLife.color={1,1,1,a};stillLife.transitionProgress=scene.elapsed;
+            push(std::move(stillLife));
+        }
         const Vector4 amber{0.94f,0.72f,0.40f,a},white{1,0.96f,0.88f,m},muted{0.60f,0.57f,0.52f,m};
         text("R U N  T E R M I N A T E D",cx,cy-170*s,0.62f*s,{0.60f,0.48f,0.35f,a},center);
         RailShooterHudDrawCommand headline;
@@ -144,8 +153,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         }
         text(input.checkpointRetryAvailable?Utf8(u8"リトライ：最後のチェックポイントから再開"):
             Utf8(u8"チェックポイントからの再開は利用できません"),cx,cy+239*s,0.65f*s,muted,center);
-        text(Utf8(u8"↑ / ↓・W / S：選択    ENTER：決定    マウス：選択 / 決定"),
-            cx,cy+278*s,0.62f*s,muted,center);
+        text(Utf8(u8"↑ / ↓・W / S：選択    ENTER：決定"),cx,cy+278*s,0.60f*s,muted,center);
+        text(Utf8(u8"マウス：選択 / 決定"),cx,cy+304*s,0.60f*s,muted,center);
         next.visible=!next.commands.empty();frame_=std::move(next);return;
     }
 
@@ -282,13 +291,32 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const int left=int(input.miniBossPartHealth[0]>0)+int(input.miniBossPartHealth[1]>0);
         text(Utf8(u8"母艦の武装を破壊  残り ")+std::to_string(left)+"/2",width*0.5f,y,
             0.70f*scale,{1,0.88f,0.62f,opacity},center);
+        const bool counter=input.miniBossCounterRemaining>0 && input.miniBossCounterDuration>0;
+        if(input.miniBossGatlingFiring && !counter) {
+            text(Utf8(u8"通常弾を撃ち続けて相殺  ")+std::to_string(input.miniBossGatlingIntercepts)+"/24",
+                width*.5f,y-35*scale,.75f*scale,{1,.83f,.5f,opacity},center);
+        }
+        if(counter) {
+            text(input.miniBossCounterPart==0 ? Utf8(u8"迎撃成功  砲台へ戻して主砲で反撃 x2") :
+                Utf8(u8"迎撃成功  ロックオンで反撃 x2"),width*.5f,y-35*scale,
+                .82f*scale,{1,.86f,.42f,opacity},center);
+            bar(width*.5f-135*scale,y-23*scale,270*scale,4*scale,
+                (std::clamp)(input.miniBossCounterRemaining/input.miniBossCounterDuration,0.0f,1.0f),
+                {1,.75f,.22f,opacity},{.13f,.10f,.05f,opacity});
+        }
+        if(input.miniBossCounterFeedbackRemaining>0 && input.miniBossCounterDamage>0) {
+            text(Utf8(u8"反撃成功  ")+std::to_string(int(std::round(input.miniBossCounterDamage)))+" DAMAGE",
+                width*.5f,y-59*scale,.82f*scale,{1,.88f,.45f,opacity},center);
+        }
         for(int i=0;i<2;++i) {
             const float px=x+i*280*scale;
             const bool alive=input.miniBossPartHealth[i]>0;
-            text((i==0?Utf8(u8"連射砲台"):Utf8(u8"重砲"))+(alive?"":Utf8(u8" 破壊済み")),
+            const bool exposed=counter && alive && input.miniBossCounterPart==i;
+            text((i==0?Utf8(u8"ガトリング"):Utf8(u8"重砲"))+(alive?"":Utf8(u8" 破壊済み")),
                 px,y+22*scale,0.65f*scale,alive?Vector4{0.85f,0.93f,1,opacity}:Vector4{0.5f,0.6f,0.6f,opacity});
             bar(px,y+29*scale,250*scale,6*scale,input.miniBossPartHealth[i],
-                i==0?Vector4{0.2f,0.8f,1,opacity}:Vector4{1,0.48f,0.16f,opacity},{0.1f,0.12f,0.14f,opacity});
+                exposed?Vector4{1,.88f,.45f,opacity}:
+                    i==0?Vector4{0.2f,0.8f,1,opacity}:Vector4{1,0.48f,0.16f,opacity},{0.1f,0.12f,0.14f,opacity});
         }
     } else if(input.bossVisible && !input.startCueActive) {
         const float w=580*scale,x=(width-w)*0.5f,y=height-110*scale;

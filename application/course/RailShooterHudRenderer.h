@@ -17,6 +17,7 @@ enum class RailShooterHudDrawCommandKind : uint8_t {
     TitleLogo,
     Plate,
     TunnelTransition,
+    GameOverDiorama,
 };
 
 enum class RailShooterHudTextAlignment : uint8_t {
@@ -72,6 +73,11 @@ struct RailShooterHudRenderInput final {
     const RailGameOverFrame* gameOver=nullptr;
     bool checkpointRetryAvailable=false;
     bool unlimitedCheckpointRetries=false;
+    float miniBossCounterRemaining=0,miniBossCounterDuration=0;
+    int miniBossCounterPart=-1;
+    bool miniBossGatlingFiring=false;
+    unsigned miniBossGatlingIntercepts=0;
+    float miniBossCounterDamage=0,miniBossCounterFeedbackRemaining=0;
 };
 
 struct RailShooterHudRenderFrame final {

@@ -90,6 +90,9 @@ struct EnemyProjectileLifecycleVfxProxy final {
     Vector4 secondaryColor{1.0f, 0.18f, 0.08f, 0.8f};
     float radius = 1.0f;
     float normalizedAge = 0.0f;
+    Vector3 clashCenter{};
+    float clashRadius = 0.0f;
+    bool secondaryClash = false;
 };
 
 struct EnemyProjectileVfxRenderFrame final {
@@ -177,6 +180,9 @@ private:
         Vector4 color{1.0f, 0.18f, 0.08f, 1.0f};
         float ageSeconds = 0.0f;
         float durationSeconds = 0.3f;
+        Vector3 clashCenter{};
+        float clashRadius = 0.0f;
+        bool secondaryClash = false;
     };
 
     const EnemyProjectileVisualDefinitionAsset& ResolveVisual(

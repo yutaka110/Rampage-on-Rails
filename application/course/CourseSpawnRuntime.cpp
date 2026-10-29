@@ -48,11 +48,12 @@ bool ValidProjectile(const CourseBulletActor& p) {
     return p.projectileId != UINT64_MAX && FiniteValues({p.spawnDistance, p.distanceOffset,
         p.lateralOffset, p.verticalOffset, p.previousDistanceOffset, p.previousLateralOffset,
         p.previousVerticalOffset, p.forwardSpeed, p.lateralSpeed, p.verticalSpeed, p.acceleration,
-        p.maximumSpeed, p.homingTurnRateRadians, p.arcGravity, p.radius, p.lifetime, p.age, p.damage,
+        p.maximumSpeed, p.homingTurnRateRadians, p.arcGravity, p.radius, p.lifetime, p.age, p.damage,p.launchDelayRemaining,
         p.shootDownHitPoints, p.shootDownMaximumHitPoints, p.shootDownRadiusScale,
         p.lockedTargetDistance, p.lockedTargetLateralOffset, p.lockedTargetVerticalOffset,
         p.color.x, p.color.y, p.color.z, p.color.w}) && p.radius > 0.0f && p.lifetime > 0.0f &&
-        p.age >= 0.0f && p.damage >= 0.0f && p.maximumSpeed >= 0.0f &&
+        p.age >= 0.0f && p.launchDelayRemaining>=0 && p.launchDelayRemaining<=10 &&
+        !(p.active && p.launchDelayRemaining>0) && p.damage >= 0.0f && p.maximumSpeed >= 0.0f &&
         p.homingTurnRateRadians >= 0.0f && p.shootDownHitPoints >= 0.0f &&
         p.shootDownMaximumHitPoints >= p.shootDownHitPoints && p.shootDownRadiusScale > 0.0f;
 }
@@ -157,6 +158,18 @@ bool CourseSpawnRuntime::SpawnProjectile(CourseBulletActor projectile, std::stri
     return accepted;
 }
 
+uint32_t CourseSpawnRuntime::CancelEnemyVolley(uint32_t ownerActorId,uint64_t intentSequence) {
+    if(!ownerActorId || !intentSequence)return 0;
+    uint32_t cancelled=0;
+    for(auto& bullet:bullets_)if(bullet.ownerActorId==ownerActorId &&
+        bullet.attackIntentSequence==intentSequence && !bullet.hitConsumed &&
+        (bullet.active || bullet.launchDelayRemaining>0)) {
+        bullet.active=false;bullet.hitConsumed=true;bullet.launchDelayRemaining=0;
+        ++cancelled;
+    }
+    return cancelled;
+}
+
 EnemyProjectileShootDownResult CourseSpawnRuntime::ShootDownProjectile(
     EnemyProjectileShootDownSystem& system, const RailPath& railPath,
     const EnemyProjectileShootDownRequest& request) {
@@ -166,6 +179,12 @@ EnemyProjectileShootDownResult CourseSpawnRuntime::ShootDownProjectile(
 void CourseSpawnRuntime::ClearProjectiles() {
     bullets_.clear();
     // Preserve the ID allocator so an old damage-history ID is never reused.
+}
+
+EnemyProjectileShootDownResult CourseSpawnRuntime::ShootDownPrimaryProjectile(
+    EnemyProjectileShootDownSystem& system,const RailPath& railPath,
+    const EnemyProjectileShootDownRequest& request) {
+    return system.SubmitPrimary(bullets_,railPath,request);
 }
 
 void CourseSpawnRuntime::SetEnemyScreenPresence(
@@ -560,7 +579,8 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     projectileInput.playerDistance = safetyInput.playerDistance;
     projectileInput.playerLateralOffset = safetyInput.playerLateralOffset;
     projectileInput.playerVerticalOffset = safetyInput.playerVerticalOffset;
-    enemyProjectileSystem_.Update(bullets_, projectileInput);
+    projectileInput.scheduledLaunchesAllowed=safetyInput.cameraAllowsEnemyFire && !safetyInput.cameraHardTransition && !enemies_.empty();
+    enemyProjectileSystem_.Update(bullets_, projectileInput,enemies_);
 
     for (CourseObstacleActor& obstacle : obstacles_) {
         obstacle.age += dt;
@@ -950,7 +970,7 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             bullets_.begin(),
             bullets_.end(),
             [](const CourseBulletActor& bullet) {
-                return !bullet.active || bullet.age >= bullet.lifetime;
+                return (!bullet.active && bullet.launchDelayRemaining<=0) || bullet.hitConsumed || bullet.age >= bullet.lifetime;
             }),
         bullets_.end());
     obstacles_.erase(

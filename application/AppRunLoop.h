@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "course/RailTitleScene.h"
+#include "AppInputEdges.h"
 #include "course/RailLockVolley.h"
 #include "course/RailPulseShotPresentation.h"
 #include "course/RailPrimaryKillPresentation.h"
@@ -7,6 +8,7 @@
 #include "SunfallAtmosphere.h"
 #include "course/RailMothershipPresentation.h"
 #include "course/RailMothershipBattle.h"
+#include "course/RailAttackWarningPresentation.h"
 #include "CaveLighting.h"
 #include "terrain/TerrainCollisionWorld.h"
 
@@ -50,6 +52,7 @@
 #include "course/RailShooterHudPresentationBridge.h"
 #include "course/RailShooterHudRenderer.h"
 #include "course/RailGameOverScene.h"
+#include "course/RailGameOverDiorama.h"
 #include "course/RailRetryPresentationCheckpoint.h"
 #include "course/RailDodgeSystem.h"
 #include "course/RailPlayerMovementSystem.h"
@@ -258,7 +261,8 @@ private:
     bool BuildRailLockOnHudAtlasQuads();
     void RegisterRailLockOnHudPass(
         ID3D12GraphicsCommandList* commandList,
-        const std::string& targetResourceName);
+        const std::string& targetResourceName,
+        const AppFrameGraphBuildContext& graphContext);
     bool EnsureSubmissionHudResources(ID3D12GraphicsCommandList* commandList);
     bool BuildSubmissionHudQuads();
     void RegisterSubmissionHudPass(
@@ -362,6 +366,7 @@ private:
     SectionCheckpointSystem railShooterCheckpointSystem_;
     GameSessionSystem railShooterGameSession_{};
     RailGameOverScene railGameOverScene_{};
+    RailGameOverDiorama railGameOverDiorama_{};
     std::unique_ptr<CourseSpawnRuntime> railGameOverWorld_;
     std::chrono::steady_clock::time_point railGameOverLastUpdate_{};
     bool railGameOverHasLastUpdate_=false;
@@ -869,6 +874,7 @@ private:
     SunfallExposure sunfallExposure_{};
     RailMothership::Reveal railMothershipReveal_{};
     RailMothership::Battle railMothershipBattle_{};
+    RailMinibossCombatDirector railMinibossCombat_{};
     CaveOpeningLighting caveOpeningLighting_{};
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;
@@ -883,6 +889,11 @@ private:
     std::chrono::steady_clock::time_point railTitleLastUpdate_{};
     bool releaseShowcaseTitleDirty_ = true;
     std::array<bool, 256> previousKeyDown_{};
+    AppInputEdges inputEdges_;
+    RailAttackWarningPresentation railAttackWarningPresentation_;
+    std::array<std::array<audio::SoundHandle,3>,3> railAttackWarningSounds_{};
+    std::array<audio::SoundHandle,3> railAttackChargeLoops_{};
+    int railAttackChargeWeapon_=-1;
     AppGamepadInput submissionGamepad_{};
     AppGamepadInput railAimGamepad_{};
 };

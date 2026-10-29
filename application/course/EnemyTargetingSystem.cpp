@@ -1,5 +1,6 @@
 #include "RailTurretGeometry.h"
 #include "EnemyTargetingSystem.h"
+#include "RailGatlingAttack.h"
 
 #include "CourseSpawnRuntime.h"
 #include "EnemyCombatPresentationBridge.h"
@@ -275,6 +276,17 @@ Vector3 ResolveEnemyProjectileWorldPosition(const RailPathSample& sample,Vector3
 }
 
 Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,int index) {
+    if(actor.desc.meshId=="gatling_turret") {
+        const auto forward=ResolveTurretAimDirection(actor);
+        const auto right=Unit({-forward.z,0,forward.x});
+        const Vector3 up{right.y*forward.z-right.z*forward.y,right.z*forward.x-right.x*forward.z,
+            right.x*forward.y-right.y*forward.x};
+        const auto p=RailTurret::MuzzleLocal(actor.desc.meshId,index,actor.age+index*RailGatling::ShotInterval);
+        const float r=actor.desc.radius;
+        return {actor.desc.lateralOffset+r*(-forward.x*p.z+right.x*p.x+up.x*p.y),
+            actor.desc.verticalOffset+r*(-forward.y*p.z+right.y*p.x+up.y*p.y),
+            actor.desc.spawnDistance+actor.desc.distanceOffset+r*(-forward.z*p.z+right.z*p.x+up.z*p.y)};
+    }
     if(actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready)
         return actor.weaponMount.muzzleRail[index & 1];
     if(RailTurret::IsMesh(actor.desc.meshId) && actor.targetingState.solutionLocked &&
@@ -387,7 +399,8 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         float horizon = 0.0f;
         for (const auto& actor : actors) {
             if (actor.behaviorDefinition.commercialBehavior && actor.HoldsCombatPositionUntilResolved() &&
-                actor.desc.projectileDefinition.trajectory == EnemyProjectileTrajectory::Direct) {
+                (actor.desc.projectileDefinition.trajectory == EnemyProjectileTrajectory::Direct ||
+                    RailGatling::IsWeapon(actor.desc.actorAssetId))) {
                 horizon = (std::max)(horizon, actor.desc.projectileDefinition.lifetime +
                     (std::max)(actor.behaviorDefinition.attackLeadSeconds, actor.behaviorState.attackTimeRemaining) + 0.1f);
             }
@@ -548,7 +561,7 @@ void EnemyTargetingSystem::LockSolution(
     state.targetVerticalOffset = input.playerVerticalOffset +
         playerVerticalVelocity * predictionSeconds;
     state.compensatesForwardTravel=actor.HoldsCombatPositionUntilResolved() &&
-        definition.trajectory==EnemyProjectileTrajectory::Direct;
+        (definition.trajectory==EnemyProjectileTrajectory::Direct || RailGatling::IsWeapon(actor.desc.actorAssetId));
     state.forwardTravelPrediction = input.travelPrediction;
     state.solutionLocked = true;
     if(state.compensatesForwardTravel) RefreshForwardIntercept(actor,input,playerForwardVelocity);

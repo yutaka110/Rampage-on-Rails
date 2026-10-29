@@ -85,6 +85,8 @@ EnemyProjectilePresentation BuildPresentation(
     output.railUp = sample.up;
     output.color = projectile.color;
     output.collisionRadius = (std::max)(0.02f, projectile.radius);
+    output.interceptionRadius=projectile.shootDownEnabled && projectile.shootDownHitPoints>0 ?
+        (std::max)(.05f,projectile.radius*projectile.shootDownRadiusScale) : 0.0f;
     output.normalizedAge = projectile.lifetime > 0.0f
         ? (std::clamp)(projectile.age / projectile.lifetime, 0.0f, 1.0f)
         : 1.0f;
@@ -214,6 +216,12 @@ void EnemyProjectilePresentationBridge::Update(
             event.projectileId = result.projectileId;
             event.ownerActorId = result.ownerActorId;
             event.worldPosition = result.worldHitPoint;
+            // The trace ends at the pulse centre; the spark belongs to the
+            // common surface of the two touching energy bodies.
+            if(result.primaryRadius>0)event.worldPosition=Add(event.worldPosition,Scale(result.worldHitNormal,-result.primaryRadius));
+            event.clashCenter=result.clashCenter;
+            event.clashRadius=result.clashRadius;
+            event.secondaryClash=result.secondaryClash;
             const auto tracked = tracked_.find(event.projectileId);
             if (tracked != tracked_.end()) {
                 event.trajectory = tracked->second.trajectory;

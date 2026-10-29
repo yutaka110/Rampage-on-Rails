@@ -39,6 +39,7 @@ RailRetryFollowBindings AppRunLoop::BindRailRetryFollowers() {
         .readyIds=railReadyDroneActorIds_,
         .mothershipReveal=railMothershipReveal_,
         .mothershipBattle=railMothershipBattle_,
+        .minibossCombat=railMinibossCombat_,
         .hudRuntime=railShooterHudRuntimeModel_,
         .hud=railShooterHudPresentation_,
         .view=frameState_.viewMatrix,
@@ -113,6 +114,7 @@ void AppRunLoop::UpdateRailGameOver(float deltaTime) {
         if(focused && railGameOverScene_.Frame().wreck) (void)audio_.Play(railVehicleCollisionSound_,0.22f);
         // Flush held gameplay buttons at entry, including a mouse shot that
         // happened on the fatal frame. Only new menu edges can retry.
+        inputEdges_.Reset();
         for(int key=0;key<256;++key) previousKeyDown_[key]=(GetAsyncKeyState(key)&0x8000)!=0;
         previousLeftMouseDown_=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
     }
@@ -278,6 +280,7 @@ bool AppRunLoop::RetryRailCheckpoint() {
         railEnemyEncounterCameraCompositionBridge_.Reset();
         railShooterCameraDirector_.Reset();
         railMothershipBattle_.Reset();railMothershipReveal_.Reset();
+        railMinibossCombat_.Reset();
         railShooterLockOnSystem_.Reset(); railLockVolley_.Reset();
         railShooterSpeedDirector_.Reset();
         railShooterRideDirector_.Reset();
