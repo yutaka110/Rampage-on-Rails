@@ -27,6 +27,7 @@ struct EnemyWaveAsset {
     std::optional<EnemyFormationDefinition> formationDefinition;
     std::vector<EnemyWaveUnit> units;
     EnemyEntrySource entrySource = EnemyEntrySource::Automatic;
+    bool localApproach = false;
 
     bool LoadFromFile(const std::string& path, std::string* errorMessage = nullptr);
 };

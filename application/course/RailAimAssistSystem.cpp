@@ -88,8 +88,7 @@ float AngleDegrees(const Vector3& left, const Vector3& right) {
 }
 
 bool SameTarget(const RailLockTargetHandle& left, const RailLockTargetHandle& right) {
-    return left.kind == right.kind && left.actorId == right.actorId &&
-        left.generationId == right.generationId;
+    return SameRailLockTarget(left,right);
 }
 
 RailAimHitKind ExpectedHitKind(RailLockTargetKind kind) {
@@ -280,8 +279,10 @@ void RailAimAssistSystem::Update(const RailAimAssistFrameInput& input) {
             RailWorldRaycastInput query = *input.visibilityQuery;
             query.aim = &visibilityAim;
             const RailAimHit hit = RailWorldRaycast::Query(query);
-            if (!hit.hit || hit.actorId != candidate.target.actorId ||
-                hit.kind != ExpectedHitKind(candidate.target.kind)) {
+            const bool blocked=candidate.target.kind==RailLockTargetKind::Projectile ?
+                (hit.hit && hit.distance<candidate.distance-.02f) :
+                (!hit.hit || hit.actorId!=candidate.target.actorId || hit.kind!=ExpectedHitKind(candidate.target.kind));
+            if (blocked) {
                 candidate.eligible = false;
                 candidate.rejectReason = RailAimAssistRejectReason::WorldOccluded;
             }

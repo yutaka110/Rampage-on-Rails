@@ -21,6 +21,31 @@ void ImpactCoordinates(float2 uv,float baseX,out float2 p,out float phase,out fl
     p=float2((uv.x-baseX-0.5f)*2.0f,frac(uv.y*0.5f)*4.0f-1.0f);
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>51.5f && input.texcoord.x<53.5f) {
+        // Soft rising vent vapor. Geometry carries the paused gameplay age;
+        // this shader has no independent clock and no projectile-shaped head.
+        float2 p=float2((input.texcoord.x-52.5f)*2,input.texcoord.y*2-1);
+        float width=.48f+.14f*(1-p.y);
+        float flow=ImpactNoise(p*float2(4,3)+8.7f);
+        float edge=exp(-pow((p.x+.10f*sin(p.y*5))/width,2)*3.5f);
+        float ends=(1-smoothstep(.55f,1,abs(p.y)));
+        return float4(input.color.rgb,edge*ends*(.45f+.55f*flow)*input.color.a);
+    }
+    if(input.texcoord.x>45.5f && input.texcoord.x<49.5f) {
+        bool cracked=input.texcoord.x>47.5f;
+        float baseX=cracked?48:46;
+        float2 p=float2((input.texcoord.x-baseX-.5f)*2,frac(input.texcoord.y*.5f)*4-1);
+        float packed=floor(input.texcoord.y*.5f),clock=fmod(packed,64)/64*6.2831853f;
+        float seed=floor(packed/64)*1.713f,r=length(p),angle=atan2(p.y,p.x);
+        float radius=.76f+.025f*sin(angle*3+clock+seed);
+        float width=max(.025f,fwidth(r));
+        float arc=exp(-pow((r-radius)/width,2));
+        float gaps=smoothstep(-.25f,.55f,sin(angle*3+clock*.4f+seed));
+        if(cracked)gaps*=smoothstep(-.1f,.6f,sin(angle*5-seed));
+        float crack=cracked?exp(-pow(p.x+.14f*sin(p.y*8+seed),2)*500)*smoothstep(.25f,.7f,r):0;
+        float a=(arc*gaps+crack*.65f)*(1-smoothstep(.9f,1,r))*input.color.a;
+        return float4(input.color.rgb+float3(.20f,.12f,.20f)*(arc+crack),a);
+    }
     if(input.texcoord.x>41.5f) {
         // Thin world-space near-ground streak, with no round projectile head.
         float u=saturate(input.texcoord.x-42),v=input.texcoord.y*2-1;

@@ -20,6 +20,7 @@ enum class EnemyProjectilePresentationEventKind : uint8_t {
     Impacted,
     Intercepted,
     Expired,
+    ShellCracked,
 };
 
 struct EnemyProjectilePresentationSettings final {
@@ -55,6 +56,10 @@ struct EnemyProjectilePresentation final {
     float forwardDistanceToPlayer = 0.0f;
     bool threat = false;
     bool spawnedThisFrame = false;
+    // Visible solid energy body and the shoot-down target share this radius.
+    // The smaller hurt radius above still belongs to player damage authority.
+    float interceptionRadius = 0.0f;
+    float shootDownHitPoints=0,shootDownMaximumHitPoints=0;
 };
 
 struct EnemyProjectilePresentationEvent final {
@@ -68,6 +73,11 @@ struct EnemyProjectilePresentationEvent final {
     Vector4 color{1.0f, 0.18f, 0.08f, 1.0f};
     std::string effectId;
     bool lethal = false;
+    Vector3 clashCenter{};
+    float clashRadius = 0.0f;
+    bool secondaryClash = false;
+    std::string definitionId;
+    float bodyRadius=0;
 };
 
 struct EnemyProjectilePresentationFrame final {

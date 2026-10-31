@@ -1,6 +1,7 @@
 #include "EnemyProjectileSystem.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailGatlingAttack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -71,7 +72,7 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
             actor.attackState.intentSequence &&
         actor.targetingState.attackTokenId == actor.attackState.tokenId;
 
-    const float lane=static_cast<float>(index)-centerLane;
+    const float lane=RailGatling::IsWeapon(actor.desc.actorAssetId) ? 0.0f : static_cast<float>(index)-centerLane;
     EnemyProjectileLaunchSolution solution;
     auto& projectile = solution.projectile;
     if (!std::isfinite(launchDelaySeconds) || launchDelaySeconds < 0.0f) {
@@ -87,7 +88,7 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
     projectile.sourceRole = actor.desc.role;
     projectile.trajectory = definition.trajectory;
     projectile.spawnDistance = 0.0f;
-    const Vector3 muzzle=ResolveEnemyProjectileMuzzleRailPosition(actor,index);
+    const Vector3 muzzle=ResolveEnemyProjectileMuzzleRailPosition(actor,index,launchDelaySeconds);
     projectile.distanceOffset=muzzle.z;
     projectile.lateralOffset=muzzle.x;
     projectile.verticalOffset=muzzle.y;
@@ -125,12 +126,21 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
         projectile.distanceOffset = aim.muzzleRail.z;
         projectile.lateralOffset = aim.muzzleRail.x;
         projectile.verticalOffset = aim.muzzleRail.y;
+        // Predictive batteries freeze their lateral aim at commitment. Advance
+        // only automatic forward travel for later rounds, so moving sideways
+        // after the tell remains a valid response to the whole burst.
+        const bool delayedBurst=RailGatling::IsWeapon(actor.desc.actorAssetId) &&
+            launchDelaySeconds>0 && !actor.targetingState.compensatesForwardTravel;
+        if (delayedBurst) {
+            projectile.distanceOffset += actor.behaviorState.engagementBandVelocity * launchDelaySeconds;
+        }
         projectile.previousDistanceOffset = projectile.distanceOffset;
         projectile.previousLateralOffset = projectile.lateralOffset;
         projectile.previousVerticalOffset = projectile.verticalOffset;
         const Vector3 target=aim.targetRail;
         projectile.lockedTargetDistance =
-            target.z;
+            target.z + (delayedBurst ?
+                actor.targetingState.playerForwardVelocity * launchDelaySeconds : 0.0f);
         projectile.lockedTargetLateralOffset =
             target.x;
         projectile.lockedTargetVerticalOffset =
@@ -236,25 +246,56 @@ uint32_t EnemyProjectileSystem::SpawnVolley(
     // Validate the entire volley before allocating an ID or emitting a barrel.
     if(!CanEnemyProjectileVolleyReachTarget(actor)) return 0;
     const int projectileCount=(std::max)(1,actor.desc.bulletCount);
+    const bool gatling=RailGatling::IsWeapon(actor.desc.actorAssetId);
+    std::vector<EnemyProjectileRuntimeState> launches;
+    launches.reserve(projectileCount);
     for(int index=0;index<projectileCount;++index) {
-        auto projectile=ResolveEnemyProjectileLaunch(actor,index);
+        const float delay=gatling ? index*RailGatling::ShotInterval : 0.0f;
+        auto projectile=ResolveEnemyProjectileScheduledLaunch(actor,index,delay).projectile;
+        if(!projectile.active)return 0;
+        projectile.launchDelayRemaining=delay;
+        projectile.active=delay<=0;
+        launches.push_back(std::move(projectile));
+    }
+    for(auto& projectile:launches) {
         projectile.projectileId=nextProjectileId_++;
         if(nextProjectileId_==0) nextProjectileId_=1;
         projectiles.push_back(std::move(projectile));
     }
-    pendingSpawned_ += static_cast<uint32_t>(projectileCount);
+    pendingSpawned_ += gatling ? 1u : static_cast<uint32_t>(projectileCount);
     return static_cast<uint32_t>(projectileCount);
 }
 
 void EnemyProjectileSystem::Update(
     std::vector<EnemyProjectileRuntimeState>& projectiles,
-    const EnemyProjectileFrameInput& input) {
+    const EnemyProjectileFrameInput& input,
+    std::span<const CourseEnemyActor> owners) {
     const float dt = (std::max)(0.0f, input.deltaTime);
     frame_ = {};
     frame_.spawnedThisFrame = pendingSpawned_;
     pendingSpawned_ = 0;
     for (EnemyProjectileRuntimeState& projectile : projectiles) {
         InitializeLegacy(projectile);
+        float travelTime=dt;
+        if(projectile.launchDelayRemaining>0 && !projectile.hitConsumed) {
+            if(dt<=0)continue;
+            const auto owner=std::find_if(owners.begin(),owners.end(),[&](const auto& actor) {
+                return actor.actorId==projectile.ownerActorId && actor.desc.hitPoints>0 &&
+                    (!actor.combatState.initialized || (actor.combatState.phase!=EnemyCombatPhase::Dying &&
+                        actor.combatState.phase!=EnemyCombatPhase::Retired));
+            });
+            if(!input.scheduledLaunchesAllowed || (!owners.empty() && owner==owners.end())) {
+                projectile.launchDelayRemaining=0;projectile.active=false;projectile.hitConsumed=true;
+                continue;
+            }
+            // Subtract the wait, then integrate only the remainder. This keeps
+            // the stream's spacing identical at 30, 60 and 120 Hz.
+            travelTime=(std::max)(0.0f,dt-projectile.launchDelayRemaining);
+            projectile.launchDelayRemaining=(std::max)(0.0f,projectile.launchDelayRemaining-dt);
+            if(projectile.launchDelayRemaining>0 || dt<=0)continue;
+            projectile.active=true;
+            ++frame_.spawnedThisFrame;
+        }
         if (!projectile.active || projectile.age >= projectile.lifetime) continue;
         ++frame_.activeProjectiles;
         projectile.previousDistanceOffset = projectile.distanceOffset;
@@ -273,13 +314,13 @@ void EnemyProjectileSystem::Update(
             direction = TurnTowards(
                 direction,
                 desired,
-                projectile.homingTurnRateRadians * dt);
+                projectile.homingTurnRateRadians * travelTime);
             ++frame_.homingProjectiles;
             projectile.forwardSpeed=direction.forward*speed;
             projectile.lateralSpeed=direction.lateral*speed;
             projectile.verticalSpeed=direction.vertical*speed;
         }
-        AdvanceEnemyProjectileTrajectory(projectile,dt);
+        AdvanceEnemyProjectileTrajectory(projectile,travelTime);
         if (projectile.age >= projectile.lifetime) {
             projectile.active = false;
             ++frame_.expiredThisFrame;

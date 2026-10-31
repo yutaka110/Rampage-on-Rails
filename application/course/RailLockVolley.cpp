@@ -2,6 +2,7 @@
 #include "CourseSpawnRuntime.h"
 #include "CourseCollisionSystem.h"
 #include "../terrain/RailPath.h"
+#include "RailHeavyAttack.h"
 #include <algorithm>
 #include <cmath>
 
@@ -122,12 +123,35 @@ Vector3 RailLockLaser::Curve(float progress) const {
     const auto b=Add(start,Add(Scale(delta,0.72f),Scale(fan,0.55f)));
     return Add(Add(Scale(start,v*v*v),Scale(a,3*v*v*u)),Add(Scale(b,3*v*u*u),Scale(end,u*u*u)));
 }
-void RailLockVolley::Reset(){lasers_.clear();contacts_.clear();batches_.clear();hits_.clear();completed_.clear();nextId_=1;}
+void RailLockVolley::Reset(){lasers_.clear();contacts_.clear();batches_.clear();hits_.clear();completed_.clear();shotHistory_.clear();seenShots_.clear();nextId_=1;}
+void RailLockVolley::UpdateDefeatPresentation(float dt) {
+    hits_.clear();completed_.clear();batches_.clear();
+    if(!std::isfinite(dt) || dt<=0) return;
+    for(auto& contact:contacts_) contact.age+=dt;
+    std::erase_if(contacts_,[](const auto& c){return c.age>=c.Duration();});
+    for(auto& laser:lasers_) {
+        laser.age+=dt;
+        if(laser.resolved) continue;
+        // Already committed shots finish their visible journey without damage.
+        if(laser.age<laser.delay) continue;
+        laser.launched=true;laser.position=laser.Curve(laser.Progress());
+        if(laser.Progress()>=1) {laser.resolved=true;laser.endedAge=laser.age;}
+    }
+    std::erase_if(lasers_,[](const auto& s){return s.resolved && s.age-s.endedAge>=0.14f;});
+}
 bool RailLockVolley::Visible() const {
     return !contacts_.empty() || std::any_of(lasers_.begin(),lasers_.end(),[](const auto& s){return s.Opacity()>0.001f;});
 }
 bool RailLockVolley::TargetPosition(RailLockTargetHandle target,const RailPath& rail,
         const CourseSpawnRuntime& runtime,Vector3& position) {
+    if(target.kind==RailLockTargetKind::Projectile) {
+        const auto found=std::find_if(runtime.Bullets().begin(),runtime.Bullets().end(),
+            [&](const auto& bullet){return bullet.projectileId==target.projectileId;});
+        const auto* p=found==runtime.Bullets().end()?nullptr:&*found;
+        if(!p || p->ownerActorId!=target.actorId || !p->active || p->hitConsumed || p->launchDelayRemaining>0 ||
+            p->age>=p->lifetime || !p->shootDownEnabled || p->shootDownHitPoints<=0 || !RailHeavy::IsProjectile(p->definitionId))return false;
+        position=Point(rail,p->spawnDistance+p->distanceOffset,p->lateralOffset,p->verticalOffset);return true;
+    }
     if(target.kind==RailLockTargetKind::Enemy) for(const auto& e:runtime.Enemies()) {
         if(e.actorId!=target.actorId) continue;
         if(e.desc.hitPoints<=0 || (e.combatState.initialized && !e.combatState.canReceiveDamage)) return false;
@@ -152,6 +176,7 @@ size_t RailLockVolley::Enqueue(std::span<const RailLockToken> tokens,std::span<c
     const size_t count=(std::min)(tokens.size(),weapons.size());
     const size_t limit=(std::min)(Capacity,static_cast<size_t>(settings.lockVfxMaxConcurrentShots));
     for(size_t i=0;i<count && lasers_.size()<limit;++i) {
+        if(seenShots_.contains(weapons[i].shotId))continue;
         if(std::any_of(lasers_.begin(),lasers_.end(),[&](const auto& s){return s.weapon.shotId==weapons[i].shotId;})) continue;
         if(!std::isfinite(weapons[i].range) || !std::isfinite(weapons[i].damage) || weapons[i].damage<0) continue;
         Vector3 end;
@@ -164,12 +189,15 @@ size_t RailLockVolley::Enqueue(std::span<const RailLockToken> tokens,std::span<c
         laser.duration=(std::clamp)(distance/(std::max)(1.0f,settings.lockVfxTravelDistanceDivisor),
             settings.lockVfxTravelDurationMin,settings.lockVfxTravelDurationMax);
         lasers_.push_back(laser);++batch.pending;
+        seenShots_.insert(weapons[i].shotId);shotHistory_.push_back(weapons[i].shotId);
+        if(shotHistory_.size()>4096){seenShots_.erase(shotHistory_.front());shotHistory_.pop_front();}
     }
     if(batch.pending) batches_.push_back(batch);
     return batch.pending;
 }
 void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseSpawnRuntime& runtime,
-        CourseCollisionSystem& collision,const CourseAsset* course) {
+        CourseCollisionSystem& collision,const CourseAsset* course,
+        const TerrainGenerationSettings* terrainSettings,const TerrainEditLayer* terrainPreview) {
     hits_.clear();completed_.clear();
     if(!std::isfinite(dt) || dt<=0) return;
     for(auto& contact:contacts_) contact.age+=dt;
@@ -186,7 +214,18 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
         if(laser.launched) laser.position=laser.Curve(laser.Progress());
         if(valid && laser.Progress()<1) continue;
         laser.resolved=true;laser.endedAge=laser.age;
-        if(valid) {
+        if(valid && laser.target.kind==RailLockTargetKind::Projectile) {
+            const auto result=collision.ApplyProjectileLockHit(runtime,rail,laser.target.projectileId,laser.weapon,
+                laser.start,course,terrainSettings,terrainPreview);
+            laser.hit=result.accepted && result.appliedDamage>0;
+            if(laser.hit) {
+                laser.end=laser.position=result.worldHitPoint;
+                RailLockContact contact;contact.shotId=laser.weapon.shotId;contact.actorId=result.ownerActorId;
+                contact.position=result.worldHitPoint;contact.normal=result.worldHitNormal;contact.size=.8f;
+                contact.destroyed=result.destroyed;
+                if(contacts_.size()>=ContactCapacity)contacts_.erase(contacts_.begin());contacts_.push_back(contact);
+            }
+        } else if(valid) {
             auto origin=previous;
             auto delta=Add(laser.end,Scale(origin,-1));
             float distance=Length(delta);
@@ -198,6 +237,7 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 request.rayDirection=Scale(delta,1/distance);request.hitPoint=laser.end;
                 request.hitNormal=Scale(request.rayDirection,-1);request.hitDistance=distance;request.baseDamage=laser.weapon.damage;
                 request.lockOnContact=true;
+                request.counterTargetActorId=laser.weapon.counterTargetActorId;
                 RailLockContact contact;contact.shotId=request.shotId;contact.actorId=request.targetActorId;
                 contact.position=request.hitPoint;contact.normal=request.hitNormal;
                 // Capture before lethal damage clears the live weapon mount.

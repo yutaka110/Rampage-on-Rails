@@ -149,6 +149,8 @@ std::filesystem::path ShaderBytecodeCachePath(
     const uint64_t sourceSize = std::filesystem::file_size(resolvedPath, error);
 
     uint64_t hash = kFnvOffset;
+    // Discard entries previously populated by the include-blind inner cache.
+    hash=HashAppendString(hash,std::string("include-aware-compiler-v2"));
     hash = HashAppendString(hash, normalized.wstring());
     hash = HashAppendString(hash, std::wstring(profile != nullptr ? profile : L""));
 #if _DEBUG
@@ -400,6 +402,7 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
 
 bool AppPipelines::Initialize(ID3D12Device* device) {
     if (!device) return false;
+    hdrPostProcessPsos_.clear();
 
     // Each initialization attempt owns one diagnostic session. Truncating the
     // files prevents a recovered startup from being mistaken for a current
@@ -2006,6 +2009,15 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         hr=device->CreateGraphicsPipelineState(&titleTracerDesc,IID_PPV_ARGS(&titleTracerPso_));
         if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(TitleTracer)",hr);
 
+        // Atmosphere produces HDR colour before world billboards. Their
+        // blend/depth contract is identical; only the render-target format changes.
+        titleDustDesc.RTVFormats[0]=DXGI_FORMAT_R16G16B16A16_FLOAT;
+        titleTracerDesc.RTVFormats[0]=DXGI_FORMAT_R16G16B16A16_FLOAT;
+        hr=device->CreateGraphicsPipelineState(&titleDustDesc,IID_PPV_ARGS(&hdrPostProcessPsos_["WorldDust"]));
+        if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(WorldDust HDR)",hr);
+        hr=device->CreateGraphicsPipelineState(&titleTracerDesc,IID_PPV_ARGS(&hdrPostProcessPsos_["WorldTracer"]));
+        if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(WorldTracer HDR)",hr);
+
     }
 
     // ------------------------------
@@ -2172,7 +2184,6 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
             {"Dissolve",dissolvePs_.Get()},{"Random",randomPs_.Get()},
             {"PrewittOutline",prewittOutlinePs_.Get()},{"Grayscale",grayscalePs_.Get()},
             {"Vignette",vignettePs_.Get()}};
-        hdrPostProcessPsos_.clear();
         for(const auto& [name,shader]:hdrShaders) {
             auto d=compositeDesc;
             d.RTVFormats[0]=DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -2708,6 +2719,17 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
             &depthTestDesc,
             IID_PPV_ARGS(&skeletonDebugDepthTestPso_));
         if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(SkeletonDebugDepthTest)", hr);
+
+        auto threatDesc=depthTestDesc;
+        auto& blend=threatDesc.BlendState.RenderTarget[0];
+        blend.BlendEnable=TRUE;blend.SrcBlend=D3D12_BLEND_SRC_ALPHA;blend.DestBlend=D3D12_BLEND_ONE;
+        blend.BlendOp=D3D12_BLEND_OP_ADD;blend.SrcBlendAlpha=D3D12_BLEND_ZERO;
+        blend.DestBlendAlpha=D3D12_BLEND_ONE;blend.BlendOpAlpha=D3D12_BLEND_OP_ADD;
+        hr=device->CreateGraphicsPipelineState(&threatDesc,IID_PPV_ARGS(&hdrPostProcessPsos_["EnemyThreatLinesLdr"]));
+        if(FAILED(hr))return FailHr("CreateGraphicsPipelineState(EnemyThreatLines LDR)",hr);
+        threatDesc.RTVFormats[0]=DXGI_FORMAT_R16G16B16A16_FLOAT;
+        hr=device->CreateGraphicsPipelineState(&threatDesc,IID_PPV_ARGS(&hdrPostProcessPsos_["EnemyThreatLines"]));
+        if(FAILED(hr))return FailHr("CreateGraphicsPipelineState(EnemyThreatLines HDR)",hr);
     }
 
     // ------------------------------

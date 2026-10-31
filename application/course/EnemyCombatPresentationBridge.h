@@ -6,11 +6,14 @@
 #include <vector>
 
 #include "EnemyCombatSystem.h"
+#include "RailBatteryThermalTypes.h"
 #include "TwinShieldDronePose.h"
 #include "../terrain/RailPath.h"
 #include "utils/math/Vector.h"
 
 class CourseSpawnRuntime;
+class RailMinibossCombatDirector;
+class RailAttackWarningPresentation;
 struct CourseEnemyActor;
 namespace ge3::debug { class DebugDrawSystem; }
 
@@ -82,6 +85,7 @@ struct EnemyCombatActorPresentation final {
     bool turret = false;
     bool turretMuzzleActive = false;
     Vector3 turretWorldRotation{};
+    RailBatteryThermalFrame batteryThermal{};
 };
 
 // Pure pose evaluation also used before attack execution to bind the weapon
@@ -144,6 +148,11 @@ struct EnemyCombatPresentationInput final {
     EnemyCombatPresentationSettings settings{};
     // Called only when a new wreck is created, never during its per-frame fall.
     std::function<bool(Vector3,Vector3,float,Vector3&,Vector3&)> traceDestructionGround;
+    uint32_t counterActorId=0;
+    float counterAmount=0,counterHitPulse=0;
+    uint32_t counterHitActorId=0;
+    const RailMinibossCombatDirector* minibossCombat=nullptr;
+    const RailAttackWarningPresentation* attackWarnings=nullptr;
 };
 
 // Converts authoritative combat state/events into procedural model animation,

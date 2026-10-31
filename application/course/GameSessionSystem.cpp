@@ -156,13 +156,13 @@ bool GameSessionSystem::Retry(std::string* errorMessage) {
         SetError(errorMessage, "Retry is valid only after defeat.");
         return false;
     }
-    if (!definition_.allowCheckpointRetry || state_.retriesRemaining == 0) {
+    if (!definition_.allowCheckpointRetry || (!definition_.unlimitedCheckpointRetries && state_.retriesRemaining == 0)) {
         SetError(errorMessage, "No retry is available for this session.");
         return false;
     }
 
     const GameSessionPhase before = state_.phase;
-    --state_.retriesRemaining;
+    if(!definition_.unlimitedCheckpointRetries) --state_.retriesRemaining;
     ++state_.attemptIndex;
     state_.phase = definition_.introDurationSeconds > 0.0f
         ? GameSessionPhase::Intro
@@ -484,7 +484,7 @@ void GameSessionSystem::RefreshDerivedState() {
     state_.canPause = definition_.allowPause &&
         (state_.phase == GameSessionPhase::Playing || state_.phase == GameSessionPhase::Intro);
     state_.canRetry = definition_.allowCheckpointRetry &&
-        state_.retriesRemaining > 0 &&
+        (definition_.unlimitedCheckpointRetries || state_.retriesRemaining > 0) &&
         state_.outcome == GameSessionOutcome::Defeat &&
         (state_.phase == GameSessionPhase::Defeat || state_.phase == GameSessionPhase::Result);
 }

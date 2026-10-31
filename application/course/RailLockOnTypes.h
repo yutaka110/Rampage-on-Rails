@@ -11,6 +11,7 @@
 enum class RailLockTargetKind {
     Enemy,
     Obstacle,
+    Projectile,
 };
 
 enum class RailLockRejectReason {
@@ -31,7 +32,13 @@ struct RailLockTargetHandle {
     RailLockTargetKind kind = RailLockTargetKind::Enemy;
     uint32_t actorId = 0;
     uint32_t generationId = 0;
+    uint64_t projectileId = 0;
 };
+
+inline bool SameRailLockTarget(const RailLockTargetHandle& a,const RailLockTargetHandle& b) {
+    return a.kind==b.kind && a.actorId==b.actorId && a.generationId==b.generationId &&
+        (a.kind!=RailLockTargetKind::Projectile || a.projectileId==b.projectileId);
+}
 
 struct RailLockAnchor {
     RailLockTargetHandle target{};

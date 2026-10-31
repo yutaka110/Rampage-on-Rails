@@ -64,6 +64,19 @@ struct D3DResourceLeakChecker {
 
 bool AppMain::Initialize(HINSTANCE hInstance) {
 	hInstance_ = hInstance;
+	// Launchers may inherit a directory without game assets. Preserve the
+	// editor's workspace when present; packaged launches use the adjacent data.
+	std::error_code pathError;
+	if (!std::filesystem::is_regular_file("Resources/courses/ShortCompleteRun.course", pathError)) {
+		wchar_t executable[MAX_PATH]{};
+		const DWORD count = GetModuleFileNameW(nullptr, executable, MAX_PATH);
+		if (count > 0 && count < MAX_PATH) {
+			const auto directory = std::filesystem::path(executable).parent_path();
+			if (std::filesystem::is_regular_file(directory / "Resources/courses/ShortCompleteRun.course", pathError)) {
+				std::filesystem::current_path(directory, pathError);
+			}
+		}
+	}
 	return true;
 }
 

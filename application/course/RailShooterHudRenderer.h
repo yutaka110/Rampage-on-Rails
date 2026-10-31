@@ -5,10 +5,12 @@
 #include <vector>
 
 #include "RailShooterHudDefinitionAsset.h"
+#include "RailBatteryThermalTypes.h"
 #include "GameSessionSystem.h"
 #include "RailShooterHudPresentationBridge.h"
 
 struct EncounterPerformanceScoreRuntimeState;
+struct RailGameOverFrame;
 
 enum class RailShooterHudDrawCommandKind : uint8_t {
     Rectangle,
@@ -16,6 +18,7 @@ enum class RailShooterHudDrawCommandKind : uint8_t {
     TitleLogo,
     Plate,
     TunnelTransition,
+    GameOverDiorama,
 };
 
 enum class RailShooterHudTextAlignment : uint8_t {
@@ -63,11 +66,27 @@ struct RailShooterHudRenderInput final {
     Vector2 titleTransitionFocus{0.5f,0.4f};
     const GameSessionRuntimeState* resultSession=nullptr;
     bool shortRun=false;
+    float gateClearPulse=0;
+    std::string courseVisualLabel;
+    unsigned courseVisualIndex=0,courseVisualCount=0;
     bool bossVisible=false;
     float bossHealth=1.0f;
     const EncounterPerformanceScoreRuntimeState* encounterScore=nullptr;
     bool miniBossParts=false;
     std::array<float,2> miniBossPartHealth{};
+    std::array<float,2> miniBossPartCharge{},miniBossCooldownRemaining{},miniBossCooldownDuration{1,1};
+    std::array<RailBatteryThermalFrame,2> miniBossThermal{};
+    bool miniBossHeavyFiring=false;
+    const RailGameOverFrame* gameOver=nullptr;
+    bool checkpointRetryAvailable=false;
+    bool unlimitedCheckpointRetries=false;
+    float miniBossCounterRemaining=0,miniBossCounterDuration=0;
+    int miniBossCounterPart=-1;
+    bool miniBossGatlingFiring=false;
+    unsigned miniBossGatlingIntercepts=0;
+    float miniBossCounterDamage=0,miniBossCounterFeedbackRemaining=0;
+    int miniBossCounterFeedbackPart=-1;
+    float miniBossCounterUnlockPulse=0,miniBossCounterHitPulse=0,miniBossCounterDamageRatio=0;
 };
 
 struct RailShooterHudRenderFrame final {

@@ -407,6 +407,7 @@ void CourseEventDispatcher::SpawnEnemyWave(
         desc.role = unit.role;
         desc.spawnDistance = event.distance;
         desc.entrySource = wave.entrySource;
+        desc.establishedEntrance = wave.localApproach;
         if(event.payload=="preplaced:turret") desc.stationaryActivationDistance=event.distance;
         const std::string actorAssetId = !unit.actorAssetId.empty()
             ? unit.actorAssetId

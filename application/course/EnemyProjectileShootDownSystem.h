@@ -20,6 +20,11 @@ struct EnemyProjectileShootDownRequest final {
     float maximumDistance = 0.0f;
     float maximumWorldHitDistance = 0.0f;
     float damage = 0.0f;
+    float primaryRadius = 0.0f;
+    // Only an aimed contact on the visible stream produces a chain clash.
+    // Incidental rounds crossing a shot at the gun can still be cancelled.
+    bool focusedGatlingClash = true;
+    uint64_t targetProjectileId = 0;
 };
 
 struct EnemyProjectileShootDownResult final {
@@ -36,6 +41,12 @@ struct EnemyProjectileShootDownResult final {
     bool targetResolved = false;
     bool accepted = false;
     bool destroyed = false;
+    // Only the first contact owns the surrounding clash. The same immutable
+    // volume is forwarded to presentation on the contact frame.
+    Vector3 clashCenter{};
+    float clashRadius = 0.0f;
+    float primaryRadius = 0.0f;
+    bool secondaryClash = false;
 };
 
 struct EnemyProjectileShootDownFrame final {
@@ -54,6 +65,12 @@ public:
         std::vector<EnemyProjectileRuntimeState>& projectiles,
         const RailPath& railPath,
         const EnemyProjectileShootDownRequest& request);
+    // One real primary pulse may disperse two nearby, already launched rounds
+    // from the same gatling burst. Every contact enters the normal result frame.
+    EnemyProjectileShootDownResult SubmitPrimary(
+        std::vector<EnemyProjectileRuntimeState>& projectiles,
+        const RailPath& railPath,
+        const EnemyProjectileShootDownRequest& request);
 
     const EnemyProjectileShootDownResult& LastResult() const noexcept {
         return lastResult_;
@@ -63,6 +80,12 @@ public:
     }
 
 private:
+    EnemyProjectileShootDownResult SubmitRay(
+        std::vector<EnemyProjectileRuntimeState>& projectiles,
+        const RailPath& railPath,
+        const EnemyProjectileShootDownRequest& request,
+        bool primaryPulse,
+        const EnemyProjectileRuntimeState* adjacentTo = nullptr);
     EnemyProjectileShootDownResult lastResult_{};
     EnemyProjectileShootDownFrame frame_{};
     uint64_t revision_ = 0;

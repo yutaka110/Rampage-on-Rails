@@ -51,6 +51,9 @@ bool IsGameplayLandscapeMesh(std::string_view meshId);
 Material BuildTitleLandscapePbrMaterial(std::string_view meshId);
 Material BuildGameplayLandscapePbrMaterial(std::string_view meshId = {});
 Material BuildRailStartupRearMaterial(const Material& gameplayTerrain);
+bool IsCarrierBatterySurfaceMesh(std::string_view meshId);
+Material BuildCarrierBatterySurfaceMaterial(std::string_view meshId,Vector4 tint,
+    float hitFlash=0,float counter=0);
 
 struct RailStartupRearScenery final {
     const char* meshId;

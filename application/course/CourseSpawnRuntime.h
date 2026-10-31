@@ -4,6 +4,7 @@
 #include <functional>
 #include "RailMothershipPresentation.h"
 #include "RailEnemyIngress.h"
+#include "RailTurretGeometry.h"
 #include <span>
 #include <string_view>
 #include <string>
@@ -173,6 +174,7 @@ struct CourseVfxCueDesc {
 };
 
 struct CourseEnemyActor {
+    RailTurret::MotionState turretMotion{};
     EnemyWeaponMountFrame weaponMount{};
     CourseEnemyActorDesc desc;
     EnemyCombatDefinition combatDefinition{};
@@ -294,8 +296,12 @@ public:
     uint32_t CommitEnemyVolley(uint32_t actorId, uint64_t intentSequence, uint64_t tokenId);
     // 消費済み・非アクティブ・寿命の状態をまとめて更新し、二重消費を拒否する。
     bool ConsumeProjectile(uint64_t projectileId);
+    // Interrupt a committed burst, including rounds that have not launched.
+    uint32_t CancelEnemyVolley(uint32_t ownerActorId, uint64_t intentSequence);
     bool SpawnProjectile(CourseBulletActor projectile, std::string* errorMessage = nullptr);
     EnemyProjectileShootDownResult ShootDownProjectile(EnemyProjectileShootDownSystem& system,
+        const RailPath& railPath, const EnemyProjectileShootDownRequest& request);
+    EnemyProjectileShootDownResult ShootDownPrimaryProjectile(EnemyProjectileShootDownSystem& system,
         const RailPath& railPath, const EnemyProjectileShootDownRequest& request);
     void ClearProjectiles();
     void SetEnemyScreenPresence(uint32_t actorId, bool evaluated, bool attackAllowed);
@@ -321,6 +327,8 @@ public:
         std::string* errorMessage = nullptr);
     void Update(float deltaTime);
     void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput);
+    // Call on a cinematic copy: preserve existing motion without new shots.
+    void UpdateDefeatPresentation(float deltaTime, CourseEnemyFireSafetyFrameInput safetyInput);
     void EnforceEnemyEngagementClearance(const CourseEnemyFireSafetyFrameInput& safetyInput);
     bool InvalidateEnemyAttackWarning(uint32_t actorId);
     bool DeferEnemyAttackForUnreachableLaunch(uint32_t actorId);

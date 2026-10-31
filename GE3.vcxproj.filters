@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="ソース ファイル">
@@ -1413,6 +1413,9 @@
     <ClCompile Include="application\AppRenderResources.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\AppRailGameOver.cpp">
+      <Filter>ソース ファイル\application</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppRunLoop.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -2133,6 +2136,12 @@
     <ClInclude Include="application\course\RailBoostPresentation.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailBatteryThermalTypes.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailBatteryThermalPresentation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailTurretGeometry.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -2140,6 +2149,42 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailMothershipPresentation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailGameOverScene.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailGameOverDiorama.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\AppInputEdges.h">
+      <Filter>ヘッダー ファイル\application</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailAttackWarningPresentation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailMinibossCombatDirector.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailGatlingAttack.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailGatlingAimCycle.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailHeavyAttack.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailProjectileOrbSurface.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailEnemyEnergyPalette.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailVehicleBreakawayGeometry.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailRetryPresentationCheckpoint.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailShortCourse.h">
@@ -3059,6 +3104,9 @@
     <ClInclude Include="application\terrain\TerrainChunkManager.h">
       <Filter>ヘッダー ファイル\application\terrain</Filter>
     </ClInclude>
+    <ClInclude Include="application\terrain\TerrainGroundSurface.h">
+      <Filter>ヘッダー ファイル\application\terrain</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailTravelPrediction.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -3086,6 +3134,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Particle.hlsli" />
+    <None Include="Resources\RailChargeStroke.hlsli" />
     <None Include="Resources\EditorAssetThumbnailPreview.PS.hlsl" />
     <None Include="Resources\EditorAssetThumbnailPreview.VS.hlsl" />
     <None Include="Resources\Spear.PS.hlsl" />

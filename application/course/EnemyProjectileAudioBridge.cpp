@@ -79,6 +79,7 @@ void EnemyProjectileAudioBridge::Update(
             flyByPlayed_.insert(event.projectileId);
             break;
         case EnemyProjectilePresentationEventKind::Expired:
+        case EnemyProjectilePresentationEventKind::ShellCracked:
             break;
         }
     }

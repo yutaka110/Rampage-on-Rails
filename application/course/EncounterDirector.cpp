@@ -81,6 +81,11 @@ EncounterDirectorFrameOutput EncounterDirector::Update(const EncounterDirectorFr
     for (PendingEvent& pending : pendingEvents_) {
         pending.age += dt;
         if(IsRoute(pending.event)) {
+            if(input.suppressRouteEncounters) {
+                ++lastStats_.suppressedThisFrame;
+                lastStats_.lastDecision="Authored recovery discards roadside arrivals without a catch-up queue.";
+                continue;
+            }
             if(pending.age>settings_.routeAdmissionWindowSeconds ||
                 input.currentDistance>pending.event.distance+settings_.routeAdmissionDistance || admission.livingBoss) {
                 ++lastStats_.suppressedThisFrame;
@@ -111,7 +116,7 @@ EncounterDirectorFrameOutput EncounterDirector::Update(const EncounterDirectorFr
     }
 
     pendingEvents_ = std::move(stillPending);
-    const bool adaptiveActive = input.adaptivePatrolsAllowed && input.spawnRuntime &&
+    const bool adaptiveActive = !input.suppressRouteEncounters && input.adaptivePatrolsAllowed && input.spawnRuntime &&
         input.readability && !admission.livingBoss;
     if (!adaptiveActive) {
         // A cinematic or result screen must not accumulate a deferred patrol.

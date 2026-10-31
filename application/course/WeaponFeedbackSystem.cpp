@@ -51,6 +51,9 @@ HitFeedbackKind ResolveFeedbackKind(const DamageResult& damage) {
     if (damage.weakPointHit && damage.damageApplied) {
         return HitFeedbackKind::WeakPointHit;
     }
+    if (damage.armorReduced && damage.damageApplied) {
+        return HitFeedbackKind::ArmorHit;
+    }
     if (damage.damageApplied) {
         return HitFeedbackKind::NormalHit;
     }

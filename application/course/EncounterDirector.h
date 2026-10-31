@@ -43,6 +43,7 @@ struct EncounterDirectorFrameInput {
     bool adaptivePatrolsAllowed = false;
     bool primaryEncounterDue = false;
     bool roleMixingAllowed = false;
+    bool suppressRouteEncounters = false;
 };
 
 struct EncounterDirectorFrameOutput {

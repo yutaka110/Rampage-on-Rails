@@ -1,5 +1,9 @@
 #include "CourseCollisionSystem.h"
 #include "../AppLogFile.h"
+#include "RailVehicleCombatMountBridge.h"
+#include "RailWorldRaycast.h"
+#include "RailGatlingAttack.h"
+#include "RailHeavyAttack.h"
 
 #include <Windows.h>
 
@@ -34,6 +38,17 @@ Vector3 NormalizeOr(const Vector3& value, const Vector3& fallback) {
         return fallback;
     }
     return Scale(value, 1.0f / std::sqrt(lengthSquared));
+}
+
+Vector3 PrimaryMuzzle(const CourseCollisionFrameInput& input,float forwardOffset) {
+    if(input.combatMount && input.combatMount->valid)
+        return Add(input.combatMount->weaponWorldPosition,Scale(input.combatMount->forward,forwardOffset));
+    if(input.railPath) {
+        const auto mount=input.railPath->Evaluate(input.player.distance);
+        return Add(mount.position,Add(Scale(mount.right,input.player.lateralOffset),
+            Add(Scale(mount.up,input.player.verticalOffset),Scale(mount.tangent,forwardOffset))));
+    }
+    return input.worldAim?input.worldAim->worldRayOrigin:Vector3{};
 }
 
 float Abs(float value) {
@@ -85,6 +100,7 @@ void CourseCollisionSystem::Reset() {
     playerHitboxSystem_.Reset();
     playerNearMissSystem_.Reset();
     projectileShootDownSystem_.Reset();
+    projectileLockFramePrepared_=false;
     attackInterruptSystem_.Reset();
     weapon_ = {};
     lastFrameStats_ = {};
@@ -132,6 +148,32 @@ WeaponDefinitionReloadReport CourseCollisionSystem::ReloadChangedWeaponDefinitio
     return weaponDefinitionRegistry_.ReloadChangedAssets(&weaponFireSystem_);
 }
 
+EnemyProjectileShootDownResult CourseCollisionSystem::ApplyProjectileLockHit(CourseSpawnRuntime& runtime,const RailPath& rail,
+    uint64_t projectileId,const WeaponShot& shot,Vector3 muzzle,const CourseAsset* course,
+    const TerrainGenerationSettings* terrainSettings,const TerrainEditLayer* terrainPreview) {
+    EnemyProjectileShootDownResult rejected;rejected.shotId=shot.shotId;
+    rejected.rejectReason=EnemyProjectileShootDownRejectReason::InvalidShot;
+    const auto found=std::find_if(runtime.Bullets().begin(),runtime.Bullets().end(),
+        [projectileId](const auto& bullet){return bullet.projectileId==projectileId;});
+    const auto* p=found==runtime.Bullets().end()?nullptr:&*found;
+    if(!p || !p->active || p->hitConsumed || p->age>=p->lifetime || !p->shootDownEnabled ||
+        !RailHeavy::IsProjectile(p->definitionId) || shot.shotId==0 || shot.damageType!=WeaponDamageType::Ice ||
+        !Finite(muzzle) || !std::isfinite(shot.damage) || shot.damage<=0 || !std::isfinite(shot.range) || shot.range<=0)return rejected;
+    const auto target=ResolveEnemyProjectileWorldPosition(rail,{p->lateralOffset,p->verticalOffset,p->spawnDistance+p->distanceOffset});
+    const auto delta=Add(target,Scale(muzzle,-1));const float distance=std::sqrt(LengthSquared(delta));
+    if(distance<.001f || distance>shot.range)return rejected;
+    if(!projectileLockFramePrepared_) {projectileShootDownSystem_.BeginFrame();projectileLockFramePrepared_=true;}
+    RailAimState ray;ray.valid=true;ray.worldRayOrigin=muzzle;ray.worldRayDirection=Scale(delta,1/distance);ray.maxDistance=distance+.01f;
+    RailWorldRaycastInput cover;cover.aim=&ray;cover.railPath=&rail;cover.spawnRuntime=&runtime;cover.course=course;
+    cover.terrainSettings=terrainSettings;cover.terrainEdits=course?&course->terrainEditLayer:nullptr;
+    cover.terrainPreview=terrainPreview;cover.includeProceduralTerrain=terrainSettings!=nullptr;
+    const auto worldHit=RailWorldRaycast::Query(cover);
+    EnemyProjectileShootDownRequest request;request.shotId=shot.shotId;request.targetProjectileId=projectileId;
+    request.rayOrigin=muzzle;request.rayDirection=ray.worldRayDirection;request.damage=shot.damage;request.maximumDistance=shot.range;
+    request.maximumWorldHitDistance=worldHit.hit?worldHit.distance:shot.range;
+    return runtime.ShootDownProjectile(projectileShootDownSystem_,rail,request);
+}
+
 DamageResult CourseCollisionSystem::ApplyWeaponHit(
     CourseSpawnRuntime& runtime,
     const CourseAsset* course,
@@ -165,7 +207,9 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     const float dt = (std::max)(0.0f, input.deltaTime);
     weaponFeedbackSystem_.Update(dt);
     lastFrameStats_ = {};
-    projectileShootDownSystem_.BeginFrame();
+    if(!projectileLockFramePrepared_)projectileShootDownSystem_.BeginFrame();
+    projectileLockFramePrepared_=false;
+    lastFrameStats_.enemyProjectilesShotDown=projectileShootDownSystem_.Frame().projectilesDestroyed;
     playerShotTraces_.clear();
     attackInterruptSystem_.BeginFrame();
     lastShotVisible_ = false;
@@ -223,6 +267,30 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         weapon_.tracerForwardDistance = pulseCannon->tracerForwardDistance;
         weapon_.muzzleRadius = pulseCannon->muzzleRadius;
         weapon_.tracerRadius = pulseCannon->tracerRadius;
+    }
+
+    // Resolve the player's authorized pulses before projectile/body contact.
+    // A round dispersed on this frame cannot also damage the cart this frame.
+    WeaponFireInput fireInput{};
+    fireInput.weaponId = RailWeaponIds::PulseCannon;
+    fireInput.deltaTime = dt;
+    fireInput.enabled = weapon_.enabled;
+    fireInput.triggerHeld = weapon_.triggerHeld;
+    fireInput.triggerPressed = weapon_.triggerPressed;
+    fireInput.triggerReleased = weapon_.triggerReleased;
+    fireInput.damageMultiplier = weapon_.damageMultiplier;
+    lastWeaponFireResult_ = UpdateWeaponFire(fireInput);
+    weapon_.shotTimer = lastWeaponFireResult_.cooldownRemaining;
+    lastFrameStats_.playerShotsFired +=
+        static_cast<uint32_t>(lastWeaponFireResult_.shots.size());
+    for (const WeaponShot& shot : lastWeaponFireResult_.shots) {
+        FirePlayerShot(runtime, input, shot);
+        if (lastShotHasWorldPoint_) {
+            // Catch-up contacts also resolve now, so every corresponding
+            // instantaneous pulse must be visible on this same render frame.
+            playerShotTraces_.push_back({shot.shotId,lastShotWorldPoint_,0,
+                PrimaryMuzzle(input,weapon_.muzzleForwardOffset),weapon_.radius});
+        }
     }
 
     for (const CourseBulletActor& bullet : runtime.Bullets()) {
@@ -373,27 +441,6 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         }
     }
 
-    WeaponFireInput fireInput{};
-    fireInput.weaponId = RailWeaponIds::PulseCannon;
-    fireInput.deltaTime = dt;
-    fireInput.enabled = weapon_.enabled;
-    fireInput.triggerHeld = weapon_.triggerHeld;
-    fireInput.triggerPressed = weapon_.triggerPressed;
-    fireInput.triggerReleased = weapon_.triggerReleased;
-    fireInput.damageMultiplier = weapon_.damageMultiplier;
-    lastWeaponFireResult_ = UpdateWeaponFire(fireInput);
-    weapon_.shotTimer = lastWeaponFireResult_.cooldownRemaining;
-    lastFrameStats_.playerShotsFired +=
-        static_cast<uint32_t>(lastWeaponFireResult_.shots.size());
-    for (const WeaponShot& shot : lastWeaponFireResult_.shots) {
-        FirePlayerShot(runtime, input, shot);
-        if (lastShotHasWorldPoint_) {
-            const size_t index = &shot - lastWeaponFireResult_.shots.data();
-            const float age = float(lastWeaponFireResult_.shots.size() - 1 - index) * weapon_.shotInterval;
-            playerShotTraces_.push_back({shot.shotId, lastShotWorldPoint_, age});
-        }
-    }
-
     runtime.PruneDestroyedActors();
     LogFrameStats(lastFrameStats_);
     return lastFrameStats_;
@@ -460,10 +507,56 @@ void CourseCollisionSystem::FirePlayerShot(
     lastDamageResult_ = {};
     lastWeaponFeedbackResult_ = {};
 
-    const RailAimState* aim = input.worldAim;
+    RailAimState shotAim = input.worldAim ? *input.worldAim : RailAimState{};
+    const RailAimState* aim = &shotAim;
     if (aim == nullptr || !aim->valid || !Finite(aim->worldRayOrigin) ||
         !Finite(aim->worldRayDirection)) {
         return;
+    }
+
+    bool focusedGatlingClash=true;
+    if (input.railPath != nullptr) {
+        bool projectileDepth=false;
+        if(input.convergePrimaryOnGatling) {
+            const auto cameraDirection=NormalizeOr(shotAim.worldRayDirection,{0,0,1});
+            float nearest=shotAim.hasWorldHit ? shotAim.aimDistance : shotAim.maxDistance;
+            if(nearest<=0)nearest=shot.range+64;
+            for(const auto& bullet:runtime.Bullets()) {
+                if(!bullet.active || bullet.hitConsumed || !bullet.shootDownEnabled ||
+                    bullet.age>=bullet.lifetime || !RailGatling::IsProjectile(bullet.definitionId))continue;
+                const auto center=ResolveEnemyProjectileWorldPosition(*input.railPath,
+                    {bullet.lateralOffset,bullet.verticalOffset,bullet.spawnDistance+bullet.distanceOffset});
+                const auto delta=Add(center,Scale(shotAim.worldRayOrigin,-1));
+                const float along=delta.x*cameraDirection.x+delta.y*cameraDirection.y+delta.z*cameraDirection.z;
+                const auto closest=Add(shotAim.worldRayOrigin,Scale(cameraDirection,along));
+                const float offSquared=LengthSquared(Add(center,Scale(closest,-1)));
+                const float radius=(std::max)(.05f,bullet.radius*bullet.shootDownRadiusScale)+weapon_.radius;
+                if(along<=0 || offSquared>radius*radius)continue;
+                const float entry=along-std::sqrt((std::max)(0.0f,radius*radius-offSquared));
+                if(entry>=nearest)continue;
+                nearest=entry;shotAim.worldAimPoint=closest;projectileDepth=true;
+            }
+        }
+        if(input.convergePrimaryOnGatling)focusedGatlingClash=projectileDepth;
+        // The camera selects the visible point, but weapon reach starts at the
+        // cart's muzzle. Pulling the camera back must not shorten the gun.
+        shotAim.worldRayOrigin=PrimaryMuzzle(input,weapon_.muzzleForwardOffset);
+        const Vector3 delta{shotAim.worldAimPoint.x-shotAim.worldRayOrigin.x,
+            shotAim.worldAimPoint.y-shotAim.worldRayOrigin.y,shotAim.worldAimPoint.z-shotAim.worldRayOrigin.z};
+        shotAim.worldRayDirection=NormalizeOr(delta,aim->worldRayDirection);
+        shotAim.aimDistance=std::sqrt(LengthSquared(delta));
+        if(projectileDepth) {
+            // The converged muzzle ray must still respect real world cover.
+            // No synthetic world hit or enlarged interception radius is used.
+            shotAim.maxDistance=shot.range;
+            RailWorldRaycastInput blocker;blocker.aim=&shotAim;blocker.railPath=input.railPath;
+            blocker.spawnRuntime=&runtime;blocker.course=input.course;blocker.playerDistance=input.player.distance;
+            blocker.terrainSettings=input.primaryTerrainSettings;
+            blocker.terrainEdits=input.course?&input.course->terrainEditLayer:nullptr;
+            blocker.terrainPreview=input.primaryTerrainPreview;
+            blocker.includeProceduralTerrain=input.primaryTerrainSettings!=nullptr;
+            ApplyRailAimHit(shotAim,RailWorldRaycast::Query(blocker));
+        }
     }
 
     const Vector3 direction = NormalizeOr(aim->worldRayDirection, {0.0f, 0.0f, 1.0f});
@@ -478,19 +571,25 @@ void CourseCollisionSystem::FirePlayerShot(
         shootDownRequest.maximumWorldHitDistance =
             aim->hasWorldHit ? aim->aimDistance : shot.range;
         shootDownRequest.damage = shot.damage;
+        shootDownRequest.primaryRadius = weapon_.radius;
+        shootDownRequest.focusedGatlingClash=focusedGatlingClash;
+        const auto destroyedBefore=projectileShootDownSystem_.Frame().projectilesDestroyed;
         const EnemyProjectileShootDownResult shootDown =
-            runtime.ShootDownProjectile(
+            runtime.ShootDownPrimaryProjectile(
                 projectileShootDownSystem_,
                 *input.railPath,
                 shootDownRequest);
         if (shootDown.accepted) {
+            if(shootDown.appliedDamage==0) {
+                CourseVfxCueDesc shield;shield.id="heavy_shell_deflect";shield.effectName="ice_impact";
+                shield.hasWorldPosition=true;shield.worldPosition=Add(shootDown.worldHitPoint,Scale(shootDown.worldHitNormal,-shootDown.primaryRadius));shield.radius=.45f;
+                shield.lifetime=.12f;shield.color={.65f,.88f,1,1};runtime.SpawnVfxCue(std::move(shield));
+            }
             lastShotWorldPoint_ = shootDown.worldHitPoint;
             lastShotWorldNormal_ = shootDown.worldHitNormal;
             lastShotDistance_ = input.player.distance + shootDown.hitDistance;
             lastShotHasWorldHit_ = true;
-            if (shootDown.destroyed) {
-                ++lastFrameStats_.enemyProjectilesShotDown;
-            }
+            lastFrameStats_.enemyProjectilesShotDown+=projectileShootDownSystem_.Frame().projectilesDestroyed-destroyedBefore;
             ++lastFrameStats_.playerShotWorldHits;
             return;
         }
@@ -514,6 +613,12 @@ void CourseCollisionSystem::FirePlayerShot(
     request.hitNormal = aim->worldAimNormal;
     request.hitDistance = aim->aimDistance;
     request.baseDamage = shot.damage;
+    if(request.hitKind==RailAimHitKind::Enemy && request.targetActorId!=0 &&
+        request.targetActorId==input.bonusTargetActorId && std::isfinite(input.bonusDamageMultiplier))
+    {
+        request.baseDamage*=(std::clamp)(input.bonusDamageMultiplier,1.0f,4.0f);
+        if(input.bonusDamageMultiplier>1)request.counterTargetActorId=request.targetActorId;
+    }
     ApplyWeaponHit(runtime, input.course, request);
 
     if (!lastWeaponFeedbackResult_.accepted) {

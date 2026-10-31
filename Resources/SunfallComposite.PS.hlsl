@@ -45,9 +45,9 @@ float4 main(PSInput input) : SV_TARGET {
     float haze=SunfallDistanceHaze(reference,gOutdoor);
     // Distance-limited haze leaves the close combat space clear. Distant
     // silhouettes converge toward the same sunlit horizon as the sky.
-    float3 air=SunfallHorizon(gSunColor,gSunIntensity);
+    float3 air=SunfallBackdropHorizon(gSunColor);
     float distant=smoothstep(300.0f,1250.0f,reference);
-    air=lerp(lerp(SunfallZenith(gSunColor),air,0.70f),air,distant);
+    air=lerp(lerp(SunfallZenith(gSunColor)*.55f,air,0.70f),air,distant);
     if(reference<gFar*0.98f) color=lerp(color,air,haze);
     return float4(color,scene.a);
 }

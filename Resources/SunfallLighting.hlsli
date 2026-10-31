@@ -8,11 +8,16 @@ float3 SunfallZenith(float3 sunColor) {
 float3 SunfallHorizon(float3 sunColor,float sunIntensity) {
     return lerp(float3(1.0f,0.92f,0.76f),sunColor,0.30f)*(1.0f+0.18f*min(sunIntensity,3.5f));
 }
+float3 SunfallBackdropHorizon(float3 sunColor) {
+    // Background radiance is a composition value, separate from the brighter
+    // irradiance used to light rock and metal. Keep room for pale enemies.
+    return lerp(float3(.46f,.56f,.66f),float3(.62f,.54f,.42f),saturate(1-sunColor.b)*.32f);
+}
 float3 SunfallSkyRadiance(float3 direction,float3 toSun,float3 sunColor,float sunIntensity) {
     float facing=saturate(dot(direction,toSun));
     float horizon=exp(-abs(direction.y)*3.8f);
-    float3 sky=lerp(SunfallZenith(sunColor),SunfallHorizon(sunColor,sunIntensity),horizon);
-    float halo=pow(facing,10.0f)*0.32f+pow(facing,85.0f)*0.55f;
+    float3 sky=lerp(SunfallZenith(sunColor)*.55f,SunfallBackdropHorizon(sunColor),horizon);
+    float halo=pow(facing,10.0f)*0.12f+pow(facing,85.0f)*0.20f;
     float disk=pow(facing,1800.0f)*2.2f;
     return sky+lerp(sunColor,float3(1.0f,0.96f,0.85f),0.40f)*(halo+disk)*min(sunIntensity,3.5f);
 }

@@ -1,5 +1,7 @@
 #include "RailTurretGeometry.h"
 #include "EnemyCombatPresentationBridge.h"
+#include "RailEnemyEnergyPalette.h"
+#include "RailBatteryThermalPresentation.h"
 
 #include "CourseSpawnRuntime.h"
 #include "EnemyEncounterReadabilityDirector.h"
@@ -494,6 +496,9 @@ void EnemyCombatPresentationBridge::Reset() {
 
 void EnemyCombatPresentationBridge::Update(
     const EnemyCombatPresentationInput& input) {
+    std::array<std::pair<uint32_t,RailBatteryThermalFrame>,2> previousThermals{};size_t previousCount=0;
+    for(const auto& actor:frame_.actors)if(actor.batteryThermal.valid && previousCount<previousThermals.size())
+        previousThermals[previousCount++]={actor.actorId,actor.batteryThermal};
     frame_.actors.clear();
     frame_.audioCues.clear();
     frame_.vfxCommands.clear();
@@ -557,7 +562,12 @@ void EnemyCombatPresentationBridge::Update(
                 actor.combatState.phase != EnemyCombatPhase::Retired;
             const bool warning = alive && actor.fireEnvironmentReady && actor.behaviorState.attackIntentActive &&
                 actor.attackState.tokenReserved && actor.behaviorState.telegraphPresented;
-            const bool firing = alive && (actor.attackState.committedThisFrame ||
+            const bool burstFiring=actor.desc.meshId=="gatling_turret" && std::any_of(
+                input.runtime->Bullets().begin(),input.runtime->Bullets().end(),[&](const auto& bullet) {
+                    return bullet.ownerActorId==actor.actorId && !bullet.hitConsumed &&
+                        (bullet.launchDelayRemaining>0 || (bullet.active && bullet.age<.09f));
+                });
+            const bool firing = alive && (burstFiring || actor.attackState.committedThisFrame ||
                 (actor.attackState.phase == EnemyAttackRuntimePhase::Recovery &&
                  actor.behaviorState.stateElapsedSeconds < 0.14f));
             output.turretMuzzleActive = warning || firing;
@@ -565,6 +575,20 @@ void EnemyCombatPresentationBridge::Update(
                 (std::max)(0.05f,actor.behaviorDefinition.attackLeadSeconds)) : (firing ? 1.0f : 0.0f);
             output.coreColor = firing ? Vector4{1.0f,1.0f,0.90f,output.materialColor.w} :
                 Vector4{1.0f,0.32f+0.60f*output.weaponCharge,0.06f,output.materialColor.w};
+            if(actor.desc.actorAssetId=="short_mothership_rapid" || actor.desc.actorAssetId=="short_mothership_heavy") {
+                output.batteryThermal=BuildRailBatteryThermalFrame(actor,*input.runtime,input.minibossCombat,input.attackWarnings,
+                    input.counterActorId,input.counterAmount);
+                if(input.deltaTime<=0 && input.attackWarnings && alive)for(size_t i=0;i<previousCount;++i)
+                    if(previousThermals[i].first==actor.actorId && previousThermals[i].second.clock==actor.age)
+                        output.batteryThermal=previousThermals[i].second;
+                const auto phase=output.batteryThermal.phase;
+                const bool charge=phase==RailBatteryThermalPhase::Charging || phase==RailBatteryThermalPhase::Imminent;
+                const bool emitted=phase==RailBatteryThermalPhase::Firing;
+                output.turretMuzzleActive=charge || emitted;
+                output.weaponCharge=charge?.18f+.82f*output.batteryThermal.charge:emitted?1.0f:0;
+                const auto& palette=RailEnemyEnergy::ForActor(actor.desc.actorAssetId);
+                output.coreColor=RailEnemyEnergy::Alpha(emitted?palette.hot:palette.surface,output.materialColor.w);
+            }
             if (alive) {
                 // A planted pedestal and rotating head, not a hovering drone.
                 output.forwardOffset = output.lateralOffset = output.verticalOffset = 0;
@@ -573,6 +597,24 @@ void EnemyCombatPresentationBridge::Update(
                 output.scaleMultiplier = 1;
                 output.materialColor = {0.85f,0.91f,1.0f,1.0f};
                 output.visible=true;
+                if(actor.actorId==input.counterActorId && input.counterAmount>0) {
+                    const float hit=actor.actorId==input.counterHitActorId ? (std::clamp)(input.counterHitPulse,0.0f,1.0f) : 0;
+                    // Steady warm overload, distinct from the red firing tell.
+                    // Never strobe the painted armour or alter the aiming pose.
+                    output.materialColor={1.0f,.68f+hit*.24f,.22f+hit*.55f,1};
+                    output.emissiveStrength=1.4f+hit;
+                    output.turretMuzzleActive=true;
+                    output.weaponCharge=.65f;
+                    output.coreColor={2.2f,1.35f+hit*.5f,.30f+hit*.4f,1};
+                }
+                if(actor.actorId==input.counterHitActorId && input.counterHitPulse>0) {
+                    // Credited lasers can arrive after the counter closes;
+                    // their contact still belongs to this gun, not the next one.
+                    const float hit=(std::clamp)(input.counterHitPulse,0.0f,1.0f);
+                    output.materialColor={.85f+.15f*hit,.91f+.05f*hit,1-.22f*hit,1};
+                    output.emissiveStrength=1.4f+hit;
+                    output.coreColor={2.2f,1.85f,.7f+hit*.5f,1};
+                }
             }
         }
         frame_.actors.push_back(output);

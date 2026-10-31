@@ -363,13 +363,26 @@ void EnemyFormationSystem::ApplyHoverSpacing(std::span<CourseEnemyActor> actors,
         auto& actor=*slot.actor;
         auto& member=actor.formationState;
         if(!slot.active || !spatialHomes) continue;
+        // A short, already-visible authored entrance owns its screen slot.
+        // Carrier and exterior flights retain their normal home search. Both
+        // paths still fit the real terrain cross-section below.
+        const bool localAuthored=actor.desc.entrySource==EnemyEntrySource::LocalApproach &&
+            actor.desc.formationDefinition.preserveAuthoredSlots;
+        const float homeDistance=spatialContext->playerDistance+actor.behaviorState.hoverPreferredForwardDistance;
+        const float floor=(std::max)(3.5f,actor.desc.radius*2.4f);
+        if(!member.hoverHomeReserved && localAuthored) {
+            float side=actor.behaviorState.authoredLateralOffset;
+            float height=(std::max)(floor,actor.behaviorState.authoredVerticalOffset);
+            if(terrainBound(actor,homeDistance,side,height) && height>=floor) {
+                member.hoverHomeLateral=side;member.hoverHomeVertical=height;
+                member.hoverHomeReserved=true;
+            }
+        }
         if(!member.hoverHomeReserved) {
             // Reserve across all waves, scoring the projected destination rather
             // than just world-space distance. The actor keeps this home for life.
-            const float homeDistance=spatialContext->playerDistance+actor.behaviorState.hoverPreferredForwardDistance;
             const float halfWidth=(std::clamp)(spatialContext->terrainSettings->canyonHalfWidth*0.64f,12.0f,28.0f);
             const float top=(std::clamp)(spatialContext->terrainSettings->wallHeight*0.54f,10.0f,20.0f);
-            const float floor=(std::max)(3.5f,actor.desc.radius*2.4f);
             float bestScore=-1.0f;
             for(uint32_t candidate=0;candidate<28;++candidate) {
                 float side=(-1.0f+static_cast<float>(candidate%7)/3.0f)*halfWidth+

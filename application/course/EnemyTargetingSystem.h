@@ -88,7 +88,7 @@ struct EnemyProjectileAimSolution final {
 EnemyProjectileAimSolution ResolveEnemyProjectileAimSolution(
     const CourseEnemyActor& actor, const Vector3& muzzle, float launchDelaySeconds = 0.0f);
 bool CanEnemyProjectileVolleyReachTarget(const CourseEnemyActor& actor, float launchDelaySeconds = 0.0f);
-Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor, int projectileIndex);
+Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor, int projectileIndex,float launchDelaySeconds=0);
 Vector3 ResolveEnemyProjectileWorldPosition(const RailPath& rail, Vector3 position);
 Vector3 ResolveEnemyProjectileWorldPosition(const RailPathSample& sample, Vector3 position);
 

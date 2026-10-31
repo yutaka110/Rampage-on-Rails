@@ -873,6 +873,11 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame.forward=NormalizeOr(Subtract(frame.target,frame.position),cameraSample.tangent);
         AppendMode(frame.mode,"READY Pursuit");
     }
+    // Frame the ordinary chase pose before blending to an explicit view.
+    // This keeps the solver history alive and fades its correction with the
+    // same weight as the chase pose, including the first/last blend frames.
+    // Solving against the cinematic eye would instead chase its close-up.
+    ApplyVehicleFraming(frame, input, cameraSample);
     // Explicit camera sections own the pose, while the common collision,
     // visibility and comfort passes below still inspect the final result.
     if (frame.authoredView.mode != CourseCameraViewMode::Inherit && frame.authoredView.Validate()) {
@@ -896,6 +901,8 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
             Add(Scale(cameraSample.right, view.positionOffset.x),
                 Add(Scale(cameraSample.up, view.positionOffset.y), Scale(cameraSample.tangent, view.positionOffset.z))));
         frame.position = LerpVector3(frame.position, eye, w);
+        frame.vehicleFramingPullback *= 1.0f - w;
+        frame.vehicleFramingLift *= 1.0f - w;
         frame.target = Add(frame.position, Scale(direction, 54.0f));
         frame.baseTarget = frame.target;
         frame.rig.fovY = Lerp(frame.rig.fovY, view.fovY, w);
@@ -905,7 +912,6 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame.viewRelativeTargeting = w > 0.0f;
         AppendMode(frame.mode, ToCourseCameraViewModeString(view.mode));
     }
-    ApplyVehicleFraming(frame, input, cameraSample);
     // Collision and sight checks must inspect the corrected/transitioned pose.
     ApplyCameraCollisionProtection(frame, input, cameraSample, frame.mode);
     ApplyLineOfSightSafety(frame, input, frame.mode);
@@ -952,6 +958,14 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
 
     frame.forward = NormalizeOr(Subtract(frame.target, frame.position), cameraSample.tangent);
     frame.up = RotateAroundAxis(cameraSample.up, frame.forward, frame.rig.roll);
+    // Composition pressure can change when a downhill target enters the
+    // frustum. Bound the FINAL lens correction as well as the base rig, so
+    // this authored ridge never produces a one-frame zoom at that handoff.
+    if(const auto* shot=input.course->FindCinematicShotSet(input.distance);
+            shot && shot->id=="blockout-shot-ridge" && hasPreviousComfortFrame_ && input.deltaTime>0) {
+        const float step=.35f*(std::min)(input.deltaTime,.25f);
+        frame.rig.fovY=(std::clamp)(frame.rig.fovY,previousFovY_-step,previousFovY_+step);
+    }
     frame.fovY = frame.rig.fovY;
     frame.modeKind = ClassifyMode(frame.mode);
     frame.railSpeed = input.railSpeed > 0.0f ? input.railSpeed : cameraSample.speed;
@@ -994,7 +1008,7 @@ void RailCameraDirector::ApplyVehicleFraming(
     RailCameraDirectorFrame& frame,
     const RailCameraDirectorFrameInput& input,
     const RailPathSample& cameraSample) {
-    if (!input.vehicleFramingActive || frame.authoredViewWeight > 0.0f) {
+    if (!input.vehicleFramingActive) {
         vehicleFramingPullback_ = 0.0f;
         vehicleFramingLift_ = 0.0f;
         return;
@@ -1385,7 +1399,7 @@ void RailCameraDirector::UpdateLookAtTarget(
                     resolved = true;
                     break;
                 }
-            } else {
+            } else if(token.target.kind==RailLockTargetKind::Obstacle) {
                 for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
                     if (obstacle.actorId != token.target.actorId) {
                         continue;
@@ -1584,7 +1598,7 @@ void RailCameraDirector::ApplyCompositionSafety(
                     }
                     break;
                 }
-            } else {
+            } else if(token.target.kind==RailLockTargetKind::Obstacle) {
                 for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
                     if (obstacle.actorId != token.target.actorId) {
                         continue;
@@ -1833,7 +1847,7 @@ void RailCameraDirector::ApplyLineOfSightSafety(
                     }
                     break;
                 }
-            } else {
+            } else if(token.target.kind==RailLockTargetKind::Obstacle) {
                 for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
                     if (obstacle.actorId != token.target.actorId) {
                         continue;

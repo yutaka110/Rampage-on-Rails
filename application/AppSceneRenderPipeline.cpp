@@ -1,4 +1,6 @@
 #include "AppSceneRenderPipeline.h"
+#include "AppPostProcessPipeline.h"
+#include <string_view>
 #include "AppLogFile.h"
 #include "editor/scene/EditorProductionScenePipeline.h"
 #include "editor/geometry/EditorTransientMeshRenderPath.h"
@@ -1470,40 +1472,7 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
                 ctx.scene->skeletonDebugVertexCount);
         }});
 
-    ctx.renderGraph->AddPass({
-        "Gameplay.EnemyThreatVisuals",
-        ge3::graphics::RenderPassLayer::Geometry,
-        {
-            {"SceneColor", ge3::graphics::RenderResourceAccessType::WriteRtv},
-            {"SceneDepth", ge3::graphics::RenderResourceAccessType::ReadDepth},
-        },
-        "SceneDepth",
-        [ctx](ge3::graphics::RenderPassContext& passContext) {
-            // Hostile projectile and lane readability is a gameplay contract,
-            // so this pass is intentionally independent from every Debug.Draw
-            // and editor visualization flag.
-            if (ctx.scene->enemyThreatVisualDraw.VertexCount() == 0 ||
-                !ctx.scene->enemyThreatVisualDraw.IsReady()) {
-                return;
-            }
-
-            const bool ready = ctx.frameRenderer->PrepareMainPass(
-                passContext.commandList,
-                ctx.srvDescriptorHeap,
-                ctx.runtimeState->viewport,
-                ctx.runtimeState->scissorRect,
-                ctx.appPipelines->GetSkeletonDebugRootSignature(),
-                ctx.appPipelines->GetSkeletonDebugDepthTestPSO() != nullptr
-                    ? ctx.appPipelines->GetSkeletonDebugDepthTestPSO()
-                    : ctx.appPipelines->GetSkeletonDebugPSO());
-            if (!ready) return;
-
-            ctx.frameRenderer->DrawSkeletonDebugLines(
-                passContext.commandList,
-                ctx.scene->enemyThreatVisualDraw.VertexBufferView(),
-                ctx.scene->enemyThreatVisualDraw.TransformBufferAddress(),
-                ctx.scene->enemyThreatVisualDraw.VertexCount());
-        }});
+    RegisterEnemyThreatVisualPass(ctx);
 
     ctx.renderGraph->AddPass({
         "Debug.Draw",
@@ -1545,6 +1514,24 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         }});
 }
 
+
+void AppSceneRenderPipeline::RegisterEnemyThreatVisualPass(const AppFrameGraphBuildContext& ctx) {
+    const bool hdr=std::string_view(AppPostProcessPipeline::WorldVfxTarget(ctx))=="SunfallColor";
+    AppPostProcessPipeline::RegisterWorldVfxPass(ctx,"Gameplay.EnemyThreatVisuals",
+        [ctx,hdr](ge3::graphics::RenderPassContext& pass) {
+            if(!ctx.scene || !ctx.frameRenderer || !ctx.appPipelines ||
+                ctx.scene->enemyThreatVisualDraw.VertexCount()==0 || !ctx.scene->enemyThreatVisualDraw.IsReady())return;
+            const auto pipeline=ctx.appPipelines->GetHdrPostProcessPSO(hdr?"EnemyThreatLines":"EnemyThreatLinesLdr");
+            if(!pipeline)return;
+            if(!ctx.frameRenderer->PrepareMainPass(pass.commandList,ctx.srvDescriptorHeap,
+                ctx.runtimeState->viewport,ctx.runtimeState->scissorRect,
+                ctx.appPipelines->GetSkeletonDebugRootSignature(),pipeline))return;
+            ctx.frameRenderer->DrawSkeletonDebugLines(pass.commandList,
+                ctx.scene->enemyThreatVisualDraw.VertexBufferView(),
+                ctx.scene->enemyThreatVisualDraw.TransformBufferAddress(),
+                ctx.scene->enemyThreatVisualDraw.VertexCount());
+        });
+}
 
 void AppSceneRenderPipeline::RegisterRailBoostProtectionPass(const AppFrameGraphBuildContext& ctx) const {
     if (!ctx.HasRailBoostBlur()) return;

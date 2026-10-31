@@ -36,6 +36,7 @@ struct EnemyAttackDefenseOutcomeAudioCue final {
 struct EnemyAttackDefenseOutcomeFeedbackFrame final {
     std::vector<EnemyAttackDefenseOutcomeAudioCue> audioCues;
     uint64_t resultSequence = 0;
+    uint32_t actorId = 0;
     EnemyAttackDefenseMethod method = EnemyAttackDefenseMethod::None;
     EnemyAttackDefenseOutcome outcome = EnemyAttackDefenseOutcome::Failed;
     EnemyAttackDefenseGrade grade = EnemyAttackDefenseGrade::None;
@@ -65,6 +66,9 @@ struct EnemyAttackDefenseOutcomeFeedbackFrame final {
 
 struct EnemyAttackDefenseOutcomeFeedbackInput final {
     std::span<const EnemyAttackDefenseResult> results{};
+    // These sources own local projectile feedback and a separate whole-volley
+    // reward. Consume their per-contact successes without a generic celebration.
+    std::span<const uint32_t> localSuccessActors{};
     float deltaTime = 0.016f;
     bool gameplayActive = true;
     EnemyAttackDefenseOutcomeFeedbackSettings settings{};

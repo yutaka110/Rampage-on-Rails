@@ -99,7 +99,7 @@ public:
             // Preserve the horizontal entrance, then clear the new high ridge
             // before descending toward the battle lane.
             if(distance>=1950) {
-                const float altitude=rail.EvaluateExtended(distance+EscortForwardOffset).position.y+Height;
+                const float altitude=rail.EvaluateExtended(distance+EscortForwardOffset).position.y+Height+RidgeVistaLift(distance);
                 frame_.center.y += (altitude-frame_.center.y)*Smooth(distance,1950,2250);
             }
             if(distance>=3100) {

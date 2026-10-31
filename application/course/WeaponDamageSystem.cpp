@@ -2,6 +2,7 @@
 
 #include "CourseAsset.h"
 #include "CourseSpawnRuntime.h"
+#include "RailBatteryDamagePolicy.h"
 
 #include <algorithm>
 #include <cmath>
@@ -54,7 +55,9 @@ bool ValidRequest(const WeaponHitRequest& request) {
 
 void ApplyHitPoints(float& hitPoints, DamageResult& result) {
     result.hitPointsBefore = (std::max)(hitPoints, 0.0f);
-    result.appliedDamage = (std::min)(result.requestedDamage, result.hitPointsBefore);
+    const float effectiveDamage = result.requestedDamage *
+        (result.armorReduced ? RailBatteryDamage::ArmoredMultiplier : 1.0f);
+    result.appliedDamage = (std::min)(effectiveDamage, result.hitPointsBefore);
     hitPoints = (std::max)(0.0f, result.hitPointsBefore - result.appliedDamage);
     result.remainingHitPoints = hitPoints;
     result.damageApplied = result.appliedDamage > 0.0f;
@@ -141,6 +144,10 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 result.remainingHitPoints = currentHitPoints;
                 return result;
             }
+            const bool counter = request.counterTargetActorId==enemy.actorId &&
+                RailBatteryDamage::IsCounterWeapon(enemy.desc.actorAssetId,request.lockOnContact) &&
+                request.damageType==(request.lockOnContact?WeaponDamageType::Ice:WeaponDamageType::Energy);
+            result.armorReduced = RailBatteryDamage::IsBattery(enemy.desc.actorAssetId) && !counter;
             if (enemy.combatState.initialized) {
                 ApplyHitPoints(enemy.combatState.currentHitPoints, result);
                 enemy.desc.hitPoints = enemy.combatState.currentHitPoints;

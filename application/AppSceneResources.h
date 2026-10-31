@@ -226,6 +226,9 @@ struct AppModelObjectInstance {
 // that is uploaded by AppSceneResources.
 [[nodiscard]] ModelData BuildTrainingSwordModelDataForSubmission();
 [[nodiscard]] ModelData BuildRailVehicleModelDataForSubmission();
+[[nodiscard]] ModelData BuildRailVehicleBreakawayModelData(bool panelOnly);
+[[nodiscard]] ModelData BuildRailVehicleFractureModelData(size_t part);
+[[nodiscard]] ModelData BuildRailGameOverWheelModelData();
 // Title preview of the original gameplay material under the opening key light.
 [[nodiscard]] Material BuildRailVehicleTitleMaterial(
     const MaterialData& source, const Material& gameplayMaterial,
@@ -324,7 +327,9 @@ public:
         float currentDistance,
         const RailVehicleWheelContactPresentationFrame* wheels,
         const Matrix4x4& viewMatrix,
-        const Matrix4x4& projMatrix);
+        const Matrix4x4& projMatrix,
+        const RailVehicleRenderFrame* detachedPanel=nullptr,
+        std::span<const RailVehicleRenderFrame> fractures={});
     void SyncRailVehicleOccupantActorFrame(
         const RailVehicleOccupantActorFrame& frame,
         const Matrix4x4& viewMatrix,

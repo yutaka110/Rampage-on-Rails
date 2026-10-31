@@ -543,6 +543,7 @@
     <ClCompile Include="application\PostProcessPresetStore.cpp" />
     <ClCompile Include="application\PostProcessStack.cpp" />
     <ClCompile Include="application\AppRenderResources.cpp" />
+    <ClCompile Include="application\AppRailGameOver.cpp" />
     <ClCompile Include="application\AppRunLoop.cpp" />
     <ClCompile Include="application\AppSceneControlsPanel.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
@@ -1513,7 +1514,21 @@
     <ClInclude Include="application\course\RailBoostPresentation.h" />
     <ClInclude Include="application\course\RailMothershipPresentation.h" />
     <ClInclude Include="application\course\RailTurretGeometry.h" />
+    <ClInclude Include="application\course\RailBatteryThermalTypes.h" />
+    <ClInclude Include="application\course\RailBatteryThermalPresentation.h" />
     <ClInclude Include="application\course\RailMothershipBattle.h" />
+    <ClInclude Include="application\course\RailGameOverScene.h" />
+    <ClInclude Include="application\course\RailGameOverDiorama.h" />
+    <ClInclude Include="application\AppInputEdges.h" />
+    <ClInclude Include="application\course\RailAttackWarningPresentation.h" />
+    <ClInclude Include="application\course\RailMinibossCombatDirector.h" />
+    <ClInclude Include="application\course\RailGatlingAttack.h" />
+    <ClInclude Include="application\course\RailGatlingAimCycle.h" />
+    <ClInclude Include="application\course\RailHeavyAttack.h" />
+    <ClInclude Include="application\course\RailProjectileOrbSurface.h" />
+    <ClInclude Include="application\course\RailEnemyEnergyPalette.h" />
+    <ClInclude Include="application\course\RailVehicleBreakawayGeometry.h" />
+    <ClInclude Include="application\course\RailRetryPresentationCheckpoint.h" />
     <ClInclude Include="application\course\RailShortCourse.h" />
     <ClInclude Include="application\course\RailRideDirector.h" />
     <ClInclude Include="application\course\RailRideMotionEnvelope.h" />
@@ -1530,6 +1545,7 @@
       <ClInclude Include="application\course\WeaponFeedbackSystem.h" />
     <ClInclude Include="application\terrain\RailPath.h" />
     <ClInclude Include="application\terrain\TerrainChunkManager.h" />
+    <ClInclude Include="application\terrain\TerrainGroundSurface.h" />
     <ClInclude Include="application\terrain\TerrainCollisionWorld.h" />
     <ClInclude Include="application\terrain\TerrainGenerationSettings.h" />
     <ClInclude Include="application\terrain\TerrainMaterialLibrary.h" />
@@ -1664,6 +1680,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="Resources\Particle.hlsli" />
+    <None Include="Resources\RailChargeStroke.hlsli" />
     <None Include="Resources\EditorAssetThumbnailPreview.PS.hlsl" />
     <None Include="Resources\EditorAssetThumbnailPreview.VS.hlsl" />
     <None Include="Resources\Spear.PS.hlsl" />

@@ -2,6 +2,7 @@
 
 #include "CourseSpawnRuntime.h"
 #include "../terrain/RailPath.h"
+#include "RailHeavyAttack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -178,6 +179,26 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
         anchors_.push_back(std::move(anchor));
     }
 
+    for(const auto& p:input.spawnRuntime->Bullets()) {
+        if(!p.active || p.hitConsumed || p.launchDelayRemaining>0 || p.age>=p.lifetime ||
+            !p.shootDownEnabled || p.shootDownHitPoints<=0 || !RailHeavy::IsProjectile(p.definitionId))continue;
+        RailLockAnchor anchor;anchor.target.kind=RailLockTargetKind::Projectile;
+        anchor.target.actorId=p.ownerActorId;anchor.target.generationId=p.ownerActorId;anchor.target.projectileId=p.projectileId;
+        anchor.label="HEAVY ROUND";
+        anchor.worldPosition=ResolveRailLocal(*input.railPath,p.spawnDistance,p.distanceOffset,p.lateralOffset,p.verticalOffset);
+        anchor.screenRadius=32;anchor.forwardDistance=p.spawnDistance+p.distanceOffset-input.playerDistance;
+        if(input.viewRelativeTargeting) {
+            const auto d=Subtract(anchor.worldPosition,input.cameraPosition);const auto f=input.viewForward;
+            anchor.forwardDistance=d.x*f.x+d.y*f.y+d.z*f.z;
+        }
+        anchor.priority=1.15f;
+        anchor.maxStack=(std::min)(input.settings.maxLocks,(std::min)(RailHeavy::InterceptLocks,
+            (std::max)(1,int(std::ceil(p.shootDownHitPoints/(std::max)(1.0f,input.settings.releaseDamage))))));
+        anchor.stackAcquireIntervalSeconds=RailHeavy::LockStackSeconds;
+        anchor.lineOfSightBlocked=ResolveLineOfSightBlock(*input.spawnRuntime,*input.railPath,anchor.target,
+            input.cameraPosition,anchor.worldPosition,input.settings,anchor.lineOfSightOccluderActorId,anchor.lineOfSightBlockT);
+        anchors_.push_back(std::move(anchor));
+    }
     for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
         if (!obstacle.desc.breakable) {
             continue;

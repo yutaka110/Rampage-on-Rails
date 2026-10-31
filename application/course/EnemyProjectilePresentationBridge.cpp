@@ -1,6 +1,7 @@
 #include "EnemyProjectilePresentationBridge.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailHeavyAttack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -84,7 +85,11 @@ EnemyProjectilePresentation BuildPresentation(
     output.railRight = sample.right;
     output.railUp = sample.up;
     output.color = projectile.color;
+    output.shootDownHitPoints=projectile.shootDownHitPoints;
+    output.shootDownMaximumHitPoints=projectile.shootDownMaximumHitPoints;
     output.collisionRadius = (std::max)(0.02f, projectile.radius);
+    output.interceptionRadius=projectile.shootDownEnabled && projectile.shootDownHitPoints>0 ?
+        (std::max)(.05f,projectile.radius*projectile.shootDownRadiusScale) : 0.0f;
     output.normalizedAge = projectile.lifetime > 0.0f
         ? (std::clamp)(projectile.age / projectile.lifetime, 0.0f, 1.0f)
         : 1.0f;
@@ -167,6 +172,7 @@ void EnemyProjectilePresentationBridge::Update(
             event.worldPosition = eventPosition;
             event.motionDirection = eventMotionDirection;
             event.color = projectile.color;
+            event.definitionId=projectile.definitionId;event.bodyRadius=visual.interceptionRadius;
             event.effectId = projectile.trailEffectId;
             PushEvent(std::move(event), input.settings.maximumEventsPerFrame);
         }
@@ -198,22 +204,41 @@ void EnemyProjectilePresentationBridge::Update(
                 event.trajectory = tracked->second.trajectory;
                 event.motionDirection = tracked->second.motionDirection;
                 event.color = tracked->second.color;
+                event.definitionId=tracked->second.definitionId;event.bodyRadius=tracked->second.interceptionRadius;
             }
             PushEvent(std::move(event), input.settings.maximumEventsPerFrame);
         }
 
         for (const EnemyProjectileShootDownResult& result :
              input.shootDownResults) {
-            if (!result.accepted || !result.destroyed ||
+            if (!result.accepted || (!result.destroyed && result.appliedDamage<=0) ||
                 result.projectileId == 0) {
                 continue;
             }
+            const auto previous=tracked_.find(result.projectileId);
+            const auto current=nextTracked.find(result.projectileId);
+            const auto* source=previous!=tracked_.end()?&previous->second:current!=nextTracked.end()?&current->second:nullptr;
+            if(!result.destroyed && (!source || !RailHeavy::IsProjectile(source->definitionId) ||
+                (previous!=tracked_.end() && previous->second.shootDownHitPoints<=result.remainingHitPoints)))continue;
+            if(!result.destroyed && source && source->shootDownHitPoints<source->shootDownMaximumHitPoints && previous!=tracked_.end())continue;
             impactedIds.insert(result.projectileId);
             EnemyProjectilePresentationEvent event{};
-            event.kind = EnemyProjectilePresentationEventKind::Intercepted;
+            event.kind = result.destroyed?EnemyProjectilePresentationEventKind::Intercepted:EnemyProjectilePresentationEventKind::ShellCracked;
             event.projectileId = result.projectileId;
             event.ownerActorId = result.ownerActorId;
             event.worldPosition = result.worldHitPoint;
+            // The trace ends at the pulse centre; the spark belongs to the
+            // common surface of the two touching energy bodies.
+            if(result.primaryRadius>0)event.worldPosition=Add(event.worldPosition,Scale(result.worldHitNormal,-result.primaryRadius));
+            if(source){event.definitionId=source->definitionId;event.bodyRadius=source->interceptionRadius;
+                if(!result.destroyed)event.worldPosition=current!=nextTracked.end()?current->second.worldPosition:source->worldPosition;}
+            else for(const auto& bullet:input.runtime->Bullets())if(bullet.projectileId==result.projectileId) {
+                event.definitionId=bullet.definitionId;event.bodyRadius=bullet.radius*bullet.shootDownRadiusScale;
+                event.color=bullet.color;event.trajectory=bullet.trajectory;event.effectId=bullet.impactEffectId;break;
+            }
+            event.clashCenter=result.clashCenter;
+            event.clashRadius=result.clashRadius;
+            event.secondaryClash=result.secondaryClash;
             const auto tracked = tracked_.find(event.projectileId);
             if (tracked != tracked_.end()) {
                 event.trajectory = tracked->second.trajectory;
@@ -283,6 +308,7 @@ const char* ToString(EnemyProjectilePresentationEventKind kind) noexcept {
     case EnemyProjectilePresentationEventKind::Impacted: return "Impacted";
     case EnemyProjectilePresentationEventKind::Intercepted: return "Intercepted";
     case EnemyProjectilePresentationEventKind::Expired: return "Expired";
+    case EnemyProjectilePresentationEventKind::ShellCracked: return "ShellCracked";
     }
     return "Unknown";
 }

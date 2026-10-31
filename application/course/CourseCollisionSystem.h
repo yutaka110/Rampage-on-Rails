@@ -16,6 +16,10 @@
 #include "WeaponDefinitionRegistry.h"
 #include "WeaponFeedbackSystem.h"
 #include "WeaponFireSystem.h"
+#include "RailPulseShotPresentation.h"
+
+struct RailVehicleCombatMountFrame;
+struct TerrainGenerationSettings;
 
 struct CourseCollisionPlayerState {
     float distance = 0.0f;
@@ -37,7 +41,7 @@ struct CourseCollisionWeaponState {
     float shotTimer = 0.0f;
     float shotInterval = 0.12f;
     float range = 96.0f;
-    float radius = 2.2f;
+    float radius = RailPulseShot::ContactRadius;
     float damage = 18.0f;
     float damageMultiplier = 1.0f;
     bool assistEnabled = false;
@@ -60,6 +64,16 @@ struct CourseCollisionFrameInput {
     // RailVehicleBodyCollisionSystem. Suppress the legacy occupant-sphere
     // obstacle/terrain loops so one contact can never subtract HP twice.
     bool externalBodyCollisionAuthority = false;
+    // Target-bound primary reward; interception rays and other actors retain
+    // the weapon's normal damage. The host owns this opportunity's lifetime.
+    uint32_t bonusTargetActorId = 0;
+    float bonusDamageMultiplier = 1.0f;
+    const RailVehicleCombatMountFrame* combatMount = nullptr;
+    // Use a visible gatling round's depth for primary convergence, preserving
+    // the player's camera ray and the actual mounted muzzle.
+    bool convergePrimaryOnGatling = false;
+    const TerrainGenerationSettings* primaryTerrainSettings = nullptr;
+    const TerrainEditLayer* primaryTerrainPreview = nullptr;
 };
 
 struct CourseCollisionFrameStats {
@@ -84,6 +98,8 @@ struct CoursePlayerShotTrace final {
     uint64_t shotId = 0;
     Vector3 end{};
     float presentationAge = 0.0f;
+    Vector3 start{};
+    float radius = RailPulseShot::ContactRadius;
 };
 
 class CourseCollisionSystem {
@@ -163,6 +179,9 @@ public:
         CourseSpawnRuntime& runtime,
         const CourseAsset* course,
         const WeaponHitRequest& request);
+    EnemyProjectileShootDownResult ApplyProjectileLockHit(CourseSpawnRuntime& runtime,const RailPath& rail,
+        uint64_t projectileId,const WeaponShot& shot,Vector3 muzzle,const CourseAsset* course,
+        const TerrainGenerationSettings* terrainSettings=nullptr,const TerrainEditLayer* terrainPreview=nullptr);
     PlayerDamageResult ApplyPlayerHit(const PlayerHitRequest& request);
 
 private:
@@ -180,6 +199,7 @@ private:
     PlayerHitboxSystem playerHitboxSystem_{};
     PlayerNearMissSystem playerNearMissSystem_{};
     EnemyProjectileShootDownSystem projectileShootDownSystem_{};
+    bool projectileLockFramePrepared_ = false;
     EnemyAttackInterruptSystem attackInterruptSystem_{};
     float lastShotDistance_ = 0.0f;
     float lastShotLateralOffset_ = 0.0f;

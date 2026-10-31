@@ -34,7 +34,7 @@ bool ValidEnemyDescription(const CourseEnemyActorDesc& d) {
         d.localScale.x, d.localScale.y, d.localScale.z, d.stationaryActivationDistance}) &&
         d.stationaryActivationDistance >= -1.0f &&
         d.hitPoints >= 0.0f && d.lifetime > 0.0f && d.radius > 0.0f &&
-        d.entrySource<=EnemyEntrySource::SideOpening;
+        d.entrySource<=EnemyEntrySource::LocalApproach;
 }
 
 bool ValidObstacleDescription(const CourseObstacleActorDesc& d) {
@@ -48,11 +48,12 @@ bool ValidProjectile(const CourseBulletActor& p) {
     return p.projectileId != UINT64_MAX && FiniteValues({p.spawnDistance, p.distanceOffset,
         p.lateralOffset, p.verticalOffset, p.previousDistanceOffset, p.previousLateralOffset,
         p.previousVerticalOffset, p.forwardSpeed, p.lateralSpeed, p.verticalSpeed, p.acceleration,
-        p.maximumSpeed, p.homingTurnRateRadians, p.arcGravity, p.radius, p.lifetime, p.age, p.damage,
+        p.maximumSpeed, p.homingTurnRateRadians, p.arcGravity, p.radius, p.lifetime, p.age, p.damage,p.launchDelayRemaining,
         p.shootDownHitPoints, p.shootDownMaximumHitPoints, p.shootDownRadiusScale,
         p.lockedTargetDistance, p.lockedTargetLateralOffset, p.lockedTargetVerticalOffset,
         p.color.x, p.color.y, p.color.z, p.color.w}) && p.radius > 0.0f && p.lifetime > 0.0f &&
-        p.age >= 0.0f && p.damage >= 0.0f && p.maximumSpeed >= 0.0f &&
+        p.age >= 0.0f && p.launchDelayRemaining>=0 && p.launchDelayRemaining<=10 &&
+        !(p.active && p.launchDelayRemaining>0) && p.damage >= 0.0f && p.maximumSpeed >= 0.0f &&
         p.homingTurnRateRadians >= 0.0f && p.shootDownHitPoints >= 0.0f &&
         p.shootDownMaximumHitPoints >= p.shootDownHitPoints && p.shootDownRadiusScale > 0.0f;
 }
@@ -157,6 +158,18 @@ bool CourseSpawnRuntime::SpawnProjectile(CourseBulletActor projectile, std::stri
     return accepted;
 }
 
+uint32_t CourseSpawnRuntime::CancelEnemyVolley(uint32_t ownerActorId,uint64_t intentSequence) {
+    if(!ownerActorId || !intentSequence)return 0;
+    uint32_t cancelled=0;
+    for(auto& bullet:bullets_)if(bullet.ownerActorId==ownerActorId &&
+        bullet.attackIntentSequence==intentSequence && !bullet.hitConsumed &&
+        (bullet.active || bullet.launchDelayRemaining>0)) {
+        bullet.active=false;bullet.hitConsumed=true;bullet.launchDelayRemaining=0;
+        ++cancelled;
+    }
+    return cancelled;
+}
+
 EnemyProjectileShootDownResult CourseSpawnRuntime::ShootDownProjectile(
     EnemyProjectileShootDownSystem& system, const RailPath& railPath,
     const EnemyProjectileShootDownRequest& request) {
@@ -166,6 +179,12 @@ EnemyProjectileShootDownResult CourseSpawnRuntime::ShootDownProjectile(
 void CourseSpawnRuntime::ClearProjectiles() {
     bullets_.clear();
     // Preserve the ID allocator so an old damage-history ID is never reused.
+}
+
+EnemyProjectileShootDownResult CourseSpawnRuntime::ShootDownPrimaryProjectile(
+    EnemyProjectileShootDownSystem& system,const RailPath& railPath,
+    const EnemyProjectileShootDownRequest& request) {
+    return system.SubmitPrimary(bullets_,railPath,request);
 }
 
 void CourseSpawnRuntime::SetEnemyScreenPresence(
@@ -311,6 +330,8 @@ bool CourseSpawnRuntime::ValidateCheckpoint(
     for (const CourseEnemyActor& actor : checkpoint.enemies) {
         valid = valid && validId(actor.actorId) && ValidEnemyDescription(actor.desc) &&
             FiniteValues({actor.age, actor.fireTimer, actor.fireVisibleTime}) && actor.age >= 0.0f &&
+            FiniteValues({actor.turretMotion.rotorAngle,actor.turretMotion.rotorSpeed,actor.turretMotion.lastFireAge}) &&
+            actor.turretMotion.rotorSpeed>=0 && actor.turretMotion.rotorSpeed<=RailTurret::SpinSpeed+.001f &&
             ValidateRailEnemyIngress(actor.terrainIngress) &&
             (!actor.carrierDeployment.initialized ||
                 (FiniteValues({actor.carrierDeployment.elapsed,actor.carrierDeployment.delay,
@@ -374,6 +395,14 @@ void CourseSpawnRuntime::Update(float deltaTime) {
     Update(deltaTime, safetyInput);
 }
 
+void CourseSpawnRuntime::UpdateDefeatPresentation(float deltaTime, CourseEnemyFireSafetyFrameInput safetyInput) {
+    if(!std::isfinite(deltaTime) || deltaTime<=0) return;
+    for(auto& enemy:enemies_) enemy.desc.suppressFire=true;
+    safetyInput.cameraAllowsEnemyFire=false;
+    safetyInput.deltaTime=deltaTime;
+    Update(deltaTime,safetyInput);
+}
+
 void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput) {
     const drone_perf::Scope profile(drone_perf::Stage::Spawn);
     const float dt = (std::max)(0.0f, deltaTime);
@@ -398,6 +427,23 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     enemyEntranceExitDirector_.BeginFrame(*this);
     enemyFormationSystem_.BeginFrame(*this);
     UpdateTerrainIngresses(dt,safetyInput);
+
+    const auto placeCarrierWeapons = [&]() {
+        for (auto& actor : enemies_) {
+            if (RailMothership::PartIndex(actor.desc.actorAssetId)<0 || actor.desc.hitPoints<=0) continue;
+            auto& state=actor.behaviorState;
+            actor.desc.distanceOffset=safetyInput.playerDistance+RailMothership::PartForwardDistance-actor.desc.spawnDistance;
+            state.integratedForwardOffset=actor.desc.distanceOffset-state.authoredForwardOffset-state.behaviorForwardOffset;
+            state.engagementBandForwardDistance=RailMothership::PartForwardDistance;
+            state.engagementBandVelocity=(std::max)(0.0f,safetyInput.playerSpeed);
+            actor.desc.lateralOffset=state.authoredLateralOffset;
+            actor.desc.verticalOffset=state.authoredVerticalOffset;
+            state.behaviorLateralOffset=state.behaviorVerticalOffset=state.safetyLateralOffset=0;
+        }
+    };
+    // Both weapons belong to one pursuing hull. Authored spawn distance or
+    // independent engagement smoothing must never strand either out of range.
+    placeCarrierWeapons();
 
     EnemyCombatFrameInput combatInput{};
     combatInput.deltaTime = dt;
@@ -479,6 +525,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     enemyBehaviorSystem_.Update(*this, behaviorInput);
     enemyFormationSystem_.Update(*this, dt, safetyInput.railPath, &safetyInput);
     enemyEntranceExitDirector_.Update(*this, dt);
+    placeCarrierWeapons();
     // Check the final staged pose, not just Behavior's pre-formation position.
     EnforceEnemyEngagementClearance(safetyInput);
     fireSafetyStats_ = {};
@@ -512,6 +559,11 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     }
 
     enemyAttackCoordinator_.Update(*this, enemyBehaviorSystem_.Frame(), dt);
+    for(auto& actor:enemies_)if(RailTurret::ForMesh(actor.desc.meshId).movingMesh) {
+        const bool alive=actor.desc.hitPoints>0 && actor.combatState.phase!=EnemyCombatPhase::Dying && actor.combatState.phase!=EnemyCombatPhase::Retired;
+        const bool warning=actor.fireEnvironmentReady && actor.behaviorState.attackIntentActive && actor.attackState.tokenReserved;
+        RailTurret::UpdateMotion(actor.turretMotion,actor.age,actor.fireSequence,dt,warning,alive,actor.desc.meshId=="gatling_turret");
+    }
     EnemyTargetingFrameInput targetingInput{};
     targetingInput.travelPredictionInput = safetyInput.travelPredictionInput;
     targetingInput.railPath = safetyInput.railPath;
@@ -528,13 +580,16 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
         *this, enemyAttackCoordinator_, enemyBehaviorSystem_);
     fireSafetyStats_.bulletsEmitted +=
         enemyAttackExecutionSystem_.Frame().emittedProjectiles;
+    for(auto& actor:enemies_)if(RailTurret::ForMesh(actor.desc.meshId).movingMesh)
+        RailTurret::ObserveFire(actor.turretMotion,actor.age,actor.fireSequence);
 
     EnemyProjectileFrameInput projectileInput{};
     projectileInput.deltaTime = dt;
     projectileInput.playerDistance = safetyInput.playerDistance;
     projectileInput.playerLateralOffset = safetyInput.playerLateralOffset;
     projectileInput.playerVerticalOffset = safetyInput.playerVerticalOffset;
-    enemyProjectileSystem_.Update(bullets_, projectileInput);
+    projectileInput.scheduledLaunchesAllowed=safetyInput.cameraAllowsEnemyFire && !safetyInput.cameraHardTransition && !enemies_.empty();
+    enemyProjectileSystem_.Update(bullets_, projectileInput,enemies_);
 
     for (CourseObstacleActor& obstacle : obstacles_) {
         obstacle.age += dt;
@@ -924,7 +979,7 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             bullets_.begin(),
             bullets_.end(),
             [](const CourseBulletActor& bullet) {
-                return !bullet.active || bullet.age >= bullet.lifetime;
+                return (!bullet.active && bullet.launchDelayRemaining<=0) || bullet.hitConsumed || bullet.age >= bullet.lifetime;
             }),
         bullets_.end());
     obstacles_.erase(
@@ -958,9 +1013,9 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
         desc.role=carrierPart==0?"carrier_rapid_part":"carrier_heavy_part";
         // The two sockets share one travelling frame instead of independently
         // drifting to different engagement distances.
-        desc.behaviorDefinition.engagementBandPreferredForwardDistance=78;
-        desc.behaviorDefinition.engagementBandMinimumForwardDistance=68;
-        desc.behaviorDefinition.engagementBandMaximumForwardDistance=90;
+        desc.behaviorDefinition.engagementBandPreferredForwardDistance=RailMothership::PartForwardDistance;
+        desc.behaviorDefinition.engagementBandMinimumForwardDistance=40;
+        desc.behaviorDefinition.engagementBandMaximumForwardDistance=60;
     }
     desc.lifetime = (std::max)(0.1f, desc.lifetime);
     desc.radius = (std::max)(0.05f, desc.radius);

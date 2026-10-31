@@ -1,6 +1,8 @@
 #include "RailShooterHudRenderer.h"
 #include "RailShortCourse.h"
+#include "RailGameOverScene.h"
 #include "EncounterPerformanceScoreSystem.h"
+#include "RailEnemyEnergyPalette.h"
 #include <cmath>
 
 #include <algorithm>
@@ -29,8 +31,9 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     next.viewportWidth = input.viewportWidth;
     next.viewportHeight = input.viewportHeight;
     next.revision = ++revision_;
+    const bool gameOver=input.gameOver && input.gameOver->active && !input.showTitleScreen;
     if (input.definition == nullptr || input.presentation == nullptr ||
-        (!input.showTitleScreen &&
+        (!input.showTitleScreen && !gameOver &&
          (!input.definition->enabled || !input.presentation->visible)) ||
         input.viewportWidth < 320 || input.viewportHeight < 180) {
         frame_ = std::move(next);
@@ -83,6 +86,78 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         if(trail>value) rect(x+w*value,y,w*((std::min)(trail,1.0f)-value),h,{1.0f,0.72f,0.32f,color.w*0.85f});
         rect(x, y, w * (std::clamp)(value, 0.0f, 1.0f), h, color);
     };
+
+    if(gameOver && input.resultSession) {
+        const auto& scene=*input.gameOver;
+        const auto& result=*input.resultSession;
+        const auto layout=GameOverLayout(width,height);
+        const float s=layout.scale,cx=layout.menuCenterX,cy=layout.centerY;
+        const auto center=RailShooterHudTextAlignment::Center;
+        if(scene.wreck && scene.hudOpacity>0 && definition.enabled && hud.visible) {
+            // Reuse the normal layout while the gameplay camera is held.
+            // Show the fatal health value immediately, then fade the HUD with
+            // the dolly instead of replacing it with a result card in one frame.
+            auto faultHud=hud;
+            faultHud.playerHealthNormalized=faultHud.playerHealthTrail=0;
+            faultHud.playerHealthCritical=true;
+            faultHud.healthText=Utf8(u8"体力 0/")+std::to_string(int(result.maximumPlayerHealth));
+            faultHud.showBanner=faultHud.showDamageNotice=false;
+            auto faultSession=result;
+            faultSession.phase=GameSessionPhase::Playing;faultSession.outcome=GameSessionOutcome::None;
+            auto faultInput=input;
+            faultInput.gameOver=nullptr;faultInput.presentation=&faultHud;faultInput.resultSession=&faultSession;
+            RailShooterHudRenderer faultLayout;faultLayout.Update(faultInput);
+            for(auto command:faultLayout.Frame().commands) {
+                command.color.w*=scene.hudOpacity;
+                push(std::move(command));
+            }
+        }
+        if(scene.impactFlash>0) {
+            rect(0,0,width,height,{0.65f,0.16f,0.025f,scene.impactFlash*0.18f});
+            rect(0,0,width,9*s,{1.0f,0.38f,0.08f,scene.impactFlash});
+            rect(0,height-9*s,width,9*s,{1.0f,0.38f,0.08f,scene.impactFlash});
+        }
+        // A fully opaque black texel closes the wreck before any menu glyphs.
+        rect(0,0,width,height,{0.006f,0.006f,0.008f,scene.blackout});
+        const float a=scene.titleOpacity,m=scene.menuOpacity;
+        if(scene.wreck && a>0) {
+            RailShooterHudDrawCommand stillLife;
+            stillLife.kind=RailShooterHudDrawCommandKind::GameOverDiorama;
+            stillLife.x=layout.preview.x;stillLife.y=layout.preview.y;
+            stillLife.width=layout.preview.width;stillLife.height=layout.preview.height;
+            stillLife.color={1,1,1,a};stillLife.transitionProgress=scene.elapsed;
+            push(std::move(stillLife));
+        }
+        const Vector4 amber{0.94f,0.72f,0.40f,a},white{1,0.96f,0.88f,m},muted{0.60f,0.57f,0.52f,m};
+        text("R U N  T E R M I N A T E D",cx,cy-170*s,0.62f*s,{0.60f,0.48f,0.35f,a},center);
+        RailShooterHudDrawCommand headline;
+        headline.kind=RailShooterHudDrawCommandKind::Text;headline.textAlignment=center;
+        headline.textStyle=RailShooterHudTextStyle::StartCue;headline.text="GAME OVER";
+        headline.x=cx;headline.y=cy-88*s;headline.fontScale=3.6f*s;headline.color=amber;
+        if(a>0) push(std::move(headline));
+        rect(cx-32*s,cy-56*s,64*s,2*s,amber);
+        text(result.endReason==GameSessionEndReason::TimeExpired?Utf8(u8"制限時間を過ぎました"):
+            result.endReason==GameSessionEndReason::PlayerDestroyed?Utf8(u8"トロッコが大破しました"):Utf8(u8"任務を継続できません"),
+            cx,cy-22*s,0.82f*s,{0.74f,0.68f,0.58f,a},center);
+        text("SCORE  "+std::to_string(result.score)+"    /    MAX CHAIN  "+std::to_string(result.maximumCombo),
+            cx,cy+20*s,0.72f*s,muted,center);
+        for(int i=0;i<2;++i) {
+            const auto button=GameOverButton(width,height,i);
+            const bool enabled=i==1 || input.checkpointRetryAvailable;
+            const bool selected=scene.selection==i && enabled;
+            rect(button.x,button.y,button.width,button.height,selected?Vector4{0.17f,0.12f,0.065f,m}:Vector4{0.035f,0.03f,0.025f,m});
+            if(selected) {
+                rect(button.x,button.y,3*s,button.height,{0.94f,0.72f,0.40f,m});
+                text(">",button.x+20*s,button.y+39*s,0.90f*s,{0.94f,0.72f,0.40f,m});
+            }
+            text(i==0?Utf8(u8"リトライ"):Utf8(u8"タイトルに戻る"),cx,button.y+38*s,1.05f*s,enabled?white:muted,center);
+        }
+        text(input.checkpointRetryAvailable?Utf8(u8"リトライ：最後のチェックポイントから再開"):
+            Utf8(u8"チェックポイントからの再開は利用できません"),cx,cy+239*s,0.65f*s,muted,center);
+        text(Utf8(u8"↑ / ↓・W / S：選択    ENTER：決定"),cx,cy+278*s,0.60f*s,muted,center);
+        text(Utf8(u8"マウス：選択 / 決定"),cx,cy+304*s,0.60f*s,muted,center);
+        next.visible=!next.commands.empty();frame_=std::move(next);return;
+    }
 
     if(!input.showTitleScreen && input.resultSession && IsRunResult(*input.resultSession)) {
         const auto& result=*input.resultSession;
@@ -217,13 +292,95 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const int left=int(input.miniBossPartHealth[0]>0)+int(input.miniBossPartHealth[1]>0);
         text(Utf8(u8"母艦の武装を破壊  残り ")+std::to_string(left)+"/2",width*0.5f,y,
             0.70f*scale,{1,0.88f,0.62f,opacity},center);
+        const bool counter=input.miniBossCounterRemaining>0 && input.miniBossCounterDuration>0;
+        const bool defending=!counter && (input.miniBossGatlingFiring || input.miniBossHeavyFiring);
+        if(counter || defending) {
+            const float cardY=y-87*scale,cardX=width*.5f-270*scale;
+            const Vector4 accent=counter?Vector4{1,.84f,.32f,opacity}:Vector4{.30f,.92f,1,opacity};
+            rect(cardX,cardY,540*scale,76*scale,{.012f,.025f,.032f,.90f*opacity});
+            rect(cardX,cardY,540*scale,(counter?3+2*input.miniBossCounterUnlockPulse:2)*scale,accent);
+            if(counter) {
+                text(Utf8(u8"反撃解放"),width*.5f,cardY+26*scale,1.04f*scale,accent,center);
+                auto remaining=std::to_string(int(std::ceil(input.miniBossCounterRemaining*10)));
+                if(remaining.size()==1)remaining="0"+remaining;
+                remaining.insert(remaining.size()-1,".");
+                text((input.miniBossCounterPart==0 ? Utf8(u8"砲台へ戻して主砲で反撃 x2") :
+                    Utf8(u8"砲台へ戻してロックオンで反撃 x2"))+"   "+remaining+"s",
+                    width*.5f,cardY+50*scale,.66f*scale,accent,center);
+                bar(cardX+30*scale,cardY+63*scale,480*scale,4*scale,
+                    (std::clamp)(input.miniBossCounterRemaining/input.miniBossCounterDuration,0.0f,1.0f),accent,{.13f,.10f,.05f,opacity});
+            } else if(input.miniBossGatlingFiring) {
+                text(Utf8(u8"弾の相殺  ")+std::to_string(input.miniBossGatlingIntercepts)+" / 24",
+                    width*.5f,cardY+25*scale,.80f*scale,accent,center);
+                text(Utf8(u8"通常弾を撃ち続けて相殺"),width*.5f,cardY+48*scale,.62f*scale,{.82f,.94f,1,opacity},center);
+                for(unsigned round=0;round<24;++round)
+                    rect(cardX+(30+round*20)*scale,cardY+62*scale,17*scale,4*scale,
+                        round<input.miniBossGatlingIntercepts?accent:Vector4{.09f,.18f,.22f,opacity});
+            } else {
+                text(Utf8(u8"重砲弾を迎撃"),width*.5f,cardY+25*scale,.80f*scale,accent,center);
+                text(Utf8(u8"重砲弾を2ロックして迎撃"),width*.5f,cardY+49*scale,.62f*scale,{.82f,.94f,1,opacity},center);
+            }
+        }
+        if(input.miniBossCounterFeedbackRemaining>0 && input.miniBossCounterDamage>0) {
+            const float alpha=(std::clamp)(input.miniBossCounterFeedbackRemaining/.22f,0.0f,1.0f)*opacity;
+            text(Utf8(u8"反撃命中  ")+std::to_string(int(std::round(input.miniBossCounterDamage)))+" DAMAGE",
+                width*.5f,y-103*scale,.82f*scale,{1,.95f,.76f,alpha},center);
+        }
         for(int i=0;i<2;++i) {
             const float px=x+i*280*scale;
             const bool alive=input.miniBossPartHealth[i]>0;
-            text((i==0?Utf8(u8"連射砲台"):Utf8(u8"重砲"))+(alive?"":Utf8(u8" 破壊済み")),
+            const bool exposed=counter && alive && input.miniBossCounterPart==i;
+            const bool counterHit=input.miniBossCounterFeedbackPart==i && input.miniBossCounterFeedbackRemaining>0 && input.miniBossCounterDamage>0;
+            const float trail=counterHit ? input.miniBossPartHealth[i]+input.miniBossCounterDamageRatio*
+                (std::clamp)(input.miniBossCounterFeedbackRemaining/.9f,0.0f,1.0f) : -1;
+            text((i==0?Utf8(u8"ガトリング"):Utf8(u8"重砲"))+
+                (alive?(exposed?Utf8(u8" 弱点開放"):Utf8(u8" 装甲")):Utf8(u8" 破壊済み")),
                 px,y+22*scale,0.65f*scale,alive?Vector4{0.85f,0.93f,1,opacity}:Vector4{0.5f,0.6f,0.6f,opacity});
             bar(px,y+29*scale,250*scale,6*scale,input.miniBossPartHealth[i],
-                i==0?Vector4{0.2f,0.8f,1,opacity}:Vector4{1,0.48f,0.16f,opacity},{0.1f,0.12f,0.14f,opacity});
+                counterHit && input.miniBossCounterHitPulse>0?Vector4{1,.96f,.80f,opacity}:
+                    exposed?Vector4{1,.88f,.45f,opacity}:
+                    RailEnemyEnergy::Alpha(i==0?RailEnemyEnergy::Gatling.ink:RailEnemyEnergy::Heavy.ink,opacity),{0.1f,0.12f,0.14f,opacity},trail);
+            if(alive) {
+                const auto& thermal=input.miniBossThermal[i];
+                if(thermal.valid) {
+                    using Phase=RailBatteryThermalPhase;const auto phase=thermal.phase;
+                    const bool charge=phase==Phase::Charging || phase==Phase::Imminent;
+                    const auto& palette=i==0?RailEnemyEnergy::Gatling:RailEnemyEnergy::Heavy;
+                    const auto color=RailEnemyEnergy::Alpha(phase==Phase::Counter?Vector4{1,.85f,.35f,1}:
+                        phase==Phase::Imminent?palette.hotInk:phase==Phase::Cooling?Vector4{.60f,.72f,.78f,1}:palette.ink,opacity);
+                    float fill=charge?thermal.charge:phase==Phase::Cooling?thermal.coolingProgress:phase==Phase::Firing?1-thermal.firingProgress:
+                        phase==Phase::Standby?1-thermal.remainingSeconds/(std::max)(.01f,thermal.durationSeconds):1;
+                    fill=(std::clamp)(fill,0.0f,1.0f);
+                    const int segments=charge && i==0?3:1;
+                    for(int segment=0;segment<segments;++segment) {
+                        const float sw=(250.0f-4*(segments-1))/segments;
+                        bar(px+segment*(sw+4)*scale,y+40*scale,sw*scale,phase==Phase::Imminent?5*scale:3*scale,
+                            (std::clamp)(fill*segments-segment,0.0f,1.0f),color,{.06f,.09f,.11f,opacity});
+                    }
+                    std::string label;
+                    switch(phase) {
+                    case Phase::Charging:label=i==0?Utf8(u8"回転上昇"):Utf8(u8"蓄積中");break;
+                    case Phase::Imminent:label=i==0?Utf8(u8"まもなく連射"):Utf8(u8"まもなく発射");break;
+                    case Phase::Firing:label=i==0?Utf8(u8"連射中"):Utf8(u8"発射");break;
+                    case Phase::Cooling:label=i==0?Utf8(u8"放熱中"):Utf8(u8"排熱中");break;
+                    case Phase::Counter:label=Utf8(u8"反撃チャンス");break;
+                    default:label=thermal.remainingSeconds>0?Utf8(u8"準備中"):Utf8(u8"待機");break;
+                    }
+                    if((charge || phase==Phase::Cooling) && thermal.remainingSeconds>0) {
+                        auto tenths=std::to_string(int(std::ceil(thermal.remainingSeconds*10)));
+                        if(tenths.size()==1)tenths="0"+tenths;
+                        tenths.insert(tenths.size()-1,".");label+="  "+tenths+"s";
+                    }
+                    text(label,px,y+56*scale,.5f*scale,color);continue;
+                }
+                const float charge=input.miniBossPartCharge[i],cooldown=input.miniBossCooldownRemaining[i];
+                const bool charging=charge>0 && !counter;
+                const float fill=charging?charge:cooldown>0?1-cooldown/(std::max)(.01f,input.miniBossCooldownDuration[i]):1;
+                const Vector4 color=charging?Vector4{1,.68f,.2f,opacity}:Vector4{.42f,.61f,.68f,opacity*.75f};
+                bar(px,y+40*scale,250*scale,3*scale,(std::clamp)(fill,0.0f,1.0f),color,{.06f,.09f,.11f,opacity});
+                text(charging?Utf8(u8"チャージ"):cooldown>0?Utf8(u8"冷却中"):Utf8(u8"待機"),
+                    px,y+56*scale,.5f*scale,color);
+            }
         }
     } else if(input.bossVisible && !input.startCueActive) {
         const float w=580*scale,x=(width-w)*0.5f,y=height-110*scale;
@@ -297,7 +454,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     }
     const size_t gaugeEnd=next.commands.size();
     if(definition.showPlayerHealth || definition.showVehicleIntegrity) {
-        text(Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
+        text(input.unlimitedCheckpointRetries?Utf8(u8"リトライ 無制限"):Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
             healthBottom+23*scale,0.54f*scale,muted);
     }
     if(hud.showDamageNotice && hud.damageNoticeAlpha>0) {
@@ -408,12 +565,18 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const float distance=input.resultSession->courseDistance;
         const int stage=distance<380?0:distance<680?1:distance<950?2:distance<1120?3:4;
         const char* stages[]={"FIRST CONTACT / LMB","LOCK BURST / HOLD RMB","INTERCEPT / SHOOT ORBS","BOOST RUN / HOLD E","FINAL PURSUIT"};
-        const int remaining=int((std::max)(0.0f,120.0f-input.resultSession->attemptElapsedSeconds));
-        text(std::to_string(stage+1)+" / 5   "+stages[stage],safe,height-90*responsive,0.64f*responsive,textColor);
+        const int remaining=int((std::max)(0.0f,ShortRunSessionDefinition().timeLimitSeconds-input.resultSession->attemptElapsedSeconds));
+        const std::string stageText=input.courseVisualCount>0 ?
+            std::to_string(input.courseVisualIndex+1)+" / "+std::to_string(input.courseVisualCount)+
+                "   "+input.courseVisualLabel : std::to_string(stage+1)+" / 5   "+stages[stage];
+        text(stageText,safe,height-90*responsive,0.64f*responsive,textColor);
         text("TIME  "+std::to_string(remaining),safe,height-64*responsive,0.58f*responsive,muted);
-        if(distance>=input.resultSession->courseLength-2.0f && !input.resultSession->combatClearConfirmed)
+        if(distance>=input.resultSession->courseLength-2.0f && !input.resultSession->combatClearConfirmed && !input.miniBossParts)
             text("CLEAR REMAINING HOSTILES",width*0.5f,height*0.24f,0.85f*responsive,warning,center);
     }
+    if(input.gateClearPulse>0 && !input.startCueActive)
+        text("STONE GATE CLEAR",width*.5f,height*.20f,1.15f*responsive,
+            {1.0f,.83f,.48f,(std::min)(1.0f,input.gateClearPulse*4)},center);
     // Keep compact reminders at the edge, not a permanent panel across combat.
     if(width>=960) {
         text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   E : 加速   P : 一時停止"),
