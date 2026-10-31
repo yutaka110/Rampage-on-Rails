@@ -87,7 +87,7 @@ void CourseGameplayWaveRuntimeBridge::Update(
     ReconcileDefeatedActors();
     UpdateActiveWaves((std::max)(0.0f, input.deltaTime));
     UpdateEarlyClearAdvance(input);
-    UpdatePrewarmAndActivation();
+    UpdatePrewarmAndActivation(input.allowActivation);
     // Zero-member and event-completed forced chains are allowed, but bounded
     // so malformed content can never stall a gameplay frame.
     for (uint32_t iteration = 0;
@@ -96,7 +96,7 @@ void CourseGameplayWaveRuntimeBridge::Update(
         const uint32_t beforeCompleted = stats_.completedThisFrame;
         const std::size_t beforeForced = forcedWaveIndices_.size();
         UpdateActiveWaves(0.0f);
-        UpdatePrewarmAndActivation();
+        UpdatePrewarmAndActivation(input.allowActivation);
         if (beforeCompleted == stats_.completedThisFrame &&
             beforeForced == forcedWaveIndices_.size()) {
             break;
@@ -323,7 +323,7 @@ void CourseGameplayWaveRuntimeBridge::UpdateEarlyClearAdvance(const CourseGamepl
     // Combat truth includes surviving intro drones, in-flight rounds and warnings.
     // A zero-delta frame (pause/READY/result) preserves the recovery clock.
     if (!std::isfinite(input.deltaTime) || input.deltaTime <= 0.0f) return;
-    if (!settings_.earlyClearAdvanceEnabled || !input.allowEarlyAdvance ||
+    if (!settings_.earlyClearAdvanceEnabled ||
         !input.combatClearConfirmed ||
         std::any_of(wavePhases_.begin(), wavePhases_.end(),
             [](auto phase) { return phase == CourseGameplayWavePhase::Active; }) ||
@@ -334,6 +334,9 @@ void CourseGameplayWaveRuntimeBridge::UpdateEarlyClearAdvance(const CourseGamepl
     }
     clearRecoverySeconds_ += (std::min)(input.deltaTime, 0.25f);
     if (clearRecoverySeconds_ < settings_.earlyClearRecoverySeconds) return;
+    // Suppressing distance-based promotion must not suppress the recovery
+    // needed to activate the next wave at its normal authored marker.
+    if (!input.allowEarlyAdvance) return;
     std::size_t candidate = program_->waves.size();
     for (std::size_t i = 0; i < wavePhases_.size(); ++i) {
         const auto phase = wavePhases_[i];
@@ -354,7 +357,7 @@ void CourseGameplayWaveRuntimeBridge::UpdateEarlyClearAdvance(const CourseGamepl
     forcedWaveIndices_.insert(candidate);
 }
 
-void CourseGameplayWaveRuntimeBridge::UpdatePrewarmAndActivation() {
+void CourseGameplayWaveRuntimeBridge::UpdatePrewarmAndActivation(bool allowActivation) {
     for (std::size_t index = 0; index < wavePhases_.size(); ++index) {
         CourseGameplayWavePhase& phase = wavePhases_[index];
         if (phase == CourseGameplayWavePhase::Disabled ||
@@ -369,7 +372,7 @@ void CourseGameplayWaveRuntimeBridge::UpdatePrewarmAndActivation() {
                 (std::max)(0.0f, wave.triggerRailDistance - wave.prewarmDistance))) {
             PrewarmWave(index);
         }
-        if ((forced || playerDistance_ >= wave.triggerRailDistance) &&
+        if (allowActivation && (forced || playerDistance_ >= wave.triggerRailDistance) &&
             phase != CourseGameplayWavePhase::Active) {
             if (CanActivateWave(index)) {
                 ActivateWave(index);

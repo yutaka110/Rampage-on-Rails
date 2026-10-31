@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <unordered_set>
+#include <iterator>
 
 using namespace ge3::core;
 
@@ -54,6 +56,26 @@ uint64_t HashAppendString(uint64_t hash, const std::string& value) {
     return HashAppend(hash, value.data(), value.size());
 }
 
+uint64_t HashShaderSourceTree(uint64_t hash,const std::filesystem::path& path,
+    std::unordered_set<std::wstring>& visited) {
+    std::error_code error;
+    const auto normalized=std::filesystem::weakly_canonical(path,error).lexically_normal();
+    if(!visited.insert(normalized.wstring()).second)return hash;
+    hash=HashAppendString(hash,normalized.wstring());
+    std::ifstream source(path,std::ios::binary);
+    const std::string contents{std::istreambuf_iterator<char>(source),std::istreambuf_iterator<char>()};
+    hash=HashAppend(hash,contents.data(),contents.size());
+    size_t offset=0;
+    while((offset=contents.find("#include",offset))!=std::string::npos) {
+        const size_t lineEnd=contents.find('\n',offset),begin=contents.find('"',offset+8);
+        if(begin==std::string::npos || (lineEnd!=std::string::npos && begin>lineEnd)){offset+=8;continue;}
+        const size_t end=contents.find('"',begin+1);if(end==std::string::npos)break;
+        hash=HashShaderSourceTree(hash,path.parent_path()/contents.substr(begin+1,end-begin-1),visited);
+        offset=end+1;
+    }
+    return hash;
+}
+
 std::filesystem::path ShaderBytecodeCachePath(
     const std::wstring& filePath,
     const std::wstring& entryPoint,
@@ -71,6 +93,7 @@ std::filesystem::path ShaderBytecodeCachePath(
     const uint64_t sourceSize = std::filesystem::file_size(filePath, error);
 
     uint64_t hash = kFnvOffset;
+    hash=HashAppendString(hash,std::string("source-tree-v2"));
     hash = HashAppendString(hash, normalized.wstring());
     hash = HashAppendString(hash, entryPoint);
     hash = HashAppendString(hash, targetProfile);
@@ -84,6 +107,10 @@ std::filesystem::path ShaderBytecodeCachePath(
     for (LPCWSTR arg : extraArgs) {
         hash = HashAppendString(hash, std::wstring(arg != nullptr ? arg : L""));
     }
+    // AppPipelines has its own include-aware cache. The lower compiler must
+    // not return old bytecode when only a nested .hlsli changed.
+    std::unordered_set<std::wstring> visited;
+    hash=HashShaderSourceTree(hash,std::filesystem::path(filePath),visited);
 
     char fileName[48]{};
     std::snprintf(fileName, sizeof(fileName), "%016llx.dxil", static_cast<unsigned long long>(hash));

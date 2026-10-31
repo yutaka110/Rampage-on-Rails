@@ -149,6 +149,8 @@ std::filesystem::path ShaderBytecodeCachePath(
     const uint64_t sourceSize = std::filesystem::file_size(resolvedPath, error);
 
     uint64_t hash = kFnvOffset;
+    // Discard entries previously populated by the include-blind inner cache.
+    hash=HashAppendString(hash,std::string("include-aware-compiler-v2"));
     hash = HashAppendString(hash, normalized.wstring());
     hash = HashAppendString(hash, std::wstring(profile != nullptr ? profile : L""));
 #if _DEBUG

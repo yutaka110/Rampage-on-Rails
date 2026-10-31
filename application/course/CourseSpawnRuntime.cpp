@@ -34,7 +34,7 @@ bool ValidEnemyDescription(const CourseEnemyActorDesc& d) {
         d.localScale.x, d.localScale.y, d.localScale.z, d.stationaryActivationDistance}) &&
         d.stationaryActivationDistance >= -1.0f &&
         d.hitPoints >= 0.0f && d.lifetime > 0.0f && d.radius > 0.0f &&
-        d.entrySource<=EnemyEntrySource::SideOpening;
+        d.entrySource<=EnemyEntrySource::LocalApproach;
 }
 
 bool ValidObstacleDescription(const CourseObstacleActorDesc& d) {

@@ -99,6 +99,7 @@ struct WeaponShot {
     float damage = 0.0f;
     float range = 0.0f;
     float chargeRatio = 0.0f;
+    uint32_t counterTargetActorId = 0;
 };
 
 struct WeaponFireResult {

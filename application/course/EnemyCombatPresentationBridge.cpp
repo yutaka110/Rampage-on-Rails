@@ -598,7 +598,7 @@ void EnemyCombatPresentationBridge::Update(
                 output.materialColor = {0.85f,0.91f,1.0f,1.0f};
                 output.visible=true;
                 if(actor.actorId==input.counterActorId && input.counterAmount>0) {
-                    const float hit=(std::clamp)(input.counterHitPulse,0.0f,1.0f);
+                    const float hit=actor.actorId==input.counterHitActorId ? (std::clamp)(input.counterHitPulse,0.0f,1.0f) : 0;
                     // Steady warm overload, distinct from the red firing tell.
                     // Never strobe the painted armour or alter the aiming pose.
                     output.materialColor={1.0f,.68f+hit*.24f,.22f+hit*.55f,1};
@@ -606,6 +606,14 @@ void EnemyCombatPresentationBridge::Update(
                     output.turretMuzzleActive=true;
                     output.weaponCharge=.65f;
                     output.coreColor={2.2f,1.35f+hit*.5f,.30f+hit*.4f,1};
+                }
+                if(actor.actorId==input.counterHitActorId && input.counterHitPulse>0) {
+                    // Credited lasers can arrive after the counter closes;
+                    // their contact still belongs to this gun, not the next one.
+                    const float hit=(std::clamp)(input.counterHitPulse,0.0f,1.0f);
+                    output.materialColor={.85f+.15f*hit,.91f+.05f*hit,1-.22f*hit,1};
+                    output.emissiveStrength=1.4f+hit;
+                    output.coreColor={2.2f,1.85f,.7f+hit*.5f,1};
                 }
             }
         }

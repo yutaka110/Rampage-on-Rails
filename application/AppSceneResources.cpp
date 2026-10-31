@@ -2803,6 +2803,7 @@ bool AppSceneResources::Initialize(
         {"fence", "Resources/fence/fence.png"},
         {"iceShard", "Resources/iceShard.png"},
         {"courseOrganicRock", "Resources/course_meshes/materials/organic_rock_albedo.bmp"},
+        {"courseBlockoutSteel", "Resources/course_meshes/CourseBlockoutBridge/CourseBlockoutBridge.bmp"},
         {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
         {"siegeTurret", "Resources/enemies/SiegeTurret/SiegeTurret.bmp"},
@@ -3224,6 +3225,7 @@ bool AppSceneResources::Initialize(
         });
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
+    registerCourseMesh("course_blockout_bridge", "Resources/course_meshes/CourseBlockoutBridge", "CourseBlockoutBridge.obj", "courseBlockoutSteel");
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
     registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
     registerCourseMesh("siege_turret_head", "Resources/enemies/SiegeTurretHead", "SiegeTurretHead.obj", "siegeTurret");

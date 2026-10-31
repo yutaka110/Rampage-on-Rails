@@ -34,14 +34,16 @@ inline CourseGameplayWaveRuntimeSettings ShortRunWaveSettings() {
     return settings;
 }
 inline bool ShortRunAllowsEarlyWave(float distance) {
-    return distance < 950.0f || (distance >= 1120.0f && distance < 1950.0f) || distance >= 3350.0f;
+    // A gate wave at 1080m must not be promoted into the preceding canyon.
+    return distance < 900.0f || distance >= 3350.0f;
 }
 inline bool ShortRunAllowsAdaptivePatrol(float distance) {
     // READY, the carrier portrait, ignition showcase and boss approach keep
-    // their authored breathing room. The long ridge is ordinary play here.
+    // their authored breathing room. Ridge combat also protects its crest.
     return distance >= 160.0f && distance < 3270.0f &&
         !(distance >= 420.0f && distance < 620.0f) &&
-        !(distance >= 950.0f && distance < 1120.0f);
+        !(distance >= 950.0f && distance < 1950.0f) &&
+        !(distance >= 2440.0f && distance < 2560.0f);
 }
 inline bool ShortRunPrimaryEncounterDue(const CourseGameplayWaveRuntimeBridge& waves,
     float distance, float speed) {

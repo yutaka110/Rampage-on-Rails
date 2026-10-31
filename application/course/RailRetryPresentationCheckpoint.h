@@ -27,6 +27,8 @@
 #include "RailRideMotionEnvelope.h"
 #include "RailTrackFeedbackDirector.h"
 #include "EncounterDirector.h"
+#include "RailGateBridgeFlow.h"
+#include "RailRidgeCombatFlow.h"
 #include "RailTitleScene.h"
 #include "RailMothershipPresentation.h"
 #include "RailMothershipBattle.h"
@@ -58,6 +60,8 @@ struct RailRetryFollowState final {
     RailRideMotionEnvelope motion{};
     RailTrackFeedbackDirector trackFeedback{};
     EncounterDirector encounters{};
+    RailGateBridgeFlow gateBridge{};
+    RailRidgeCombatFlow ridge{};
     RailTitleGameplayEntry entry{};
     RailReadyDroneSalvo readySalvo{};
     std::array<uint32_t,kRailReadyDroneCount> readyIds{};
@@ -100,6 +104,8 @@ struct RailRetryFollowBindings final {
     RailRideMotionEnvelope& motion;
     RailTrackFeedbackDirector& trackFeedback;
     EncounterDirector& encounters;
+    RailGateBridgeFlow& gateBridge;
+    RailRidgeCombatFlow& ridge;
     RailTitleGameplayEntry& entry;
     RailReadyDroneSalvo& readySalvo;
     std::array<uint32_t,kRailReadyDroneCount>& readyIds;
@@ -143,6 +149,8 @@ inline RailRetryFollowBindings BindRailRetryFollowState(RailRetryFollowState& st
         .motion=state.motion,
         .trackFeedback=state.trackFeedback,
         .encounters=state.encounters,
+        .gateBridge=state.gateBridge,
+        .ridge=state.ridge,
         .entry=state.entry,
         .readySalvo=state.readySalvo,
         .readyIds=state.readyIds,
@@ -190,6 +198,8 @@ public:
         saved->motion=live.motion;
         saved->trackFeedback=live.trackFeedback;
         saved->encounters=live.encounters;
+        saved->gateBridge=live.gateBridge;
+        saved->ridge=live.ridge;
         saved->entry=live.entry;
         saved->readySalvo=live.readySalvo;
         saved->readyIds=live.readyIds;
@@ -233,6 +243,8 @@ public:
         live.motion=state_->motion;
         live.trackFeedback=state_->trackFeedback;
         live.encounters=state_->encounters;
+        live.gateBridge=state_->gateBridge;
+        live.ridge=state_->ridge;
         live.entry=state_->entry;
         live.readySalvo=state_->readySalvo;
         live.readyIds=state_->readyIds;

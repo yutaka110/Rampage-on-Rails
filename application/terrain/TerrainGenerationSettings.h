@@ -19,6 +19,9 @@ struct TerrainGenerationSettings {
     float chunkLength = 80.0f;
     uint32_t visibleAheadChunks = 8;
     uint32_t visibleBehindChunks = 2;
+    // Transient render budget: surface-only chunks beyond the detailed ring.
+    // Collision resolution and authored terrain parameters are unchanged.
+    uint32_t renderHorizonAheadChunks = 0;
     float corridorRadius = 18.0f;
     float canyonHalfWidth = 42.0f;
     float wallHeight = 35.0f;

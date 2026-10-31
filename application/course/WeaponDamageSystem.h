@@ -48,6 +48,8 @@ struct WeaponHitRequest {
     float baseDamage = 0.0f;
     // Presentation source only; damage acceptance remains actor/shot-ID based.
     bool lockOnContact = false;
+    // Earned firing-time counter authorization; never inferred from damage.
+    uint32_t counterTargetActorId = 0;
 };
 
 struct DamageResult {
@@ -67,6 +69,7 @@ struct DamageResult {
     bool weakPointHit = false;
     bool destroyed = false;
     bool duplicate = false;
+    bool armorReduced = false;
 };
 
 // Actor-ID based damage reception boundary for runtime Course actors and

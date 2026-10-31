@@ -293,33 +293,53 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         text(Utf8(u8"母艦の武装を破壊  残り ")+std::to_string(left)+"/2",width*0.5f,y,
             0.70f*scale,{1,0.88f,0.62f,opacity},center);
         const bool counter=input.miniBossCounterRemaining>0 && input.miniBossCounterDuration>0;
-        if(input.miniBossGatlingFiring && !counter) {
-            text(Utf8(u8"通常弾を撃ち続けて相殺  ")+std::to_string(input.miniBossGatlingIntercepts)+"/24",
-                width*.5f,y-35*scale,.75f*scale,{1,.83f,.5f,opacity},center);
-        }
-        if(input.miniBossHeavyFiring && !counter)
-            text(Utf8(u8"重砲弾を2ロックして迎撃"),width*.5f,y-35*scale,.75f*scale,{.55f,.9f,1,opacity},center);
-        if(counter) {
-            text(input.miniBossCounterPart==0 ? Utf8(u8"迎撃成功  砲台へ戻して主砲で反撃 x2") :
-                Utf8(u8"迎撃成功  ロックオンで反撃 x2"),width*.5f,y-35*scale,
-                .82f*scale,{1,.86f,.42f,opacity},center);
-            bar(width*.5f-135*scale,y-23*scale,270*scale,4*scale,
-                (std::clamp)(input.miniBossCounterRemaining/input.miniBossCounterDuration,0.0f,1.0f),
-                {1,.75f,.22f,opacity},{.13f,.10f,.05f,opacity});
+        const bool defending=!counter && (input.miniBossGatlingFiring || input.miniBossHeavyFiring);
+        if(counter || defending) {
+            const float cardY=y-87*scale,cardX=width*.5f-270*scale;
+            const Vector4 accent=counter?Vector4{1,.84f,.32f,opacity}:Vector4{.30f,.92f,1,opacity};
+            rect(cardX,cardY,540*scale,76*scale,{.012f,.025f,.032f,.90f*opacity});
+            rect(cardX,cardY,540*scale,(counter?3+2*input.miniBossCounterUnlockPulse:2)*scale,accent);
+            if(counter) {
+                text(Utf8(u8"反撃解放"),width*.5f,cardY+26*scale,1.04f*scale,accent,center);
+                auto remaining=std::to_string(int(std::ceil(input.miniBossCounterRemaining*10)));
+                if(remaining.size()==1)remaining="0"+remaining;
+                remaining.insert(remaining.size()-1,".");
+                text((input.miniBossCounterPart==0 ? Utf8(u8"砲台へ戻して主砲で反撃 x2") :
+                    Utf8(u8"砲台へ戻してロックオンで反撃 x2"))+"   "+remaining+"s",
+                    width*.5f,cardY+50*scale,.66f*scale,accent,center);
+                bar(cardX+30*scale,cardY+63*scale,480*scale,4*scale,
+                    (std::clamp)(input.miniBossCounterRemaining/input.miniBossCounterDuration,0.0f,1.0f),accent,{.13f,.10f,.05f,opacity});
+            } else if(input.miniBossGatlingFiring) {
+                text(Utf8(u8"弾の相殺  ")+std::to_string(input.miniBossGatlingIntercepts)+" / 24",
+                    width*.5f,cardY+25*scale,.80f*scale,accent,center);
+                text(Utf8(u8"通常弾を撃ち続けて相殺"),width*.5f,cardY+48*scale,.62f*scale,{.82f,.94f,1,opacity},center);
+                for(unsigned round=0;round<24;++round)
+                    rect(cardX+(30+round*20)*scale,cardY+62*scale,17*scale,4*scale,
+                        round<input.miniBossGatlingIntercepts?accent:Vector4{.09f,.18f,.22f,opacity});
+            } else {
+                text(Utf8(u8"重砲弾を迎撃"),width*.5f,cardY+25*scale,.80f*scale,accent,center);
+                text(Utf8(u8"重砲弾を2ロックして迎撃"),width*.5f,cardY+49*scale,.62f*scale,{.82f,.94f,1,opacity},center);
+            }
         }
         if(input.miniBossCounterFeedbackRemaining>0 && input.miniBossCounterDamage>0) {
-            text(Utf8(u8"反撃成功  ")+std::to_string(int(std::round(input.miniBossCounterDamage)))+" DAMAGE",
-                width*.5f,y-59*scale,.82f*scale,{1,.88f,.45f,opacity},center);
+            const float alpha=(std::clamp)(input.miniBossCounterFeedbackRemaining/.22f,0.0f,1.0f)*opacity;
+            text(Utf8(u8"反撃命中  ")+std::to_string(int(std::round(input.miniBossCounterDamage)))+" DAMAGE",
+                width*.5f,y-103*scale,.82f*scale,{1,.95f,.76f,alpha},center);
         }
         for(int i=0;i<2;++i) {
             const float px=x+i*280*scale;
             const bool alive=input.miniBossPartHealth[i]>0;
             const bool exposed=counter && alive && input.miniBossCounterPart==i;
-            text((i==0?Utf8(u8"ガトリング"):Utf8(u8"重砲"))+(alive?"":Utf8(u8" 破壊済み")),
+            const bool counterHit=input.miniBossCounterFeedbackPart==i && input.miniBossCounterFeedbackRemaining>0 && input.miniBossCounterDamage>0;
+            const float trail=counterHit ? input.miniBossPartHealth[i]+input.miniBossCounterDamageRatio*
+                (std::clamp)(input.miniBossCounterFeedbackRemaining/.9f,0.0f,1.0f) : -1;
+            text((i==0?Utf8(u8"ガトリング"):Utf8(u8"重砲"))+
+                (alive?(exposed?Utf8(u8" 弱点開放"):Utf8(u8" 装甲")):Utf8(u8" 破壊済み")),
                 px,y+22*scale,0.65f*scale,alive?Vector4{0.85f,0.93f,1,opacity}:Vector4{0.5f,0.6f,0.6f,opacity});
             bar(px,y+29*scale,250*scale,6*scale,input.miniBossPartHealth[i],
-                exposed?Vector4{1,.88f,.45f,opacity}:
-                    RailEnemyEnergy::Alpha(i==0?RailEnemyEnergy::Gatling.ink:RailEnemyEnergy::Heavy.ink,opacity),{0.1f,0.12f,0.14f,opacity});
+                counterHit && input.miniBossCounterHitPulse>0?Vector4{1,.96f,.80f,opacity}:
+                    exposed?Vector4{1,.88f,.45f,opacity}:
+                    RailEnemyEnergy::Alpha(i==0?RailEnemyEnergy::Gatling.ink:RailEnemyEnergy::Heavy.ink,opacity),{0.1f,0.12f,0.14f,opacity},trail);
             if(alive) {
                 const auto& thermal=input.miniBossThermal[i];
                 if(thermal.valid) {
@@ -546,11 +566,17 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const int stage=distance<380?0:distance<680?1:distance<950?2:distance<1120?3:4;
         const char* stages[]={"FIRST CONTACT / LMB","LOCK BURST / HOLD RMB","INTERCEPT / SHOOT ORBS","BOOST RUN / HOLD E","FINAL PURSUIT"};
         const int remaining=int((std::max)(0.0f,ShortRunSessionDefinition().timeLimitSeconds-input.resultSession->attemptElapsedSeconds));
-        text(std::to_string(stage+1)+" / 5   "+stages[stage],safe,height-90*responsive,0.64f*responsive,textColor);
+        const std::string stageText=input.courseVisualCount>0 ?
+            std::to_string(input.courseVisualIndex+1)+" / "+std::to_string(input.courseVisualCount)+
+                "   "+input.courseVisualLabel : std::to_string(stage+1)+" / 5   "+stages[stage];
+        text(stageText,safe,height-90*responsive,0.64f*responsive,textColor);
         text("TIME  "+std::to_string(remaining),safe,height-64*responsive,0.58f*responsive,muted);
         if(distance>=input.resultSession->courseLength-2.0f && !input.resultSession->combatClearConfirmed && !input.miniBossParts)
             text("CLEAR REMAINING HOSTILES",width*0.5f,height*0.24f,0.85f*responsive,warning,center);
     }
+    if(input.gateClearPulse>0 && !input.startCueActive)
+        text("STONE GATE CLEAR",width*.5f,height*.20f,1.15f*responsive,
+            {1.0f,.83f,.48f,(std::min)(1.0f,input.gateClearPulse*4)},center);
     // Keep compact reminders at the edge, not a permanent panel across combat.
     if(width>=960) {
         text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   E : 加速   P : 一時停止"),

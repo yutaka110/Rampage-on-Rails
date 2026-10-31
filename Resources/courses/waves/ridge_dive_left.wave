@@ -1,0 +1,5 @@
+# Short entrance inside the visible corridor; no exterior cliff detour.
+wave|ridge_dive_left|Downhill Left Low
+deployment|local_approach
+formation|authored|left|forward|1|8|3|5|2|0.4|0.70|0|8|6|0.65|30|0
+unitAsset|dive_low|route_scout|assault_magenta_single|58|-16|1|0|1.15|120|0.8|0.75|0.65|1

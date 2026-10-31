@@ -408,6 +408,15 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 *item->materialData=timber;
                 item->useMaterialOverride=true;
             }
+            if (placement.meshId == "course_blockout_bridge" && item->materialData != nullptr) {
+                Material steel{};
+                steel.color={1,1,1,1};
+                steel.enableLighting=true;
+                steel.uvTransform=MakeIdentity4x4();
+                steel.specularMode=2;
+                *item->materialData=steel;
+                item->useMaterialOverride=true;
+            }
             const Vector3 center = ResolveRailLocal(
                 railPath,
                 placement.distance,
@@ -1201,9 +1210,11 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
         item->materialData->color=color;
         item->materialData->enableLighting=lit;
         item->materialData->uvTransform=MakeIdentity4x4();
-        item->materialData->specularMode=1;
-        item->materialData->shininess=24.0f;
-        item->materialData->environmentCoefficient=lit?0.12f:0.0f;
+        // Matte escort backdrop: broad white specular faces compete with the
+        // smaller combatants and their charge lights on the ridge approach.
+        item->materialData->specularMode=2;
+        item->materialData->shininess=1.0f;
+        item->materialData->environmentCoefficient=lit?0.025f:0.0f;
         item->useMaterialOverride=true;
         auto world=Multiply(models[model].rootLocal,
             Multiply(MakeAffineMatrix(scale,Vector3{},center),ship));
@@ -1213,16 +1224,16 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
     };
     const float dying=carrier.battleDestruction;
     part("carrier_hull","carrier/blockout-hull",{},{1,1,1},
-        {0.32f+dying*0.15f,0.37f-dying*0.12f,0.40f-dying*0.22f,1},true);
+        {0.18f+dying*0.15f,0.24f-dying*0.12f,0.29f-dying*0.22f,1},true);
     if(carrier.partsBattle) {
         // Intact hull and independently destructible weapon pods. Their live
         // meshes are Enemy actors, so aim, damage and rendering share anchors.
-        part("carrier_box","carrier/reactor-armour",{0,-11,-69},{14,15,5},{0.24f,0.28f,0.3f,1},true);
+        part("carrier_box","carrier/reactor-armour",{0,-11,-69},{14,15,5},{0.10f,0.14f,0.18f,1},true);
         for(int i=0;i<2;++i) {
             const float x=RailMothership::PartLateral[i];
             const bool alive=carrier.partHealth[i]>0;
             part("carrier_box",i==0?"carrier/rapid-mount":"carrier/heavy-mount",
-                {x,-11,-65},{11,11,8},alive?Vector4{0.23f,0.28f,0.31f,1}:Vector4{0.06f,0.05f,0.04f,1},true);
+                {x,-11,-65},{11,11,8},alive?Vector4{0.14f,0.18f,0.22f,1}:Vector4{0.06f,0.05f,0.04f,1},true);
             if(alive) {
                 const float glow=0.7f+carrier.partCharge[i]*1.6f;
                 part("carrier_box","carrier/weapon-guide",{x,-18,-69},{10,0.7f,0.7f},

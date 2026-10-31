@@ -66,6 +66,9 @@ struct RailShooterHudRenderInput final {
     Vector2 titleTransitionFocus{0.5f,0.4f};
     const GameSessionRuntimeState* resultSession=nullptr;
     bool shortRun=false;
+    float gateClearPulse=0;
+    std::string courseVisualLabel;
+    unsigned courseVisualIndex=0,courseVisualCount=0;
     bool bossVisible=false;
     float bossHealth=1.0f;
     const EncounterPerformanceScoreRuntimeState* encounterScore=nullptr;
@@ -82,6 +85,8 @@ struct RailShooterHudRenderInput final {
     bool miniBossGatlingFiring=false;
     unsigned miniBossGatlingIntercepts=0;
     float miniBossCounterDamage=0,miniBossCounterFeedbackRemaining=0;
+    int miniBossCounterFeedbackPart=-1;
+    float miniBossCounterUnlockPulse=0,miniBossCounterHitPulse=0,miniBossCounterDamageRatio=0;
 };
 
 struct RailShooterHudRenderFrame final {

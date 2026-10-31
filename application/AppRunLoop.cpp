@@ -1,4 +1,4 @@
-﻿#include "course/RailShortCourse.h"
+#include "course/RailShortCourse.h"
 #include "AppRunLoop.h"
 #include "AppLogFile.h"
 #include "diagnostics/DronePerformanceProfile.h"
@@ -2225,6 +2225,8 @@ void AppRunLoop::ApplyRailShooterCourse() {
     StopGameSessionPresentation();
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
+    railGateBridgeFlow_.Reset();
+    railRidgeCombatFlow_.Reset();
     railEnemyEncounterCameraCompositionBridge_.Reset();
     railShooterCameraDirector_.Reset();
     railShooterSpeedDirector_.Reset();
@@ -2428,6 +2430,8 @@ void AppRunLoop::TeleportRailShooterCourse(float distance) {
     railRetryPresentation_.Reset();railFirstPlayableCheckpointPending_=true;
     railShooterCombatFeelSystem_.Reset();
     railShooterEncounterDirector_.Reset();
+    railGateBridgeFlow_.Reset();
+    railRidgeCombatFlow_.Reset();
     railEnemyEncounterCameraCompositionBridge_.Reset();
     railShooterCameraDirector_.Reset();
     railShooterSpeedDirector_.Reset();
@@ -3294,7 +3298,7 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
         0x3057, 0x308B, 0x30A6, 0x30AA, 0x30AF, 0x30B2, 0x30B9, 0x30C3, 0x30DE, 0x30E0, 0x30EA, 0x30ED, 0x30F3, 0x4F5C, 0x52D5, 0x59CB, 0x5B9A, 0x623B, 0x629E, 0x62BC, 0x64CD, 0x6589, 0x660E, 0x6C7A, 0x7167, 0x79FB, 0x8AAC, 0x9078, 0x9577, 0x96E2,
     };
     // Native HUD glyphs used by the game-over scene (not the ImGui atlas).
-    for(char32_t cp:std::u32string_view(U"トロッコが大破しました制限時間を過ぎました任務を継続できませんリトライタイトルに戻る最後のチェックポイントから再開利用選択決定マウス↑↓：・母艦の武装を破壊残り連射砲台重砲破壊済み迎撃成功ロックオンで反撃ガトリング通常弾を撃ち続けて相殺照準位置ここへ弾列冷却中待機チャージ回転上昇蓄積中まもなく連射発射放熱排熱反撃チャンス準備"))
+    for(char32_t cp:std::u32string_view(U"トロッコが大破しました制限時間を過ぎました任務を継続できませんリトライタイトルに戻る最後のチェックポイントから再開利用選択決定マウス↑↓：・母艦の武装を破壊残り連射砲台重砲破壊済み迎撃成功ロックオンで反撃ガトリング通常弾を撃ち続けて相殺照準位置ここへ弾列冷却中待機チャージ回転上昇蓄積中まもなく連射発射放熱排熱反撃チャンス準備解放命中弾の"))
         submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
     std::sort(submissionJapaneseCodepoints.begin(),submissionJapaneseCodepoints.end());
     submissionJapaneseCodepoints.erase(std::unique(submissionJapaneseCodepoints.begin(),submissionJapaneseCodepoints.end()),submissionJapaneseCodepoints.end());
@@ -4354,6 +4358,15 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.checkpointRetryAvailable=railShooterRetryCoordinator_.CanRetry();
     hudRenderInput.unlimitedCheckpointRetries=railShooterGameSession_.Definition().unlimitedCheckpointRetries;
     hudRenderInput.shortRun=IsRailShortCourse(railShooterCoursePath_);
+    hudRenderInput.gateClearPulse=hudRenderInput.shortRun?railGateBridgeFlow_.ClearPulse():0;
+    if(const auto* shot=railShooterCourse_.FindCinematicShotSet(railShooterDistance_);
+            shot && shot->id.starts_with("blockout-shot-")) {
+        hudRenderInput.courseVisualLabel=shot->label;
+        hudRenderInput.courseVisualIndex=static_cast<unsigned>(shot-&railShooterCourse_.cinematicShotSets.front());
+        hudRenderInput.courseVisualCount=static_cast<unsigned>(railShooterCourse_.cinematicShotSets.size());
+    }
+    if(hudRenderInput.shortRun && RailRidgeCombatFlow::Active(railShooterDistance_))
+        hudRenderInput.courseVisualLabel=railRidgeCombatFlow_.Label(railShooterDistance_);
     hudRenderInput.bossVisible=hudRenderInput.shortRun && railMothershipBattle_.Current().battleActive;
     hudRenderInput.bossHealth=railMothershipBattle_.Current().battleHealth;
     hudRenderInput.miniBossParts=railMothershipBattle_.Current().partsBattle;
@@ -4375,6 +4388,12 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.miniBossGatlingIntercepts=railMinibossCombat_.InterceptedCount();
     hudRenderInput.miniBossCounterDamage=railMinibossCombat_.FeedbackDamage();
     hudRenderInput.miniBossCounterFeedbackRemaining=railMinibossCombat_.FeedbackRemaining();
+    hudRenderInput.miniBossCounterFeedbackPart=railMinibossCombat_.FeedbackPart();
+    hudRenderInput.miniBossCounterUnlockPulse=railMinibossCombat_.UnlockPulse();
+    hudRenderInput.miniBossCounterHitPulse=railMinibossCombat_.HitPulse();
+    for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(actor.actorId==railMinibossCombat_.FeedbackOwner())
+        hudRenderInput.miniBossCounterDamageRatio=railMinibossCombat_.FeedbackDamage()/
+            (std::max)(1.0f,actor.combatDefinition.maximumHitPoints);
     for(const auto& part:railShooterSpawnRuntime_.Enemies())if(part.actorId==railMinibossCombat_.CounterOwner())
         hudRenderInput.miniBossCounterPart=RailMothership::PartIndex(part.desc.actorAssetId);
     hudRenderInput.encounterScore=&railEncounterPerformanceScoreSystem_.State();
@@ -4478,14 +4497,16 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             const auto p=ProjectRailOverlayPoint(cue.world,frameState_.viewProjectionMatrix,hudWidth,hudHeight);
             if(p.onscreen && p.inDepth && !p.behind) {
                 const bool guard=cue.phase==RailGatlingAimPhase::Guard;
-                const float s=hudScale,r=guard?21*s:31*s;
+                const float s=hudScale,r=guard?21*s:(31+10*railMinibossCombat_.UnlockPulse())*s;
                 const Vector4 ink=guard?Vector4{.28f,.92f,1,.92f}:Vector4{1,.82f,.25f,.98f};
                 addCircleLine(p.screen,r,6*s,{.015f,.035f,.045f,.7f},32);
                 addCircleLine(p.screen,r,2*s,ink,32);
                 if(!guard)addBracket(p.screen,r+5*s,7*s,2*s,ink);
                 const auto label=guard?u8"ここで弾列を相殺":railMinibossCombat_.CounterPart()==1?
-                    u8"砲台をロックして反撃 x2":u8"砲台へ戻して反撃 x2";
-                addCenteredText(std::string(reinterpret_cast<const char*>(label)),p.screen.x,p.screen.y+r+23*s,.68f*s,ink);
+                    u8"反撃解放：ロックオン x2":u8"反撃解放：主砲 x2";
+                auto labelText=std::string(reinterpret_cast<const char*>(label));
+                if(guard)labelText+="  "+std::to_string(railMinibossCombat_.InterceptedCount())+"/24";
+                addCenteredText(labelText,p.screen.x,p.screen.y+r+23*s,.68f*s,ink);
                 addQuad(p.screen.x-25*s,p.screen.y+r+29*s,50*s,3*s,uvWhite,{.02f,.05f,.06f,.8f});
                 addQuad(p.screen.x-25*s,p.screen.y+r+29*s,50*s*(std::clamp)(cue.progress,0.0f,1.0f),3*s,uvWhite,ink);
             }
@@ -4513,14 +4534,32 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
     }
 
+    if(hudRenderInput.bossVisible && hudRenderInput.miniBossParts && !railGameOverScene_.Active() &&
+        !hudRenderInput.startCueActive && railMinibossCombat_.FeedbackRemaining()>0 && railMinibossCombat_.FeedbackDamage()>0) {
+        for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(actor.actorId==railMinibossCombat_.FeedbackOwner()) {
+            const auto point=ResolveEnemyProjectileWorldPosition(railPath_,{actor.desc.lateralOffset,
+                actor.desc.verticalOffset,actor.desc.spawnDistance+actor.desc.distanceOffset});
+            const auto p=ProjectRailOverlayPoint(point,frameState_.viewProjectionMatrix,hudWidth,hudHeight);
+            if(!p.onscreen || !p.inDepth || p.behind)break;
+            const float s=hudScale,a=(std::clamp)(railMinibossCombat_.FeedbackRemaining()/.22f,0.0f,1.0f);
+            const float rise=(.9f-railMinibossCombat_.FeedbackRemaining())*16*s;
+            const Vector4 hitInk{1,.94f,.72f,a};
+            addCenteredText(std::string(reinterpret_cast<const char*>(u8"反撃命中")),p.screen.x,p.screen.y-58*s-rise,.72f*s,hitInk);
+            addCenteredText("-"+std::to_string(int(std::round(railMinibossCombat_.FeedbackDamage()))),
+                p.screen.x,p.screen.y-34*s-rise,.92f*s,hitInk);
+            const float pulse=railMinibossCombat_.HitPulse();
+            if(pulse>0)addBracket(p.screen,(35+7*(1-pulse))*s,10*s,3*s,{1,.96f,.78f,pulse});
+            break;
+        }
+    }
+
     RailShooterDefensePromptRenderInput defensePromptInput{};
     // Hide tactical instruction cards (dodge left/right, shoot enemy/bullet).
     // Defense simulation and accepted outcome feedback keep their own state.
     defensePromptInput.presentation = nullptr;
-    defensePromptInput.outcome =
-        railMinibossCombat_.GatlingInFlight() ? nullptr : &railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
-    // Individual round outcomes must not announce success while the full
-    // stream is still live. The guard marker/progress owns this phase.
+    defensePromptInput.outcome = hudRenderInput.miniBossParts ? nullptr : &railEnemyAttackDefenseOutcomeFeedbackBridge_.Frame();
+    // The carrier dock owns defense, unlock and counter contact. A retained
+    // generic toast must not reappear between volleys or cover that dock.
     defensePromptInput.viewportWidth = hudWidth;
     defensePromptInput.viewportHeight = hudHeight;
     defensePromptInput.settings = railShooterDefensePromptRendererSettings_;
@@ -7498,6 +7537,7 @@ void AppRunLoop::EnterRailShooterScene() {
     runtimeState_.terrain.enabled = true;
     runtimeState_.terrain.autoAdvancePreview = false;
     ApplyRailShooterTerrainBudget(runtimeState_.terrain);
+    runtimeState_.terrain.settings.renderHorizonAheadChunks=IsRailShortCourse(railShooterCoursePath_)?10u:0u;
     runtimeState_.terrain.cascadeShadowSplit0 =
         (std::min)(runtimeState_.terrain.cascadeShadowSplit0, 96.0f);
     runtimeState_.terrain.cascadeShadowSplit1 =
@@ -8139,6 +8179,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     vehicleInput.requestedSpeed = titleEntryBlocked
         ? RailTitleScene::Speed+(motionEnvelope.requestedSpeed-RailTitleScene::Speed)*entryFrame.rollingHandoff
         : motionEnvelope.requestedSpeed;
+    if(IsRailShortCourse(railShooterCoursePath_) && !titleEntryBlocked && !coursePreviewOwnsRail)
+        vehicleInput.requestedSpeed=(std::max)(vehicleInput.requestedSpeed,
+            railGateBridgeFlow_.ScenicSpeed(speedInput.distance));
     vehicleInput.movementEnabled = railTravelDeltaTime > 0.0f;
     vehicleInput.motionEnvelopeActive = motionEnvelope.active;
     vehicleInput.manualBoostMultiplier = motionEnvelope.manualBoostMultiplier;
@@ -8190,7 +8233,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const float carrierOutdoorEnd=carrierTerrain.openCanyonStartDistance+
         carrierTerrain.openCanyonTransitionLength;
     railMothershipReveal_.Update(gameplayDeltaTime,railShooterDistance_,carrierOutdoorEnd,
-        railPath_,IsRailShortCourse(railShooterCoursePath_) && !entryFrame.blockingGameplay);
+        railPath_,IsRailShortCourse(railShooterCoursePath_) && !entryFrame.blockingGameplay,
+        railShooterCourse_.FindCinematicShotSet(railShooterDistance_)!=nullptr &&
+        railShooterCourse_.FindCinematicShotSet(railShooterDistance_)->id.starts_with("blockout-shot-"));
 
     if(railReadyDroneActorIds_[0]!=0 && entryFrame.active) {
         railReadyDroneSalvo_.Update(railTitleGameplayEntry_.Elapsed(),railShooterDistance_,railPath_,1.65f,
@@ -8445,11 +8490,34 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraInertiaInput.settings = railShooterCameraInertiaSettings_;
     const RailVehicleCameraInertiaFrame& cameraInertiaFrame =
         railShooterCameraInertia_.Update(cameraInertiaInput);
+    const bool gateBridgeEnabled=IsRailShortCourse(railShooterCoursePath_);
+    RailAimState ridgeVisibilityAim;
+    ridgeVisibilityAim.worldRayOrigin=railShooterCameraDirector_.LastFrame().gameplayPosition;
+    RailWorldRaycastInput ridgeVisibility;
+    ridgeVisibility.aim=&ridgeVisibilityAim;ridgeVisibility.spawnRuntime=&railShooterSpawnRuntime_;
+    ridgeVisibility.railPath=&railPath_;ridgeVisibility.course=&railShooterCourse_;
+    ridgeVisibility.terrainSettings=&runtimeState_.terrain.settings;
+    ridgeVisibility.terrainEdits=&railShooterCourse_.terrainEditLayer;
+    ridgeVisibility.terrainPreview=&runtimeState_.terrain.previewEditLayer;
+    ridgeVisibility.terrainCollision=&terrainCollisionWorld_;
+    ridgeVisibility.playerDistance=railShooterDistance_;
+    ridgeVisibility.includeVisualColumns=true;
+    const auto ridgePreviousPhase=railShooterGameplayWaveBridge_.Phase("short-exit-guard");
+    const bool ridgePreviousResolved=ridgePreviousPhase==CourseGameplayWavePhase::Completed ||
+        ridgePreviousPhase==CourseGameplayWavePhase::Disabled;
+    if(gateBridgeEnabled && !coursePreviewOwnsRail && !titleEntryBlocked)
+        railRidgeCombatFlow_.Update(gameplayDeltaTime,railShooterDistance_,railShooterSpawnRuntime_,
+            railEnemyEncounterReadabilityDirector_.Frame(),&ridgeVisibility,ridgePreviousResolved);
+    if(gateBridgeEnabled && !coursePreviewOwnsRail && !titleEntryBlocked)
+        railGateBridgeFlow_.Update(gameplayDeltaTime,railShooterDistance_,railShooterSpawnRuntime_,
+            railEnemyEncounterReadabilityDirector_.Frame().truth.safeToResolveSession);
     if (!coursePreviewOwnsRail && !titleEntryBlocked && railShooterGameplayWaveBridge_.IsBound()) {
         CourseGameplayWaveFrameInput waveInput{};
         waveInput.deltaTime = gameplayDeltaTime;
         waveInput.playerDistance = railShooterDistance_;
         waveInput.combatClearConfirmed = railEnemyEncounterReadabilityDirector_.Frame().truth.safeToResolveSession;
+        waveInput.allowActivation = !gateBridgeEnabled ||
+            (!railGateBridgeFlow_.BlockNewEnemies(railShooterDistance_) && !railRidgeCombatFlow_.HoldAttacks());
         waveInput.allowEarlyAdvance = ShortRunAllowsEarlyWave(railShooterDistance_) &&
             (!IsRailShortCourse(railShooterCoursePath_) || railShooterDistance_<carrierOutdoorEnd-180.0f ||
              railShooterDistance_>=carrierOutdoorEnd+20.0f);
@@ -8479,6 +8547,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     encounterInput.primaryEncounterDue = ShortRunPrimaryEncounterDue(
         railShooterGameplayWaveBridge_, railShooterDistance_, vehicleFrame.state.speed);
     encounterInput.roleMixingAllowed = encounterInput.adaptivePatrolsAllowed;
+    if(gateBridgeEnabled && RailRidgeCombatFlow::Active(railShooterDistance_))encounterInput.roleMixingAllowed=false;
+    encounterInput.suppressRouteEncounters = gateBridgeEnabled &&
+        (railGateBridgeFlow_.ProtectAuthoredCombat(railShooterDistance_) ||
+         railRidgeCombatFlow_.SuppressReinforcements(railShooterDistance_));
     encounterInput.readability = &railEnemyEncounterReadabilityDirector_.Frame();
     encounterInput.minimumTargetForwardDistance = railShooterLockOnSystem_.Settings().minForwardDistance;
     encounterInput.maximumTargetForwardDistance = railShooterLockOnSystem_.Settings().maxForwardDistance;
@@ -8522,9 +8594,19 @@ void AppRunLoop::UpdateRailShooterFrame() {
             encounterInput.triggeredEvents.end());
     }
     encounterInput.spawnRuntime = &railShooterSpawnRuntime_;
-    const EncounterDirectorFrameOutput encounterOutput =
+    EncounterDirectorFrameOutput encounterOutput =
         titleEntryBlocked ? EncounterDirectorFrameOutput{} :
             railShooterEncounterDirector_.Update(std::move(encounterInput));
+    if(gateBridgeEnabled && !coursePreviewOwnsRail && !titleEntryBlocked && gameplayDeltaTime>0 && railGateBridgeFlow_.TakeLookout()) {
+        CourseEventMarker lookout;
+        lookout.distance=railShooterDistance_;lookout.type="enemy_wave";lookout.id="route_sniper_right";
+        lookout.payload="route:support";lookout.editorGuid="short-bridge-lookout";
+        encounterOutput.dispatchEvents.push_back(std::move(lookout));
+    }
+    if(gateBridgeEnabled && !coursePreviewOwnsRail && !titleEntryBlocked && gameplayDeltaTime>0 &&
+            railRidgeCombatFlow_.ArrivalThisFrame()>=0)
+        encounterOutput.dispatchEvents.push_back(RailRidgeCombatFlow::Arrival(
+            railRidgeCombatFlow_.ArrivalThisFrame(),railShooterDistance_));
     LogCourseEvents(encounterOutput.dispatchEvents);
     railShooterCameraDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
     railShooterSpeedDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
@@ -8557,6 +8639,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
          railShooterGameSession_.State().gameplaySimulationEnabled);
     const EnemyEncounterPacingFrame& encounterPacingFrame =
         railEnemyEncounterPacingDirector_.Update(pacingInput);
+    if(gateBridgeEnabled)railRidgeCombatFlow_.ApplyAttackGates(railShooterSpawnRuntime_,railShooterDistance_);
     railMinibossCombat_.Update(railShooterSpawnRuntime_,gameplayDeltaTime,
         IsRailShortCourse(railShooterCoursePath_) &&
             railShooterGameplayWaveBridge_.Phase(RailMothership::BossWaveId)==CourseGameplayWavePhase::Active,
@@ -9398,6 +9481,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
     defenseFeedbackInput.gameplayActive = grazeInput.gameplayActive;
     defenseFeedbackInput.settings =
         railEnemyAttackDefenseOutcomeFeedbackSettings_;
+    std::array<uint32_t,2> carrierLocalSuccessActors{};
+    for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
+        const int part=RailMothership::PartIndex(actor.desc.actorAssetId);
+        if(part>=0)carrierLocalSuccessActors[part]=actor.actorId;
+    }
+    defenseFeedbackInput.localSuccessActors=carrierLocalSuccessActors;
     railEnemyAttackDefenseOutcomeFeedbackBridge_.Update(
         defenseFeedbackInput);
     DispatchEnemyAttackDefenseOutcomeFeedback();
@@ -9425,6 +9514,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     DispatchThreatResponse();
     const std::vector<EnemyCombatEvent> enemyCombatEvents =
         railShooterSpawnRuntime_.EnemyCombat().ConsumeEvents();
+    if(IsRailShortCourse(railShooterCoursePath_)) railGateBridgeFlow_.Notify(enemyCombatEvents);
+    if(IsRailShortCourse(railShooterCoursePath_)) railRidgeCombatFlow_.Notify(enemyCombatEvents);
     for (const EnemyCombatEvent& event : enemyCombatEvents) {
         if (event.kind == EnemyCombatEventKind::Defeated &&
             !event.placementGuid.empty() &&
@@ -10521,6 +10612,7 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
     }
     if (railShooterInitialized_) {
         ApplyRailShooterTerrainBudget(terrain);
+        terrain.settings.renderHorizonAheadChunks=IsRailShortCourse(railShooterCoursePath_)?10u:0u;
     }
 
     if (terrain.useCanyonSunLighting) {
@@ -11192,6 +11284,7 @@ void AppRunLoop::DispatchEnemyCombatPresentation(
     input.counterActorId=railMinibossCombat_.CounterOwner();
     input.counterAmount=railMinibossCombat_.CounterRemaining();
     input.counterHitPulse=railMinibossCombat_.HitPulse();
+    input.counterHitActorId=railMinibossCombat_.FeedbackOwner();
     input.minibossCombat=&railMinibossCombat_;
     input.attackWarnings=&railAttackWarningPresentation_;
     input.traceDestructionGround=[&](Vector3 from,Vector3 to,float railDistance,Vector3& contact,Vector3& normal) {
@@ -14385,6 +14478,49 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     gRailPerfFrame.signalMs = ElapsedMs(signalStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSignalFrame");
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforePresent");
+    // Explicit authoring export: capture the engine's finished backbuffer,
+    // after terrain residency settles. Normal gameplay never enters this path.
+    static const std::wstring frameExportPath=[] {
+        wchar_t path[32768]{};
+        const DWORD count=GetEnvironmentVariableW(L"GE3_COURSE_FRAME_EXPORT",path,32768);
+        return count>0 && count<32768 ? std::wstring(path,count) : std::wstring{};
+    }();
+    static unsigned frameExportWait=0;
+    static bool frameExportDone=false;
+    static const unsigned frameExportMinimum=(std::clamp)(ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_FRAMES",90),1u,600u);
+    if(!frameExportPath.empty() && !frameExportDone && ++frameExportWait>=frameExportMinimum &&
+        terrainChunkManager_.RenderChunks().size()==terrainChunkManager_.Chunks().size()) {
+        frameExportDone=true;
+        DirectX::ScratchImage image;
+        HRESULT result=E_FAIL;
+        if(frameCoordinator_.FlushGpu())
+            result=DirectX::CaptureTexture(dev_.GetCommandQueue(),backBuffer,false,image,
+                D3D12_RESOURCE_STATE_PRESENT,D3D12_RESOURCE_STATE_PRESENT);
+        if(SUCCEEDED(result)) {
+            const auto parent=std::filesystem::path(frameExportPath).parent_path();
+            std::error_code error;
+            if(!parent.empty())std::filesystem::create_directories(parent,error);
+            result=DirectX::SaveToWICFile(*image.GetImage(0,0,0),DirectX::WIC_FLAGS_NONE,
+                DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG),frameExportPath.c_str());
+        }
+        std::ofstream log("logs/course_frame_export.log",std::ios::app);
+        log<<railShooterDistance_<<","<<std::hex<<result<<"\n";
+        auto statePath=std::filesystem::path(frameExportPath);statePath.replace_extension(".csv");
+        std::ofstream state(statePath);
+        const auto& camera=railShooterCameraDirector_.LastFrame();
+        state<<"# distance="<<railShooterDistance_<<" eye="<<camera.position.x<<','<<camera.position.y<<','<<camera.position.z
+             <<" target="<<camera.target.x<<','<<camera.target.y<<','<<camera.target.z<<" fov="<<camera.fovY<<"\n";
+        state<<"wave,actor,forward,lateral,vertical,authored_lateral,authored_vertical,screen_x,screen_y,on_screen\n";
+        for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(actor.desc.waveId.starts_with("ridge-dive-")) {
+            const auto* proxy=railEnemyEncounterReadabilityDirector_.FindActor(actor.actorId);
+            state<<actor.desc.waveId<<','<<actor.desc.actorAssetId<<','
+                <<actor.desc.spawnDistance+actor.desc.distanceOffset-railShooterDistance_<<','
+                <<actor.desc.lateralOffset<<','<<actor.desc.verticalOffset<<','<<actor.behaviorState.authoredLateralOffset<<','
+                <<actor.behaviorState.authoredVerticalOffset<<','<<(proxy?proxy->screenPosition.x:-1)<<','
+                <<(proxy?proxy->screenPosition.y:-1)<<','<<(proxy&&proxy->onScreen)<<'\n';
+        }
+        PostMessageW(hwnd_,WM_CLOSE,0,0);
+    }
     const auto presentStart = RailPerfClock::now();
     const HRESULT presentHr = swapChain_.Present(dev_, frameCoordinator_.PresentSyncInterval());
     gRailPerfFrame.presentMs = ElapsedMs(presentStart, RailPerfClock::now());

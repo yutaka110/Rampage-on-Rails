@@ -364,6 +364,7 @@ uint32_t SettingsHash(const TerrainGenerationSettings& settings) {
     mixFloat(settings.chunkLength);
     hash = Hash(hash ^ settings.visibleAheadChunks);
     hash = Hash(hash ^ settings.visibleBehindChunks);
+    hash = Hash(hash ^ settings.renderHorizonAheadChunks);
     mixFloat(settings.corridorRadius);
     mixFloat(settings.canyonHalfWidth);
     mixFloat(settings.wallHeight);
@@ -3699,6 +3700,10 @@ TerrainCpuMesh BuildChunkMesh(
         radialSegments + 1,
         openingMasks,
         true,true,settings.wallHeight*0.045f);
+    // The open horizon needs a continuous floor/wall silhouette beyond the
+    // detailed residency window, especially when the cart crests a hill.
+    // Reuse its exact boundary ring; omit rocks, distant mesas and debris.
+    if(chunk.lodTier>=3u) return mesh;
     if (stopToken.stop_requested()) {
         return {};
     }
@@ -4460,9 +4465,15 @@ void TerrainChunkManager::Update(
     const int32_t maxChunkIndex = (std::max)(
         0,
         static_cast<int32_t>(std::ceil(railPath.Length() / settings.chunkLength)) - 1);
-    const int32_t lastIndex = (std::min)(
+    const int32_t detailedLastIndex = (std::min)(
         maxChunkIndex,
         focusIndex + static_cast<int32_t>(settings.visibleAheadChunks));
+    const int32_t lastIndex = (std::min)(maxChunkIndex,detailedLastIndex+
+        static_cast<int32_t>((std::min)(settings.renderHorizonAheadChunks,16u)));
+    const auto requestedLod=[&](float start,float middle) {
+        return start>=static_cast<float>(detailedLastIndex+1)*settings.chunkLength-.001f ? 3u :
+            TerrainLodTierForDistance(std::abs(middle-focusDistance),settings);
+    };
 
     const uint32_t settingsHash = SettingsHash(settings);
     const uint64_t editRevision =
@@ -4496,13 +4507,14 @@ void TerrainChunkManager::Update(
     if (settingsHash == chunkCacheSettingsHash_ &&
         firstIndex == cachedFirstChunkIndex_ &&
         lastIndex == cachedLastChunkIndex_ &&
-        !chunks_.empty()) {
+        !chunks_.empty() && std::none_of(chunks_.begin(),chunks_.end(),[&](const auto& chunk){
+            return (chunk.lodTier>=3u)!=(requestedLod(chunk.startDistance,(chunk.startDistance+chunk.endDistance)*.5f)>=3u);})) {
         bool lodChanged = false;
         bool editHashChanged = false;
         for (TerrainChunkDebugInfo& chunk : chunks_) {
             const float chunkMid = (chunk.startDistance + chunk.endDistance) * 0.5f;
             const uint32_t lodTier =
-                TerrainLodTierForDistance(std::abs(chunkMid - focusDistance), settings);
+                requestedLod(chunk.startDistance,chunkMid);
             if (chunk.lodTier != lodTier) {
                 chunk.lodTier = lodTier;
                 lodChanged = true;
@@ -4541,13 +4553,13 @@ void TerrainChunkManager::Update(
         const float endDistance = startDistance + settings.chunkLength;
         const uint32_t seed = Hash(settings.seed ^ static_cast<uint32_t>(chunkIndex * 747796405));
         const float chunkMid = (startDistance + endDistance) * 0.5f;
-        const uint32_t lodTier = TerrainLodTierForDistance(std::abs(chunkMid - focusDistance), settings);
+        const uint32_t lodTier = requestedLod(startDistance,chunkMid);
         const uint64_t editHash = editHashForRange(startDistance, endDistance);
         const auto reusable = std::find_if(
             reusableDebugChunks.begin(),
             reusableDebugChunks.end(),
             [&](const TerrainChunkDebugInfo& chunk) {
-                return chunk.seed == seed &&
+                return chunk.seed == seed && (chunk.lodTier>=3u)==(lodTier>=3u) &&
                     std::abs(chunk.startDistance - startDistance) <= 0.001f &&
                     std::abs(chunk.endDistance - endDistance) <= 0.001f;
             });
@@ -4566,6 +4578,11 @@ void TerrainChunkManager::Update(
         chunk.seed = seed;
         chunk.lodTier = lodTier;
         chunk.editHash = editHash;
+
+        if(lodTier>=3u) {
+            chunks_.push_back(std::move(chunk));
+            continue;
+        }
 
         const uint32_t candidateCount =
             1u + static_cast<uint32_t>(settings.rockPillarDensity * 4.0f) +

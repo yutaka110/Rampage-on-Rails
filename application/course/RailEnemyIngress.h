@@ -9,7 +9,7 @@
 struct CourseAsset;
 struct TerrainGenerationSettings;
 
-enum class EnemyEntrySource : unsigned char { Automatic, Carrier, RockLeft, RockRight, High, SideOpening };
+enum class EnemyEntrySource : unsigned char { Automatic, Carrier, RockLeft, RockRight, High, SideOpening, LocalApproach };
 enum class RailEnemyIngressKind : unsigned char { Rock, Cliff, SideOpening };
 
 // Coordinates are (rail lateral, rail vertical, absolute rail distance).

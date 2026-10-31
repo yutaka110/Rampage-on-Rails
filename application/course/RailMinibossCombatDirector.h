@@ -6,6 +6,7 @@
 #include "WeaponFireSystem.h"
 #include "RailLockOnTypes.h"
 #include "RailGatlingAttack.h"
+#include "RailBatteryDamagePolicy.h"
 #include <array>
 #include <algorithm>
 #include <bit>
@@ -16,7 +17,7 @@
 class RailMinibossCombatDirector final {
 public:
     static constexpr float RapidCounterSeconds=1.15f,HeavyCounterSeconds=1.80f;
-    static constexpr float CounterDamageMultiplier=2.0f;
+    static constexpr float CounterDamageMultiplier=RailBatteryDamage::CounterMultiplier;
     void Reset(uint32_t seed=0x6d2b79f5u){*this={};random_=seed?seed:0x6d2b79f5u;}
     bool Active()const{return active_;}
     int Turn()const{return turn_;}
@@ -29,6 +30,10 @@ public:
     float FeedbackDamage()const{return feedbackDamage_;}
     float FeedbackRemaining()const{return feedbackRemaining_;}
     uint32_t FeedbackOwner()const{return feedbackOwner_;}
+    int FeedbackPart()const{return feedbackPart_;}
+    float UnlockPulse()const {
+        return counterRemaining_>0 ? (std::clamp)(1.0f-(counterDuration_-counterRemaining_)/.35f,0.0f,1.0f) : 0;
+    }
     float HitPulse()const{return (std::clamp)((feedbackRemaining_-.78f)/.12f,0.0f,1.0f);}
     float DamageMultiplier(uint32_t target,bool lockOn)const {
         return counterRemaining_>0 && target!=0 && target==counterOwner_ &&
@@ -39,7 +44,7 @@ public:
     bool CreditShot(uint64_t shot,uint32_t target,bool lockOn) {
         if(!shot || DamageMultiplier(target,lockOn)<=1)return false;
         for(const auto& credit:credits_)if(credit.shot==shot)return false;
-        credits_[nextCredit_++%credits_.size()]={shot,target,counterSerial_};
+        credits_[nextCredit_++%credits_.size()]={shot,target,counterSerial_,counterPart_};
         return true;
     }
     void PrepareLockShots(std::span<const RailLockToken> tokens,std::span<WeaponShot> shots) {
@@ -47,7 +52,10 @@ public:
             const auto& target=tokens[i].target;
             if(target.kind!=RailLockTargetKind::Enemy || !std::isfinite(shots[i].damage) || shots[i].damage<=0)continue;
             const float bonus=DamageMultiplier(target.actorId,true);
-            if(bonus>1 && CreditShot(shots[i].shotId,target.actorId,true))shots[i].damage*=bonus;
+            if(bonus>1 && CreditShot(shots[i].shotId,target.actorId,true)) {
+                shots[i].damage*=bonus;
+                shots[i].counterTargetActorId=target.actorId;
+            }
         }
     }
     bool NotifyCounterDamage(const WeaponFeedbackEvent& hit) {
@@ -56,6 +64,7 @@ public:
             const bool first=feedbackCycle_!=credit.cycle;
             if(first)feedbackDamage_=0;
             feedbackCycle_=credit.cycle;feedbackOwner_=credit.owner;
+            feedbackPart_=credit.part;
             feedbackDamage_+=hit.appliedDamage;feedbackRemaining_=.9f;credit.owner=0;
             return first;
         }
@@ -234,11 +243,12 @@ private:
     float elapsed_=0;
     Vector3 guardOffset_{};
     bool guardValid_=false;
-    struct Credit {uint64_t shot=0;uint32_t owner=0;uint64_t cycle=0;};
+    struct Credit {uint64_t shot=0;uint32_t owner=0;uint64_t cycle=0;int part=-1;};
     std::array<Credit,64> credits_{};
     size_t nextCredit_=0;
     int counterPart_=-1;
     uint64_t feedbackCycle_=0;
     uint32_t feedbackOwner_=0;
+    int feedbackPart_=-1;
     float feedbackDamage_=0,feedbackRemaining_=0;
 };

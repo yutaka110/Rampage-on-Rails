@@ -34,6 +34,8 @@ RailRetryFollowBindings AppRunLoop::BindRailRetryFollowers() {
         .motion=railShooterRideMotionEnvelope_,
         .trackFeedback=railShooterTrackFeedbackDirector_,
         .encounters=railShooterEncounterDirector_,
+        .gateBridge=railGateBridgeFlow_,
+        .ridge=railRidgeCombatFlow_,
         .entry=railTitleGameplayEntry_,
         .readySalvo=railReadyDroneSalvo_,
         .readyIds=railReadyDroneActorIds_,
@@ -277,6 +279,8 @@ bool AppRunLoop::RetryRailCheckpoint() {
         StopRailEnemyAttackFeedback();
         railShooterCombatFeelSystem_.Reset();
         railShooterEncounterDirector_.Reset();
+        railGateBridgeFlow_.Reset();
+        railRidgeCombatFlow_.Reset();
         railEnemyEncounterCameraCompositionBridge_.Reset();
         railShooterCameraDirector_.Reset();
         railMothershipBattle_.Reset();railMothershipReveal_.Reset();

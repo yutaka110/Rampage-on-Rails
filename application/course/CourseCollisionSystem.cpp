@@ -615,7 +615,10 @@ void CourseCollisionSystem::FirePlayerShot(
     request.baseDamage = shot.damage;
     if(request.hitKind==RailAimHitKind::Enemy && request.targetActorId!=0 &&
         request.targetActorId==input.bonusTargetActorId && std::isfinite(input.bonusDamageMultiplier))
+    {
         request.baseDamage*=(std::clamp)(input.bonusDamageMultiplier,1.0f,4.0f);
+        if(input.bonusDamageMultiplier>1)request.counterTargetActorId=request.targetActorId;
+    }
     ApplyWeaponHit(runtime, input.course, request);
 
     if (!lastWeaponFeedbackResult_.accepted) {

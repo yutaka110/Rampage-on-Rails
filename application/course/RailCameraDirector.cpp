@@ -958,6 +958,14 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
 
     frame.forward = NormalizeOr(Subtract(frame.target, frame.position), cameraSample.tangent);
     frame.up = RotateAroundAxis(cameraSample.up, frame.forward, frame.rig.roll);
+    // Composition pressure can change when a downhill target enters the
+    // frustum. Bound the FINAL lens correction as well as the base rig, so
+    // this authored ridge never produces a one-frame zoom at that handoff.
+    if(const auto* shot=input.course->FindCinematicShotSet(input.distance);
+            shot && shot->id=="blockout-shot-ridge" && hasPreviousComfortFrame_ && input.deltaTime>0) {
+        const float step=.35f*(std::min)(input.deltaTime,.25f);
+        frame.rig.fovY=(std::clamp)(frame.rig.fovY,previousFovY_-step,previousFovY_+step);
+    }
     frame.fovY = frame.rig.fovY;
     frame.modeKind = ClassifyMode(frame.mode);
     frame.railSpeed = input.railSpeed > 0.0f ? input.railSpeed : cameraSample.speed;

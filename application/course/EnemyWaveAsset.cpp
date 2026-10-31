@@ -41,7 +41,8 @@ bool EnemyWaveAsset::LoadFromFile(const std::string& path, std::string* errorMes
             }
         } else if (parts[0] == "deployment") {
             if(parts.size()!=2) { if(errorMessage) *errorMessage="Invalid deployment row";return false; }
-            if(parts[1]=="automatic") loaded.entrySource=EnemyEntrySource::Automatic;
+            if(parts[1]=="local_approach") {loaded.entrySource=EnemyEntrySource::LocalApproach;loaded.localApproach=true;}
+            else if(parts[1]=="automatic") loaded.entrySource=EnemyEntrySource::Automatic;
             else if(parts[1]=="carrier") loaded.entrySource=EnemyEntrySource::Carrier;
             else if(parts[1]=="rock_left") loaded.entrySource=EnemyEntrySource::RockLeft;
             else if(parts[1]=="rock_right") loaded.entrySource=EnemyEntrySource::RockRight;
@@ -142,6 +143,10 @@ bool EnemyWaveAsset::LoadFromFile(const std::string& path, std::string* errorMes
     }
     if (loaded.formationDefinition.has_value()) {
         loaded.formationDefinition->definitionId = loaded.id;
+    }
+    if(loaded.localApproach && !loaded.formationDefinition) {
+        if(errorMessage)*errorMessage="Local approach requires an authored visible entrance.";
+        return false;
     }
     if (loaded.units.empty()) {
         if (errorMessage != nullptr) {

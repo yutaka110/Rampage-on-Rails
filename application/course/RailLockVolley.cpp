@@ -237,6 +237,7 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 request.rayDirection=Scale(delta,1/distance);request.hitPoint=laser.end;
                 request.hitNormal=Scale(request.rayDirection,-1);request.hitDistance=distance;request.baseDamage=laser.weapon.damage;
                 request.lockOnContact=true;
+                request.counterTargetActorId=laser.weapon.counterTargetActorId;
                 RailLockContact contact;contact.shotId=request.shotId;contact.actorId=request.targetActorId;
                 contact.position=request.hitPoint;contact.normal=request.hitNormal;
                 // Capture before lethal damage clears the live weapon mount.

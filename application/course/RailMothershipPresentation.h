@@ -24,6 +24,9 @@ inline float Smooth(float value, float begin, float end) {
     const float t = (std::clamp)((value-begin)/(end-begin), 0.0f, 1.0f);
     return t*t*(3.0f-2.0f*t);
 }
+inline float RidgeVistaLift(float distance) {
+    return 110.0f*Smooth(distance,2320,2440)*(1.0f-Smooth(distance,2680,2820));
+}
 inline Vector3 Add(Vector3 a, Vector3 b) { return {a.x+b.x,a.y+b.y,a.z+b.z}; }
 inline Vector3 Scale(Vector3 a, float s) { return {a.x*s,a.y*s,a.z*s}; }
 inline Vector3 Mix(Vector3 a, Vector3 b, float t) {
@@ -69,7 +72,7 @@ class Reveal final {
 public:
     void Reset() { *this = {}; }
     const Frame& Update(float dt, float distance, float outdoorEnd,
-            const RailPath& rail, bool enabled) {
+            const RailPath& rail, bool enabled, bool preserveCourseView=false) {
         if (!enabled || rail.Length() <= 0.0f) { Reset(); return frame_; }
         if (distance+25.0f < previousDistance_) Reset();
         previousDistance_ = distance;
@@ -94,7 +97,7 @@ public:
         frame_.railDistance = distance+forward;
         const auto sample = rail.EvaluateExtended(frame_.railDistance);
         frame_.right=sample.right; frame_.up=sample.up; frame_.forward=sample.tangent;
-        const float flightAltitude=rail.EvaluateExtended(outdoorEnd).position.y+Height;
+        const float flightAltitude=rail.EvaluateExtended(outdoorEnd).position.y+Height+RidgeVistaLift(distance);
         // Constant WORLD altitude: no downward slide or terrain-following bob
         // may turn this pass into a ship falling from the sky.
         frame_.railVertical=(flightAltitude-sample.position.y)/(std::max)(sample.up.y,0.1f);
@@ -116,6 +119,17 @@ public:
             Scale(player.tangent,(std::max)(0.0f,80.0f-forward)));
         frame_.cameraSubject=Mix(subject,Add(ahead.position,Scale(ahead.up,12.0f)),
             Smooth(elapsed_,DeploymentBegin,IntroductionDuration-0.5f));
+        // The six-beat course owns the vista. Keep deployment timing and the
+        // escort flight, without steering away from the rail and its landmarks.
+        if(preserveCourseView) {
+            frame_.cameraWeight=0;frame_.heroWeight=0;
+            // Vacate the bridge skyline before returning for the next launch.
+            // Bay staging shares this exact height; drones cannot launch from
+            // the previous, now empty, escort position.
+            const float climb=110.0f*Smooth(distance,1530,1640)*(1.0f-Smooth(distance,1830,1990));
+            frame_.railVertical+=climb;
+            frame_.center=Add(frame_.center,Scale(frame_.up,climb));
+        }
         return frame_;
     }
     const Frame& Current() const { return frame_; }

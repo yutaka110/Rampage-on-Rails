@@ -441,6 +441,8 @@ private:
     CourseEventDispatcher railShooterEventDispatcher_;
     std::vector<RailEnemyIngressRoute> railEnemyIngressRoutes_;
     EncounterDirector railShooterEncounterDirector_;
+    RailGateBridgeFlow railGateBridgeFlow_;
+    RailRidgeCombatFlow railRidgeCombatFlow_;
     RailCameraDirector railShooterCameraDirector_;
     bool cameraSectionPreviewWasActive_ = false;
     float cameraSectionPreviewLastDistance_ = 0.0f;

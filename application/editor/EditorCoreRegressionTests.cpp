@@ -1,5 +1,6 @@
-﻿#include "course/CourseCameraShotDetailsPanel.h"
+#include "course/CourseCameraShotDetailsPanel.h"
 #include "../course/RailTurretGeometry.h"
+#include "core/ShaderCompiler.h"
 #include "../course/RailGatlingAimCycle.h"
 #include "../course/RailHeavyAttack.h"
 #include "../course/RailMothershipBattle.h"
@@ -16992,6 +16993,119 @@ void TestEditorFramePacingAndViewportRealtime(RegressionRunner& runner) {
             realtime.Evaluate({}).reason ==
                 EditorViewportRealtimeReason::UserEnabled,
         "Realtime toggle should restore continuous Viewport updates");
+}
+
+void TestShaderNestedIncludeCache(RegressionRunner& runner) {
+    const auto directory=std::filesystem::path("generated/shader-include-cache-test");
+    std::filesystem::create_directories(directory);
+    const auto root=directory/"root.hlsl",palette=directory/"palette.hlsli",leaf=directory/"leaf.hlsli";
+    {std::ofstream out(root);out<<"#include \"palette.hlsli\"\nfloat4 main():SV_TARGET { return float4(Shade(),1); }\n";}
+    {std::ofstream out(palette);out<<"#include \"leaf.hlsli\"\n";}
+    {std::ofstream out(leaf);out<<"float3 Shade(){return float3(1,0,0);}\n";}
+    ge3::core::ShaderCompiler compiler;
+    runner.Expect(compiler.Initialize(),"Release cache test initializes the production DXC compiler");
+    const auto bytes=[](const Microsoft::WRL::ComPtr<IDxcBlob>& blob) {
+        if(!blob)return std::vector<uint8_t>{};
+        const auto* begin=static_cast<const uint8_t*>(blob->GetBufferPointer());
+        return std::vector<uint8_t>(begin,begin+blob->GetBufferSize());
+    };
+    const auto first=bytes(compiler.CompileFromFile(root.wstring(),L"main",L"ps_6_0"));
+    const auto time=std::filesystem::last_write_time(leaf),rootTime=std::filesystem::last_write_time(root);
+    const auto length=std::filesystem::file_size(leaf);
+    {std::ofstream out(leaf);out<<"float3 Shade(){return float3(0,1,0);}\n";}
+    std::filesystem::last_write_time(leaf,time);
+    const auto changed=bytes(compiler.CompileFromFile(root.wstring(),L"main",L"ps_6_0"));
+    const auto cached=bytes(compiler.CompileFromFile(root.wstring(),L"main",L"ps_6_0"));
+    runner.Expect(!first.empty() && !changed.empty() && first!=changed && changed==cached,
+        "a same-size nested include edit changes actual bytecode, while an unchanged source tree reuses the correct result");
+    runner.Expect(std::filesystem::last_write_time(root)==rootTime && std::filesystem::file_size(leaf)==length &&
+        std::filesystem::last_write_time(leaf)==time,"include invalidation cannot depend on changing the root shader, file length or timestamp");
+    std::ofstream report("logs/shader_include_cache.csv");
+    report<<"initial_bytes,changed_bytes,include_edit_invalidated,unchanged_reused\n"<<first.size()<<','<<changed.size()<<','<<(first!=changed)<<','<<(changed==cached)<<'\n';
+}
+
+void TestRidgeHorizonVisibility(RegressionRunner& runner) {
+    CourseAsset course;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"ridge visibility uses the actual complete course");
+    RailPath rail;course.ApplyToRailPath(rail);
+    TerrainGenerationSettings settings;settings.visibleAheadChunks=4;settings.visibleBehindChunks=1;
+    settings.surfaceLongitudinalSteps=24;settings.surfaceRadialSegments=36;
+    settings.lodNearDistance=140;settings.lodFarDistance=320;settings.renderHorizonAheadChunks=10;
+    const auto sub=[](Vector3 a,Vector3 b){return Vector3{a.x-b.x,a.y-b.y,a.z-b.z};};
+    const auto dot=[](Vector3 a,Vector3 b){return a.x*b.x+a.y*b.y+a.z*b.z;};
+    const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
+    const auto trace=[&](const TerrainChunkCpuBuild& mesh,Vector3 origin,Vector3 direction,float limit) {
+        for(size_t i=0;i+2<mesh.indices.size();i+=3) {
+            const auto& a=mesh.vertices[mesh.indices[i]].position;
+            const auto& b=mesh.vertices[mesh.indices[i+1]].position;
+            const auto& c=mesh.vertices[mesh.indices[i+2]].position;
+            const Vector3 edge1{b.x-a.x,b.y-a.y,b.z-a.z},edge2{c.x-a.x,c.y-a.y,c.z-a.z};
+            const auto p=cross(direction,edge2);const float determinant=dot(edge1,p);
+            if(std::abs(determinant)<1e-7f)continue;
+            const auto t=sub(origin,{a.x,a.y,a.z});const float u=dot(t,p)/determinant;
+            if(u<0 || u>1)continue;
+            const auto q=cross(t,edge1);const float v=dot(direction,q)/determinant;
+            if(v<0 || u+v>1)continue;
+            const float distance=dot(edge2,q)/determinant;
+            if(distance>=0 && distance<limit)limit=distance;
+        }
+        return limit;
+    };
+    std::ofstream report("logs/ridge_horizon_visibility.csv");
+    report<<"focus,detailed_end,horizon_end,horizon_chunks,horizon_triangles,recovered_pixels,near_intrusions,max_seam_gap\n";
+    unsigned totalRecovered=0;
+    for(float focus:{2400.0f,2480.0f,2640.0f,2880.0f,3040.0f}) {
+        TerrainChunkManager manager;manager.Update(nullptr,nullptr,rail,settings,nullptr,nullptr,focus,MakeIdentity4x4());
+        const auto chunks=manager.Chunks();
+        runner.Expect(chunks.size()==16 && chunks.back().endDistance-focus>=1120,
+            "coaster view retains detailed near terrain plus bounded continuous horizon coverage");
+        std::vector<TerrainChunkCpuBuild> meshes;unsigned horizonChunks=0,horizonTriangles=0;
+        float detailedEnd=0,maxGap=0;
+        for(const auto& chunk:chunks) {
+            auto mesh=BuildTerrainChunkGeometry(chunk,rail,settings);
+            runner.Expect(!mesh.vertices.empty() && mesh.indices.size()%3==0 &&
+                std::all_of(mesh.indices.begin(),mesh.indices.end(),[&](auto i){return i<mesh.vertices.size();}),"coarse horizon publishes finite indexed geometry");
+            if(chunk.lodTier>=3) {
+                ++horizonChunks;horizonTriangles+=unsigned(mesh.indices.size()/3);
+                runner.Expect(mesh.vertices.size()<1500 && chunk.spawnCandidates.empty() && chunk.debrisInstances.empty() && chunk.vfxZones.empty(),
+                    "horizon carries only the connected terrain surface, with no new enemies, rocks or dust zones");
+                if(!meshes.empty()) {
+                    const auto& prior=meshes.back();const unsigned stride=settings.surfaceRadialSegments+1;
+                    const unsigned steps=(std::clamp)(settings.surfaceLongitudinalSteps/(prior.lodTier==0?1u:prior.lodTier==1?2u:3u),12u,64u);
+                    for(unsigned a=0;a<stride;++a) {
+                        const auto p=prior.vertices[steps*stride+a].position,q=mesh.vertices[a].position;
+                        maxGap=(std::max)(maxGap,std::sqrt((p.x-q.x)*(p.x-q.x)+(p.y-q.y)*(p.y-q.y)+(p.z-q.z)*(p.z-q.z)));
+                    }
+                }
+            } else detailedEnd=chunk.endDistance;
+            meshes.push_back(std::move(mesh));
+        }
+        runner.Expect(horizonChunks==10 && horizonTriangles<30000 && maxGap<.0001f,
+            "far surface has a bounded triangle budget and closes the detailed-to-horizon boundary without cracks");
+        RailCameraDirector camera;RailCameraDirectorFrameInput ci;ci.course=&course;ci.railPath=&rail;ci.distance=focus;
+        ci.deltaTime=0;ci.viewportWidth=1600;ci.viewportHeight=900;const auto frame=camera.Evaluate(ci);
+        const auto forward=Normalize(sub(frame.target,frame.position));const auto right=Normalize(cross(frame.gameplayUp,forward));const auto up=cross(forward,right);
+        const float tangent=std::tan(frame.fovY*.5f);unsigned recovered=0,nearIntrusions=0;
+        for(int y=0;y<7;++y)for(int x=0;x<11;++x) {
+            const float nx=-.85f+1.7f*x/10,ny=.6f-1.4f*y/6;
+            const auto direction=Normalize(Vector3{forward.x+right.x*nx*tangent*16/9+up.x*ny*tangent,
+                forward.y+right.y*nx*tangent*16/9+up.y*ny*tangent,forward.z+right.z*nx*tangent*16/9+up.z*ny*tangent});
+            float nearHit=1600,fullHit=1600;
+            for(const auto& mesh:meshes)if(mesh.lodTier<3)nearHit=trace(mesh,frame.position,direction,nearHit);
+            fullHit=nearHit;
+            for(const auto& mesh:meshes)if(mesh.lodTier>=3)fullHit=trace(mesh,frame.position,direction,fullHit);
+            recovered+=nearHit==1600 && fullHit<1600;
+            nearIntrusions+=fullHit<100 && nearHit>=100;
+        }
+        totalRecovered+=recovered;
+        runner.Expect(nearIntrusions==0,"horizon terrain cannot introduce a new occluder inside the close combat space");
+        report<<focus<<','<<detailedEnd<<','<<chunks.back().endDistance<<','<<horizonChunks<<','<<horizonTriangles<<','<<recovered<<','<<nearIntrusions<<','<<maxGap<<'\n';
+        manager.Update(nullptr,nullptr,rail,settings,nullptr,nullptr,focus+80,MakeIdentity4x4());
+        const auto promoted=std::find_if(manager.Chunks().begin(),manager.Chunks().end(),[&](const auto& c){return c.startDistance==detailedEnd;});
+        runner.Expect(promoted!=manager.Chunks().end() && promoted->lodTier<3 && !promoted->spawnCandidates.empty(),
+            "advancing promotes coarse terrain to full near detail and restores its normal placement metadata");
+    }
+    runner.Expect(totalRecovered>0,"actual ridge camera rays now hit scenery where the old finite resident window exposed sky");
 }
 
 void TestTerrainChunkSurfaceSeams(RegressionRunner& runner) {
@@ -36884,6 +36998,379 @@ void TestRailTitleGameplayEntry(RegressionRunner& runner) {
 // Controlled no-kill comparison. Uses production movement, spawning, hovering,
 // camera and lock candidate filtering. Terrain occlusion and human cursor
 // movement are intentionally outside this headless availability measurement.
+void TestRidgeCrestProtection(RegressionRunner& runner) {
+    CourseAsset course;std::string error;course.LoadFromFile(RailShortCoursePath,&error);
+    CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;dispatcher.PlaceGroundBatteries(course,runtime);
+    CourseEnemyActorDesc desc;desc.sourcePlacementGuid="ridge-residual";desc.waveId="short-exit-guard";
+    desc.spawnDistance=2200;desc.distanceOffset=60;desc.hitPoints=30;runtime.SpawnEnemyActor(desc);
+    RailPath rail;course.ApplyToRailPath(rail);
+    RailMothership::Reveal crestEscort;RailMothership::Battle crestCarrier;CourseSpawnRuntime emptySky;
+    const auto crestShip=crestCarrier.Update(crestEscort.Update(.016f,2500,600,rail,true,true),emptySky,
+        CourseGameplayWavePhase::Pending,rail,2500,.016f);
+    runner.Expect(crestShip.center.y>rail.Evaluate(2500+RailMothership::EscortForwardOffset).position.y+150,
+        "carrier and its deployment path clear the crest vista above the descending rail");
+    CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.playerDistance=2200;safety.cameraAllowsEnemyFire=false;
+    safety.groundSupportQuery=[](const RailPathSample&,float,float& y){y=-17;return true;};runtime.Update(.1f,safety);
+    RailRidgeCombatFlow flow;EnemyEncounterReadabilityFrame frame;
+    flow.Update(.1f,2200,runtime,frame);flow.ApplyAttackGates(runtime,2200);
+    bool held=false;
+    for(const auto& actor:runtime.Enemies())if(actor.desc.actorAssetId=="short_turret" &&
+        actor.desc.spawnDistance+actor.desc.distanceOffset==2220)
+        held=actor.encounterPacingEvaluated && !actor.encounterPacingAttackAllowed;
+    runner.Expect(flow.PrimaryBusy() && flow.SuppressReinforcements(2200) && held,
+        "a late bridge formation owns the climb before the fixed battery and reinforcements");
+    CourseBulletActor bullet;bullet.active=true;bullet.damage=8;bullet.lifetime=10;
+    runtime.SpawnProjectile(bullet);const auto count=runtime.Bullets().size();
+    flow.Update(.1f,2500,runtime,frame);flow.ApplyAttackGates(runtime,2500);
+    runner.Expect(flow.HoldAttacks() && flow.ArrivalThisFrame()<0 && runtime.Bullets().size()==count,
+        "crest suspends new commitment while retaining real enemies and existing rounds");
+    for(const auto& actor:runtime.Enemies())if(!actor.stationaryDormant && actor.desc.hitPoints>0)
+        runner.Expect(!actor.encounterPacingAttackAllowed,"crest holds current opponents without making them invulnerable");
+    RailRetryFollowState state;state.ridge=flow;RailRetryPresentationCheckpoint checkpoint;
+    checkpoint.Capture(7,2,BindRailRetryFollowState(state));state.ridge.Reset();
+    runner.Expect(checkpoint.Restore(7,2,BindRailRetryFollowState(state)) && state.ridge.HoldAttacks(),
+        "retry retains the crest phase and its timer");
+    const auto elapsed=state.ridge.CrestSeconds();state.ridge.Update(0,2500,runtime,frame);
+    runner.Expect(state.ridge.CrestSeconds()==elapsed,"pause never advances the crest or arrival clocks");
+    for(int i=0;i<30;++i)flow.Update(.1f,2700,runtime,frame);
+    runner.Expect(flow.ArrivalThisFrame()<0,"late unresolved opponents cannot acquire a hidden downhill backlog");
+    flow.Update(.1f,2830,runtime,frame);
+    runner.Expect(!flow.SuppressReinforcements(2830) && !flow.HoldAttacks(),"late play resumes normal course ownership after the authored window");
+    RailRidgeCombatFlow pending;CourseSpawnRuntime empty;frame.truth.safeToResolveSession=true;
+    for(int i=0;i<30;++i)pending.Update(.1f,2600,empty,frame,nullptr,false);
+    runner.Expect(pending.PrimaryBusy() && pending.ArrivalThisFrame()<0 && pending.SuppressReinforcements(2600),
+        "an empty frame before a pending mandatory battle cannot release optional downhill opponents");
+}
+
+void TestRidgeLocalApproaches(RegressionRunner& runner) {
+    CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;std::string error;
+    for(int i=0;i<2;++i) {
+        const auto event=RailRidgeCombatFlow::Arrival(i,2560+i*50.0f);
+        EnemyWaveAsset wave;
+        runner.Expect(wave.LoadFromFile("Resources/courses/waves/"+event.id+".wave",&error) &&
+            wave.localApproach && wave.formationDefinition && wave.units.size()==1,
+            "downhill assets declare one local authored entrance: "+error);
+        runner.Expect(wave.formationDefinition->entranceDurationSeconds>=.6f &&
+            wave.formationDefinition->entranceSideDistance<=8,"local arrival stays inside the canyon with readable motion");
+        dispatcher.Dispatch({event},runtime,event.distance);
+    }
+    runner.Expect(runtime.Enemies().size()==2 && runtime.Enemies()[0].desc.establishedEntrance &&
+        runtime.Enemies()[1].desc.establishedEntrance && runtime.Enemies()[0].desc.lateralOffset<0 &&
+        runtime.Enemies()[1].desc.lateralOffset>0 && runtime.Enemies()[1].desc.verticalOffset-runtime.Enemies()[0].desc.verticalOffset>=12,
+        "left low and right high use two distinct visible slots within the auxiliary budget");
+}
+
+void TestRidgeMovingAimSwitch(RegressionRunner& runner) {
+    CourseAsset course;std::string error;course.LoadFromFile(RailShortCoursePath,&error);
+    RailPath rail;course.ApplyToRailPath(rail);TerrainGenerationSettings terrain;
+    TerrainCollisionWorld terrainWorld;
+    terrainWorld.BuildSynchronously(rail,terrain,&course.terrainEditLayer,nullptr,2360,3000);
+    RailVehicleControlDefinitionAsset controls;controls.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error);
+    std::ofstream report("logs/ridge_aim_switch.csv");
+    report<<"fps,speed,left_distance,right_distance,left_x,left_y,right_x,right_y,visible_together_frames,peak_auxiliary,crest_seconds\n";
+    const auto projection=[](const RailCameraDirectorFrame& camera) {
+        const auto unit=[](Vector3 v){const float n=std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);return RailMothership::Scale(v,1/n);};
+        const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
+        const auto f=unit(camera.forward),r=unit(cross(camera.up,f)),u=cross(f,r);
+        Matrix4x4 world=MakeIdentity4x4();const Vector3 rows[]={r,u,f,camera.position};
+        for(int i=0;i<4;++i){world.m[i][0]=rows[i].x;world.m[i][1]=rows[i].y;world.m[i][2]=rows[i].z;}
+        return Multiply(Inverse(world),MakePerspectiveFovMatrix(camera.fovY,16.0f/9.0f,.1f,1500));
+    };
+    for(int fps:{30,60,120})for(float speed:{16.0f,32.0f,64.0f}) {
+        const float dt=1.0f/fps;CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;
+        RailRidgeCombatFlow flow;EnemyEncounterReadabilityDirector readable;RailCameraDirector camera;
+        RailVehicleMovementSystem vehicle;vehicle.Initialize(controls.vehicle);
+        RailVehicleCameraMountBridge mount;mount.Initialize(controls.camera);
+        float at=2420,leftAt=0,rightAt=0,crestTime=0,previousFov=0;unsigned leftCount=0,rightCount=0,together=0,peak=0;
+        Vector2 leftScreen{},rightScreen{};
+        RailAimState visibilityAim;RailWorldRaycastInput visibility;
+        visibility.aim=&visibilityAim;visibility.railPath=&rail;visibility.spawnRuntime=&runtime;
+        visibility.course=&course;visibility.terrainSettings=&terrain;visibility.terrainEdits=&course.terrainEditLayer;
+        visibility.includeVisualColumns=true;
+        visibility.terrainCollision=&terrainWorld;
+        for(int step=0;at<2820 && step<40*fps;++step,at+=speed*dt) {
+            visibilityAim.worldRayOrigin=camera.LastFrame().gameplayPosition;visibility.playerDistance=at;
+            flow.Update(dt,at,runtime,readable.Frame(),&visibility);
+            if(flow.HoldAttacks())crestTime+=dt;
+            if(flow.ArrivalThisFrame()>=0) {
+                const int index=flow.ArrivalThisFrame();dispatcher.Dispatch({RailRidgeCombatFlow::Arrival(index,at)},runtime,at);
+                if(index==0){++leftCount;leftAt=at;}else{++rightCount;rightAt=at;}
+            }
+            RailCameraDirectorFrameInput ci;ci.course=&course;ci.railPath=&rail;ci.spawnRuntime=&runtime;
+            ci.distance=at;ci.railSpeed=speed;ci.deltaTime=dt;ci.viewportWidth=1600;ci.viewportHeight=900;
+            ci.section=course.FindSection(at);
+            vehicle.Reset(at,speed,&rail);
+            RailVehicleCameraMountInput mountInput;mountInput.vehicleDefinition=&controls.vehicle;
+            mountInput.vehicleState=&vehicle.State();mountInput.gameplayActive=true;mount.Update(mountInput);
+            const auto& mf=mount.Frame();ci.mountedCameraActive=mf.active;ci.mountedCameraAnchor=mf.anchorWorldPosition;
+            ci.mountedCameraOffset=mf.cameraOffset;ci.mountedTargetOffset=mf.targetOffset;
+            ci.mountedCameraBlend=mf.anchorBlend;ci.mountedMaximumCorrection=mf.maximumAnchorCorrection;
+            ci.vehicleFramingActive=true;const auto sample=rail.Evaluate(at);
+            for(size_t i=0;i<8;++i)ci.vehicleBoundsCorners[i]=RailMothership::Add(sample.position,
+                RailMothership::Add(RailMothership::Scale(sample.right,(i&1)?2.4f:-2.4f),
+                    RailMothership::Add(RailMothership::Scale(sample.up,(i&2)?3.4f:-.6f),RailMothership::Scale(sample.tangent,(i&4)?4.0f:-4.0f))));
+            const auto view=camera.Evaluate(ci);const auto vp=projection(view);
+            const float alignment=view.forward.x*sample.tangent.x+view.forward.y*sample.tangent.y+view.forward.z*sample.tangent.z;
+            runner.Expect(alignment>.3f && (previousFov==0 || std::abs(view.fovY-previousFov)<.04f),
+                "crest camera stays forward/continuous at "+std::to_string(at)+" fps="+std::to_string(fps)+
+                " align="+std::to_string(alignment)+" fov="+std::to_string(view.fovY)+" previous="+std::to_string(previousFov));previousFov=view.fovY;
+            runtime.ResetEnemyEncounterPacing();flow.ApplyAttackGates(runtime,at);
+            CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.playerDistance=at;safety.playerSpeed=speed;
+            safety.course=&course;safety.terrainSettings=&terrain;safety.terrainEdits=&course.terrainEditLayer;
+            safety.terrainCollision=&terrainWorld;
+            safety.hasCameraPosition=true;safety.cameraPosition=view.position;safety.viewProjection=&vp;safety.readability=&readable;
+            runtime.Update(dt,safety);
+            for(const auto& actor:runtime.Enemies())if(actor.attackState.tokenReserved) {
+                runtime.EnemyBehavior().MarkTelegraphPresented(runtime,actor.actorId,actor.behaviorState.attackIntentSequence);
+                runtime.EnemyAttacks().MarkTelegraphPresented(runtime,actor.actorId,actor.attackState.intentSequence);
+            }
+            EnemyEncounterReadabilityInput ri;ri.runtime=&runtime;ri.railPath=&rail;ri.viewProjection=&vp;
+            ri.viewportWidth=1600;ri.viewportHeight=900;ri.playerDistance=at;ri.deltaTime=dt;readable.Update(ri);
+            peak=(std::max)(peak,static_cast<unsigned>(runtime.Enemies().size()));
+            const EnemyEncounterActorReadability *left=nullptr,*right=nullptr;
+            for(const auto& actor:runtime.Enemies()) {
+                const auto* proxy=readable.FindActor(actor.actorId);
+                if(actor.desc.waveId=="ridge-dive-left")left=proxy;
+                if(actor.desc.waveId=="ridge-dive-right")right=proxy;
+            }
+            if(left && right && left->targetable && right->targetable && left->screenReadable && right->screenReadable &&
+                left->onScreen && right->onScreen && left->screenPosition.x<right->screenPosition.x &&
+                left->screenPosition.y>right->screenPosition.y+40) {
+                ++together;leftScreen=left->screenPosition;rightScreen=right->screenPosition;
+            }
+            flow.Notify(runtime.EnemyCombat().ConsumeEvents());
+        }
+        report<<fps<<','<<speed<<','<<leftAt<<','<<rightAt<<','<<leftScreen.x<<','<<leftScreen.y<<','
+            <<rightScreen.x<<','<<rightScreen.y<<','<<together<<','<<peak<<','<<crestTime<<'\n';report.flush();
+        runner.Expect(leftCount==1 && rightCount==1 && leftAt>=2560 && rightAt>leftAt &&
+            together>=unsigned(fps/3) && peak<=2 && crestTime+dt>=1.2f,
+            "visible downhill aim switch follows the crest at fps="+std::to_string(fps)+" speed="+std::to_string(speed)+
+            " left="+std::to_string(leftAt)+" right="+std::to_string(rightAt)+" overlap="+std::to_string(together));
+    }
+}
+
+void TestGateBridgeEarnedRelease(RegressionRunner& runner) {
+    CourseAsset course;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"gate course loads");
+    RailPath bridgeRail;course.ApplyToRailPath(bridgeRail);
+    RailMothership::Reveal bridgeCarrier;
+    const auto bridgeShip=bridgeCarrier.Update(1.0f/60,1730,600,bridgeRail,true,true);
+    runner.Expect(bridgeShip.visible && bridgeShip.railVertical>100 && bridgeShip.cameraWeight==0,
+        "escort clears the bridge skyline while its launch sockets stay attached");
+    const auto afterBridge=bridgeCarrier.Update(1.0f/60,2050,600,bridgeRail,true,true);
+    runner.Expect(afterBridge.railVertical<bridgeShip.railVertical,
+        "escort returns smoothly after the vista rather than remaining hidden");
+    std::ofstream log("logs/gate_bridge_release.csv");
+    log<<"fps,speed,release_seconds,lookout_distance,lookout_count\n";
+    for(int fps:{30,60,120}) for(float speed:{16.0f,30.0f,64.0f}) {
+        const float dt=1.0f/fps;
+        CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;
+        dispatcher.PlaceGroundBatteries(course,runtime);
+        RailGateBridgeFlow flow;flow.Observe(runtime);
+        std::vector<uint32_t> ids;
+        for(const auto& a:runtime.Enemies())if(a.desc.waveId=="short_turret_left" || a.desc.waveId=="short_turret_right")ids.push_back(a.actorId);
+        runner.Expect(ids.size()==2,"gate owns exactly two installed batteries");
+        for(auto id:ids)runner.Expect(runtime.DefeatEnemy(runtime.EnemyCombat(),id),"battery defeat uses authoritative combat");
+        flow.Notify(runtime.EnemyCombat().ConsumeEvents());
+        auto late=flow;late.Update(dt,1900,runtime,true);
+        runner.Expect(late.CurrentPhase()==RailGateBridgeFlow::Phase::Complete && !late.BlockNewEnemies(2000),
+            "a missed scenic window cannot move recovery into the next roadside battery");
+        flow.Update(dt,1640,runtime,false);
+        runner.Expect(flow.ClearedBatteries() && flow.ClearPulse()==0 && flow.ReleaseSeconds()==0,
+            "lingering attacks prevent clear text and quiet-time credit after both kills");
+        float at=1640,release=0,lookoutAt=0;unsigned lookoutCount=0;
+        for(int step=0;step<30*fps;++step) {
+            flow.Update(dt,at,runtime,true);
+            if(flow.CurrentPhase()==RailGateBridgeFlow::Phase::Release) {
+                release+=dt;
+                runner.Expect(flow.BlockNewEnemies(at) && flow.ProtectAuthoredCombat(at),"quiet view excludes waves and auxiliary arrivals");
+                const auto paused=flow.ReleaseSeconds();
+                flow.Update(0,at,runtime,true);
+                runner.Expect(flow.ReleaseSeconds()==paused,"pause preserves the earned release clock");
+            }
+            if(flow.TakeLookout()) {++lookoutCount;lookoutAt=at;break;}
+            at+=speed*dt;
+        }
+        runner.Expect(lookoutCount==1 && release+dt>=3 && lookoutAt>=1730,
+            "one precision arrival follows at least three quiet seconds and the bridge vista");
+        RailRetryFollowState saved;saved.gateBridge=flow;RailRetryPresentationCheckpoint checkpoint;
+        checkpoint.Capture(1,1,BindRailRetryFollowState(saved));saved.gateBridge.Reset();
+        runner.Expect(checkpoint.Restore(1,1,BindRailRetryFollowState(saved)) &&
+            saved.gateBridge.CurrentPhase()==RailGateBridgeFlow::Phase::Lookout,
+            "retry restores the bridge phase rather than replaying its clear");
+        flow=saved.gateBridge;
+        for(int i=0;i<fps;++i) {flow.Update(dt,lookoutAt,runtime,true);runner.Expect(!flow.TakeLookout(),"no duplicate lookout after retry");}
+        log<<fps<<','<<speed<<','<<release+dt<<','<<lookoutAt<<','<<lookoutCount<<'\n';
+    }
+    CourseSpawnRuntime missed;CourseEventDispatcher dispatcher;dispatcher.PlaceGroundBatteries(course,missed);
+    RailGateBridgeFlow failed;failed.Observe(missed);std::vector<EnemyCombatEvent> retired;
+    for(const auto& a:missed.Enemies()) {EnemyCombatEvent e;e.kind=EnemyCombatEventKind::Retired;e.actorId=a.actorId;retired.push_back(e);}
+    failed.Notify(retired);missed.ClearEnemies();failed.Update(.1f,1700,missed,true);
+    runner.Expect(!failed.ClearedBatteries() && failed.ClearPulse()==0 && !failed.TakeLookout(),
+        "retirement, absence and passing do not pretend to be a battery kill");
+    failed.Update(.1f,2000,missed,true);
+    runner.Expect(!failed.BlockNewEnemies(2000),"missed batteries cannot strand later progression");
+}
+
+void TestGateBridgeMovingHandoff(RegressionRunner& runner) {
+    CourseAsset authored;std::string error;authored.LoadFromFile(RailShortCoursePath,&error);
+    // Resume with the three opening battles already cleared, while retaining
+    // the production gate/ambush actors, rail, camera and entry trajectories.
+    CourseAsset course=authored;
+    std::erase_if(course.waveDefinitions,[](const auto& w){return w.triggerRailDistance<1000;});
+    std::erase_if(course.enemyPlacements,[](const auto& p){return p.waveGroupGuid=="short_fire" || p.waveGroupGuid=="short_lock" || p.waveGroupGuid=="short_intercept";});
+    std::erase_if(course.encounterBeats,[](const auto& b){return b.triggerRailDistance<1000;});
+    const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    runner.Expect(cooked.succeeded,"moving gate fixture cooks real actors");
+    RailPath rail;course.ApplyToRailPath(rail);
+    const auto routes=BuildRailEnemyIngressRoutes(course,rail,TerrainGenerationSettings{});
+    std::ofstream report("logs/gate_bridge_moving_handoff.csv");
+    report<<"fps,speed,quiet_seconds,lookout_distance,ambush_distance,peak_living\n";
+    const auto projection=[](const RailCameraDirectorFrame& camera) {
+        const auto unit=[](Vector3 v){const float n=std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);return RailMothership::Scale(v,1/n);};
+        const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
+        const auto f=unit(camera.forward),r=unit(cross(camera.up,f)),u=cross(f,r);
+        Matrix4x4 world=MakeIdentity4x4();const Vector3 rows[]={r,u,f,camera.position};
+        for(int i=0;i<4;++i){world.m[i][0]=rows[i].x;world.m[i][1]=rows[i].y;world.m[i][2]=rows[i].z;}
+        return Multiply(Inverse(world),MakePerspectiveFovMatrix(camera.fovY,16.0f/9.0f,.1f,1500));
+    };
+    for(int fps:{30,60,120})for(float speed:{16.0f,30.0f,64.0f}) {
+        const float dt=1.0f/fps;float at=1050,quiet=0,lookoutAt=0,ambushAt=0;
+        unsigned dispatches=0,peak=0;RailGateBridgeFlow flow;RailMothership::Reveal carrier;
+        CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;dispatcher.PlaceGroundBatteries(course,runtime);
+        CourseGameplayWaveRuntimeBridge waves;waves.Configure(ShortRunWaveSettings());waves.Bind(&cooked.program,&runtime,at,&error);
+        EnemyEncounterReadabilityDirector readable;CombatTruthGate truth;RailCameraDirector camera;
+        TerrainGenerationSettings terrain;
+        for(int step=0;step<100*fps && at<2600;++step) {
+            flow.Update(dt,at,runtime,truth.Frame().safeToResolveSession);
+            waves.Update({dt,at,{},truth.Frame().safeToResolveSession,false,!flow.BlockNewEnemies(at)});
+            if(waves.Phase("short-exit-guard")==CourseGameplayWavePhase::Active && ambushAt==0)ambushAt=at;
+            if(flow.TakeLookout()) {
+                CourseEventMarker event{at,"enemy_wave","route_sniper_right","route:support","short-bridge-lookout"};
+                dispatcher.Dispatch({event},runtime,at);++dispatches;lookoutAt=at;
+            }
+            runtime.StageCarrierDeployments(at,carrier.Update(dt,at,600,rail,true,true));
+            CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.playerDistance=at;safety.playerSpeed=speed;
+            safety.cameraAllowsEnemyFire=false;safety.terrainSettings=&terrain;safety.ingressRoutes=routes;
+            safety.groundSupportQuery=[](const RailPathSample&,float,float& y){y=-17;return true;};
+            runtime.Update(dt,safety);
+            RailCameraDirectorFrameInput ci;ci.course=&course;ci.railPath=&rail;ci.spawnRuntime=&runtime;
+            ci.distance=at;ci.railSpeed=speed;ci.deltaTime=dt;ci.viewportWidth=1600;ci.viewportHeight=900;
+            const auto view=camera.Evaluate(ci);const auto vp=projection(view);
+            EnemyEncounterReadabilityInput ri;ri.runtime=&runtime;ri.railPath=&rail;ri.viewProjection=&vp;
+            ri.viewportWidth=1600;ri.viewportHeight=900;ri.playerDistance=at;ri.deltaTime=dt;readable.Update(ri);
+            std::vector<uint32_t> kills;unsigned living=0;
+            for(const auto& actor:runtime.Enemies()) {
+                if(actor.stationaryDormant || actor.desc.hitPoints<=0)continue;
+                ++living;const auto* proxy=readable.FindActor(actor.actorId);
+                const float forward=actor.desc.spawnDistance+actor.desc.distanceOffset-at;
+                const bool battery=actor.desc.waveId=="short_turret_left" || actor.desc.waveId=="short_turret_right";
+                const bool lookout=actor.desc.waveId=="short-bridge-lookout";
+                if(proxy && proxy->onScreen && proxy->screenReadable && proxy->targetable && forward>=4 && forward<=120 &&
+                    actor.age>(battery?1.5f:lookout?6.0f:4.0f))kills.push_back(actor.actorId);
+            }
+            peak=(std::max)(peak,living);
+            if(flow.CurrentPhase()==RailGateBridgeFlow::Phase::Release) {
+                quiet+=dt;runner.Expect(living==0,"actual quiet bridge contains no live active actors");
+            }
+            for(auto id:kills)runtime.DefeatEnemy(runtime.EnemyCombat(),id);
+            const auto events=runtime.EnemyCombat().ConsumeEvents();flow.Notify(events);
+            for(const auto& event:events)if(event.kind==EnemyCombatEventKind::Defeated && !event.placementGuid.empty())
+                waves.NotifyEnemyDefeated(event.placementGuid);
+            CombatTruthGateInput ti;ti.runtime=&runtime;ti.deltaTime=dt;ti.activeWaves=waves.Stats().activeWaves;truth.Update(ti);
+            if(ambushAt>0 && dispatches>0 && flow.CurrentPhase()==RailGateBridgeFlow::Phase::Complete)break;
+            at+=(std::max)(speed,flow.ScenicSpeed(at))*dt;
+        }
+        runner.Expect(flow.ClearedBatteries() && dispatches==1 && quiet+dt>=3 && lookoutAt>=1730 && ambushAt>lookoutAt && peak<=10,
+            "visible-target clear leads to quiet, one lookout and later ambush at fps="+std::to_string(fps)+
+            " speed="+std::to_string(speed)+" quiet="+std::to_string(quiet)+" lookout="+std::to_string(lookoutAt)+
+            " ambush="+std::to_string(ambushAt)+" killed="+std::to_string(flow.ClearedBatteries()));
+        report<<fps<<','<<speed<<','<<quiet+dt<<','<<lookoutAt<<','<<ambushAt<<','<<peak<<'\n';
+    }
+}
+
+void TestGateBridgeSpawnProtection(RegressionRunner& runner) {
+    CourseAsset course;std::string error;course.LoadFromFile(RailShortCoursePath,&error);
+    CourseRailAuthoringModel topology(course);
+    std::ofstream segments("logs/gate_bridge_rail_segments.csv");
+    segments<<"guid,start,length\n";
+    for(const auto& segment:topology.Segments())
+        segments<<segment.guid<<','<<std::setprecision(9)<<segment.startDistance<<','<<segment.length<<'\n';
+    const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    runner.Expect(cooked.succeeded,"bridge protection uses the cooked production course");
+    runner.Expect(!ShortRunAllowsEarlyWave(900) && !ShortRunAllowsEarlyWave(1640),
+        "gate and bridge formations cannot advance into the preceding quiet interval");
+    for(const auto& wave:cooked.program.waves)if(wave.waveGuid=="short_finale" || wave.waveGuid=="short-exit-guard")
+        for(auto index:wave.actorIndices) {
+            const auto& actor=cooked.program.actors[index].actor;
+            const float forward=actor.spawnDistance+actor.distanceOffset-wave.triggerRailDistance;
+            runner.Expect(forward>=45 && forward<=120,
+                "retimed encounter actors are anchored ahead of its new marker: "+wave.waveGuid+" offset="+std::to_string(forward));
+        }
+    CourseSpawnRuntime runtime;CourseGameplayWaveRuntimeBridge waves;
+    waves.Configure(ShortRunWaveSettings());waves.Bind(&cooked.program,&runtime,160,&error);
+    for(int frame=0;frame<100;++frame) {
+        waves.Update({.1f,1480,{},true,false});
+        std::vector<std::string> kills;
+        for(const auto& a:runtime.Enemies())if(!a.desc.sourcePlacementGuid.empty())kills.push_back(a.desc.sourcePlacementGuid);
+        for(const auto& id:kills)waves.NotifyEnemyDefeated(id);
+    }
+    runner.Expect(waves.Stats().completedWaves==4,"gate ends after four mandatory waves");
+    for(int i=0;i<40;++i)waves.Update({.1f,2000,{},true,false,false});
+    runner.Expect(waves.Phase("short-exit-guard")!=CourseGameplayWavePhase::Active && waves.Stats().activeActors==0,
+        "crossing the ambush marker cannot override an earned quiet window");
+    waves.Update({.1f,2000,{},true,false,true});
+    runner.Expect(waves.Phase("short-exit-guard")==CourseGameplayWavePhase::Active && waves.Stats().activeActors==8,
+        "eight-member ambush resumes without deleting mandatory actors");
+    EncounterDirector director;EnemyEncounterReadabilityFrame readable;CourseSpawnRuntime empty;
+    EncounterDirectorFrameInput input;input.spawnRuntime=&empty;input.readability=&readable;
+    input.currentDistance=1700;input.deltaTime=0;input.triggeredEvents={{1700,"enemy_wave","route_patrol_left","route:single","pending-before-rest"}};
+    director.Update(input);input.triggeredEvents.clear();input.deltaTime=.1f;
+    input.suppressRouteEncounters=input.adaptivePatrolsAllowed=input.roleMixingAllowed=true;
+    for(int i=0;i<50;++i)runner.Expect(director.Update(input).dispatchEvents.empty(),"rest suppresses authored, adaptive and mixed-role arrivals");
+    runner.Expect(director.LastStats().pendingEvents==0,"quiet windows discard delayed roadside events");
+    input.suppressRouteEncounters=false;input.adaptivePatrolsAllowed=input.roleMixingAllowed=false;
+    runner.Expect(director.Update(input).dispatchEvents.empty(),"leaving rest never releases a catch-up group");
+}
+
+void TestCourseBlockoutComposition(RegressionRunner& runner) {
+    CourseAsset course;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"blockout course loads: "+error);
+    runner.Expect(course.cinematicShotSets.size()==6,"six visual beats cover the playable course");
+    float end=0;
+    for(const auto& shot:course.cinematicShotSets) {
+        runner.Expect(shot.startDistance==end && shot.endDistance>shot.startDistance,
+            "visual beats have no gap or overlap");
+        end=shot.endDistance;
+        for(const auto& id:shot.heroLandmarkIds)
+            runner.Expect(std::any_of(course.terrainPlacements.begin(),course.terrainPlacements.end(),
+                [&](const auto& p){return p.id==id && p.editorVisible;}),"shot landmark exists: "+id);
+    }
+    runner.Expect(end>=3800 && course.cinematicCameraShots.empty(),
+        "visual beats reach the finish and use the continuous forward camera");
+    auto previous=course.EvaluateCamera(160);
+    for(float d=161;d<=3800;d+=1) {
+        const auto c=course.EvaluateCamera(d);
+        runner.Expect(c.backDistance>=24 && c.lookAheadDistance>=64 && std::abs(c.roll)<0.001f &&
+            std::abs(c.fovY-previous.fovY)<0.002f &&
+            std::abs(c.lateralOffset-previous.lateralOffset)<0.2f,
+            "authored camera stays forward, unbanked and continuous");
+        previous=c;
+    }
+    runner.Expect(course.terrainEditLayer.Evaluate(1570,4.712389f).radialOffset==0 &&
+        course.terrainEditLayer.Evaluate(1780,4.712389f).radialOffset>40,
+        "bridge valley is deep while the preceding roadside battery keeps its foundation");
+    RailPath rail;course.ApplyToRailPath(rail);RailMothership::Reveal reveal;
+    bool deployed=false;
+    for(int i=0;i<600;++i) {
+        const auto& frame=reveal.Update(1.0f/60,600.0f+i*.5f,600,rail,true,true);
+        runner.Expect(frame.cameraWeight==0 && frame.heroWeight==0,
+            "carrier flyby preserves the authored forward view and HUD");
+        deployed=deployed || (frame.visible && !frame.introductionActive);
+    }
+    runner.Expect(deployed,"carrier still completes its introduction on the original clock");
+}
+
 void TestFirstTurretCameraStability(RegressionRunner& runner) {
     CourseAsset course;RailVehicleControlDefinitionAsset controls;std::string error;
     runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) &&
@@ -37529,11 +38016,11 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
     streamingReport<<"event,lod,supported_samples,total_samples,prepared_height\n";
     CourseEventDispatcher placementDispatcher;
     const auto placements=placementDispatcher.GroundBatteryPlacements(course);
-    runner.Expect(placements.size()==5,"all authored foundations can be prepared without spawning enemies");
+    runner.Expect(placements.size()==4,"all authored foundations can be prepared without spawning enemies");
     {
         CourseSpawnRuntime preplaced;
         placementDispatcher.PlaceGroundBatteries(course,preplaced);
-        runner.Expect(preplaced.Enemies().size()==5 && preplaced.ActiveEnemyCount()==0,
+        runner.Expect(preplaced.Enemies().size()==4 && preplaced.ActiveEnemyCount()==0,
             "all stationary batteries exist before combat and do not consume encounter capacity");
         CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.terrainSettings=&terrain;
         safety.course=&course;safety.playerDistance=1000;
@@ -37560,17 +38047,17 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
             "distant scenery neither ages, attacks, locks on nor blocks wave advancement");
         const float installed=dormant.desc.verticalOffset;
         const auto saved=preplaced.CaptureCheckpoint();CourseSpawnRuntime restored;
-        runner.Expect(restored.RestoreCheckpoint(saved,false,&error) && restored.Enemies().size()==5 &&
+        runner.Expect(restored.RestoreCheckpoint(saved,false,&error) && restored.Enemies().size()==4 &&
             restored.ActiveEnemyCount()==0,"retry preserves future stationary batteries and their dormancy");
         safety.playerDistance=dormant.desc.stationaryActivationDistance;
         preplaced.Update(1.0f/60,safety);presentation.Update(pi);
         const auto& active=preplaced.Enemies().front();drawn=presentation.FindActor(active.actorId);
-        runner.Expect(preplaced.Enemies().size()==5 && preplaced.ActiveEnemyCount()==1 && !active.stationaryDormant &&
+        runner.Expect(preplaced.Enemies().size()==4 && preplaced.ActiveEnemyCount()==1 && !active.stationaryDormant &&
             active.entranceExitState.targetable && active.desc.verticalOffset==installed &&
             drawn && drawn->visible && drawn->materialColor.w==1 && drawn->scaleMultiplier==1,
             "combat activation preserves the already visible tower without duplication, fade or foundation movement");
     }
-    const float fixedDistances[]={1300,1570,2220,2520,3000};
+    const float fixedDistances[]={1300,1550,2220,3000};
     size_t placementIndex=0;
     for(const auto& event:course.events) if(event.payload=="route:turret") {
         CourseSpawnRuntime probe;CourseEventDispatcher dispatcher;
@@ -37578,8 +38065,8 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
         if(probe.Enemies().empty()) continue;
         const auto& actor=probe.Enemies().front();
         const float distance=actor.desc.spawnDistance+actor.desc.distanceOffset;
-        runner.Expect(placementIndex<5 && std::abs(distance-fixedDistances[placementIndex])<0.001f &&
-            actor.desc.distanceOffset>=160,"ground preparation preserves the five original installation positions");
+        runner.Expect(placementIndex<4 && std::abs(distance-fixedDistances[placementIndex])<0.001f &&
+            actor.desc.distanceOffset>=160,"ground preparation preserves the four authored installation positions");
         ++placementIndex;
         auto anchor=rail.Evaluate(distance);
         anchor.position=RailMothership::Add(anchor.position,RailMothership::Scale(anchor.right,actor.desc.lateralOffset));
@@ -37667,7 +38154,7 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
     }
     std::vector<CourseEventMarker> markers;
     for(const auto& event:course.events) if(event.type=="enemy_wave" && event.payload=="route:turret") markers.push_back(event);
-    runner.Expect(markers.size()==5,"five optional roadside batteries are spaced along the route");
+    runner.Expect(markers.size()==4,"four optional batteries leave the ridge crest open");
     std::ofstream report("logs/short_run_ground_batteries.csv");report<<"fps,speed,event,ground_vertical,volleys,lockable_frames\n";
     for(int fps:{30,60,120}) for(float speed:{30.0f,60.0f}) for(const auto& marker:markers) {
         CourseSpawnRuntime spawn;CourseEventDispatcher dispatcher;EncounterDirector director;
@@ -38143,7 +38630,7 @@ void TestMixedEnemyRoleChoices(RegressionRunner& runner) {
     CourseAsset course;std::string error;
     runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"role course loads");
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
-    runner.Expect(cooked.succeeded && cooked.program.waves.size()==6 && cooked.program.actors.size()==32,
+    runner.Expect(cooked.succeeded && cooked.program.waves.size()==6 && cooked.program.actors.size()==30,
         "mixed roles preserve mandatory wave count and victory contract");
     const auto* lock=cooked.program.FindWave("short_lock");unsigned scouts=0,snipers=0;
     for(auto index:lock->actorIndices) {
@@ -38288,8 +38775,8 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
     runner.Expect(!ValidateCourseAsset(course).HasErrors(),"roadside assets and formation contracts validate");
     RailPath rail;course.ApplyToRailPath(rail);
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
-    runner.Expect(cooked.succeeded && cooked.program.waves.size()==6 && cooked.program.actors.size()==32,
-        "roadside rhythm preserves all six mandatory waves and their thirty-two actors");
+    runner.Expect(cooked.succeeded && cooked.program.waves.size()==6 && cooked.program.actors.size()==30,
+        "roadside rhythm preserves all six mandatory waves and their thirty actors");
     std::vector<CourseEventMarker> events;unsigned towers=0,patrols=0,pairs=0;
     for(const auto& event:course.events) if(event.payload.starts_with("route:")) {
         events.push_back(event);EnemyWaveAsset asset;
@@ -38300,9 +38787,9 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
         runner.Expect(event.distance<600 || (event.distance>=1120 && event.distance<3350),
             "roadside additions respect the sky reveal, first boost lane and boss introduction");
     }
-    runner.Expect(events.size()==12 && towers==5 && patrols==7 && pairs==1,
+    runner.Expect(events.size()==6 && towers==4 && patrols==2 && pairs==1,
         "route has distributed fixed guns, singles and one staggered two-unit arrival");
-    const auto marker=*std::find_if(events.begin(),events.end(),[](const auto& e){return e.distance==1920;});
+    const CourseEventMarker marker{2690,"enemy_wave","route_patrol_left","route:single","route-admission-fixture"};
     // Busy encounters expire rather than defeating budget checks via maxQueueDelay.
     CourseSpawnRuntime crowded;
     for(int i=0;i<6;++i) { auto actor=cooked.program.actors.front().actor;actor.sourcePlacementGuid="busy-"+std::to_string(i);crowded.SpawnEnemyActor(actor); }
@@ -38324,15 +38811,15 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
     EncounterDirector passed;input.deltaTime=.1f;input.currentDistance=marker.distance+40;input.triggeredEvents={marker};
     runner.Expect(passed.Update(input).dispatchEvents.empty() && passed.LastStats().pendingEvents==0,"passed arrival cannot spawn behind the cart");
     RailCameraDirector a,b;a.NotifyCourseEvents({marker});RailCameraDirectorFrameInput ci;
-    ci.course=&course;ci.railPath=&rail;ci.distance=1920;ci.deltaTime=.016f;
+    ci.course=&course;ci.railPath=&rail;ci.distance=2690;ci.deltaTime=.016f;
     const auto notified=a.Evaluate(ci),quiet=b.Evaluate(ci);
     runner.Expect(std::abs(notified.fovY-quiet.fovY)<.00001f && std::abs(notified.position.y-quiet.position.y)<.0001f &&
         notified.allowEnemyFire==quiet.allowEnemyFire,"single patrol does not retrigger the major-wave camera pullback/fire hold");
 
     std::ofstream sightings("logs/route_patrol_readability.csv");sightings<<"fps,speed,kind,lockable_frames,volleys,arrival_delay\n";
-    for(int fps:{30,60,120}) for(float speed:{30.0f,60.0f}) for(float start:{1920.0f,2210.0f,2530.0f,3100.0f}) {
+    for(int fps:{30,60,120}) for(float speed:{30.0f,60.0f}) for(float start:{2690.0f,2210.0f,2530.0f,3100.0f}) {
         const float dt=1.0f/fps;
-        const auto event=*std::find_if(events.begin(),events.end(),[&](const auto& e){return e.distance==start;});
+        const CourseEventMarker event{start,"enemy_wave",start==2210?"route_patrol_high":start==2530?"route_sniper_left":start==3100?"route_scout_sniper_pair":"route_patrol_left",start==3100?"route:pair":"route:single","route-flight-fixture"};
         CourseSpawnRuntime spawn;CourseEventDispatcher dispatcher;dispatcher.Dispatch({event},spawn,start);
         runner.Expect(spawn.Enemies().size()==(event.payload=="route:pair"?2:1),"small arrival instantiates its own real actor count");
         RailCameraDirector camera;camera.NotifyCourseEvents({event});RailMothership::Reveal carrier;
@@ -38371,7 +38858,7 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
         }
         const float stagger=visible.size()==2?visible[1]-visible[0]:0;
         runner.Expect(lockable>=unsigned(fps) && volleys>0,"small arrival is visible/capturable and can fire with the live rail camera: "+event.id+" speed="+std::to_string(speed));
-        runner.Expect((start==1920 || start==2530)?sideEntry:skyEntry,"patrol really travels from its authored side/height");
+        runner.Expect((start==2690 || start==2530)?sideEntry:skyEntry,"patrol really travels from its authored side/height");
         if(visible.size()==2) runner.Expect(stagger>.5f,"two patrols arrive separately rather than materializing together");
         sightings<<fps<<','<<speed<<','<<event.id<<','<<lockable<<','<<volleys<<','<<stagger<<'\n';
     }
@@ -38406,7 +38893,7 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
             CombatTruthGateInput gate;gate.runtime=&spawn;gate.deltaTime=dt;gate.activeWaves=waves.Stats().activeWaves;truth.Update(gate);
             if(at>=3800 && waves.Stats().completedWaves==6 && spawn.Enemies().empty()) break;
         }
-        runner.Expect(waves.Stats().completedWaves==6 && releases>=6 && lateReleases>=5 && kinds.size()>=4,
+        runner.Expect(waves.Stats().completedWaves==6 && releases>=4 && lateReleases>=2 && kinds.size()>=3,
             "full course mixes independent small encounters between retained mandatory formations");
         runner.Expect(peak<=10 && peakAux<=2,"long route never builds an unlimited persistent patrol backlog");
         route<<fps<<','<<speed<<','<<waves.Stats().completedWaves<<','<<releases<<','<<peak<<','<<peakAux<<'\n';
@@ -38417,11 +38904,11 @@ void TestShortRunMixedGroupCombat(RegressionRunner& runner) {
     std::string error;CourseAsset course;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"mixed course loads");
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
     runner.Expect(cooked.succeeded,"mixed course dependencies compile");
-    const unsigned counts[]={4,6,6,6,8};
+    const unsigned counts[]={4,6,6,4,8};
     std::unordered_set<std::string> hulls,patterns;
     for(size_t i=0;i<5 && i<cooked.program.waves.size();++i) {
         runner.Expect(cooked.program.waves[i].actorIndices.size()==counts[i] &&
-            cooked.program.waves[i].executionPolicy==CourseWaveExecutionPolicy::Exclusive,"short-run groups progress from four to eight without overlap");
+            cooked.program.waves[i].executionPolicy==CourseWaveExecutionPolicy::Exclusive,"gate escort is focused while the later ambush preserves eight targets");
         for(auto actorIndex:cooked.program.waves[i].actorIndices) {
             const auto& desc=cooked.program.actors[actorIndex].actor;
             CourseEnemyActor candidate;candidate.desc=desc;candidate.behaviorDefinition=desc.behaviorDefinition;
@@ -38636,7 +39123,8 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
             if(step==4*fps)chipApplied=hit(1-first,12,100).damageApplied;
             if(step==8*fps) {
                 runner.Expect(shots[0]>0 && shots[1]>0,"both weapon types produce real warned attacks before any part breaks");
-                runner.Expect(hit(first,1000,200).destroyed,"either part may be destroyed first by authoritative weapon damage");
+                // This lifecycle probe must remain lethal through 75% armor.
+                runner.Expect(hit(first,2000,200).destroyed,"either part may be destroyed first by authoritative weapon damage");
                 waves.NotifyEnemyDefeated(first==0?"short-mothership-rapid":"short-mothership-heavy");
                 waves.Update({dt,at,{}});partialSave=spawn.CaptureCheckpoint();
                 runner.Expect(waves.Phase(RailMothership::BossWaveId)==CourseGameplayWavePhase::Active,
@@ -38695,7 +39183,7 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
             "retry snapshot preserves the broken part and the survivor error="+error+" restored="+std::to_string(restored.Enemies().size()));
         RailMothership::Battle retry;retry.Update(reveal.Current(),restored,CourseGameplayWavePhase::Active,rail,3700,dt);
         runner.Expect(retry.Current().remainingParts==1 && retry.Current().partHealth[first]==0,"retry cannot resurrect a destroyed weapon");
-        runner.Expect(hit(1-first,1000,300).destroyed,"the remaining part can be broken");
+        runner.Expect(hit(1-first,2000,300).destroyed,"the remaining part can be broken");
         waves.NotifyEnemyDefeated(first==0?"short-mothership-heavy":"short-mothership-rapid");waves.Update({dt,3800,{}});
         runner.Expect(waves.Phase(RailMothership::BossWaveId)==CourseGameplayWavePhase::Completed,"both weapons broken completes only their wave");
         const auto before=battle.Current().center;
@@ -38751,7 +39239,7 @@ void ExerciseCarrierCounterReward(RegressionRunner& runner,const CourseSpawnRunt
     input.externalBodyCollisionAuthority=true;input.weapon.enabled=input.weapon.triggerHeld=input.weapon.triggerPressed=true;
     input.bonusTargetActorId=owner;input.bonusDamageMultiplier=counter.DamageMultiplier(owner,false);
     targetAim(owner);collision.Update(probe,input);
-    const float primary=counter.CounterPart()==0?24.0f:12.0f;
+    const float primary=counter.CounterPart()==0?24.0f:3.0f;
     runner.Expect(std::abs(collision.LastDamageResult().appliedDamage-primary)<.001f,
         "only the rapid battery's real primary contact receives the two-times reward: actual="+
         std::to_string(collision.LastDamageResult().appliedDamage)+" requested="+std::to_string(collision.LastDamageResult().requestedDamage)+
@@ -38764,12 +39252,13 @@ void ExerciseCarrierCounterReward(RegressionRunner& runner,const CourseSpawnRunt
     }
     if(other) {
         input.deltaTime=.09f;input.weapon.triggerPressed=false;targetAim(other);collision.Update(probe,input);
-        runner.Expect(std::abs(collision.LastDamageResult().appliedDamage-12)<.001f,
+        runner.Expect(std::abs(collision.LastDamageResult().appliedDamage-3)<.001f,
             "the opportunity never increases damage to the other battery");
     }
     EnemyCombatPresentationBridge bridge;EnemyCombatPresentationInput visual;
     visual.runtime=&probe;visual.railPath=&rail;visual.counterActorId=owner;
-    visual.counterAmount=counter.CounterRemaining();visual.counterHitPulse=counter.HitPulse();bridge.Update(visual);
+    visual.counterAmount=counter.CounterRemaining();visual.counterHitPulse=counter.HitPulse();
+    visual.counterHitActorId=counter.FeedbackOwner();bridge.Update(visual);
     const auto* overloaded=bridge.FindActor(owner);
     runner.Expect(overloaded && overloaded->turretMuzzleActive && overloaded->materialColor.x>overloaded->materialColor.z &&
         overloaded->coreColor.x>2,"the actual counter target has a steady warm overload and luminous barrel");
@@ -38787,8 +39276,8 @@ void ExerciseCarrierCounterReward(RegressionRunner& runner,const CourseSpawnRunt
     for(auto& token:tokens)token.target={RailLockTargetKind::Enemy,owner,owner};
     counter.PrepareLockShots(tokens,fire.shots);
     counter.PrepareLockShots(tokens,fire.shots);
-    const float perLock=counter.CounterPart()==1?68.0f:34.0f;
-    runner.Expect(std::all_of(fire.shots.begin(),fire.shots.end(),[&](const auto& shot){return std::abs(shot.damage-perLock)<.001f;}),
+    const float perLock=counter.CounterPart()==1?68.0f:8.5f;
+    runner.Expect(std::all_of(fire.shots.begin(),fire.shots.end(),[&](const auto& shot){return std::abs(shot.damage-(counter.CounterPart()==1?68.0f:34.0f))<.001f;}),
         "heavy lock reward is target-bound and cannot be multiplied twice by a repeated preparation");
     RailLockVolley volley;RailLockSettings settings;
     runner.Expect(volley.Enqueue(tokens,fire.shots,muzzle,rail,probe,settings)==4,"four real counter lasers are enqueued");
@@ -38805,14 +39294,17 @@ void ExerciseCarrierCounterReward(RegressionRunner& runner,const CourseSpawnRunt
         "a four-lock volley keeps its earned damage through travel after the window expires");
     const float expected=counter.CounterPart()==1?272.0f:24.0f;
     runner.Expect(std::abs(counter.FeedbackDamage()-expected)<.001f,"success feedback totals accepted bonus damage, not unrelated hits");
+    runner.Expect(counter.FeedbackPart()==counter.CounterPart() && counter.FeedbackOwner()==owner && counter.UnlockPulse()==0,
+        "late credited contact retains its original gun and role without replaying the unlock cue");
     for(const auto& hit:collision.WeaponFeedback().RecentEvents())
         runner.Expect(!counter.NotifyCounterDamage(hit),"replayed hit feedback never counts or rewards a shot twice");
     auto restored=counter;counter.Reset();
-    runner.Expect(counter.FeedbackDamage()==0 && counter.FeedbackRemaining()==0 && counter.DamageMultiplier(owner,false)==1,
+    runner.Expect(counter.FeedbackDamage()==0 && counter.FeedbackRemaining()==0 && counter.FeedbackPart()==-1 && counter.UnlockPulse()==0 && counter.DamageMultiplier(owner,false)==1,
         "retry clears both the damage opportunity and pending reward credits");
-    const auto damage=restored.FeedbackDamage();
+    const auto damage=restored.FeedbackDamage();const float hold=restored.FeedbackRemaining(),pulse=restored.HitPulse();
     restored.Update(probe,dt,true,false,false,at);
-    runner.Expect(restored.FeedbackDamage()==damage,"paused feedback does not invent extra damage");
+    runner.Expect(restored.FeedbackDamage()==damage && restored.FeedbackRemaining()==hold && restored.HitPulse()==pulse,
+        "pause retains the exact contact hold and pulse without inventing extra damage");
 }
 
 void TestCarrierGatlingBurst(RegressionRunner& runner) {
@@ -38835,7 +39327,7 @@ void TestCarrierGatlingBurst(RegressionRunner& runner) {
     actor.targetingState.targetDistance=3368;actor.targetingState.targetLateralOffset=0;actor.targetingState.targetVerticalOffset=4;
     actor.targetingState.playerForwardVelocity=actor.behaviorState.engagementBandVelocity=18;
     runner.Expect(actor.desc.meshId=="gatling_turret" && actor.desc.bulletCount==RailGatling::Rounds &&
-        actor.desc.projectileDefinition.damage==2,"gatling has its six-barrel mesh and a bounded 24-round low-damage burst");
+        actor.desc.projectileDefinition.damage==6,"gatling has its six-barrel mesh and a 24-round burst with meaningful unguarded damage");
     for(int fps:{30,60,120}) {
         EnemyProjectileSystem system;std::vector<EnemyProjectileRuntimeState> shots;
         runner.Expect(system.SpawnVolley(actor,shots)==RailGatling::Rounds && shots.size()==RailGatling::Rounds,
@@ -38999,6 +39491,9 @@ void TestPrimaryContactPresentationCoherence(RegressionRunner& runner) {
 }
 
 void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOnly=false) {
+    std::array<float,3> guardedDamage{};
+    std::ofstream comparison;
+    if(aimCycleOnly){comparison.open("logs/battery_gatling_strategy.csv");comparison<<"fps,mode,seconds,battery_damage,player_damage\n";}
     std::ofstream clashMetrics(aimCycleOnly?"logs/gatling_aim_switch.csv":"logs/gatling_primary_cancellation.csv");
     clashMetrics<<(aimCycleOnly?"fps,mode,cancelled,bonus_damage,min_screen_separation,damage_hits\n":
         "fps,mode,frame,pulses,cancelled,rayEndX,rayEndY,rayEndZ,bulletX,bulletY,bulletZ,reject\n");
@@ -39082,7 +39577,7 @@ void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOn
         float rewardAt=-1,bonusDamage=0,minSeparation=10000;
         unsigned cancelled=0,pulses=0,damageHits=0;bool partial=false,rewarded=false;
         std::unordered_set<uint64_t> launched;
-        for(int frame=0;frame<fps*5;++frame) {
+        for(int frame=0;frame<fps*(aimCycleOnly?3:5);++frame) {
             const float at=startAt+(frame+1)*dt*18;
             cycle.Update(runtime,dt,true,true,false,at);
             CourseEnemyFireSafetyFrameInput safety;safety.playerDistance=at;safety.playerSpeed=18;safety.railPath=&rail;
@@ -39169,19 +39664,20 @@ void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOn
                 ++contacts;++cancelled;
                 const bool counter=cycle.NotifyIntercept(hit,runtime);
                 if(cancelled>=6 && cancelled<24) {
-                    runner.Expect(!counter && cycle.CounterRemaining()==0 && cycle.InFlight(),
+                    runner.Expect(!counter && cycle.CounterRemaining()==0 && cycle.UnlockPulse()==0 && cycle.FeedbackRemaining()==0 && cycle.InFlight(),
                         "partial cancellation leaves the burst live and cannot create a premature safe window");
                     partial=true;
                 }
                 if(counter) {
                     rewarded=true;
                     rewardAt=frame*dt;
-                    runner.Expect(cancelled==24,"the reward requires 24 actual projectile contacts");
+                    runner.Expect(cancelled==24 && cycle.UnlockPulse()==1 && cycle.FeedbackRemaining()==0,
+                        "24 actual contacts unlock the cue once, without fabricating counter damage");
                     if(!aimCycleOnly)ExerciseCarrierCounterReward(runner,runtime,rail,cycle,at,dt);
                 }
             }
             runner.Expect(contacts<=stats.playerShotsFired*2,"one real primary pulse cancels at most two nearby rounds");
-            if(rewarded && (!aimCycleOnly || frame*dt-rewardAt>RailMinibossCombatDirector::RapidCounterSeconds+.15f))break;
+            if(rewarded && !aimCycleOnly)break;
         }
         runner.Expect(launched.size()==24,"all 24 scheduled rounds actually launch even after six early contacts");
         if(mode==0)runner.Expect(cancelled==24 && rewarded && partial && damageHits==0 && pulses>=12 && pulses<=35,
@@ -39191,6 +39687,14 @@ void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOn
             "releasing normal fire lets the remaining stream continue instead of cancelling it for free");
         if(mode==2)runner.Expect(cancelled==0 && !rewarded,"continuous fire aimed away cannot erase the burst");
         if(aimCycleOnly) {
+            const float dealt=desc.hitPoints-runtime.Enemies().front().desc.hitPoints;
+            const float taken=100-collision.Player().hitPoints;
+            comparison<<fps<<','<<mode<<",3,"<<dealt<<','<<taken<<'\n';
+            const size_t fpsIndex=fps==30?0:fps==60?1:2;
+            if(mode==3)guardedDamage[fpsIndex]=dealt;
+            if(mode==5)runner.Expect(dealt>0 && guardedDamage[fpsIndex]>dealt*1.5f && taken>0,
+                "over the same three seconds, actual guard/aim-return beats gun camping in damage and safety: guard="+
+                std::to_string(guardedDamage[fpsIndex])+" camp="+std::to_string(dealt));
             clashMetrics<<fps<<','<<mode<<','<<cancelled<<','<<bonusDamage<<','<<minSeparation<<','<<damageHits<<'\n';
             runner.Expect(minSeparation>65,"the defensive point and gun require visibly different screen aim positions: "+std::to_string(minSeparation));
             if(mode==3)runner.Expect(cancelled==24 && rewarded && damageHits==0 && bonusDamage>=120,
@@ -39331,7 +39835,7 @@ void TestHeavyBatteryForwardAccuracy(RegressionRunner& runner) {
             ci.externalBodyCollisionAuthority=true;ci.weapon.enabled=false;hits+=collision.Update(runtime,ci).enemyBulletHits;
         }
         metrics<<fps<<','<<speed<<','<<dodge<<','<<hits<<','<<collision.Player().hitPoints<<'\n';
-        runner.Expect(dodge ? hits==0 : (hits==1 && std::abs(collision.Player().hitPoints-86)<.001f),
+        runner.Expect(dodge ? hits==0 : (hits==1 && std::abs(collision.Player().hitPoints-70)<.001f),
             "heavy hits an undefended moving player and retains the announced lateral aim after a dodge: fps="+std::to_string(fps)+" hits="+std::to_string(hits));
     }
 }
@@ -39375,7 +39879,9 @@ void TestHeavyLockDefenseAndCounter(RegressionRunner& runner) {
     const auto record=std::find_if(cooked.program.actors.begin(),cooked.program.actors.end(),[](const auto& p){return RailHeavy::IsWeapon(p.actor.actorAssetId);});
     runner.Expect(record!=cooked.program.actors.end(),"heavy lock actor compiles");if(record==cooked.program.actors.end())return;
     std::ofstream report("logs/heavy_lock_defense_counter.csv");report<<"fps,mode,locks,partial,counter,damage_hits,counter_damage\n";
-    for(int fps:{30,60,120})for(int mode:{0,1,2}) {
+    std::array<float,3> guardedDamage{};
+    std::ofstream comparison("logs/battery_heavy_strategy.csv");comparison<<"fps,mode,seconds,battery_damage,player_damage\n";
+    for(int fps:{30,60,120})for(int mode:{0,1,2,3,4}) {
         const float dt=1.0f/fps,start=3350,speed=18,playerY=cart.vehicle.bodyVerticalOffset+cart.vehicle.mounts.player.y;
         auto desc=record->actor;desc.spawnDistance=start;desc.distanceOffset=50;desc.lateralOffset=20;desc.verticalOffset=18;
         desc.establishedEntrance=true;desc.suppressFire=true;CourseSpawnRuntime runtime;runtime.SpawnEnemyActor(desc);
@@ -39414,14 +39920,14 @@ void TestHeavyLockDefenseAndCounter(RegressionRunner& runner) {
             const bool back=rewardAt>=0 && t-rewardAt>=.30f;const bool firstReturn=back && !returning;
             if(firstReturn){resolver.Reset();returning=true;}
             Vector2 cursor{1450,100};EditorViewportCoordinateService coordinates;coordinates.Update({{0,0,1600,900},1600,900,vp});
-            for(const auto& anchor:registry.Anchors())if(mode!=2 && ((back && anchor.target.kind==RailLockTargetKind::Enemy && anchor.target.actorId==owner)||
-                    (!back && anchor.target.kind==RailLockTargetKind::Projectile))) {const auto p=coordinates.ProjectWorld(anchor.worldPosition);cursor={p.render.x,p.render.y};break;}
-            RailReticleState reticle;reticle.lockHeld=back?!counterReleased:!released;reticle.lockPressed=frame==0 || firstReturn;
+            for(const auto& anchor:registry.Anchors())if(mode!=2 && (((back || mode>=3) && anchor.target.kind==RailLockTargetKind::Enemy && anchor.target.actorId==owner)||
+                    (!back && mode<3 && anchor.target.kind==RailLockTargetKind::Projectile))) {const auto p=coordinates.ProjectWorld(anchor.worldPosition);cursor={p.render.x,p.render.y};break;}
+            RailReticleState reticle;reticle.lockHeld=mode==3 || (mode<3 && (back?!counterReleased:!released));reticle.lockPressed=frame==0 || firstReturn;
             reticle.previousScreenPosition=reticle.currentScreenPosition=cursor;
             RailLockResolverFrameInput lock;lock.anchors=&registry.Anchors();lock.reticle=&reticle;lock.viewProjection=&vp;lock.viewportWidth=1600;lock.viewportHeight=900;lock.elapsedTime=t;resolver.Update(lock);
             volley.Update(dt,muzzle,rail,runtime,collision,nullptr);
             if((!released && mode!=2 && ((mode==0 && resolver.Tokens().size()==2)||(mode==1 && t>=.05f && !resolver.Tokens().empty()))) ||
-                (back && !counterReleased && resolver.Tokens().size()==4)) {
+                (back && !counterReleased && resolver.Tokens().size()==4) || (mode==3 && resolver.Tokens().size()==4)) {
                 auto tokens=resolver.ConsumeTokens();WeaponFireInput fire;fire.weaponId=RailWeaponIds::LockOnIce;fire.enabled=fire.triggerReleased=true;fire.deltaTime=dt;fire.requestedProjectileCount=static_cast<uint32_t>(tokens.size());
                 fire.deltaTime=0;auto result=collision.UpdateWeaponFire(fire);runner.Expect(result.fired,"actual lock release creates weapon shots");cycle.PrepareLockShots(tokens,result.shots);
                 if(!back){releasedCount=static_cast<unsigned>(tokens.size());released=true;}else counterReleased=true;
@@ -39433,20 +39939,96 @@ void TestHeavyLockDefenseAndCounter(RegressionRunner& runner) {
                 runner.Expect(volley.Lasers().front().age==age,"pause freezes heavy-interception laser travel");paused=true;
             }
             CourseCollisionFrameInput input;input.railPath=&rail;input.deltaTime=dt;input.externalBodyCollisionAuthority=true;input.player.distance=at;
-            input.player.verticalOffset=playerY;input.player.hitPoints=collision.Player().hitPoints;input.weapon.enabled=false;
+            input.player.verticalOffset=playerY;input.player.hitPoints=collision.Player().hitPoints;input.weapon.enabled=mode==4;
+            RailAimState primaryAim;
+            if(mode==4) {
+                RailAimRayBuildInput ray;ray.viewportWidth=1600;ray.viewportHeight=900;ray.gameplayViewProjection=vp;
+                ray.gameplayCameraPosition=view.gameplayPosition;ray.pixelPosition=cursor;ray.maxDistance=120;
+                primaryAim=BuildRailAimState(ray);RailWorldRaycastInput query;query.aim=&primaryAim;query.railPath=&rail;
+                query.spawnRuntime=&runtime;query.includeProceduralTerrain=false;ApplyRailAimHit(primaryAim,RailWorldRaycast::Query(query));
+                input.worldAim=&primaryAim;input.combatMount=&mounts.Frame();input.weapon.triggerHeld=true;input.weapon.triggerPressed=frame==0;
+            }
             damageHits+=collision.Update(runtime,input).enemyBulletHits;
             for(const auto& hit:collision.ProjectileShootDown().Frame().results) {
-                if(hit.accepted && !hit.destroyed){partial=true;runner.Expect(hit.remainingHitPoints==2 && cycle.CounterRemaining()==0,"one lock leaves the heavy core alive and grants no early counter");}
+                if(hit.accepted && !hit.destroyed) {
+                    if(mode==4)runner.Expect(hit.remainingHitPoints==36 && cycle.CounterRemaining()==0,
+                        "sustained primary deflects from the heavy shell without chipping it or granting a counter");
+                    else {partial=true;runner.Expect(hit.remainingHitPoints==2 && cycle.CounterRemaining()==0,
+                        "one lock leaves the heavy core alive and grants no early counter");}
+                }
                 if(cycle.NotifyIntercept(hit,runtime)){rewarded=true;rewardAt=t;}
             }
             for(const auto& hit:collision.WeaponFeedback().RecentEvents())cycle.NotifyCounterDamage(hit);
+            if(cycle.FeedbackRemaining()>0)runner.Expect(cycle.FeedbackPart()==1 && cycle.FeedbackOwner()==owner && cycle.FeedbackDamage()>0,
+                "actual heavy counter contacts identify the correct health bar and world-space damage label");
         }
         report<<fps<<','<<mode<<','<<releasedCount<<','<<partial<<','<<rewarded<<','<<damageHits<<','<<cycle.FeedbackDamage()<<'\n';
+        const float dealt=desc.hitPoints-runtime.Enemies().front().desc.hitPoints,taken=100-collision.Player().hitPoints;
+        comparison<<fps<<','<<mode<<",3,"<<dealt<<','<<taken<<'\n';
+        const size_t fpsIndex=fps==30?0:fps==60?1:2;
+        if(mode==0)guardedDamage[fpsIndex]=dealt;
+        if(mode>=3)runner.Expect(dealt>0 && guardedDamage[fpsIndex]>dealt && std::abs(taken-30)<.001f,
+            "over the same three seconds, heavy interception and fresh counter locks beat sustained gun attacks: guard="+
+            std::to_string(guardedDamage[fpsIndex])+" spam="+std::to_string(dealt));
         if(mode==0)runner.Expect(releasedCount==2 && partial && rewarded && damageHits==0 && counterReleased && std::abs(cycle.FeedbackDamage()-272)<.001f,
             "two screen-acquired locks intercept the real heavy shot, then four fresh locks land 272 counter damage: fps="+std::to_string(fps)+" damage="+std::to_string(cycle.FeedbackDamage()));
         else runner.Expect(!rewarded && damageHits==1,"an incomplete or absent heavy lock defense leaves a real damaging round");
         volley.Reset();resolver.Reset();cycle.Reset();runner.Expect(volley.Lasers().empty() && resolver.Tokens().empty() && cycle.CounterRemaining()==0,"retry drops travelling locks, retained targets and counter credit");
     }
+}
+
+void TestBatteryArmorReception(RegressionRunner& runner) {
+    CourseAsset course;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"armor test loads shipped course");
+    const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    CourseSpawnRuntime runtime;
+    for(const auto& record:cooked.program.actors)if(RailBatteryDamage::IsBattery(record.actor.actorAssetId)) {
+        auto desc=record.actor;desc.establishedEntrance=true;runtime.SpawnEnemyActor(desc);
+    }
+    CourseEnemyActorDesc ordinary;ordinary.actorAssetId="armor_control";ordinary.hitPoints=200;
+    ordinary.establishedEntrance=true;runtime.SpawnEnemyActor(ordinary);
+    auto ready=runtime.CaptureCheckpoint();
+    for(auto& actor:ready.enemies) {
+        actor.combatState.phase=EnemyCombatPhase::Engaging;actor.combatState.canReceiveDamage=true;
+        actor.entranceExitState.targetable=true;
+    }
+    runner.Expect(runtime.RestoreCheckpoint(ready,true,&error),"armor fixture makes all contacts receivable");
+    CourseCollisionSystem collision;uint64_t sequence=10000;
+    for(const auto actor:runtime.Enemies()) {
+        const bool battery=RailBatteryDamage::IsBattery(actor.desc.actorAssetId);
+        for(bool lock:{false,true}) {
+            WeaponHitRequest request;request.shotId=sequence++;request.targetActorId=actor.actorId;
+            request.hitKind=RailAimHitKind::Enemy;request.hitNormal={0,0,-1};request.lockOnContact=lock;
+            request.damageType=lock?WeaponDamageType::Ice:WeaponDamageType::Energy;request.baseDamage=lock?34.0f:12.0f;
+            const auto hit=collision.ApplyWeaponHit(runtime,nullptr,request);
+            runner.Expect(hit.damageApplied && hit.armorReduced==battery &&
+                std::abs(hit.appliedDamage-request.baseDamage*(battery?.25f:1.0f))<.001f &&
+                hit.requestedDamage==request.baseDamage,"both actual weapon contacts share carrier armor without reducing ordinary enemies");
+            runner.Expect(collision.LastWeaponFeedbackResult().accepted &&
+                collision.LastWeaponFeedbackResult().event.feedbackKind==(battery?HitFeedbackKind::ArmorHit:HitFeedbackKind::NormalHit),
+                "armor sparks and accepted feedback retain the original request and reduced actual damage");
+            const auto replay=collision.ApplyWeaponHit(runtime,nullptr,request);
+            runner.Expect(replay.duplicate && !replay.damageApplied,"replayed armor contacts cannot chip HP twice");
+            if(!battery)continue;
+            request.shotId=sequence++;request.counterTargetActorId=actor.actorId+1000;
+            const auto other=collision.ApplyWeaponHit(runtime,nullptr,request);
+            runner.Expect(other.armorReduced,"another target's counter credit cannot bypass this battery's armor");
+            request.shotId=sequence++;request.counterTargetActorId=actor.actorId;
+            request.lockOnContact=!RailBatteryDamage::IsCounterWeapon(actor.desc.actorAssetId,true);
+            request.damageType=request.lockOnContact?WeaponDamageType::Ice:WeaponDamageType::Energy;
+            const auto wrongWeapon=collision.ApplyWeaponHit(runtime,nullptr,request);
+            runner.Expect(wrongWeapon.armorReduced,"counter authorization never removes armor for the wrong weapon role");
+        }
+    }
+    RailShooterHudRenderer hud;auto definition=RailShooterHudDefinitionAsset::Defaults();
+    RailShooterHudPresentationFrame presentation;presentation.visible=true;RailShooterHudRenderInput input;
+    input.definition=&definition;input.presentation=&presentation;input.viewportWidth=1600;input.viewportHeight=900;
+    input.bossVisible=input.miniBossParts=true;input.miniBossPartHealth={1,1};hud.Update(input);
+    const auto labels=[&](const char8_t* word){return std::count_if(hud.Frame().commands.begin(),hud.Frame().commands.end(),
+        [&](const auto& c){return c.text.find(Utf8ForTest(word))!=std::string::npos;});};
+    runner.Expect(labels(u8"装甲")==2,"both living batteries communicate protected armor");
+    input.miniBossCounterRemaining=1;input.miniBossCounterDuration=1;input.miniBossCounterPart=0;hud.Update(input);
+    runner.Expect(labels(u8"弱点開放")==1 && labels(u8"装甲")==1,"only the earned target communicates its exposed counter window");
 }
 
 void TestMinibossCounterDamageBudget(RegressionRunner& runner) {
@@ -39472,6 +40054,7 @@ void TestMinibossCounterDamageBudget(RegressionRunner& runner) {
                 WeaponHitRequest request;request.shotId=shot++;request.targetActorId=id;request.hitKind=RailAimHitKind::Enemy;
                 request.damageType=weapon->definition.damageType;request.hitNormal={0,0,-1};
                 request.baseDamage=weapon->definition.baseDamage*RailMinibossCombatDirector::CounterDamageMultiplier;
+                request.lockOnContact=part==1;request.counterTargetActorId=id;
                 damage+=collision.ApplyWeaponHit(runtime,nullptr,request).appliedDamage;
             }
             const float remaining=runtime.Enemies().front().desc.hitPoints;
@@ -39576,6 +40159,78 @@ void TestMinibossVariableAttackOrder(RegressionRunner& runner) {
     input.bossVisible=input.miniBossParts=true;input.miniBossPartHealth={1,1};input.miniBossPartCharge={.6f,0};input.miniBossCooldownRemaining={0,1};input.miniBossCooldownDuration={2.4f,2.6f};hud.Update(input);
     for(const auto label:{u8"チャージ",u8"冷却中"})runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& c){return c.text==Utf8ForTest(label);}),
         "the HUD exposes the actual charging and cooling weapon states");
+}
+
+void TestCarrierLocalDefenseFeedback(RegressionRunner& runner) {
+    const std::array<uint32_t,2> batteries{17,23};
+    EnemyAttackDefenseOutcomeFeedbackBridge bridge;
+    EnemyAttackDefenseOutcomeFeedbackInput input;input.localSuccessActors=batteries;
+    std::array<EnemyAttackDefenseResult,24> contacts{};
+    for(size_t i=0;i<contacts.size();++i) {
+        auto& result=contacts[i];result.sequence=i+1;result.actorId=17;result.projectileId=100+i;
+        result.method=EnemyAttackDefenseMethod::ShootDown;result.outcome=EnemyAttackDefenseOutcome::Success;
+        result.grade=EnemyAttackDefenseGrade::Good;result.accepted=true;result.scoreAwarded=100;
+    }
+    input.results=contacts;bridge.Update(input);
+    runner.Expect(!bridge.Frame().visible && bridge.Frame().audioCues.empty() && bridge.Frame().cameraShake==0 &&
+        bridge.Frame().screenFlashAlpha==0 && bridge.Frame().hapticRemainingSeconds==0,
+        "carrier per-round contacts keep local projectile feedback without a generic banner, camera, full success sound or haptic");
+    input.localSuccessActors={};bridge.Update(input);
+    runner.Expect(!bridge.Frame().visible && bridge.Frame().audioCues.empty(),
+        "consumed local successes cannot reappear when the volley ends or the policy changes");
+    auto next=contacts.front();next.sequence=25;next.actorId=23;
+    input.results={&next,1};bridge.Update(input);
+    runner.Expect(bridge.Frame().visible && !bridge.Frame().audioCues.empty(),"ordinary presentation can still celebrate a projectile contact");
+    input.results={};input.localSuccessActors=batteries;bridge.Update(input);
+    runner.Expect(!bridge.Frame().visible && bridge.Frame().screenFlashAlpha==0 && bridge.Frame().hapticRemainingSeconds==0,
+        "entering carrier presentation clears an already retained carrier success before it can leak between attacks");
+    next.sequence=26;next.actorId=99;input.results={&next,1};bridge.Update(input);
+    runner.Expect(bridge.Frame().visible && bridge.Frame().actorId==99 && bridge.Frame().audioCues.size()==1,
+        "noncarrier enemies retain their existing defense reward even while carrier actors exist");
+    next.sequence=27;next.actorId=17;next.outcome=EnemyAttackDefenseOutcome::Failed;bridge.Update(input);
+    runner.Expect(bridge.Frame().outcome==EnemyAttackDefenseOutcome::Failed && !bridge.Frame().audioCues.empty(),
+        "local successes do not suppress authoritative damage or failure reactions");
+}
+
+void TestCarrierFeedbackHudSeparation(RegressionRunner& runner) {
+    auto definition=RailShooterHudDefinitionAsset::Defaults();
+    RailShooterHudPresentationFrame presentation;presentation.visible=true;
+    std::ofstream metrics("logs/carrier_feedback_hud.csv");metrics<<"width,height,phase,commands\n";
+    for(const auto size:std::array<std::pair<uint32_t,uint32_t>,4>{{{1600,900},{1280,720},{960,540},{640,360}}}) {
+        RailShooterHudRenderer hud;RailShooterHudRenderInput input;
+        input.definition=&definition;input.presentation=&presentation;input.viewportWidth=size.first;input.viewportHeight=size.second;
+        input.bossVisible=input.miniBossParts=true;input.miniBossPartHealth={.7f,1};
+        const auto has=[&](std::u8string_view value){return std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& c){return c.text.find(Utf8ForTest(value))!=std::string::npos;});};
+        const auto check=[&](const char* phase) {
+            metrics<<size.first<<','<<size.second<<','<<phase<<','<<hud.Frame().commands.size()<<'\n';
+            runner.Expect(hud.Frame().commands.size()<definition.maximumDrawCommands,"carrier feedback leaves command capacity for ordinary HUD");
+            for(const auto& c:hud.Frame().commands)runner.Expect(std::isfinite(c.x) && std::isfinite(c.y) && c.x>=0 && c.y>=0 &&
+                c.x<=size.first && c.y<=size.second,"carrier action and contact feedback stay inside the supported viewport");
+        };
+        input.miniBossGatlingFiring=true;input.miniBossGatlingIntercepts=7;hud.Update(input);check("partial");
+        runner.Expect(has(u8"弾の相殺  7 / 24") && !has(u8"反撃解放") && !has(u8"反撃命中") && !has(u8"迎撃成功"),
+            "partial gatling defense reports progress without promising counter eligibility or counter damage");
+        input.miniBossGatlingFiring=false;input.miniBossHeavyFiring=true;hud.Update(input);check("heavy-defense");
+        runner.Expect(has(u8"重砲弾を2ロックして迎撃") && !has(u8"反撃解放") && !has(u8"反撃命中"),
+            "heavy defense identifies the projectile and never announces a hit before a real counter contact");
+        input.miniBossHeavyFiring=false;input.miniBossCounterRemaining=input.miniBossCounterDuration=1.15f;
+        input.miniBossCounterPart=0;input.miniBossCounterUnlockPulse=1;hud.Update(input);check("unlock");
+        runner.Expect(has(u8"反撃解放") && has(u8"主砲で反撃 x2") && !has(u8"反撃命中") && !has(u8"弾の相殺"),
+            "an open counter window has a distinct gold callout and action, not a false damage confirmation");
+        input.miniBossCounterDamage=72;input.miniBossCounterFeedbackRemaining=.9f;input.miniBossCounterDamageRatio=72.0f/420;
+        input.miniBossCounterFeedbackPart=0;input.miniBossCounterHitPulse=1;hud.Update(input);check("counter-contact");
+        runner.Expect(has(u8"反撃命中  72 DAMAGE") && has(u8"反撃解放"),"accepted contact and still-open opportunity remain distinct messages");
+        const float scale=float(size.first)/1600,barX=float(size.first)*.5f-270*scale;
+        runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& c){
+            return c.kind==RailShooterHudDrawCommandKind::Rectangle && std::abs(c.x-(barX+250*scale*.7f))<.01f &&
+                c.width>0 && std::abs(c.color.y-.72f)<.001f;}),"actual counter damage leaves a visible loss segment on the correct health bar");
+        input.miniBossCounterRemaining=0;hud.Update(input);check("late-contact");
+        runner.Expect(has(u8"反撃命中") && !has(u8"反撃解放"),"a credited laser arriving after closure remains a hit without reopening the counter");
+        input.miniBossCounterFeedbackRemaining=0;hud.Update(input);check("expired");
+        runner.Expect(!has(u8"反撃命中") && !has(u8"反撃解放"),"expired contact and opportunity cannot linger into the next attack");
+        input.miniBossCounterRemaining=1;input.startCueActive=true;hud.Update(input);
+        runner.Expect(!has(u8"反撃命中") && !has(u8"反撃解放"),"startup never inherits an old carrier reward");
+    }
 }
 
 void TestCarrierIntroAndCounterCycle(RegressionRunner& runner) {
@@ -41103,8 +41758,8 @@ void TestShortCompleteRun(RegressionRunner& runner) {
         "short course has eight authored stages and a bounded complete route");
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
     std::string diagnostics;for(const auto& d:cooked.diagnostics) diagnostics+=d.message+"; ";
-    runner.Expect(cooked.succeeded && cooked.program.waves.size()==6 && cooked.program.actors.size()==32,
-        "short course compiles six mandatory waves and thirty-two real actor/pattern assets: "+diagnostics);
+    runner.Expect(cooked.succeeded && cooked.program.waves.size()==6 && cooked.program.actors.size()==30,
+        "short course compiles six mandatory waves and thirty real actor/pattern assets: "+diagnostics);
     CourseSpawnRuntime spawn;CourseGameplayWaveRuntimeBridge shortWaves;
     runner.Expect(shortWaves.Bind(&cooked.program,&spawn,160,&error),"short waves bind");
     for(float distance:{300.0f,490.0f,790.0f,1200.0f,1580.0f}) shortWaves.Update({0.1f,distance,{}});
@@ -41127,7 +41782,7 @@ void TestShortCompleteRun(RegressionRunner& runner) {
         for(auto id:ids) runner.Expect(spawn.DefeatEnemy(spawn.EnemyCombat(),id),"real enemy death is accepted");
         shortWaves.Update({0.1f,rail.Length(),{}});
     }
-    runner.Expect(totalSpawned==32,"all thirty-two opponents include the mandatory carrier boss");
+    runner.Expect(totalSpawned==30,"all thirty opponents include the mandatory carrier boss");
     for(int i=0;i<10;++i) truth.Update(truthInput);
     shortWaves.Update({0.1f,rail.Length(),{}});
     si.totalMandatoryWaves=6;
@@ -41321,7 +41976,7 @@ void TestShortRunAimedFireCompletion(RegressionRunner& runner) {
             session.Update(tick);
         }
         report<<fps<<','<<elapsed<<','<<at<<','<<waves.Stats().completedWaves<<','<<shots<<','<<hits<<','<<kills<<'\n';report.flush();
-        runner.Expect(session.State().outcome==GameSessionOutcome::Victory && waves.Stats().completedWaves==6 && kills==32,
+        runner.Expect(session.State().outcome==GameSessionOutcome::Victory && waves.Stats().completedWaves==6 && kills==30,
             "actual gun hits can complete every mandatory group and both boss parts: fps="+std::to_string(fps)+
             " waves="+std::to_string(waves.Stats().completedWaves)+" kills="+std::to_string(kills)+" hits="+std::to_string(hits));
     }
@@ -42930,6 +43585,8 @@ int RunEditorCoreRegressionTests() {
         {"production placement brush tool pack", [&]() { TestProductionPlacementBrushToolPack(runner); }},
         {"production terrain sculpt paint tool pack", [&]() { TestProductionTerrainSculptPaintToolPack(runner); }},
         {"terrain chunk surface seams", [&]() { TestTerrainChunkSurfaceSeams(runner); }},
+        {"ridge horizon continuity and visibility", [&]() { TestRidgeHorizonVisibility(runner); }},
+        {"shader nested include cache invalidation", [&]() { TestShaderNestedIncludeCache(runner); }},
         {"terrain chunk presentation continuity", [&]() { TestTerrainChunkPresentationContinuityPolicy(runner); }},
         {"terrain chunk latest-wins build policy", [&]() { TestTerrainChunkLatestWinsBuildPolicy(runner); }},
         {"editor notification toast lifecycle", [&]() { TestEditorNotificationToastLifecycle(runner); }},
@@ -43066,14 +43723,24 @@ int RunEditorCoreRegressionTests() {
          {"heavy lock defense and counter", [&]() { TestHeavyLockDefenseAndCounter(runner); }},
          {"heavy lock cover and replay", [&]() { TestHeavyLockCoverAndReplay(runner); }},
          {"miniboss counter damage budget", [&]() { TestMinibossCounterDamageBudget(runner); }},
+         {"carrier armor reception and feedback", [&]() { TestBatteryArmorReception(runner); }},
          {"miniboss variable attack order", [&]() { TestMinibossVariableAttackOrder(runner); }},
          {"primary contact presentation coherence", [&]() { TestPrimaryContactPresentationCoherence(runner); }},
          {"carrier intro and interception counter cycle", [&]() { TestCarrierIntroAndCounterCycle(runner); }},
+         {"carrier local defense feedback isolation", [&]() { TestCarrierLocalDefenseFeedback(runner); }},
+         {"carrier feedback HUD state separation", [&]() { TestCarrierFeedbackHudSeparation(runner); }},
          {"carrier pursuit reachability", [&]() { TestCarrierPursuitReachability(runner); }},
          {"short complete run flow and pacing", [&]() { TestShortCompleteRun(runner); }},
          {"short run aimed primary fire completion", [&]() { TestShortRunAimedFireCompletion(runner); }},
         {"short run terminal camera and early-clear waves", [&]() { TestShortRunFinishAndEarlyWaves(runner); }},
         {"encounter camera spawn kill and release continuity", [&]() { TestEncounterCameraContinuity(runner); }},
+        {"course blockout composition", [&]() { TestCourseBlockoutComposition(runner); }},
+        {"gate bridge earned release and retry", [&]() { TestGateBridgeEarnedRelease(runner); }},
+        {"gate bridge spawn protection", [&]() { TestGateBridgeSpawnProtection(runner); }},
+        {"gate bridge moving camera handoff", [&]() { TestGateBridgeMovingHandoff(runner); }},
+        {"ridge crest protection and retry", [&]() { TestRidgeCrestProtection(runner); }},
+        {"ridge local approach assets", [&]() { TestRidgeLocalApproaches(runner); }},
+        {"ridge moving aim switch", [&]() { TestRidgeMovingAimSwitch(runner); }},
         {"first turret combat camera stability", [&]() { TestFirstTurretCameraStability(runner); }},
         {"camera view vehicle framing continuity", [&]() { TestCameraViewFramingContinuity(runner); }},
         {"roadside singles staggered arrivals and population budget", [&]() { TestRoadsideEncounterRhythm(runner); }},
