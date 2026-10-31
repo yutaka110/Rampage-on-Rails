@@ -24,6 +24,7 @@ struct EnemyProjectileShootDownRequest final {
     // Only an aimed contact on the visible stream produces a chain clash.
     // Incidental rounds crossing a shot at the gun can still be cancelled.
     bool focusedGatlingClash = true;
+    uint64_t targetProjectileId = 0;
 };
 
 struct EnemyProjectileShootDownResult final {

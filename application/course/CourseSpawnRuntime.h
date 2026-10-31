@@ -4,6 +4,7 @@
 #include <functional>
 #include "RailMothershipPresentation.h"
 #include "RailEnemyIngress.h"
+#include "RailTurretGeometry.h"
 #include <span>
 #include <string_view>
 #include <string>
@@ -173,6 +174,7 @@ struct CourseVfxCueDesc {
 };
 
 struct CourseEnemyActor {
+    RailTurret::MotionState turretMotion{};
     EnemyWeaponMountFrame weaponMount{};
     CourseEnemyActorDesc desc;
     EnemyCombatDefinition combatDefinition{};

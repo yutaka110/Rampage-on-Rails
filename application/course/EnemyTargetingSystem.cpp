@@ -1,6 +1,7 @@
 #include "RailTurretGeometry.h"
 #include "EnemyTargetingSystem.h"
 #include "RailGatlingAttack.h"
+#include "RailHeavyAttack.h"
 
 #include "CourseSpawnRuntime.h"
 #include "EnemyCombatPresentationBridge.h"
@@ -275,13 +276,15 @@ Vector3 ResolveEnemyProjectileWorldPosition(const RailPathSample& sample,Vector3
         sample.position.z+sample.right.z*p.x+sample.up.z*p.y};
 }
 
-Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,int index) {
+Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,int index,float launchDelaySeconds) {
     if(actor.desc.meshId=="gatling_turret") {
         const auto forward=ResolveTurretAimDirection(actor);
         const auto right=Unit({-forward.z,0,forward.x});
         const Vector3 up{right.y*forward.z-right.z*forward.y,right.z*forward.x-right.x*forward.z,
             right.x*forward.y-right.y*forward.x};
-        const auto p=RailTurret::MuzzleLocal(actor.desc.meshId,index,actor.age+index*RailGatling::ShotInterval);
+        const float phase=RailTurret::RotorAngle(actor.turretMotion,actor.age,launchDelaySeconds);
+        const float recoil=launchDelaySeconds>0?0:RailTurret::Recoil(actor.turretMotion,actor.desc.meshId,actor.age);
+        const auto p=RailTurret::MuzzleLocalAtPhase(actor.desc.meshId,index,phase,recoil);
         const float r=actor.desc.radius;
         return {actor.desc.lateralOffset+r*(-forward.x*p.z+right.x*p.x+up.x*p.y),
             actor.desc.verticalOffset+r*(-forward.y*p.z+right.y*p.x+up.y*p.y),
@@ -289,6 +292,7 @@ Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,i
     }
     if(actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready)
         return actor.weaponMount.muzzleRail[index & 1];
+    if(actor.desc.meshId=="carrier_heavy_turret")return ResolveTurretMuzzleRailPosition(actor,0);
     if(RailTurret::IsMesh(actor.desc.meshId) && actor.targetingState.solutionLocked &&
         actor.targetingState.attackIntentSequence==actor.attackState.intentSequence &&
         actor.targetingState.attackTokenId==actor.attackState.tokenId)
@@ -370,9 +374,10 @@ Vector3 ResolveTurretMuzzleRailPosition(const CourseEnemyActor& actor, float bar
         right.z*forward.x-right.x*forward.z,right.x*forward.y-right.y*forward.x};
     const float r = actor.desc.radius;
     const auto geometry=RailTurret::ForMesh(actor.desc.meshId);
-    return {actor.desc.lateralOffset+r*(forward.x*geometry.muzzleForward+right.x*barrelSide*geometry.muzzleSide+up.x*geometry.muzzleHeight),
-        actor.desc.verticalOffset+r*(forward.y*geometry.muzzleForward+right.y*barrelSide*geometry.muzzleSide+up.y*geometry.muzzleHeight),
-        actor.desc.spawnDistance+actor.desc.distanceOffset+r*(forward.z*geometry.muzzleForward+right.z*barrelSide*geometry.muzzleSide+up.z*geometry.muzzleHeight)};
+    const float front=geometry.muzzleForward-RailTurret::Recoil(actor.turretMotion,actor.desc.meshId,actor.age);
+    return {actor.desc.lateralOffset+r*(forward.x*front+right.x*barrelSide*geometry.muzzleSide+up.x*geometry.muzzleHeight),
+        actor.desc.verticalOffset+r*(forward.y*front+right.y*barrelSide*geometry.muzzleSide+up.y*geometry.muzzleHeight),
+        actor.desc.spawnDistance+actor.desc.distanceOffset+r*(forward.z*front+right.z*barrelSide*geometry.muzzleSide+up.z*geometry.muzzleHeight)};
 }
 
 void EnemyTargetingSystem::Reset() {
@@ -400,7 +405,7 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         for (const auto& actor : actors) {
             if (actor.behaviorDefinition.commercialBehavior && actor.HoldsCombatPositionUntilResolved() &&
                 (actor.desc.projectileDefinition.trajectory == EnemyProjectileTrajectory::Direct ||
-                    RailGatling::IsWeapon(actor.desc.actorAssetId))) {
+                    RailGatling::IsWeapon(actor.desc.actorAssetId) || RailHeavy::IsWeapon(actor.desc.actorAssetId))) {
                 horizon = (std::max)(horizon, actor.desc.projectileDefinition.lifetime +
                     (std::max)(actor.behaviorDefinition.attackLeadSeconds, actor.behaviorState.attackTimeRemaining) + 0.1f);
             }
@@ -561,7 +566,8 @@ void EnemyTargetingSystem::LockSolution(
     state.targetVerticalOffset = input.playerVerticalOffset +
         playerVerticalVelocity * predictionSeconds;
     state.compensatesForwardTravel=actor.HoldsCombatPositionUntilResolved() &&
-        (definition.trajectory==EnemyProjectileTrajectory::Direct || RailGatling::IsWeapon(actor.desc.actorAssetId));
+        (definition.trajectory==EnemyProjectileTrajectory::Direct || RailGatling::IsWeapon(actor.desc.actorAssetId) ||
+            RailHeavy::IsWeapon(actor.desc.actorAssetId));
     state.forwardTravelPrediction = input.travelPrediction;
     state.solutionLocked = true;
     if(state.compensatesForwardTravel) RefreshForwardIntercept(actor,input,playerForwardVelocity);

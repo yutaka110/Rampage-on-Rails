@@ -330,6 +330,8 @@ bool CourseSpawnRuntime::ValidateCheckpoint(
     for (const CourseEnemyActor& actor : checkpoint.enemies) {
         valid = valid && validId(actor.actorId) && ValidEnemyDescription(actor.desc) &&
             FiniteValues({actor.age, actor.fireTimer, actor.fireVisibleTime}) && actor.age >= 0.0f &&
+            FiniteValues({actor.turretMotion.rotorAngle,actor.turretMotion.rotorSpeed,actor.turretMotion.lastFireAge}) &&
+            actor.turretMotion.rotorSpeed>=0 && actor.turretMotion.rotorSpeed<=RailTurret::SpinSpeed+.001f &&
             ValidateRailEnemyIngress(actor.terrainIngress) &&
             (!actor.carrierDeployment.initialized ||
                 (FiniteValues({actor.carrierDeployment.elapsed,actor.carrierDeployment.delay,
@@ -557,6 +559,11 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     }
 
     enemyAttackCoordinator_.Update(*this, enemyBehaviorSystem_.Frame(), dt);
+    for(auto& actor:enemies_)if(RailTurret::ForMesh(actor.desc.meshId).movingMesh) {
+        const bool alive=actor.desc.hitPoints>0 && actor.combatState.phase!=EnemyCombatPhase::Dying && actor.combatState.phase!=EnemyCombatPhase::Retired;
+        const bool warning=actor.fireEnvironmentReady && actor.behaviorState.attackIntentActive && actor.attackState.tokenReserved;
+        RailTurret::UpdateMotion(actor.turretMotion,actor.age,actor.fireSequence,dt,warning,alive,actor.desc.meshId=="gatling_turret");
+    }
     EnemyTargetingFrameInput targetingInput{};
     targetingInput.travelPredictionInput = safetyInput.travelPredictionInput;
     targetingInput.railPath = safetyInput.railPath;
@@ -573,6 +580,8 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
         *this, enemyAttackCoordinator_, enemyBehaviorSystem_);
     fireSafetyStats_.bulletsEmitted +=
         enemyAttackExecutionSystem_.Frame().emittedProjectiles;
+    for(auto& actor:enemies_)if(RailTurret::ForMesh(actor.desc.meshId).movingMesh)
+        RailTurret::ObserveFire(actor.turretMotion,actor.age,actor.fireSequence);
 
     EnemyProjectileFrameInput projectileInput{};
     projectileInput.deltaTime = dt;

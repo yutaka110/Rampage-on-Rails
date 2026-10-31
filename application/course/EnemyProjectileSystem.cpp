@@ -88,7 +88,7 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
     projectile.sourceRole = actor.desc.role;
     projectile.trajectory = definition.trajectory;
     projectile.spawnDistance = 0.0f;
-    const Vector3 muzzle=ResolveEnemyProjectileMuzzleRailPosition(actor,index);
+    const Vector3 muzzle=ResolveEnemyProjectileMuzzleRailPosition(actor,index,launchDelaySeconds);
     projectile.distanceOffset=muzzle.z;
     projectile.lateralOffset=muzzle.x;
     projectile.verticalOffset=muzzle.y;

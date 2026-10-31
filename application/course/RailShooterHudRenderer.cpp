@@ -2,6 +2,7 @@
 #include "RailShortCourse.h"
 #include "RailGameOverScene.h"
 #include "EncounterPerformanceScoreSystem.h"
+#include "RailEnemyEnergyPalette.h"
 #include <cmath>
 
 #include <algorithm>
@@ -296,6 +297,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
             text(Utf8(u8"通常弾を撃ち続けて相殺  ")+std::to_string(input.miniBossGatlingIntercepts)+"/24",
                 width*.5f,y-35*scale,.75f*scale,{1,.83f,.5f,opacity},center);
         }
+        if(input.miniBossHeavyFiring && !counter)
+            text(Utf8(u8"重砲弾を2ロックして迎撃"),width*.5f,y-35*scale,.75f*scale,{.55f,.9f,1,opacity},center);
         if(counter) {
             text(input.miniBossCounterPart==0 ? Utf8(u8"迎撃成功  砲台へ戻して主砲で反撃 x2") :
                 Utf8(u8"迎撃成功  ロックオンで反撃 x2"),width*.5f,y-35*scale,
@@ -316,7 +319,48 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
                 px,y+22*scale,0.65f*scale,alive?Vector4{0.85f,0.93f,1,opacity}:Vector4{0.5f,0.6f,0.6f,opacity});
             bar(px,y+29*scale,250*scale,6*scale,input.miniBossPartHealth[i],
                 exposed?Vector4{1,.88f,.45f,opacity}:
-                    i==0?Vector4{0.2f,0.8f,1,opacity}:Vector4{1,0.48f,0.16f,opacity},{0.1f,0.12f,0.14f,opacity});
+                    RailEnemyEnergy::Alpha(i==0?RailEnemyEnergy::Gatling.ink:RailEnemyEnergy::Heavy.ink,opacity),{0.1f,0.12f,0.14f,opacity});
+            if(alive) {
+                const auto& thermal=input.miniBossThermal[i];
+                if(thermal.valid) {
+                    using Phase=RailBatteryThermalPhase;const auto phase=thermal.phase;
+                    const bool charge=phase==Phase::Charging || phase==Phase::Imminent;
+                    const auto& palette=i==0?RailEnemyEnergy::Gatling:RailEnemyEnergy::Heavy;
+                    const auto color=RailEnemyEnergy::Alpha(phase==Phase::Counter?Vector4{1,.85f,.35f,1}:
+                        phase==Phase::Imminent?palette.hotInk:phase==Phase::Cooling?Vector4{.60f,.72f,.78f,1}:palette.ink,opacity);
+                    float fill=charge?thermal.charge:phase==Phase::Cooling?thermal.coolingProgress:phase==Phase::Firing?1-thermal.firingProgress:
+                        phase==Phase::Standby?1-thermal.remainingSeconds/(std::max)(.01f,thermal.durationSeconds):1;
+                    fill=(std::clamp)(fill,0.0f,1.0f);
+                    const int segments=charge && i==0?3:1;
+                    for(int segment=0;segment<segments;++segment) {
+                        const float sw=(250.0f-4*(segments-1))/segments;
+                        bar(px+segment*(sw+4)*scale,y+40*scale,sw*scale,phase==Phase::Imminent?5*scale:3*scale,
+                            (std::clamp)(fill*segments-segment,0.0f,1.0f),color,{.06f,.09f,.11f,opacity});
+                    }
+                    std::string label;
+                    switch(phase) {
+                    case Phase::Charging:label=i==0?Utf8(u8"回転上昇"):Utf8(u8"蓄積中");break;
+                    case Phase::Imminent:label=i==0?Utf8(u8"まもなく連射"):Utf8(u8"まもなく発射");break;
+                    case Phase::Firing:label=i==0?Utf8(u8"連射中"):Utf8(u8"発射");break;
+                    case Phase::Cooling:label=i==0?Utf8(u8"放熱中"):Utf8(u8"排熱中");break;
+                    case Phase::Counter:label=Utf8(u8"反撃チャンス");break;
+                    default:label=thermal.remainingSeconds>0?Utf8(u8"準備中"):Utf8(u8"待機");break;
+                    }
+                    if((charge || phase==Phase::Cooling) && thermal.remainingSeconds>0) {
+                        auto tenths=std::to_string(int(std::ceil(thermal.remainingSeconds*10)));
+                        if(tenths.size()==1)tenths="0"+tenths;
+                        tenths.insert(tenths.size()-1,".");label+="  "+tenths+"s";
+                    }
+                    text(label,px,y+56*scale,.5f*scale,color);continue;
+                }
+                const float charge=input.miniBossPartCharge[i],cooldown=input.miniBossCooldownRemaining[i];
+                const bool charging=charge>0 && !counter;
+                const float fill=charging?charge:cooldown>0?1-cooldown/(std::max)(.01f,input.miniBossCooldownDuration[i]):1;
+                const Vector4 color=charging?Vector4{1,.68f,.2f,opacity}:Vector4{.42f,.61f,.68f,opacity*.75f};
+                bar(px,y+40*scale,250*scale,3*scale,(std::clamp)(fill,0.0f,1.0f),color,{.06f,.09f,.11f,opacity});
+                text(charging?Utf8(u8"チャージ"):cooldown>0?Utf8(u8"冷却中"):Utf8(u8"待機"),
+                    px,y+56*scale,.5f*scale,color);
+            }
         }
     } else if(input.bossVisible && !input.startCueActive) {
         const float w=580*scale,x=(width-w)*0.5f,y=height-110*scale;

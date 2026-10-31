@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "RailShooterHudDefinitionAsset.h"
+#include "RailBatteryThermalTypes.h"
 #include "GameSessionSystem.h"
 #include "RailShooterHudPresentationBridge.h"
 
@@ -70,6 +71,9 @@ struct RailShooterHudRenderInput final {
     const EncounterPerformanceScoreRuntimeState* encounterScore=nullptr;
     bool miniBossParts=false;
     std::array<float,2> miniBossPartHealth{};
+    std::array<float,2> miniBossPartCharge{},miniBossCooldownRemaining{},miniBossCooldownDuration{1,1};
+    std::array<RailBatteryThermalFrame,2> miniBossThermal{};
+    bool miniBossHeavyFiring=false;
     const RailGameOverFrame* gameOver=nullptr;
     bool checkpointRetryAvailable=false;
     bool unlimitedCheckpointRetries=false;

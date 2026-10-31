@@ -21,7 +21,7 @@ inline RailGatlingAimCue BuildRailGatlingAimCue(const RailMinibossCombatDirector
         cue.phase=RailGatlingAimPhase::Guard;cue.owner=cycle.VolleyOwner();
         cue.world=ResolveEnemyProjectileWorldPosition(rail,guard);
         cue.progress=float(cycle.InterceptedCount())/RailGatling::Rounds;
-    } else if(cycle.CounterRemaining()>0 && cycle.CounterPart()==0) {
+    } else if(cycle.CounterRemaining()>0) {
         for(const auto& actor:runtime.Enemies())if(actor.actorId==cycle.CounterOwner() && actor.desc.hitPoints>0) {
             cue.phase=RailGatlingAimPhase::Counter;cue.owner=actor.actorId;
             cue.world=ResolveEnemyProjectileWorldPosition(rail,{actor.desc.lateralOffset,

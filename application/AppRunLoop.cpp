@@ -8,6 +8,8 @@
 #include "course/RailTurretGeometry.h"
 #include "course/RailProjectileOrbSurface.h"
 #include "course/RailGatlingAimCycle.h"
+#include "course/RailHeavyAttack.h"
+#include "course/RailBatteryThermalPresentation.h"
 
 #include <DirectXMath.h>
 #include <algorithm>
@@ -3292,7 +3294,7 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
         0x3057, 0x308B, 0x30A6, 0x30AA, 0x30AF, 0x30B2, 0x30B9, 0x30C3, 0x30DE, 0x30E0, 0x30EA, 0x30ED, 0x30F3, 0x4F5C, 0x52D5, 0x59CB, 0x5B9A, 0x623B, 0x629E, 0x62BC, 0x64CD, 0x6589, 0x660E, 0x6C7A, 0x7167, 0x79FB, 0x8AAC, 0x9078, 0x9577, 0x96E2,
     };
     // Native HUD glyphs used by the game-over scene (not the ImGui atlas).
-    for(char32_t cp:std::u32string_view(U"トロッコが大破しました制限時間を過ぎました任務を継続できませんリトライタイトルに戻る最後のチェックポイントから再開利用選択決定マウス↑↓：・母艦の武装を破壊残り連射砲台重砲破壊済み迎撃成功ロックオンで反撃ガトリング通常弾を撃ち続けて相殺照準位置ここへ弾列"))
+    for(char32_t cp:std::u32string_view(U"トロッコが大破しました制限時間を過ぎました任務を継続できませんリトライタイトルに戻る最後のチェックポイントから再開利用選択決定マウス↑↓：・母艦の武装を破壊残り連射砲台重砲破壊済み迎撃成功ロックオンで反撃ガトリング通常弾を撃ち続けて相殺照準位置ここへ弾列冷却中待機チャージ回転上昇蓄積中まもなく連射発射放熱排熱反撃チャンス準備"))
         submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
     std::sort(submissionJapaneseCodepoints.begin(),submissionJapaneseCodepoints.end());
     submissionJapaneseCodepoints.erase(std::unique(submissionJapaneseCodepoints.begin(),submissionJapaneseCodepoints.end()),submissionJapaneseCodepoints.end());
@@ -4356,6 +4358,17 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.bossHealth=railMothershipBattle_.Current().battleHealth;
     hudRenderInput.miniBossParts=railMothershipBattle_.Current().partsBattle;
     hudRenderInput.miniBossPartHealth=railMothershipBattle_.Current().partHealth;
+    hudRenderInput.miniBossPartCharge=railMothershipBattle_.Current().partCharge;
+    for(const auto& pose:railEnemyCombatPresentationBridge_.Frame().actors)if(pose.batteryThermal.valid)
+        for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(actor.actorId==pose.actorId) {
+            const int part=RailMothership::PartIndex(actor.desc.actorAssetId);
+            if(part>=0)hudRenderInput.miniBossThermal[part]=pose.batteryThermal;
+        }
+    hudRenderInput.miniBossHeavyFiring=railMinibossCombat_.InFlight() && !railMinibossCombat_.GatlingInFlight();
+    for(int part=0;part<2;++part) {
+        hudRenderInput.miniBossCooldownRemaining[part]=railMinibossCombat_.CooldownRemaining(railShooterSpawnRuntime_,part);
+        hudRenderInput.miniBossCooldownDuration[part]=railMinibossCombat_.CooldownDuration(railShooterSpawnRuntime_,part);
+    }
     hudRenderInput.miniBossCounterRemaining=railMinibossCombat_.CounterRemaining();
     hudRenderInput.miniBossCounterDuration=railMinibossCombat_.CounterDuration();
     hudRenderInput.miniBossGatlingFiring=railMinibossCombat_.GatlingInFlight();
@@ -4470,11 +4483,33 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 addCircleLine(p.screen,r,6*s,{.015f,.035f,.045f,.7f},32);
                 addCircleLine(p.screen,r,2*s,ink,32);
                 if(!guard)addBracket(p.screen,r+5*s,7*s,2*s,ink);
-                const auto label=guard?u8"ここで弾列を相殺":u8"砲台へ戻して反撃 x2";
+                const auto label=guard?u8"ここで弾列を相殺":railMinibossCombat_.CounterPart()==1?
+                    u8"砲台をロックして反撃 x2":u8"砲台へ戻して反撃 x2";
                 addCenteredText(std::string(reinterpret_cast<const char*>(label)),p.screen.x,p.screen.y+r+23*s,.68f*s,ink);
                 addQuad(p.screen.x-25*s,p.screen.y+r+29*s,50*s,3*s,uvWhite,{.02f,.05f,.06f,.8f});
                 addQuad(p.screen.x-25*s,p.screen.y+r+29*s,50*s*(std::clamp)(cue.progress,0.0f,1.0f),3*s,uvWhite,ink);
             }
+        }
+    }
+
+    if(hudRenderInput.bossVisible && !railGameOverScene_.Active() && !hudRenderInput.startCueActive) {
+        for(const auto& round:railShooterSpawnRuntime_.Bullets()) {
+            if(!round.active || round.hitConsumed || round.age>=round.lifetime || !RailHeavy::IsProjectile(round.definitionId))continue;
+            const auto point=ResolveEnemyProjectileWorldPosition(railPath_,{round.lateralOffset,round.verticalOffset,round.spawnDistance+round.distanceOffset});
+            const auto p=ProjectRailOverlayPoint(point,frameState_.viewProjectionMatrix,hudWidth,hudHeight);
+            if(!p.onscreen || !p.inDepth || p.behind)continue;
+            unsigned count=unsigned((std::max)(0,2-int(std::ceil(round.shootDownHitPoints/34.0f))));
+            for(const auto& token:railShooterLockOnSystem_.Tokens())if(token.target.kind==RailLockTargetKind::Projectile && token.target.projectileId==round.projectileId)++count;
+            for(const auto& laser:railLockVolley_.Lasers())if(!laser.resolved && laser.target.kind==RailLockTargetKind::Projectile && laser.target.projectileId==round.projectileId)++count;
+            count=(std::min)(2u,count);const float s=hudScale;
+            const Vector4 ink=count==2?Vector4{1,.88f,.40f,.98f}:Vector4{.46f,.90f,1,.96f};
+            addBracket(p.screen,29*s,10*s,2.5f*s,ink);
+            for(unsigned slot=0;slot<2;++slot) {
+                const float x=p.screen.x+((slot==0)?-15.0f:3.0f)*s;
+                addQuad(x,p.screen.y+39*s,12*s,5*s,uvWhite,slot<count?ink:Vector4{.15f,.20f,.22f,.8f});
+            }
+            const auto label=u8"重砲弾：2ロックで迎撃";
+            addCenteredText(std::string(reinterpret_cast<const char*>(label)),p.screen.x,p.screen.y-42*s,.64f*s,ink);
         }
     }
 
@@ -4525,9 +4560,12 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const auto& enemyBulletFrame=railEnemyProjectileVfxRenderer_.Frame();
     const bool hasEnemyOrbs=!railTitleScreenVisible_ && std::any_of(enemyBulletFrame.proxies.begin(),enemyBulletFrame.proxies.end(),
         [](const auto& p){return p.spriteBacked;});
+    const bool hasBatteryThermals=!railTitleScreenVisible_ && !railGameOverScene_.Active() &&
+        std::any_of(railEnemyCombatPresentationBridge_.Frame().actors.begin(),railEnemyCombatPresentationBridge_.Frame().actors.end(),
+            [](const auto& p){return p.batteryThermal.valid && (p.batteryThermal.charge>0 || p.batteryThermal.heat>0);});
     const bool hudVisible=imguiLayer_.EditorViewportOverlay().LayerVisible(editor::EditorViewportOverlayLayerId::GameplayHud);
     if(!hudVisible && !railGameOverScene_.Active()) railLockOnHudAtlasVertexCount_=0;
-    const bool hasWorldEffects=railGameOverScene_.Active() || hasEnemyOrbs || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    const bool hasWorldEffects=railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     if (hasWorldEffects) {
         // Suppress every gameplay overlay, including the reticle built above.
         if (railTitleScreenVisible_) railLockOnHudAtlasVertexCount_ = 0;
@@ -4623,12 +4661,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
         // The solid orb body shares the sorted alpha world pass with smoke.
         // Unlike an additive glow this preserves a shaded silhouette outdoors.
-        const auto orbBody=[&](Vector3 center,float radius,float opacity,float animationUvY) {
+        const auto orbBody=[&](Vector3 center,float radius,float opacity,float animationUvY,
+                Vector4 body=RailEnemyEnergy::Body,float uvBase=2000.0f) {
             billboards.push_back({center,Scale(right,radius),Scale(up,radius),
-                RailEnemyEnergy::Alpha(RailEnemyEnergy::Body,opacity),2000.0f,{},0.0f,animationUvY,radius});
+                RailEnemyEnergy::Alpha(body,opacity),uvBase,{},0.0f,animationUvY,radius});
         };
         if(hasEnemyOrbs) for(const auto& p:enemyBulletFrame.proxies) {
-            if(p.spriteBacked) orbBody(p.worldPosition,p.coreRadius,1.0f,p.orbAnimationUvY);
+            if(p.spriteBacked) orbBody(p.worldPosition,p.coreRadius,1.0f,p.orbAnimationUvY,p.bodyColor,p.bodyUvBase);
         }
         const auto shotRadius=[&](const RailTitleShot& shot) {
             return railTitleScreenVisible_ ? (shot.railStrike?RailTitleScene::DepartureShotRadius:0.90f) : 0.42f;
@@ -4840,6 +4879,10 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             for(const auto& sprite:railAttackWarningPresentation_.Sprites(right,up,eye,
                     2.0f/((std::max)(.001f,std::abs(frameState_.projMatrix.m[1][1]))*720.0f)))
                 glowQuad(sprite.center,sprite.horizontal,sprite.vertical,sprite.atlas,sprite.color);
+        if(hasBatteryThermals)for(const auto& pose:railEnemyCombatPresentationBridge_.Frame().actors)if(pose.batteryThermal.valid)
+            for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(actor.actorId==pose.actorId)
+                for(const auto& sprite:BuildRailBatteryThermalSprites(actor,pose.batteryThermal,railPath_,pose.turretWorldRotation,right,up))
+                    glowQuad(sprite.center,sprite.horizontal,sprite.vertical,sprite.atlas,sprite.color);
         if(railGameOverScene_.Active() && !railTitleScreenVisible_) {
             const auto& wreck=railGameOverScene_.Frame();
             for(size_t i=0;i<wreck.sparkCount;++i) {
@@ -4869,21 +4912,56 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     {0.95f,0.68f,0.34f,chip.opacity});
             }
         }
-        const auto orbTail=[&](Vector3 center,Vector3 tail,Vector3 direction,float radius,float opacity,float animationUvY,float haloRadius=0.0f) {
+        const auto orbTail=[&](Vector3 center,Vector3 tail,Vector3 direction,float radius,float opacity,float animationUvY,float haloRadius=0.0f,
+                const RailEnemyEnergy::Palette& palette=RailEnemyEnergy::Ordinary,float pulse=1.0f,
+                RailEnemyEnergy::BatteryKind kind=RailEnemyEnergy::BatteryKind::None,float shellIntegrity=1.0f) {
             const auto head=Add(center,Scale(direction,-radius*0.55f));
             const auto delta=Add(head,Scale(tail,-1)),middle=Scale(Add(tail,head),0.5f);
             const auto side=NormalizeOr(Cross(direction,NormalizeOr(Add(eye,Scale(middle,-1)),right)),right);
             if(Dot(delta,delta)>0.0001f) {
-                glowQuad(middle,Scale(delta,0.5f),Scale(side,radius*0.40f),32.0f,RailEnemyEnergy::Alpha(RailEnemyEnergy::Trail,opacity*0.50f));
-                glowQuad(middle,Scale(delta,0.5f),Scale(side,radius*0.10f),32.0f,RailEnemyEnergy::Alpha(RailEnemyEnergy::Hot,opacity*0.45f));
+                glowQuad(middle,Scale(delta,0.5f),Scale(side,radius*(kind==RailEnemyEnergy::BatteryKind::Heavy?.50f:.30f)),32.0f,RailEnemyEnergy::Alpha(palette.trail,opacity*0.50f));
+                glowQuad(middle,Scale(delta,0.5f),Scale(side,radius*0.10f),32.0f,RailEnemyEnergy::Alpha(palette.hot,opacity*0.45f));
             }
             // The body, hot arcs and halo share one spherical depth profile.
             // A flat glow card would still pop behind the cart independently.
-            orbSurface(center,(std::max)(radius*1.35f,haloRadius),radius,16.0f,0.0f,RailEnemyEnergy::Alpha(RailEnemyEnergy::Halo,opacity*0.11f));
-            orbSurface(center,radius*1.20f,radius,34.0f,animationUvY,RailEnemyEnergy::Alpha(RailEnemyEnergy::Surface,opacity*0.80f));
+            orbSurface(center,(std::max)(radius*1.35f,haloRadius),radius,16.0f,0.0f,RailEnemyEnergy::Alpha(palette.halo,opacity*0.11f*pulse));
+            if(kind==RailEnemyEnergy::BatteryKind::Gatling)
+                orbSurface(center,radius*.55f,radius,16,0,RailEnemyEnergy::Alpha(palette.hot,opacity*.24f));
+            else orbSurface(center,radius*1.20f,radius,kind==RailEnemyEnergy::BatteryKind::Heavy?(shellIntegrity<.999f?48.0f:46.0f):34.0f,
+                animationUvY,RailEnemyEnergy::Alpha(palette.surface,opacity*.80f*pulse));
         };
         if(hasEnemyOrbs) for(const auto& p:enemyBulletFrame.proxies) {
-            if(p.spriteBacked) orbTail(p.worldPosition,p.trailStart,p.motionDirection,p.coreRadius,1.0f,p.orbAnimationUvY,p.haloRadius);
+            if(p.spriteBacked) orbTail(p.worldPosition,p.trailStart,p.motionDirection,p.coreRadius,1.0f,p.orbAnimationUvY,p.haloRadius,
+                RailEnemyEnergy::For(p.batteryKind),p.energyPulse,p.batteryKind,p.shellIntegrity);
+        }
+        if(!railTitleScreenVisible_)for(const auto& burst:enemyBulletFrame.lifecycleBursts) {
+            if(!burst.spriteBacked)continue;
+            const float age=burst.normalizedAge,fade=1-age,r=burst.radius;
+            const bool shell=burst.kind==EnemyProjectileLifecycleVisualKind::ShellCracked;
+            const bool launch=burst.kind==EnemyProjectileLifecycleVisualKind::Launch;
+            const bool heavy=burst.batteryKind==RailEnemyEnergy::BatteryKind::Heavy;
+            const auto center=burst.worldPosition;
+            if(burst.clashRadius>0) {
+                const float contactFade=(std::max)(0.0f,1-age/.25f);
+                if(contactFade>0)orbSurface(burst.clashCenter,burst.clashRadius/ .76f,burst.clashRadius,46,0,
+                    RailEnemyEnergy::Alpha(burst.secondaryColor,contactFade*.22f));
+            }
+            // A compact rapid spark versus a larger heavy-core rupture. These
+            // are emitted only by accepted runtime contacts, never by locks.
+            glowQuad(center,Scale(right,r*(shell?.4f:.75f)),Scale(up,r*(shell?.4f:.75f)),16,
+                RailEnemyEnergy::Alpha(burst.primaryColor,fade*fade*(shell?.30f:.75f)));
+            if(heavy && !launch)glowQuad(center,Scale(right,r*(.65f+age)),Scale(up,r*(.65f+age)),36,
+                RailEnemyEnergy::Alpha(burst.secondaryColor,fade*.65f),float(2*uint32_t(age*31)));
+            const int rays=launch?2:shell?7:heavy?12:4;
+            for(int ray=0;ray<rays;++ray) {
+                const float angle=float(ray)*6.2831853f/rays+float(burst.projectileId%17)*.37f;
+                const auto axis=Add(Scale(right,std::cos(angle)),Scale(up,std::sin(angle)));
+                const auto tangent=Add(Scale(up,std::cos(angle)),Scale(right,-std::sin(angle)));
+                const float distance=r*(.25f+age*(shell?1.1f:1.8f));
+                const auto point=Add(center,Scale(axis,distance));
+                glowQuad(point,Scale(axis,r*(.18f+.24f*fade)),Scale(tangent,r*(shell?.065f:.035f)),32,
+                    RailEnemyEnergy::Alpha(burst.secondaryColor,fade*fade*.85f));
+            }
         }
         if(!railTitleScreenVisible_) for(const auto& kill:railPrimaryKills_.Kills()) {
             const auto frame=kill.Evaluate(right,up);
@@ -9054,7 +9132,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
             collisionInput.player.verticalOffset,
             railShooterLockOnSystem_.Settings().lockVfxMuzzleForwardOffset);
     railLockVolley_.Update(gameplayDeltaTime,railLockMuzzle,railPath_,railShooterSpawnRuntime_,
-        railShooterCollisionSystem_,&railShooterCourse_);
+        railShooterCollisionSystem_,&railShooterCourse_,&runtimeState_.terrain.settings,&runtimeState_.terrain.previewEditLayer);
     const int lockScheduledShots=ProcessRailLockOnRelease(railLockMuzzle,gameplayDeltaTime);
     const uint32_t lockReleaseTokenCount=static_cast<uint32_t>(railShooterLockOnSystem_.LastRelease().tokens.size());
     railInputRouteDebug_.releaseFireTriggered=lockScheduledShots>0;
@@ -11114,6 +11192,8 @@ void AppRunLoop::DispatchEnemyCombatPresentation(
     input.counterActorId=railMinibossCombat_.CounterOwner();
     input.counterAmount=railMinibossCombat_.CounterRemaining();
     input.counterHitPulse=railMinibossCombat_.HitPulse();
+    input.minibossCombat=&railMinibossCombat_;
+    input.attackWarnings=&railAttackWarningPresentation_;
     input.traceDestructionGround=[&](Vector3 from,Vector3 to,float railDistance,Vector3& contact,Vector3& normal) {
         const auto delta=Add(to,Scale(from,-1));
         const float length=std::sqrt(Dot(delta,delta));

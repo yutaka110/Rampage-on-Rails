@@ -110,7 +110,7 @@ public:
                 if(flash.sequence!=cue.fireSequence){flash.sequence=cue.fireSequence;flash.started=time;flash.muzzles=source.muzzles;flash.count=source.muzzleCount;}
                 const float age=(std::max)(0.0f,time-flash.started);
                 source.flash=(std::max)(0.0f,1-age/0.12f);
-                source.charge=0;source.muzzles=flash.muzzles;source.muzzleCount=flash.count;
+                source.charge=0; // Keep the flash attached to the recoiling live barrel.
                 if(source.flash<=0)continue;
             }
             sources_.push_back(source);
@@ -161,33 +161,34 @@ public:
     static std::vector<RailBatteryWarningStroke> BatteryStrokes(const RailWarningSource& source) {
         std::vector<RailBatteryWarningStroke> strokes;strokes.reserve(14);
         if(source.fired || source.weapon==RailWarningWeapon::Ordinary)return strokes;
+        const auto& palette=RailEnemyEnergy::For(source.weapon==RailWarningWeapon::Heavy?RailEnemyEnergy::BatteryKind::Heavy:RailEnemyEnergy::BatteryKind::Gatling);
         const auto style=BatteryStyle(source);
         const auto line=[&](Vector2 a,Vector2 b,float width,Vector4 ink){strokes.push_back({a,b,width,ink});};
         if(source.weapon==RailWarningWeapon::Rapid) {
             for(int stage=0;stage<3;++stage) {
                 const float y=float(stage-1)*11;
                 const bool lit=stage<style.litStages;
-                const Vector4 ink=lit?RailEnemyEnergy::Ink:RailEnemyEnergy::Alpha(RailEnemyEnergy::Ink,.30f);
+                const Vector4 ink=lit?palette.ink:RailEnemyEnergy::Alpha(palette.ink,.30f);
                 for(float side:{-1.0f,1.0f})
                     line({side*(style.extent+10),y-3},{side*style.extent,y+3},style.stroke,ink);
             }
             if(source.imminent)for(float side:{-1.0f,1.0f})
-                line({side*4,-8},{side*4,8},3.0f,RailEnemyEnergy::HotInk);
+                line({side*4,-8},{side*4,8},3.0f,palette.hotInk);
         } else {
             constexpr float halfPi=1.570796327f;
             for(int wedge=0;wedge<4;++wedge) {
                 const float angle=halfPi*wedge,dx=std::cos(angle),dy=std::sin(angle);
                 const Vector2 tip{dx*style.extent,dy*style.extent};
                 for(float side:{-1.0f,1.0f})
-                    line({tip.x+dx*11-dy*side*7,tip.y+dy*11+dx*side*7},tip,style.stroke,RailEnemyEnergy::Ink);
+                    line({tip.x+dx*11-dy*side*7,tip.y+dy*11+dx*side*7},tip,style.stroke,palette.ink);
             }
             // A single large hexagonal core denotes the heavy shot. It becomes
-            // hot yellow-orange only in the authoritative Imminent phase.
+            // its hottest tint only in the authoritative Imminent phase.
             for(int edge=0;edge<6;++edge) {
                 const float a=1.047197551f*edge,b=1.047197551f*(edge+1);
                 line({std::cos(a)*style.coreRadius,std::sin(a)*style.coreRadius},
                     {std::cos(b)*style.coreRadius,std::sin(b)*style.coreRadius},source.imminent?3.8f:2.6f,
-                    RailEnemyEnergy::Alpha(RailEnemyEnergy::HotInk,source.imminent?1.0f:.55f));
+                    RailEnemyEnergy::Alpha(palette.hotInk,source.imminent?1.0f:.55f));
             }
         }
         return strokes;
@@ -199,6 +200,8 @@ public:
         constexpr float pi=3.14159265358979323846f;
         for(const auto& source:sources_)for(size_t barrel=0;barrel<source.muzzleCount;++barrel) {
             const Vector3 forward{right.y*up.z-right.z*up.y,right.z*up.x-right.x*up.z,right.x*up.y-right.y*up.x};
+            const auto& palette=RailEnemyEnergy::For(source.weapon==RailWarningWeapon::Heavy?RailEnemyEnergy::BatteryKind::Heavy:
+                source.weapon==RailWarningWeapon::Rapid?RailEnemyEnergy::BatteryKind::Gatling:RailEnemyEnergy::BatteryKind::None);
             const auto anchor=source.muzzles[barrel];
             const float depth=(std::max)(0.0f,Dot(Sub(anchor,eye),forward));
             const float r=source.weapon==RailWarningWeapon::Ordinary
@@ -209,34 +212,34 @@ public:
             const auto muzzle=Add(anchor,Mul(forward,-.12f));
             if(source.fired) {
                 const float a=source.flash;
-                emit(muzzle,Mul(right,r*(1+1.8f*(1-a))),Mul(up,r*(1+1.8f*(1-a))),RailEnemyEnergy::Alpha(RailEnemyEnergy::Halo,a*.65f));
-                emit(muzzle,Mul(right,r*.58f),Mul(up,r*.58f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Hot,a));
-                emit(muzzle,Mul(right,r*2.2f),Mul(up,r*.13f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Trail,a),26);
+                emit(muzzle,Mul(right,r*(1+1.8f*(1-a))),Mul(up,r*(1+1.8f*(1-a))),RailEnemyEnergy::Alpha(palette.halo,a*.65f));
+                emit(muzzle,Mul(right,r*.58f),Mul(up,r*.58f),RailEnemyEnergy::Alpha(palette.hot,a));
+                emit(muzzle,Mul(right,r*2.2f),Mul(up,r*.13f),RailEnemyEnergy::Alpha(palette.trail,a),26);
                 if(source.weapon==RailWarningWeapon::Heavy)
-                    emit(muzzle,Mul(right,r*.15f),Mul(up,r*1.8f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Hot,a),26);
+                    emit(muzzle,Mul(right,r*.15f),Mul(up,r*1.8f),RailEnemyEnergy::Alpha(palette.hot,a),26);
                 else if(source.weapon==RailWarningWeapon::Rapid)for(float side:{-1.0f,1.0f})
-                    emit(Add(muzzle,Mul(right,side*r*.32f)),Mul(right,r*.12f),Mul(up,r*.80f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Hot,a),32);
+                    emit(Add(muzzle,Mul(right,side*r*.32f)),Mul(right,r*.12f),Mul(up,r*.80f),RailEnemyEnergy::Alpha(palette.hot,a),32);
                 continue;
             }
             if(source.onset>0) {
                 const float size=r*(2.0f+.8f*(1-source.onset));
-                emit(muzzle,Mul(right,size),Mul(up,size),RailEnemyEnergy::Alpha(RailEnemyEnergy::Halo,
+                emit(muzzle,Mul(right,size),Mul(up,size),RailEnemyEnergy::Alpha(palette.halo,
                     source.onset*(source.primary?.60f:.48f)));
             }
             if(source.weapon==RailWarningWeapon::Ordinary) {
                 const auto style=OrdinaryStyle(source);
                 const float c=source.charge,gain=style.opacity;
-                emit(muzzle,Mul(right,r*1.65f),Mul(up,r*1.65f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Halo,(.42f+.23f*c)*gain));
-                emit(muzzle,Mul(right,r*.92f),Mul(up,r*.92f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Surface,.90f*gain));
+                emit(muzzle,Mul(right,r*1.65f),Mul(up,r*1.65f),RailEnemyEnergy::Alpha(palette.halo,(.42f+.23f*c)*gain));
+                emit(muzzle,Mul(right,r*.92f),Mul(up,r*.92f),RailEnemyEnergy::Alpha(palette.surface,.90f*gain));
                 emit(muzzle,Mul(right,r*(source.imminent?.64f:.45f)),Mul(up,r*(source.imminent?.64f:.45f)),
-                    RailEnemyEnergy::Alpha(RailEnemyEnergy::Hot,(source.imminent?1.0f:.92f)*gain));
+                    RailEnemyEnergy::Alpha(palette.hot,(source.imminent?1.0f:.92f)*gain));
                 for(int i=0;i<4;++i) {
                     const float angle=pi*.25f+pi*.5f*i;
                     const auto direction=Add(Mul(right,std::cos(angle)),Mul(up,std::sin(angle)));
                     const auto tangent=Add(Mul(up,std::cos(angle)),Mul(right,-std::sin(angle)));
                     const auto center=Add(muzzle,Mul(direction,r*style.rayRadius/10));
                     emit(center,Mul(direction,r*style.rayLength/20),Mul(tangent,r*.14f),
-                        RailEnemyEnergy::Alpha(RailEnemyEnergy::Trail,gain),32);
+                        RailEnemyEnergy::Alpha(palette.trail,gain),32);
                 }
                 continue;
             }
@@ -244,26 +247,26 @@ public:
             const float c=source.charge,gain=style.opacity;
             const bool heavy=source.weapon==RailWarningWeapon::Heavy;
             emit(muzzle,Mul(right,r*(heavy?1.65f:1.25f)),Mul(up,r*(heavy?1.65f:1.25f)),
-                RailEnemyEnergy::Alpha(RailEnemyEnergy::Halo,(.44f+.26f*c)*gain));
-            emit(muzzle,Mul(right,r*.90f),Mul(up,r*.90f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Surface,.95f*gain));
+                RailEnemyEnergy::Alpha(palette.halo,(.44f+.26f*c)*gain));
+            emit(muzzle,Mul(right,r*.90f),Mul(up,r*.90f),RailEnemyEnergy::Alpha(palette.surface,.95f*gain));
             if(heavy) {
                 emit(muzzle,Mul(right,r*(source.imminent?.66f:.42f+.12f*c)),Mul(up,r*(source.imminent?.66f:.42f+.12f*c)),
-                    RailEnemyEnergy::Alpha(RailEnemyEnergy::Hot,(source.imminent?1.0f:.92f)*gain));
+                    RailEnemyEnergy::Alpha(palette.hot,(source.imminent?1.0f:.92f)*gain));
                 for(int i=0;i<8;++i) {
                     const float angle=pi*.25f*i;
                     const auto direction=Add(Mul(right,std::cos(angle)),Mul(up,std::sin(angle)));
                     const auto tangent=Add(Mul(up,std::cos(angle)),Mul(right,-std::sin(angle)));
                     const auto center=Add(muzzle,Mul(direction,r*style.extent/17));
-                    emit(center,Mul(direction,r*.42f),Mul(tangent,r*.18f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Trail,gain),32);
+                    emit(center,Mul(direction,r*.42f),Mul(tangent,r*.18f),RailEnemyEnergy::Alpha(palette.trail,gain),32);
                 }
             } else {
                 for(float side:{-1.0f,1.0f}) {
                     emit(Add(muzzle,Mul(right,side*r*.28f)),Mul(right,r*.22f),Mul(up,r*(source.imminent?.68f:.48f)),
-                        RailEnemyEnergy::Alpha(RailEnemyEnergy::Hot,(source.imminent?1.0f:.92f)*gain),32);
+                        RailEnemyEnergy::Alpha(palette.hot,(source.imminent?1.0f:.92f)*gain),32);
                     for(int stage=0;stage<3;++stage) {
                         const auto center=Add(muzzle,Add(Mul(right,side*r*style.extent/13),Mul(up,r*float(stage-1))));
                         const float a=stage<style.litStages?.95f:.16f;
-                        emit(center,Mul(right,r*.40f),Mul(up,r*.16f),RailEnemyEnergy::Alpha(RailEnemyEnergy::Trail,a*gain),32);
+                        emit(center,Mul(right,r*.40f),Mul(up,r*.16f),RailEnemyEnergy::Alpha(palette.trail,a*gain),32);
                     }
                 }
             }

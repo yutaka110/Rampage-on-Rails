@@ -17,7 +17,7 @@ class RailMinibossCombatDirector final {
 public:
     static constexpr float RapidCounterSeconds=1.15f,HeavyCounterSeconds=1.80f;
     static constexpr float CounterDamageMultiplier=2.0f;
-    void Reset(){*this={};}
+    void Reset(uint32_t seed=0x6d2b79f5u){*this={};random_=seed?seed:0x6d2b79f5u;}
     bool Active()const{return active_;}
     int Turn()const{return turn_;}
     unsigned IntroducedMask()const{return introduced_;}
@@ -69,6 +69,16 @@ public:
         railPoint={guardOffset_.x,guardOffset_.y,playerDistance+guardOffset_.z};return true;
     }
     unsigned InterceptedCount()const{return std::popcount(intercepted_);}
+    float CooldownRemaining(const CourseSpawnRuntime& runtime,int part)const {
+        if(part<0 || part>1)return 0;
+        const auto* actor=FindLiving(runtime,ids_[part]);
+        return actor?(std::max)(cooldown_[part],actor->behaviorState.attackCooldownRemaining):0;
+    }
+    float CooldownDuration(const CourseSpawnRuntime& runtime,int part)const {
+        if(part<0 || part>1)return 1;
+        const auto* actor=FindLiving(runtime,ids_[part]);
+        return (std::max)(part==0?2.4f:2.6f,actor?actor->behaviorDefinition.attackCooldownSeconds:0.0f);
+    }
 
     void Update(CourseSpawnRuntime& runtime,float deltaTime,bool enabled,bool gameplayActive,bool pacingAllowsAttack,
             float playerDistance=-1.0f) {
@@ -78,6 +88,8 @@ public:
         if(!active_){counterRemaining_=0;ClearVolley();return;}
         if(!gameplayActive){ApplyGate(runtime,false);return;}
         const float dt=gameplayActive && std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,.25f):0;
+        elapsed_+=dt;
+        for(auto& cooldown:cooldown_)cooldown=(std::max)(0.0f,cooldown-dt);
         counterRemaining_=(std::max)(0.0f,counterRemaining_-dt);
         gapRemaining_=(std::max)(0.0f,gapRemaining_-dt);
         feedbackRemaining_=(std::max)(0.0f,feedbackRemaining_-dt);
@@ -90,7 +102,9 @@ public:
                 std::find(projectiles_.begin(),projectiles_.begin()+count_,bullet.projectileId)!=projectiles_.begin()+count_)live=true;
             if(!live)FinishTurn(.35f);
         }
-        if(!Living(runtime,turn_))turn_=1-turn_;
+        if(!Living(runtime,turn_))selectionPending_=true;
+        if(pacingAllowsAttack && !InFlight() && counterRemaining_<=0 && gapRemaining_<=0 && selectionPending_)
+            SelectTurn(runtime);
         ApplyGate(runtime,gameplayActive && pacingAllowsAttack);
     }
 
@@ -102,6 +116,11 @@ public:
             if(!actor || actor->fireSequence<=observed_[part])continue;
             observed_[part]=actor->fireSequence;introduced_|=1u<<part;
             if(InFlight())continue;
+            cooldown_[part]=CooldownDuration(runtime,part);
+            streak_=lastPart_==part?streak_+1:1;lastPart_=part;
+            // Defense timing affects later choices; checkpoint copies preserve
+            // the stream, and pause never advances it.
+            random_^=static_cast<uint32_t>(elapsed_*60)+actor->actorId+static_cast<uint32_t>(actor->fireSequence);
             volleyPart_=part;volleyOwner_=actor->actorId;intercepted_=0;count_=0;
             guardValid_=false;
             Vector3 guardSum{};unsigned guardSamples=0;
@@ -171,15 +190,32 @@ private:
                 if(actor.fireSequence)introduced_|=1u<<part;
             }
         }
-        if(introduced_==1u && !InFlight() && counterRemaining_<=0)turn_=1;
+    }
+    void SelectTurn(const CourseSpawnRuntime& runtime) {
+        const bool alive[2]={Living(runtime,0),Living(runtime,1)};
+        // Teach both existing controls before introducing variable order.
+        for(int part=0;part<2;++part)if(alive[part] && !(introduced_&(1u<<part))) {
+            turn_=part;selectionPending_=CooldownRemaining(runtime,part)>.0001f;return;
+        }
+        bool ready[2]={alive[0] && CooldownRemaining(runtime,0)<=.0001f,
+            alive[1] && CooldownRemaining(runtime,1)<=.0001f};
+        if(alive[0] && alive[1] && streak_>=2 && lastPart_>=0)ready[lastPart_]=false;
+        if(!ready[0] && !ready[1])return;
+        if(ready[0] && ready[1]) {
+            random_^=random_<<13;random_^=random_>>17;random_^=random_<<5;
+            turn_=int(random_&1u);
+        } else turn_=ready[0]?0:1;
+        // Hold the choice through aiming, warning admission and execution.
+        selectionPending_=false;
     }
     void ApplyGate(CourseSpawnRuntime& runtime,bool pacingAllowsAttack) {
-        const bool available=pacingAllowsAttack && !InFlight() && counterRemaining_<=0 && gapRemaining_<=0;
+        const bool available=pacingAllowsAttack && !selectionPending_ && !InFlight() && counterRemaining_<=0 && gapRemaining_<=0 &&
+            CooldownRemaining(runtime,turn_)<=.0001f;
         for(const auto& actor:runtime.Enemies())if(RailMothership::PartIndex(actor.desc.actorAssetId)>=0)
             runtime.SetEnemyEncounterPacing(actor.actorId,true,available && actor.actorId==ids_[turn_]);
     }
     void ClearVolley(){projectiles_={};count_=0;intercepted_=0;volleyOwner_=0;volleyIntent_=0;volleyPart_=-1;}
-    void FinishTurn(float gap){if(volleyPart_>=0)turn_=1-volleyPart_;ClearVolley();gapRemaining_=gap;}
+    void FinishTurn(float gap){if(volleyPart_>=0)turn_=1-volleyPart_;ClearVolley();gapRemaining_=gap;selectionPending_=true;}
     std::array<uint32_t,2> ids_{};
     std::array<uint64_t,2> observed_{};
     std::array<uint64_t,RailGatling::Rounds> projectiles_{};
@@ -191,6 +227,11 @@ private:
     float counterRemaining_=0,counterDuration_=0,gapRemaining_=0;
     uint64_t counterSerial_=0;
     bool active_=false;
+    std::array<float,2> cooldown_{};
+    bool selectionPending_=true;
+    int lastPart_=-1,streak_=0;
+    uint32_t random_=0x6d2b79f5u;
+    float elapsed_=0;
     Vector3 guardOffset_{};
     bool guardValid_=false;
     struct Credit {uint64_t shot=0;uint32_t owner=0;uint64_t cycle=0;};

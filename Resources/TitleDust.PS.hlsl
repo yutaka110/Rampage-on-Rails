@@ -22,6 +22,41 @@ float4 main(PixelInput input) : SV_TARGET0 {
         float3 color=input.color.rgb*(0.55f+facet*0.80f)+float3(0.35f,0.29f,0.19f)*bevel;
         return float4(color,(1-smoothstep(0.84f,1.0f,edge))*input.color.a);
     }
+    if(input.texcoord.x>=2100.0f && input.texcoord.x<2400.0f) {
+        // Weapon-specific solid bodies retain the exact spherical depth and
+        // interception silhouette. Saturated edges survive pale hull/sky.
+        float mode=floor((input.texcoord.x-2000.0f)/100.0f);
+        float baseX=2000.0f+mode*100.0f;
+        float2 p=float2((input.texcoord.x-baseX-0.5f)*2,frac(input.texcoord.y*0.5f)*4-1);
+        float r=length(p),aa=max(fwidth(r),.008f);
+        float packed=floor(input.texcoord.y*.5f);
+        float clock=fmod(packed,64)/64*6.2831853f,seed=floor(packed/64)*1.713f;
+        float coverage=1-smoothstep(1-aa,1+aa,r);
+        if(mode<1.5f) {
+            // Stable yellow-white seed with an orange shoulder; no rotating
+            // dark channels or large halo obscuring the next rapid round.
+            float hot=exp(-dot(p,p)*12);
+            float shoulder=exp(-dot(p,p)*3);
+            float3 color=input.color.rgb*(.60f+.50f*shoulder);
+            color=lerp(color,float3(3.1f,2.65f,1.35f),hot);
+            return float4(color,coverage*input.color.a);
+        }
+        float angle=atan2(p.y,p.x),cracked=step(2.5f,mode);
+        float grain=Noise(p*4+float2(cos(clock),sin(clock))+seed);
+        float core=exp(-dot(p,p)*lerp(22,12,cracked));
+        float band=exp(-pow((r-.81f)/.065f,2));
+        float plates=.65f+.35f*smoothstep(.10f,.32f,abs(sin(angle*3+seed)));
+        float crack=exp(-pow(p.x+.17f*sin(p.y*7+seed)-.06f,2)*650)*cracked;
+        crack*=smoothstep(.2f,.8f,r);
+        float pulse=.94f+.06f*sin(clock*2+seed);
+        float3 color=input.color.rgb*(.36f+.34f*(1-r)+band*plates*.65f);
+        color+=input.color.rgb*grain*.12f;
+        color=lerp(color,float3(3.1f,2.65f,3.05f)*pulse,saturate(core+crack*.80f));
+        // The damaged shell loses complete bands, exposing bright fissures.
+        float gaps=lerp(1,smoothstep(.15f,.55f,sin(angle*3+seed)),cracked);
+        color+=input.color.rgb*band*plates*gaps*.35f;
+        return float4(color,coverage*input.color.a);
+    }
     if(input.texcoord.x>=2000.0f) {
         // Dense plasma, not a lit plastic sphere. Broad dark channels and a
         // torn hot seam remain visible at the actual 14-20px target size.

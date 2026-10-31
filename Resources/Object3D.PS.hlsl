@@ -261,6 +261,47 @@ PixelShaderOutput main(VertexShaderOutput input)
 
     float2 uv = input.texcoord;
 
+    if (gMaterial.specularMode == 16) {
+        // Carrier weapon UV contract: the integer band selects paint, steel,
+        // ceramic or rubber; the fractional face coordinates move with the
+        // actual barrel, so wear never swims during rotation or recoil.
+        int band=clamp((int)floor(uv.x/4.0f),0,11);
+        float2 detail=saturate(float2((uv.x-band*4.0f-.125f)/.75f,uv.y));
+        float3 base=gTexture.SampleLevel(gSampler,float2((band+.5f)/12.0f,.5f),0).rgb*gMaterial.color.rgb;
+        const float roughness[12]={.72f,.58f,.36f,.88f,.70f,.48f,.83f,.48f,.28f,.79f,.94f,.70f};
+        const float metalness[12]={.08f,.15f,.90f,0,.06f,.80f,.25f,.75f,1,.06f,0,.05f};
+        float rough=roughness[band]+gMaterial.shininess;
+        float metal=metalness[band]*saturate(gMaterial.environmentCoefficient);
+        float grainFilter=1-smoothstep(.15f,.65f,max(fwidth(detail.x),fwidth(detail.y))*32);
+        float grain=CartSurfaceNoise(detail*float2(9,37)+4.2f);
+        float broad=CartSurfaceNoise(detail*5+11.7f);
+        bool painted=band==0 || band==1 || band==4 || band==9 || band==11;
+        float edge=min(min(detail.x,1-detail.x),min(detail.y,1-detail.y));
+        float edgeAA=max(fwidth(edge),.004f);
+        float wear=(1-smoothstep(.018f,.018f+edgeAA,edge))*
+            smoothstep(.63f,.88f,CartSurfaceNoise(detail*11+8.1f))*(painted?.14f:0);
+        base*=.97f+.06f*broad+(grain-.5f)*.035f*grainFilter;
+        base=lerp(base,float3(.26f,.28f,.29f),wear);
+        metal=lerp(metal,.85f,wear);
+        rough+=(broad-.5f)*.045f+(grain-.5f)*.025f*grainFilter-wear*.10f;
+        if(band==7) {
+            // Subdued blue/straw tempering belongs only to hot steel collars.
+            float3 temper=lerp(float3(.74f,.80f,1.0f),float3(1.0f,.79f,.56f),detail.y);
+            base*=temper;
+        }
+        rough=clamp(rough,.30f,.95f);
+        float3 N=SafeNormalize(input.normal),V=SafeNormalize(cameraWorldPosition-input.worldPosition);
+        float3 lit=RailSurfaceLighting(base,metal,rough,N,V,input.worldPosition,.92f,GameplayCaveWeight(input.worldPosition));
+        // Retain readable dark steel in shadow without the old orange outline.
+        lit=max(lit,base*.16f);
+        float counter=saturate(gMaterial.caveSurface.x);
+        float rim=pow(1-saturate(abs(dot(N,V))),3);
+        lit+=float3(.12f,.075f,.012f)*counter*(.3f+.7f*rim);
+        lit=lerp(lit,float3(1.4f,1.3f,1.1f),saturate(gMaterial.pad_)*.85f);
+        if(titleSubject.w>.5f)lit=TitleAtmosphere(lit*TitleCaveExposure(),input.worldPosition);
+        output.color=float4(lit,gMaterial.color.a);return output;
+    }
+
     float4 texColor = gTexture.Sample(gSampler, uv);
     float4 maskColor = motionMaskTex.Sample(gSampler, uv);
 

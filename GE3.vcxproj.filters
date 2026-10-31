@@ -2136,6 +2136,12 @@
     <ClInclude Include="application\course\RailBoostPresentation.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\RailBatteryThermalTypes.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailBatteryThermalPresentation.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\RailTurretGeometry.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
@@ -2164,6 +2170,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailGatlingAimCycle.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailHeavyAttack.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\RailProjectileOrbSurface.h">

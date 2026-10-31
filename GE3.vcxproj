@@ -1514,6 +1514,8 @@
     <ClInclude Include="application\course\RailBoostPresentation.h" />
     <ClInclude Include="application\course\RailMothershipPresentation.h" />
     <ClInclude Include="application\course\RailTurretGeometry.h" />
+    <ClInclude Include="application\course\RailBatteryThermalTypes.h" />
+    <ClInclude Include="application\course\RailBatteryThermalPresentation.h" />
     <ClInclude Include="application\course\RailMothershipBattle.h" />
     <ClInclude Include="application\course\RailGameOverScene.h" />
     <ClInclude Include="application\course\RailGameOverDiorama.h" />
@@ -1522,6 +1524,7 @@
     <ClInclude Include="application\course\RailMinibossCombatDirector.h" />
     <ClInclude Include="application\course\RailGatlingAttack.h" />
     <ClInclude Include="application\course\RailGatlingAimCycle.h" />
+    <ClInclude Include="application\course\RailHeavyAttack.h" />
     <ClInclude Include="application\course\RailProjectileOrbSurface.h" />
     <ClInclude Include="application\course\RailEnemyEnergyPalette.h" />
     <ClInclude Include="application\course\RailVehicleBreakawayGeometry.h" />

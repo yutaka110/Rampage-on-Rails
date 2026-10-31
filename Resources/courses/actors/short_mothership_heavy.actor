@@ -1,5 +1,6 @@
-# Miniboss starboard weapon. A slower, tougher projectile costs more interception time.
-actor|short_mothership_heavy|Carrier Heavy Battery|siege_turret|3.8|360|240|1|0.42|0.08|1|mothership_heavy
+# Miniboss starboard weapon. Armored round: two actual lock contacts, then reacquire the battery.
+# Four counter locks (68 each) remove 272/480 HP; fast return or preparation can shorten the fight.
+actor|short_mothership_heavy|Carrier Heavy Battery|carrier_heavy_turret|3.8|480|240|1|0.42|0.08|1|mothership_heavy
 combat|3.6|0.58|24|mothership_heavy
 movement|0
 behavior|boss|0.65|0.40|0.30|1.25|2.6|0.20|0.35|0|0|0|true

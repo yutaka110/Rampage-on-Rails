@@ -102,6 +102,26 @@ bool IsCourseMeshRenderEligible(
         !IsPlaceholderCourseMesh(meshId);
 }
 
+bool IsCarrierBatterySurfaceMesh(std::string_view meshId) {
+    return meshId=="gatling_turret_head" || meshId=="gatling_turret_base" || meshId=="gatling_turret_rotor" ||
+        meshId=="carrier_heavy_turret_head" || meshId=="carrier_heavy_turret_base" ||
+        meshId=="carrier_heavy_turret_barrel" || meshId=="carrier_heavy_turret_vent";
+}
+
+Material BuildCarrierBatterySurfaceMaterial(std::string_view meshId,Vector4 tint,float hitFlash,float counter) {
+    Material material{};material.color=tint;material.enableLighting=true;material.uvTransform=MakeIdentity4x4();
+    material.specularMode=IsCarrierBatterySurfaceMesh(meshId)?16:3;
+    if(material.specularMode!=16){material.shininess=5;material.environmentCoefficient=.025f;return material;}
+    // Mode 16 decodes per-face paint/steel/ceramic/rubber bands from authored
+    // UVs. Shininess is a roughness bias; environmentCoefficient scales metal.
+    material.shininess=meshId=="gatling_turret_rotor"?-.03f:meshId=="carrier_heavy_turret_barrel"?-.015f:
+        meshId=="gatling_turret_head"?.03f:meshId=="carrier_heavy_turret_head"?.04f:.06f;
+    material.environmentCoefficient=1;
+    material.padding2[0]=(std::clamp)(hitFlash,0.0f,1.0f);
+    material.padding2[1]=(std::clamp)(counter,0.0f,1.0f);
+    return material;
+}
+
 bool IsTitleLandscapeMesh(std::string_view meshId) {
     return meshId == "title_ground" || meshId == "title_cliff" ||
         meshId == "title_boulder" || meshId == "title_tunnel" || meshId == "title_sand_clod";
@@ -595,7 +615,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             center = Add(center, Scale(sample.right, presentation->lateralOffset));
             center = Add(center, Scale(sample.up, presentation->verticalOffset));
         }
-        const float presentationScale = (enemy.desc.meshId=="siege_turret" || enemy.desc.meshId=="gatling_turret") ? 1.0f : enemy.combatState.initialized
+        const float presentationScale = (enemy.desc.meshId=="siege_turret" || RailTurret::ForMesh(enemy.desc.meshId).movingMesh) ? 1.0f : enemy.combatState.initialized
             ? (std::max)(0.0f, enemy.combatState.presentationScale)
             : 1.0f;
         float bridgeScale = presentation != nullptr
@@ -689,6 +709,10 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 item->materialData->environmentCoefficient = 0.025f;
                 // Enemy rim/fill mode also keeps painted armour matte.
             }
+            if(IsCarrierBatterySurfaceMesh(model.name))
+                *item->materialData=BuildCarrierBatterySurfaceMaterial(model.name,materialColor,
+                    presentation?presentation->flashStrength:0,
+                    presentation && presentation->batteryThermal.phase==RailBatteryThermalPhase::Counter?1.0f:0.0f);
             item->useMaterialOverride = true;
         }
         const Vector3 bodyScale = presentation != nullptr
@@ -805,26 +829,31 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                     base->visible = models[baseIndex].loaded && base->transformData != nullptr;
                     if (base->materialData && item->materialData) {
                         *base->materialData = *item->materialData;
+                        if(IsCarrierBatterySurfaceMesh(geometry.baseMesh))
+                            *base->materialData=BuildCarrierBatterySurfaceMaterial(geometry.baseMesh,item->materialData->color,
+                                item->materialData->padding2[0],item->materialData->padding2[1]);
                         base->useMaterialOverride = true;
                     }
                     WriteItemTransform(*base,models[baseIndex].rootLocal,
                         {baseScale,baseScale,baseScale},RotationFromRailTangent(sample.tangent),center,viewProjection);
                 }
             }
-            if(enemy.desc.meshId=="gatling_turret") {
-                const uint32_t rotorIndex=ResolveModelIndex(models,"gatling_turret_rotor",nullptr);
-                if(models[rotorIndex].name=="gatling_turret_rotor")if(auto* rotor=AllocateItem()) {
+            if(geometry.movingMesh) {
+                const uint32_t rotorIndex=ResolveModelIndex(models,geometry.movingMesh,nullptr);
+                if(models[rotorIndex].name==geometry.movingMesh)if(auto* rotor=AllocateItem()) {
                     rotor->kind=CourseMeshRenderKind::Enemy;rotor->sourceActorId=enemy.actorId;
-                    rotor->meshId="gatling_turret_rotor";rotor->modelIndex=rotorIndex;
+                    rotor->meshId=geometry.movingMesh;rotor->modelIndex=rotorIndex;
                     rotor->visible=models[rotorIndex].loaded && rotor->transformData;
                     if(rotor->materialData && item->materialData) {
-                        *rotor->materialData=*item->materialData;rotor->useMaterialOverride=true;
+                        *rotor->materialData=BuildCarrierBatterySurfaceMaterial(geometry.movingMesh,item->materialData->color,
+                            item->materialData->padding2[0],item->materialData->padding2[1]);rotor->useMaterialOverride=true;
                     }
                     // Roll around the barrel axis before applying the aimed
                     // head transform, keeping the pedestal and armour fixed.
                     const auto head=MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
-                    const auto local=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,RailTurret::GatlingRotation(enemy.age)},
-                        Vector3{0,geometry.muzzleHeight,0});
+                    const float angle=enemy.desc.meshId=="gatling_turret"?RailTurret::RotorAngle(enemy.turretMotion,enemy.age):0;
+                    const float recoil=RailTurret::Recoil(enemy.turretMotion,enemy.desc.meshId,enemy.age);
+                    const auto local=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,angle},Vector3{0,geometry.muzzleHeight,recoil});
                     auto world=Multiply(models[rotorIndex].rootLocal,Multiply(local,head));
                     if(rotor->transformData) {
                         rotor->transformData->World=world;
@@ -833,11 +862,32 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                     }
                 }
             }
+            if(enemy.desc.meshId=="carrier_heavy_turret" && presentation) {
+                const uint32_t ventIndex=ResolveModelIndex(models,"carrier_heavy_turret_vent",nullptr);
+                if(models[ventIndex].name=="carrier_heavy_turret_vent")for(float side:{-1.0f,1.0f})if(auto* vent=AllocateItem()) {
+                    vent->kind=CourseMeshRenderKind::Enemy;vent->sourceActorId=enemy.actorId;
+                    vent->meshId="carrier_heavy_turret_vent";vent->modelIndex=ventIndex;
+                    vent->visible=models[ventIndex].loaded && vent->transformData;
+                    if(vent->materialData && item->materialData){
+                        *vent->materialData=BuildCarrierBatterySurfaceMaterial("carrier_heavy_turret_vent",item->materialData->color,
+                            item->materialData->padding2[0],item->materialData->padding2[1]);vent->useMaterialOverride=true;
+                    }
+                    const auto head=MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
+                    const auto offset=MakeAffineMatrix(Vector3{1,1,1},Vector3{},Vector3{side*.18f,0,0});
+                    const auto hinge=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,side*presentation->batteryThermal.ventOpen*1.05f},
+                        Vector3{side*.68f,.76f,.12f});
+                    auto world=Multiply(models[ventIndex].rootLocal,Multiply(offset,Multiply(hinge,head)));
+                    if(vent->transformData) {
+                        vent->transformData->World=world;vent->transformData->WVP=Multiply(world,viewProjection);
+                        vent->transformData->WorldInverseTranspose=Transpose(Inverse(world));
+                    }
+                }
+            }
             if (presentation && presentation->turretMuzzleActive) {
                 const uint32_t glowIndex = ResolveModelIndex(models,"ball",nullptr);
                 if (models[glowIndex].name == "ball") {
                     const Matrix4x4 head = MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
-                    const int barrels=enemy.desc.meshId=="gatling_turret"?6:2;
+                    const int barrels=enemy.desc.meshId=="gatling_turret"?6:geometry.muzzleSide==0?1:2;
                     for (int barrel=0;barrel<barrels;++barrel) {
                         CourseMeshRenderItem* glow = AllocateItem();
                         if (!glow) break;
@@ -846,7 +896,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                         glow->meshId = "turret_muzzle_glow";
                         glow->modelIndex = glowIndex;
                         glow->visible = models[glowIndex].loaded && glow->transformData != nullptr;
-                        const Vector3 p=RailTurret::MuzzleLocal(enemy.desc.meshId,barrel,enemy.age);
+                        const Vector3 p=RailTurret::MuzzleLocalAtPhase(enemy.desc.meshId,barrel,
+                            RailTurret::RotorAngle(enemy.turretMotion,enemy.age),RailTurret::Recoil(enemy.turretMotion,enemy.desc.meshId,enemy.age));
                         const Vector3 muzzle{p.x*head.m[0][0]+p.y*head.m[1][0]+p.z*head.m[2][0]+head.m[3][0],
                             p.x*head.m[0][1]+p.y*head.m[1][1]+p.z*head.m[2][1]+head.m[3][1],
                             p.x*head.m[0][2]+p.y*head.m[1][2]+p.z*head.m[2][2]+head.m[3][2]};

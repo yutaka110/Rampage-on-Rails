@@ -1,5 +1,6 @@
 #include "EnemyProjectileShootDownSystem.h"
 #include "RailGatlingAttack.h"
+#include "RailHeavyAttack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -104,6 +105,7 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitRay(
     Vector3 bestCenter{};
     float bestDistance = std::numeric_limits<float>::max();
     for (EnemyProjectileRuntimeState& projectile : projectiles) {
+        if(request.targetProjectileId && request.targetProjectileId!=projectile.projectileId)continue;
         if (!projectile.active || projectile.hitConsumed ||
             projectile.age >= projectile.lifetime ||
             !projectile.shootDownEnabled ||
@@ -180,8 +182,9 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitRay(
     if(primaryPulse && !adjacentTo && request.focusedGatlingClash &&
         RailGatling::IsProjectile(best->definitionId) && best->age+.0001f>=RailGatling::ClashArmSeconds)
         lastResult_.clashRadius=RailGatling::ClashRadius;
-    lastResult_.appliedDamage = (std::min)(
-        request.damage, best->shootDownHitPoints);
+    // The heavy shell stops an energy pulse, but only lock lasers damage it.
+    lastResult_.appliedDamage = primaryPulse && RailHeavy::IsProjectile(best->definitionId) ? 0.0f :
+        (std::min)(request.damage, best->shootDownHitPoints);
     best->shootDownHitPoints = (std::max)(
         0.0f, best->shootDownHitPoints - lastResult_.appliedDamage);
     lastResult_.remainingHitPoints = best->shootDownHitPoints;

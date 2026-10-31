@@ -1,2 +1,2 @@
 # A larger target that survives one pulse hit; colour/size distinguish the threat.
-projectile|enemy_mothership_heavy|Carrier Heavy Energy|predictive|24|0|24|0|1|4.0|0|1.05|7|14|1|0.42|0.08|1|enemy_projectile_trail|ice_impact|shootdown|36|1.5
+projectile|enemy_mothership_heavy|Carrier Heavy Energy|predictive|24|0|24|0|1|4.0|0|1.05|7|14|0.84|0.025|0.56|1|enemy_projectile_trail|ice_impact|shootdown|36|1.5

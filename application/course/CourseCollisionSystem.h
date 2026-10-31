@@ -179,6 +179,9 @@ public:
         CourseSpawnRuntime& runtime,
         const CourseAsset* course,
         const WeaponHitRequest& request);
+    EnemyProjectileShootDownResult ApplyProjectileLockHit(CourseSpawnRuntime& runtime,const RailPath& rail,
+        uint64_t projectileId,const WeaponShot& shot,Vector3 muzzle,const CourseAsset* course,
+        const TerrainGenerationSettings* terrainSettings=nullptr,const TerrainEditLayer* terrainPreview=nullptr);
     PlayerDamageResult ApplyPlayerHit(const PlayerHitRequest& request);
 
 private:
@@ -196,6 +199,7 @@ private:
     PlayerHitboxSystem playerHitboxSystem_{};
     PlayerNearMissSystem playerNearMissSystem_{};
     EnemyProjectileShootDownSystem projectileShootDownSystem_{};
+    bool projectileLockFramePrepared_ = false;
     EnemyAttackInterruptSystem attackInterruptSystem_{};
     float lastShotDistance_ = 0.0f;
     float lastShotLateralOffset_ = 0.0f;

@@ -1,6 +1,7 @@
 ﻿#include "course/CourseCameraShotDetailsPanel.h"
 #include "../course/RailTurretGeometry.h"
 #include "../course/RailGatlingAimCycle.h"
+#include "../course/RailHeavyAttack.h"
 #include "../course/RailMothershipBattle.h"
 #include "../course/CourseValidation.h"
 #include "../course/RailShortCourse.h"
@@ -8,6 +9,7 @@
 #include "../course/RailGameOverDiorama.h"
 #include "../AppInputEdges.h"
 #include "../course/RailAttackWarningPresentation.h"
+#include "../course/RailBatteryThermalPresentation.h"
 #include <iomanip>
 #include "../course/RailRetryPresentationCheckpoint.h"
 #include <cstdlib>
@@ -20295,10 +20297,14 @@ void TestWarningEnergyColorAndOnset(RegressionRunner& runner) {
             runner.Expect(extent(acquired)>extent(settled)+10,"the warning enters larger than its sustained charge silhouette");
             presentation.Update(warnings,lanes,runtime,rail,2);
             runner.Expect(presentation.Sources().front().onset==0,"the same attack cannot repeat the acquisition swell");
-            for(const auto& sprite:presentation.Sprites({1,0,0},{0,1,0},{},.002f))
-                runner.Expect(sprite.color.x>sprite.color.y*1.7f && sprite.color.y>sprite.color.z*2 &&
-                    sprite.color.w>=0 && sprite.color.w<=1,
-                    "warning energy keeps the hostile orb's red-orange hue instead of whitening to pale yellow");
+            const auto& palette=RailEnemyEnergy::ForActor(asset);
+            for(const auto& sprite:presentation.Sprites({1,0,0},{0,1,0},{},.002f)) {
+                bool matches=false;
+                for(const auto color:{palette.halo,palette.surface,palette.hot,palette.trail})
+                    matches|=sprite.color.x==color.x && sprite.color.y==color.y && sprite.color.z==color.z;
+                runner.Expect(matches && sprite.color.w>=0 && sprite.color.w<=1,
+                    "each muzzle layer uses its own projectile palette, including the small white-hot core");
+            }
         }
         RailAttackWarningPresentation restart;restart.Update(warnings,lanes,runtime,rail,1);
         restart.Update(warnings,lanes,runtime,rail,2);
@@ -20309,6 +20315,340 @@ void TestWarningEnergyColorAndOnset(RegressionRunner& runner) {
     runner.Expect(RailEnemyEnergy::Body.x==1 && RailEnemyEnergy::Body.y==.20f && RailEnemyEnergy::Body.z==.025f &&
         RailEnemyEnergy::Ink.x>RailEnemyEnergy::Ink.y*2,
         "the warning and the shipped hostile orb use the same saturated energy palette");
+}
+
+void TestCarrierBatterySurfaceMaterials(RegressionRunner& runner) {
+    const std::array<std::pair<const char*,const char*>,7> parts{{
+        {"GatlingTurretBase","gatling_turret_base"},{"GatlingTurretHead","gatling_turret_head"},{"GatlingTurretRotor","gatling_turret_rotor"},
+        {"CarrierHeavyTurretBase","carrier_heavy_turret_base"},{"CarrierHeavyTurretHead","carrier_heavy_turret_head"},
+        {"CarrierHeavyTurretBarrel","carrier_heavy_turret_barrel"},{"CarrierHeavyTurretVent","carrier_heavy_turret_vent"}}};
+    std::ofstream report("logs/carrier_battery_materials.csv");report<<"part,indices,material_bands,roughness_bias\n";
+    for(const auto& [asset,id]:parts) {
+        const auto model=LoadObjFile_Assimp(std::string("Resources/enemies/")+asset,std::string(asset)+".obj");
+        std::array<unsigned,12> bands{};bool varying=false;
+        runner.Expect(!model.vertices.empty() && model.indices.size()<20000 && ValidateModelGeometryOrientation(model),
+            "detailed weapon component keeps finite outward geometry within the existing draw budget");
+        for(const auto& vertex:model.vertices) {
+            const auto uv=vertex.texcoord;const int band=int(std::floor(uv.x/4));
+            runner.Expect(std::isfinite(uv.x) && std::isfinite(uv.y) && band>=0 && band<12 && uv.y>=-.0001f && uv.y<=1.0001f,
+                "production import preserves the tagged material band and local detail UVs");
+            if(band>=0 && band<12)++bands[band];
+            const float detail=uv.x-band*4;
+            runner.Expect(detail>=.124f && detail<=.876f,"fractional UVs cannot bleed into an adjacent material band");
+            varying|=uv.y<.1f;
+        }
+        runner.Expect(varying,"wear coordinates vary across real faces rather than sampling a single palette texel");
+        if(std::string_view(id)=="gatling_turret_rotor")runner.Expect(bands[2]>0 && bands[3]>0 && bands[7]>0,
+            "six-barrel group includes machined steel, nonmetal bore liners and tempered collars");
+        if(std::string_view(id)=="carrier_heavy_turret_barrel")runner.Expect(bands[3]>0 && bands[8]>0 && bands[9]>0,
+            "heavy barrel separates the ceramic bore/mantlet from bright hydraulic rods");
+        if(std::string_view(id)=="carrier_heavy_turret_head")runner.Expect(bands[5]>0 && bands[9]>0 && bands[10]>0,
+            "heavy head includes armor, fasteners and dark hydraulic seals");
+        const auto material=BuildCarrierBatterySurfaceMaterial(id,{.8f,.9f,1,1});
+        runner.Expect(IsCarrierBatterySurfaceMesh(id) && material.enableLighting && material.specularMode==16 &&
+            std::isfinite(material.shininess) && material.padding2[0]==0 && material.padding2[1]==0,
+            "carrier components use the tagged PBR path without a perpetual emissive or hit state");
+        const auto hit=BuildCarrierBatterySurfaceMaterial(id,{1,.68f,.22f,1},.75f,1);
+        runner.Expect(hit.specularMode==material.specularMode && hit.padding2[0]>.7f && hit.padding2[1]==1,
+            "actual hit and gold counter feedback survive the new metal/paint material path");
+        unsigned used=0;for(auto count:bands)used+=count>0;
+        report<<id<<','<<model.indices.size()<<','<<used<<','<<material.shininess<<'\n';
+    }
+    const auto rotor=BuildCarrierBatterySurfaceMaterial("gatling_turret_rotor",{1,1,1,1});
+    const auto armor=BuildCarrierBatterySurfaceMaterial("carrier_heavy_turret_head",{1,1,1,1});
+    runner.Expect(rotor.shininess<armor.shininess && !IsCarrierBatterySurfaceMesh("siege_turret_head") &&
+        BuildCarrierBatterySurfaceMaterial("siege_turret_head",{1,1,1,1}).specularMode!=16,
+        "machined moving parts retain sharper reflections than heavy armor and the roadside turret keeps its own path");
+    const auto palette=[](const char* asset){
+        std::ifstream file(std::string("Resources/enemies/")+asset+"/"+asset+".bmp",std::ios::binary);
+        return std::vector<unsigned char>(std::istreambuf_iterator<char>(file),{});
+    };
+    const auto rapid=palette("GatlingTurretHead"),heavy=palette("CarrierHeavyTurretHead");
+    runner.Expect(rapid.size()>54 && heavy.size()>54 && rapid[18]==96 && heavy[18]==96 && rapid!=heavy,
+        "packaged metal/paint palettes have the 12 shader bands and distinct role-specific base colors");
+}
+
+void TestCarrierBatteryGeometryAndSockets(RegressionRunner& runner) {
+    for(const char* part:{"GatlingTurretBase","GatlingTurretHead","GatlingTurretRotor","CarrierHeavyTurretBase","CarrierHeavyTurretHead","CarrierHeavyTurretBarrel","CarrierHeavyTurretVent"}) {
+        const auto model=LoadObjFile_Assimp(std::string("Resources/enemies/")+part,std::string(part)+".obj");
+        runner.Expect(!model.indices.empty() && model.indices.size()<20000 && ValidateModelGeometryOrientation(model),
+            "each distinct carrier weapon component imports with bounded geometry and correct face normals: "+std::string(part));
+    }
+    const auto rapid=LoadObjFile_Assimp("Resources/enemies/GatlingTurretRotor","GatlingTurretRotor.obj");
+    const auto heavy=LoadObjFile_Assimp("Resources/enemies/CarrierHeavyTurretBarrel","CarrierHeavyTurretBarrel.obj");
+    const auto boreCenter=[&](const ModelData& model,Vector3 center,float outer,float front) {
+        Vector3 sum{};unsigned count=0;
+        for(const auto& v:model.vertices)if(std::abs(v.position.z-front)<.0001f &&
+                (v.position.x-center.x)*(v.position.x-center.x)+(v.position.y-center.y)*(v.position.y-center.y)<outer*outer+.0001f) {
+            sum.x+=v.position.x;sum.y+=v.position.y;sum.z+=v.position.z;++count;
+        }
+        runner.Expect(count>=24,"imported front ring has a real open bore at the shared muzzle plane");
+        return count?RailMothership::Scale(sum,1.0f/count):Vector3{};
+    };
+    std::array<Vector3,6> bores{};
+    for(int i=0;i<6;++i){const float a=float(i)*6.2831853f/6;bores[i]=boreCenter(rapid,{.4f*std::cos(a),.4f*std::sin(a),0},.166f,-2.25f);}
+    const auto heavyBore=boreCenter(heavy,{},.611f,-2.10f);
+    runner.Expect(std::abs(heavyBore.x)+std::abs(heavyBore.y)<.0001f,"heavy has one centered large bore instead of twin small barrels");
+    RailPathControlPoint a{{0,0,0}},b{{0,0,1000}};a.tangentMode=b.tangentMode=RailPathTangentMode::Broken;
+    a.outgoingTangent={0,0,1000.0f/3};b.incomingTangent={0,0,-1000.0f/3};RailPath rail;rail.SetControlPoints({a,b});
+    CourseAsset course;std::string error;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"carrier geometry uses real cooked weapons");
+    const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    const auto transform=[](Vector3 p,const Matrix4x4& m){return Vector3{p.x*m.m[0][0]+p.y*m.m[1][0]+p.z*m.m[2][0]+m.m[3][0],
+        p.x*m.m[0][1]+p.y*m.m[1][1]+p.z*m.m[2][1]+m.m[3][1],p.x*m.m[0][2]+p.y*m.m[1][2]+p.z*m.m[2][2]+m.m[3][2]};};
+    const auto separation=[](Vector3 p,Vector3 q){const auto d=RailMothership::Add(p,RailMothership::Scale(q,-1));return std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z);};
+    for(const auto& record:cooked.program.actors)if(RailMothership::PartIndex(record.actor.actorAssetId)>=0) {
+        CourseSpawnRuntime runtime;auto desc=record.actor;desc.spawnDistance=200;desc.distanceOffset=0;desc.establishedEntrance=true;runtime.SpawnEnemyActor(desc);
+        auto saved=runtime.CaptureCheckpoint();auto& actor=saved.enemies.front();actor.age=2;actor.combatState.phase=EnemyCombatPhase::Engaging;
+        actor.turretMotion.initialized=true;actor.turretMotion.rotorAngle=.61f;actor.turretMotion.rotorSpeed=RailTurret::SpinSpeed;
+        actor.targetingState.targetLateralOffset=desc.lateralOffset;actor.targetingState.targetVerticalOffset=desc.verticalOffset+.32f*desc.radius;
+        actor.targetingState.targetDistance=100;actor.targetingState.turretAimDirection={0,0,-1};
+        runtime.RestoreCheckpoint(saved,true,&error);const auto& live=runtime.Enemies().front();const auto g=RailTurret::ForMesh(desc.meshId);
+        EnemyCombatPresentationBridge presentation;EnemyCombatPresentationInput pi;pi.runtime=&runtime;pi.railPath=&rail;presentation.Update(pi);
+        const auto pose=presentation.Frame().actors.front();const auto center=ResolveEnemyProjectileWorldPosition(rail,{desc.lateralOffset,desc.verticalOffset,200});
+        const auto head=MakeAffineMatrix({desc.radius,desc.radius,desc.radius},pose.turretWorldRotation,center);
+        const bool gatling=desc.meshId=="gatling_turret";
+        for(int i=0;i<(gatling?24:1);++i) {
+            const float delay=gatling?i*RailGatling::ShotInterval:0;
+            const float angle=gatling?RailTurret::RotorAngle(live.turretMotion,live.age,delay):0;
+            const auto local=MakeAffineMatrix({1,1,1},Vector3{0,0,angle},{0,g.muzzleHeight,0});
+            const auto visible=transform(gatling?bores[i%6]:heavyBore,Multiply(local,head));
+            const auto launched=ResolveEnemyProjectileScheduledLaunch(live,i,delay).projectile;
+            const auto muzzle=ResolveEnemyProjectileWorldPosition(rail,{launched.lateralOffset,launched.verticalOffset,launched.distanceOffset});
+            runner.Expect(separation(visible,muzzle)<.002f,"real emitted muzzle agrees with the imported moving bore, including each delayed gatling round");
+        }
+        if(!gatling)for(float since:{.0f,.03f,.055f,.20f,.70f,.80f}) {
+            auto recoilActor=live;recoilActor.turretMotion.lastFireAge=live.age-since;
+            const float recoil=RailTurret::Recoil(recoilActor.turretMotion,desc.meshId,live.age);
+            const auto local=MakeAffineMatrix({1,1,1},Vector3{},{0,g.muzzleHeight,recoil});
+            const auto visible=transform(heavyBore,Multiply(local,head));
+            const auto muzzle=ResolveEnemyProjectileWorldPosition(rail,ResolveEnemyProjectileMuzzleRailPosition(recoilActor,0));
+            runner.Expect(separation(visible,muzzle)<.002f,"heavy muzzle and its world warning follow the retracting barrel while the support stays fixed");
+        }
+    }
+}
+
+void TestCarrierBatteryMotion(RegressionRunner& runner) {
+    std::ofstream report("logs/carrier_battery_motion.csv");report<<"fps,spin_speed,prediction_error,heavy_peak,rapid_peak\n";
+    for(int fps:{30,60,120}) {
+        const float dt=1.0f/fps;RailTurret::MotionState motion;float age=0;
+        for(int i=0;i<fps;++i){age+=dt;RailTurret::UpdateMotion(motion,age,0,dt,false,true);}
+        runner.Expect(motion.rotorAngle==0 && motion.rotorSpeed==0,"a cold gatling stays still before an admitted warning");
+        for(int i=0;i<fps/2;++i){age+=dt;RailTurret::UpdateMotion(motion,age,0,dt,true,true);}
+        runner.Expect(std::abs(motion.rotorSpeed-RailTurret::SpinSpeed)<.001f,"warning spins the exposed barrel group up to a bounded firing speed");
+        RailTurret::ObserveFire(motion,age,1);const auto atFire=motion;const float fireAge=age;
+        float error=0;for(int i=1;i<=fps;++i) {
+            age+=dt;RailTurret::UpdateMotion(motion,age,1,dt,false,true);
+            const float predicted=std::fmod(RailTurret::RotorAngle(atFire,fireAge,i*dt),6.2831853f);
+            error=(std::max)(error,std::abs(std::remainder(motion.rotorAngle-predicted,6.2831853f)));
+        }
+        runner.Expect(error<.001f,"scheduled launch rotation agrees with actual stepped motion at each frame rate");
+        const auto held=motion;RailTurret::UpdateMotion(motion,age,1,0,false,true);
+        runner.Expect(motion.rotorAngle==held.rotorAngle && motion.rotorSpeed==held.rotorSpeed,"pause cannot advance rotor phase or spin-down");
+        for(int i=0;i<fps*3;++i){age+=dt;RailTurret::UpdateMotion(motion,age,1,dt,false,true);}
+        runner.Expect(motion.rotorSpeed==0,"rotation decays to rest after the complete burst rather than running forever");
+        const float heavyPeak=RailTurret::Recoil(atFire,"carrier_heavy_turret",fireAge+.055f);
+        const float rapidPeak=RailTurret::Recoil(atFire,"gatling_turret",fireAge+.01f);
+        runner.Expect(heavyPeak>.35f && rapidPeak>.049f && heavyPeak>rapidPeak*6 &&
+            std::abs(RailTurret::Recoil(atFire,"carrier_heavy_turret",fireAge+.72f))<.00001f,
+            "heavy makes one large fast kick and slow return while gatling uses compact per-round recoil");
+        CourseSpawnRuntime runtime;CourseEnemyActorDesc desc;desc.meshId="gatling_turret";desc.hitPoints=100;desc.suppressFire=true;runtime.SpawnEnemyActor(desc);
+        auto saved=runtime.CaptureCheckpoint();saved.enemies.front().turretMotion=atFire;saved.enemies.front().age=fireAge;saved.enemies.front().fireSequence=1;
+        std::string message;runner.Expect(runtime.RestoreCheckpoint(saved,true,&message),"checkpoint accepts the complete mechanical state");
+        CourseEnemyFireSafetyFrameInput safety;runtime.Update(0,safety);const auto restored=runtime.Enemies().front().turretMotion;
+        runner.Expect(restored.rotorAngle==atFire.rotorAngle && restored.lastFireAge==atFire.lastFireAge && restored.rotorSpeed==atFire.rotorSpeed,
+            "checkpoint and paused resume preserve rotation and recoil without replaying a shot");
+        saved.enemies.front().turretMotion.rotorSpeed=(std::numeric_limits<float>::quiet_NaN)();
+        runner.Expect(!runtime.RestoreCheckpoint(saved,true,&message),"invalid mechanical checkpoint data cannot reach rendering or launch prediction");
+        report<<fps<<','<<atFire.rotorSpeed<<','<<error<<','<<heavyPeak<<','<<rapidPeak<<'\n';
+    }
+}
+
+void TestBatteryChargeCoolingTimeline(RegressionRunner& runner) {
+    CourseAsset course;std::string error;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"thermal timeline loads the authored encounter");
+    RailPath rail;course.ApplyToRailPath(rail);const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    std::ofstream report("logs/battery_charge_cooling.csv");report<<"fps,part,charge_frames,imminent_frames,firing_frames,cooling_frames,vent_peak\n";
+    using Phase=RailBatteryThermalPhase;
+    for(int fps:{30,60,120})for(const auto& record:cooked.program.actors) {
+        const int part=RailMothership::PartIndex(record.actor.actorAssetId);if(part<0)continue;
+        const float dt=1.0f/fps;CourseSpawnRuntime runtime;auto desc=record.actor;desc.spawnDistance=3350;desc.distanceOffset=50;desc.establishedEntrance=true;desc.suppressFire=true;
+        runtime.SpawnEnemyActor(desc);RailMinibossCombatDirector director;director.Update(runtime,0,true,true,false,3350);
+        auto saved=runtime.CaptureCheckpoint();auto& state=saved.enemies.front();state.age=3;state.combatState.phase=EnemyCombatPhase::Telegraphing;
+        state.fireEnvironmentReady=true;state.behaviorState.attackIntentActive=state.behaviorState.telegraphPresented=true;
+        state.behaviorState.attackIntentSequence=state.attackState.intentSequence=11;state.attackState.tokenId=17;state.attackState.tokenReserved=true;
+        state.behaviorState.attackCooldownRemaining=0;runtime.RestoreCheckpoint(saved,true,&error);
+        RailAttackWarningPresentation warning;EnemyAttackTelegraphFrame cues;EnemyAttackTelegraphCue cue;
+        cue.actorId=runtime.Enemies().front().actorId;cue.attackIntentSequence=11;cue.attackTokenId=17;cue.onScreen=true;cue.phase=EnemyAttackTelegraphPhase::Tracking;
+        cues.cues.push_back(cue);EnemyAttackLaneTelegraphRenderFrame lanes;EnemyAttackLaneTelegraphProxy lane;lane.actorId=cue.actorId;lane.attackIntentSequence=11;lane.attackTokenId=17;lanes.lanes.push_back(lane);
+        EnemyCombatPresentationBridge presentation;EnemyCombatPresentationInput pi;pi.runtime=&runtime;pi.railPath=&rail;pi.minibossCombat=&director;pi.attackWarnings=&warning;pi.deltaTime=dt;
+        const auto absent=BuildRailBatteryThermalFrame(runtime.Enemies().front(),runtime,&director,&warning);
+        runner.Expect(absent.charge==0 && absent.phase==Phase::Standby,"an unsubmitted warning cannot illuminate charge paths or announce imminent fire");
+        unsigned chargeFrames=0,imminentFrames=0,firingFrames=0,coolingFrames=0;float ventPeak=0;
+        const float lead=runtime.Enemies().front().behaviorDefinition.attackLeadSeconds;
+        for(int step=0;step<int(std::ceil(lead*fps));++step) {
+            const float elapsed=step*dt,remaining=(std::max)(.001f,lead-elapsed);
+            auto cp=runtime.CaptureCheckpoint();cp.enemies.front().age=3+elapsed;cp.enemies.front().behaviorState.attackTimeRemaining=remaining;runtime.RestoreCheckpoint(cp,true,&error);
+            cues.cues.front().urgency=1-remaining/lead;cues.cues.front().phase=remaining<=.24f?EnemyAttackTelegraphPhase::Imminent:EnemyAttackTelegraphPhase::Tracking;
+            warning.Update(cues,lanes,runtime,rail,3+elapsed);presentation.Update(pi);
+            const auto thermal=presentation.Frame().actors.front().batteryThermal;
+            runner.Expect(thermal.phase==(remaining<=.24f?Phase::Imminent:Phase::Charging) && std::abs(thermal.remainingSeconds-remaining)<.001f &&
+                std::abs(thermal.charge-cues.cues.front().urgency)<.001f && thermal.ventOpen==0,"body light, shutter and imminent phase follow the actual admitted countdown");
+            (thermal.phase==Phase::Imminent?imminentFrames:chargeFrames)++;
+            const auto sprites=BuildRailBatteryThermalSprites(runtime.Enemies().front(),thermal,rail,presentation.Frame().actors.front().turretWorldRotation,{1,0,0},{0,1,0});
+            runner.Expect(!sprites.empty() && sprites.size()<=32 && std::none_of(sprites.begin(),sprites.end(),[](const auto& s){return s.atlas==52;}),
+                "charge fills weapon-specific paths with bounded effects and cannot emit cooling vapor");
+        }
+        saved=runtime.CaptureCheckpoint();auto& fired=saved.enemies.front();const float firedAt=fired.age;
+        fired.behaviorState.attackIntentActive=false;fired.attackState.tokenReserved=false;fired.behaviorState.committedAttackSequence=11;fired.fireSequence=1;
+        fired.behaviorState.attackCooldownRemaining=director.CooldownDuration(runtime,part);fired.turretMotion.initialized=true;
+        fired.turretMotion.lastFireAge=firedAt;fired.turretMotion.observedFireSequence=1;fired.turretMotion.rotorSpeed=part==0?RailTurret::SpinSpeed:0;
+        EnemyProjectileSystem emit;runner.Expect(emit.SpawnVolley(fired,saved.bullets)==(part==0?24u:1u),"thermal transition is driven by a real emitted volley");
+        runtime.RestoreCheckpoint(saved,true,&error);director.ObserveFire(runtime,3350,0);warning.Reset();
+        float previousCooling=0;bool cooled=false;
+        for(int step=0;step<fps*4;++step) {
+            director.Update(runtime,dt,true,true,false,3350);CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.playerDistance=3350;runtime.Update(dt,safety);
+            presentation.Update(pi);const auto& pose=presentation.Frame().actors.front();const auto thermal=pose.batteryThermal;
+            ventPeak=(std::max)(ventPeak,thermal.ventOpen);
+            if(thermal.phase==Phase::Firing){++firingFrames;runner.Expect(pose.turretMuzzleActive && thermal.ventOpen==0,"only actual emission keeps the muzzle lit before cooling");}
+            if(thermal.phase==Phase::Cooling) {
+                ++coolingFrames;runner.Expect(!pose.turretMuzzleActive && thermal.charge==0 && thermal.coolingProgress+.001f>=previousCooling,
+                    "cooling extinguishes the firing core and advances once without replaying an imminent charge");previousCooling=thermal.coolingProgress;
+                const auto sprites=BuildRailBatteryThermalSprites(runtime.Enemies().front(),thermal,rail,pose.turretWorldRotation,{1,0,0},{0,1,0});
+                runner.Expect(sprites.size()<=32 && std::all_of(sprites.begin(),sprites.end(),[](const auto& s){return std::isfinite(s.center.x) && std::isfinite(s.vertical.y) && s.color.w>=0 && s.color.w<=1;}),
+                    "radiators and exhaust remain bounded, finite and transparent");
+            }
+            if(thermal.phase==Phase::Standby && step>fps) {
+                cooled=true;runner.Expect(thermal.heat==0 && thermal.ventOpen==0 && !pose.turretMuzzleActive &&
+                    BuildRailBatteryThermalSprites(runtime.Enemies().front(),thermal,rail,pose.turretWorldRotation,{1,0,0},{0,1,0}).empty(),
+                    "finished cooling closes shutters and removes light and vapor");
+            }
+        }
+        runner.Expect(chargeFrames>0 && imminentFrames>0 && firingFrames>0 && coolingFrames>0 && cooled && (part==0?ventPeak==0:ventPeak>.95f),
+            "both roles complete charge, imminent, actual fire and cooling at every frame rate; only heavy opens exhaust covers");
+        report<<fps<<','<<part<<','<<chargeFrames<<','<<imminentFrames<<','<<firingFrames<<','<<coolingFrames<<','<<ventPeak<<'\n';
+    }
+}
+
+void TestBatteryThermalPauseCounterAndHud(RegressionRunner& runner) {
+    using Phase=RailBatteryThermalPhase;
+    RailPath rail;rail.SetControlPoints({{{0,0,0}},{{0,0,1000}}});CourseSpawnRuntime runtime;
+    CourseEnemyActorDesc desc;desc.actorAssetId="short_mothership_heavy";desc.meshId="carrier_heavy_turret";desc.hitPoints=100;
+    desc.spawnDistance=200;desc.suppressFire=true;runtime.SpawnEnemyActor(desc);auto cp=runtime.CaptureCheckpoint();auto& actor=cp.enemies.front();
+    actor.age=3;actor.combatState.phase=EnemyCombatPhase::Telegraphing;actor.fireEnvironmentReady=true;
+    actor.behaviorState.attackIntentActive=actor.behaviorState.telegraphPresented=true;actor.attackState.tokenReserved=true;
+    actor.behaviorState.attackIntentSequence=actor.attackState.intentSequence=11;actor.attackState.tokenId=17;actor.behaviorState.attackTimeRemaining=.15f;
+    std::string error;runtime.RestoreCheckpoint(cp,true,&error);const uint32_t owner=runtime.Enemies().front().actorId;
+    RailAttackWarningPresentation warnings;EnemyAttackTelegraphFrame cues;EnemyAttackTelegraphCue cue;cue.actorId=owner;cue.attackIntentSequence=11;cue.attackTokenId=17;
+    cue.onScreen=true;cue.urgency=.85f;cue.phase=EnemyAttackTelegraphPhase::Imminent;cues.cues.push_back(cue);
+    EnemyAttackLaneTelegraphRenderFrame lanes;EnemyAttackLaneTelegraphProxy lane;lane.actorId=owner;lane.attackIntentSequence=11;lane.attackTokenId=17;lanes.lanes.push_back(lane);
+    warnings.Update(cues,lanes,runtime,rail,3);EnemyCombatPresentationBridge presentation;EnemyCombatPresentationInput input;
+    input.runtime=&runtime;input.railPath=&rail;input.attackWarnings=&warnings;presentation.Update(input);const auto before=presentation.Frame().actors.front().batteryThermal;
+    auto invalidated=runtime.CaptureCheckpoint();invalidated.enemies.front().fireEnvironmentReady=false;runtime.RestoreCheckpoint(invalidated,true,&error);
+    input.deltaTime=0;presentation.Update(input);const auto paused=presentation.Frame().actors.front().batteryThermal;
+    runner.Expect(paused.phase==before.phase && paused.charge==before.charge && paused.clock==before.clock,"pause retains the displayed admitted phase without an extra cooling or warning animation");
+    input.deltaTime=1.0f/60;presentation.Update(input);
+    runner.Expect(presentation.Frame().actors.front().batteryThermal.charge==0,"active cancellation clears charge paths immediately");
+    runtime.RestoreCheckpoint(cp,true,&error);input.counterActorId=owner;input.counterAmount=.8f;presentation.Update(input);
+    const auto counter=presentation.Frame().actors.front();runner.Expect(counter.batteryThermal.phase==Phase::Counter && counter.batteryThermal.charge==0 &&
+        counter.coreColor.y>counter.coreColor.z,"earned gold counter state takes priority over residual weapon warning colors");
+    RailShooterHudRenderer hud;auto definition=RailShooterHudDefinitionAsset::Defaults();RailShooterHudPresentationFrame visible;visible.visible=true;
+    RailShooterHudRenderInput hi;hi.definition=&definition;hi.presentation=&visible;hi.viewportWidth=1600;hi.viewportHeight=900;hi.bossVisible=hi.miniBossParts=true;hi.miniBossPartHealth={1,1};
+    for(int part=0;part<2;++part)for(Phase phase:{Phase::Charging,Phase::Imminent,Phase::Cooling,Phase::Counter}) {
+        hi.miniBossThermal={};auto& thermal=hi.miniBossThermal[part];thermal.valid=true;thermal.phase=phase;thermal.charge=.85f;thermal.remainingSeconds=.8f;thermal.coolingProgress=.4f;
+        hud.Update(hi);const auto label=phase==Phase::Charging?(part==0?u8"回転上昇":u8"蓄積中"):phase==Phase::Imminent?
+            (part==0?u8"まもなく連射":u8"まもなく発射"):phase==Phase::Cooling?(part==0?u8"放熱中":u8"排熱中"):u8"反撃チャンス";
+        runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& c){return c.text.find(Utf8ForTest(label))!=std::string::npos;}),
+            "HUD names the same weapon-specific phase as the model and effect frame");
+    }
+    auto dead=runtime.CaptureCheckpoint();dead.enemies.front().desc.hitPoints=dead.enemies.front().combatState.currentHitPoints=0;dead.enemies.front().combatState.phase=EnemyCombatPhase::Dying;
+    runtime.RestoreCheckpoint(dead,true,&error);input.deltaTime=0;presentation.Update(input);
+    const auto destroyed=presentation.Frame().actors.front();runner.Expect(destroyed.batteryThermal.phase==Phase::Destroyed && destroyed.batteryThermal.ventOpen==0 &&
+        BuildRailBatteryThermalSprites(runtime.Enemies().front(),destroyed.batteryThermal,rail,destroyed.turretWorldRotation,{1,0,0},{0,1,0}).empty(),
+        "destruction clears thermal light and exhaust even on a paused frame");
+    presentation.Reset();warnings.Reset();runtime.RestoreCheckpoint(cp,true,&error);input.counterActorId=0;input.counterAmount=0;input.deltaTime=1.0f/60;presentation.Update(input);
+    runner.Expect(presentation.Frame().actors.front().batteryThermal.charge==0,"retry cannot replay a cached imminent cue before a fresh warning is submitted");
+}
+
+void TestBatteryProjectileVisualIdentity(RegressionRunner& runner) {
+    RailPath rail;rail.SetControlPoints({{{0,0,0}},{{0,0,1000}}});std::string error;
+    EnemyProjectileVfxRenderer renderer;runner.Expect(renderer.LoadDirectory(EnemyProjectileVfxRenderer::DefaultDirectory(),&error),"battery visual assets load");
+    std::ofstream report("logs/battery_projectile_visuals.csv");report<<"fps,kind,body_radius,tail_length,body_uv,pulse\n";
+    for(int fps:{30,60,120})for(bool heavy:{false,true}) {
+        const std::string id=heavy?"enemy_mothership_heavy":"enemy_mothership_rapid";
+        EnemyProjectileDefinitionAsset asset;runner.Expect(asset.LoadFromFile("Resources/courses/projectiles/"+id+".projectile",&error),"production battery projectile loads");
+        const auto* look=renderer.FindVisual(id);runner.Expect(look && look->style==EnemyProjectileVisualStyle::Orb,"each battery has an explicit packaged orb visual");
+        CourseSpawnRuntime runtime;EnemyProjectileRuntimeState p;p.projectileId=17;p.ownerActorId=5;p.definitionId=id;
+        p.active=p.initialized=true;p.distanceOffset=p.previousDistanceOffset=80;p.verticalOffset=p.previousVerticalOffset=4;
+        p.radius=asset.radius;p.shootDownRadiusScale=asset.shootDownRadiusScale;p.shootDownHitPoints=p.shootDownMaximumHitPoints=asset.shootDownHitPoints;
+        p.color=asset.color;p.lifetime=asset.lifetime;p.defenseResponses=asset.defenseResponses;runtime.SpawnProjectile(p);
+        EnemyProjectilePresentationBridge bridge;EnemyProjectilePresentationInput input;input.runtime=&runtime;input.railPath=&rail;input.gameplayActive=true;bridge.Update(input);
+        EnemyProjectileVfxRenderInput draw;draw.presentation=&bridge.Frame();draw.settings.orbSpritesEnabled=true;draw.settings.effectRuntimeEnabled=false;
+        draw.cameraWorldPosition={0,4,0};draw.elapsedTime=1;draw.deltaTime=1.0f/fps;renderer.Reset();renderer.Update(draw);
+        runner.Expect(renderer.Frame().proxies.size()==1,"battery round is submitted without optional effect assets");
+        const auto proxy=renderer.Frame().proxies.front();const auto& palette=RailEnemyEnergy::For(proxy.batteryKind);
+        const auto d=RailMothership::Add(proxy.trailStart,RailMothership::Scale(proxy.worldPosition,-1));
+        const float tail=std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z);
+        runner.Expect(std::abs(proxy.coreRadius-p.radius*p.shootDownRadiusScale)<.0001f && proxy.spriteBacked,
+            "battery body retains the actual interception radius at all frame rates");
+        runner.Expect(proxy.bodyColor.x==asset.color.x && proxy.bodyColor.z==asset.color.z && proxy.haloColor.z==palette.halo.z,
+            "simulation tint, visible silhouette and muzzle palette identify the same weapon");
+        runner.Expect(heavy ? proxy.bodyUvBase==2200 && tail<=proxy.coreRadius*2.11f && proxy.haloColor.z>proxy.haloColor.y*10 :
+            proxy.bodyUvBase==2100 && tail<asset.initialSpeed*RailGatling::ShotInterval && proxy.energyPulse==1,
+            "heavy armor and magenta glow differ from stable compact amber rapid rounds with separated tails");
+        const auto frozen=proxy;draw.deltaTime=0;renderer.Update(draw);
+        runner.Expect(renderer.Frame().proxies.front().energyPulse==frozen.energyPulse && renderer.Frame().proxies.front().coreRadius==frozen.coreRadius,
+            "a held gameplay clock freezes internal energy without pulsing the collision silhouette");
+        report<<fps<<','<<(heavy?"heavy":"gatling")<<','<<proxy.coreRadius<<','<<tail<<','<<proxy.bodyUvBase<<','<<proxy.energyPulse<<'\n';
+    }
+    CourseAsset course;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"battery muzzle fixture loads");
+    const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    for(const auto& record:cooked.program.actors)if(RailMothership::PartIndex(record.actor.actorAssetId)>=0) {
+        CourseSpawnRuntime runtime;runtime.SpawnEnemyActor(record.actor);auto saved=runtime.CaptureCheckpoint();auto& actor=saved.enemies.front();
+        actor.combatState.phase=EnemyCombatPhase::Telegraphing;actor.fireEnvironmentReady=true;
+        actor.behaviorState.attackIntentActive=actor.behaviorState.telegraphPresented=true;actor.attackState.tokenReserved=true;
+        runtime.RestoreCheckpoint(saved,true,&error);EnemyCombatPresentationBridge muzzle;EnemyCombatPresentationInput input;input.runtime=&runtime;input.railPath=&rail;muzzle.Update(input);
+        const auto color=muzzle.Frame().actors.front().coreColor;const auto& palette=RailEnemyEnergy::ForActor(record.actor.actorAssetId);
+        runner.Expect(color.x==palette.surface.x && color.z==palette.surface.z,"physical turret charge uses the same weapon color as the world warning and round");
+        saved=runtime.CaptureCheckpoint();saved.enemies.front().attackState.phase=EnemyAttackRuntimePhase::Recovery;
+        saved.enemies.front().fireSequence=1;saved.enemies.front().turretMotion.initialized=true;
+        saved.enemies.front().turretMotion.lastFireAge=saved.enemies.front().age;
+        saved.enemies.front().behaviorState.attackIntentActive=false;saved.enemies.front().attackState.tokenReserved=false;
+        EnemyProjectileSystem flashVolley;flashVolley.SpawnVolley(saved.enemies.front(),saved.bullets);
+        saved.enemies.front().behaviorState.stateElapsedSeconds=.01f;runtime.RestoreCheckpoint(saved,true,&error);muzzle.Update(input);
+        const auto flash=muzzle.Frame().actors.front().coreColor;
+        runner.Expect(flash.x==palette.hot.x && flash.z==palette.hot.z,"physical firing flash uses the matching hottest core");
+    }
+}
+
+void TestHeavyShellContactPresentation(RegressionRunner& runner) {
+    RailPath rail;rail.SetControlPoints({{{0,0,0}},{{0,0,1000}}});CourseSpawnRuntime runtime;
+    EnemyProjectileRuntimeState p;p.projectileId=0x100000007;p.ownerActorId=17;p.definitionId="enemy_mothership_heavy";
+    p.active=p.initialized=true;p.distanceOffset=p.previousDistanceOffset=80;p.verticalOffset=p.previousVerticalOffset=4;
+    p.radius=1.05f;p.shootDownRadiusScale=1.5f;p.shootDownHitPoints=p.shootDownMaximumHitPoints=36;p.lifetime=7;runtime.SpawnProjectile(p);
+    EnemyProjectilePresentationBridge bridge;EnemyProjectilePresentationInput input;input.runtime=&runtime;input.railPath=&rail;bridge.Update(input);
+    EnemyProjectileVfxRenderer renderer;EnemyProjectileVfxRenderInput draw;draw.presentation=&bridge.Frame();draw.settings.orbSpritesEnabled=true;
+    renderer.Update(draw);runner.Expect(renderer.Frame().proxies.front().bodyUvBase==2200,"heavy round starts with an intact shell");
+    // Captured lock tokens are UI state and cannot crack a body by themselves.
+    bridge.Update(input);renderer.Update(draw);runner.Expect(renderer.Frame().proxies.front().bodyUvBase==2200,"waiting or acquiring locks does not damage the shell");
+    const auto world=bridge.Frame().projectiles.front().worldPosition;const auto muzzle=RailMothership::Add(world,{0,0,-10});
+    EnemyProjectileShootDownSystem primary;EnemyProjectileShootDownRequest pulse;pulse.shotId=1;pulse.rayOrigin=muzzle;pulse.rayDirection={0,0,1};pulse.damage=12;pulse.maximumDistance=20;
+    const auto deflect=runtime.ShootDownPrimaryProjectile(primary,rail,pulse);
+    input.shootDownResults=primary.Frame().results;bridge.Update(input);renderer.Update(draw);
+    runner.Expect(deflect.accepted && deflect.appliedDamage==0 && renderer.Frame().proxies.front().bodyUvBase==2200 && bridge.Frame().events.empty(),
+        "a normal pulse bounces without a false shell crack or interception burst");
+    CourseCollisionSystem collision;WeaponShot lock;lock.shotId=2;lock.damageType=WeaponDamageType::Ice;lock.damage=34;lock.range=120;
+    const auto first=collision.ApplyProjectileLockHit(runtime,rail,p.projectileId,lock,muzzle,nullptr);
+    input.shootDownResults=collision.ProjectileShootDown().Frame().results;bridge.Update(input);renderer.Update(draw);
+    runner.Expect(first.accepted && !first.destroyed && first.remainingHitPoints==2 && renderer.Frame().proxies.front().bodyUvBase==2300 &&
+        std::count_if(bridge.Frame().events.begin(),bridge.Frame().events.end(),[](const auto& e){return e.kind==EnemyProjectilePresentationEventKind::ShellCracked;})==1 &&
+        renderer.Frame().interceptBursts==0,"first actual lock contact cracks the live shell and exposes its core without claiming an interception");
+    const float radius=renderer.Frame().proxies.front().coreRadius;bridge.Update(input);renderer.Update(draw);
+    runner.Expect(bridge.Frame().events.empty() && renderer.Frame().proxies.front().coreRadius==radius,"a repeated contact observation cannot replay the shell break or change the target size");
+    lock.shotId=3;const auto second=collision.ApplyProjectileLockHit(runtime,rail,p.projectileId,lock,muzzle,nullptr);
+    std::array<EnemyProjectileShootDownResult,1> last{second};input.shootDownResults=last;bridge.Update(input);renderer.Update(draw);
+    runner.Expect(second.destroyed && renderer.Frame().proxies.empty() && renderer.Frame().interceptBursts==1 &&
+        std::any_of(renderer.Frame().lifecycleBursts.begin(),renderer.Frame().lifecycleBursts.end(),[](const auto& e){return e.kind==EnemyProjectileLifecycleVisualKind::Intercepted && e.spriteBacked && e.radius>2 && e.secondaryColor.z>e.secondaryColor.y*5;}),
+        "second actual lock contact removes the body and produces the large matching heavy-core rupture");
+    bridge.Reset();renderer.Reset();runner.Expect(bridge.Frame().events.empty() && renderer.Frame().lifecycleBursts.empty(),"retry clears shell state and contact fragments");
 }
 
 void TestIncomingWarningCollisionCourse(RegressionRunner& runner) {
@@ -38329,11 +38669,11 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
                 return a.desc.hitPoints>0 && a.combatState.canBeTargeted &&
                     (!a.entranceExitState.initialized || a.entranceExitState.targetable);
             });
-            runner.Expect(registry.Anchors().size()==size_t(targetable) &&
-                std::all_of(registry.Anchors().begin(),registry.Anchors().end(),[](const auto& a){return a.maxStack==4 && a.stackAcquireIntervalSeconds==0.22f;}),
+            runner.Expect(std::count_if(registry.Anchors().begin(),registry.Anchors().end(),[](const auto& a){return a.target.kind==RailLockTargetKind::Enemy;})==targetable &&
+                std::all_of(registry.Anchors().begin(),registry.Anchors().end(),[](const auto& a){return a.target.kind!=RailLockTargetKind::Enemy || (a.maxStack==4 && a.stackAcquireIntervalSeconds==0.22f);}),
                 "only live parts can receive up to four timed locks each");
-            // Exercise real emitted projectiles with the ordinary gun damage;
-            // defensive movement is never submitted in this test.
+            // Probe raw durability here. Player input, armored primary contacts
+            // and actual lock travel are covered by the defense cycle tests.
             for(const auto bullet:spawn.Bullets()) {
                 const int i=bullet.ownerActorId==ids[0]?0:bullet.ownerActorId==ids[1]?1:-1;
                 if(i<0 || (i==0?rapidIntercept:heavyIntercept))continue;
@@ -38955,6 +39295,289 @@ void TestGatlingPrimaryDepthAndCover(RegressionRunner& runner) {
     }
 }
 
+void TestHeavyBatteryForwardAccuracy(RegressionRunner& runner) {
+    CourseAsset course;RailVehicleControlDefinitionAsset cart;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) &&
+        cart.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),"heavy accuracy loads production assets");
+    RailPath rail;course.ApplyToRailPath(rail);const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    const auto record=std::find_if(cooked.program.actors.begin(),cooked.program.actors.end(),[](const auto& p){return RailHeavy::IsWeapon(p.actor.actorAssetId);});
+    runner.Expect(record!=cooked.program.actors.end(),"production heavy weapon is compiled");if(record==cooked.program.actors.end())return;
+    std::ofstream metrics("logs/heavy_battery_forward_accuracy.csv");metrics<<"fps,speed,dodge,damage_hits,player_hp\n";
+    for(int fps:{30,60,120})for(float speed:{18.0f,27.0f})for(bool dodge:{false,true}) {
+        const float dt=1.0f/fps,at=3350,playerY=cart.vehicle.bodyVerticalOffset+cart.vehicle.mounts.player.y;
+        auto desc=record->actor;desc.spawnDistance=at;desc.distanceOffset=50;desc.lateralOffset=20;desc.verticalOffset=18;
+        desc.establishedEntrance=true;desc.suppressFire=true;CourseSpawnRuntime runtime;runtime.SpawnEnemyActor(desc);
+        auto saved=runtime.CaptureCheckpoint();auto& actor=saved.enemies.front();actor.age=3;actor.fireSequence=1;
+        actor.attackState.intentSequence=11;actor.attackState.tokenId=17;actor.attackState.tokenReserved=true;
+        actor.behaviorState.committedAttackSequence=actor.behaviorState.attackIntentSequence=11;actor.behaviorState.attackIntentActive=true;
+        actor.behaviorState.engagementBandVelocity=speed;runtime.RestoreCheckpoint(saved,true,&error);
+        EnemyTargetingSystem targeting;
+        for(int warm=0;warm<3;++warm) {
+            EnemyTargetingFrameInput ti;ti.railPath=&rail;ti.deltaTime=dt;ti.playerDistance=at-(2-warm)*speed*dt;ti.playerVerticalOffset=playerY;
+            targeting.Update(runtime,ti);
+        }
+        saved=runtime.CaptureCheckpoint();auto& aimed=saved.enemies.front();
+        runner.Expect(aimed.targetingState.compensatesForwardTravel && aimed.targetingState.forwardInterceptReachable,
+            "heavy predictive shot uses the same exact forward intercept as the gatling");
+        aimed.attackState.tokenReserved=false;aimed.behaviorState.attackIntentActive=false;
+        EnemyProjectileSystem emit;runner.Expect(emit.SpawnVolley(aimed,saved.bullets)==1,"one real heavy round launches");
+        runtime.RestoreCheckpoint(saved,true,&error);CourseCollisionSystem collision;unsigned hits=0;
+        for(int frame=0;frame<fps*3;++frame) {
+            const float current=at+(frame+1)*dt*speed;
+            CourseEnemyFireSafetyFrameInput safety;safety.playerDistance=current;safety.playerSpeed=speed;safety.railPath=&rail;safety.playerLateralOffset=dodge?6.0f:0;
+            runtime.Update(dt,safety);
+            CourseCollisionFrameInput ci;ci.railPath=&rail;ci.deltaTime=dt;ci.player.distance=current;
+            ci.player.verticalOffset=playerY;ci.player.lateralOffset=dodge?6.0f:0;ci.player.hitPoints=collision.Player().hitPoints;
+            ci.externalBodyCollisionAuthority=true;ci.weapon.enabled=false;hits+=collision.Update(runtime,ci).enemyBulletHits;
+        }
+        metrics<<fps<<','<<speed<<','<<dodge<<','<<hits<<','<<collision.Player().hitPoints<<'\n';
+        runner.Expect(dodge ? hits==0 : (hits==1 && std::abs(collision.Player().hitPoints-86)<.001f),
+            "heavy hits an undefended moving player and retains the announced lateral aim after a dodge: fps="+std::to_string(fps)+" hits="+std::to_string(hits));
+    }
+}
+
+void TestHeavyProjectileLockIdentity(RegressionRunner& runner) {
+    RailPath rail;rail.SetControlPoints({{{0,0,0}},{{0,0,1200}}});CourseSpawnRuntime runtime;
+    for(uint64_t id:{uint64_t{7},uint64_t{0x100000007}}) {
+        EnemyProjectileRuntimeState p;p.projectileId=id;p.ownerActorId=17;p.definitionId="enemy_mothership_heavy";
+        p.initialized=p.active=true;p.distanceOffset=40;p.verticalOffset=4;p.radius=1.05f;p.lifetime=7;
+        p.shootDownHitPoints=p.shootDownMaximumHitPoints=36;runtime.SpawnProjectile(p);
+    }
+    EnemyProjectileRuntimeState queued=runtime.Bullets().front();queued.projectileId=9;queued.active=false;queued.launchDelayRemaining=.5f;runtime.SpawnProjectile(queued);
+    auto rapid=queued;rapid.projectileId=10;rapid.active=true;rapid.launchDelayRemaining=0;rapid.definitionId="enemy_mothership_rapid";runtime.SpawnProjectile(rapid);
+    RailTargetRegistry registry;RailTargetRegistryFrameInput ri;ri.spawnRuntime=&runtime;ri.railPath=&rail;registry.Build(ri);
+    runner.Expect(registry.Anchors().size()==2,"only launched live heavy rounds become lock targets");
+    runner.Expect(!SameRailLockTarget(registry.Anchors()[0].target,registry.Anchors()[1].target),"64-bit projectile identities from the same owner never alias");
+    auto camera=MakeAffineMatrix({1,1,1},Vector3{},Vector3{0,4,-20});
+    const auto vp=Multiply(Inverse(camera),MakePerspectiveFovMatrix(1.0f,16.0f/9,.1f,1000));
+    RailReticleState reticle;reticle.currentScreenPosition=reticle.previousScreenPosition={800,450};reticle.lockHeld=true;
+    RailLockResolver resolver;RailLockResolverFrameInput input;input.anchors=&registry.Anchors();input.reticle=&reticle;
+    input.viewProjection=&vp;input.viewportWidth=1600;input.viewportHeight=900;
+    for(int frame=0;frame<120;++frame){input.elapsedTime=frame/120.0f;resolver.Update(input);}
+    runner.Expect(resolver.Tokens().size()==4,"two same-owner rounds independently cap at two timed locks each");
+    EnemyProjectileShootDownSystem damage;EnemyProjectileShootDownRequest shot;shot.shotId=1;shot.targetProjectileId=7;
+    shot.rayOrigin={0,4,0};shot.rayDirection={0,0,1};shot.maximumDistance=shot.maximumWorldHitDistance=120;shot.damage=36;
+    runtime.ShootDownProjectile(damage,rail,shot);registry.Build(ri);resolver.Update(input);
+    runner.Expect(resolver.Tokens().size()==2 && resolver.Tokens()[0].target.projectileId==0x100000007,
+        "a destroyed round clears only its exact locks, leaving the other 64-bit target intact");
+    resolver.Reset();runner.Expect(resolver.Tokens().empty(),"retry clears projectile locks");
+    // Primary pulses are stopped by the shell without chipping its health.
+    shot.shotId=2;shot.targetProjectileId=0x100000007;shot.damage=12;
+    for(int hit=0;hit<5;++hit){shot.shotId++;const auto result=runtime.ShootDownPrimaryProjectile(damage,rail,shot);
+        runner.Expect(result.accepted && result.appliedDamage==0 && !result.destroyed && result.remainingHitPoints==36,
+            "normal fire visibly contacts the heavy shell but cannot erase or chip it");}
+}
+
+void TestHeavyLockDefenseAndCounter(RegressionRunner& runner) {
+    CourseAsset course;RailVehicleControlDefinitionAsset cart;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) && cart.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),"heavy lock cycle assets load");
+    RailPath rail;course.ApplyToRailPath(rail);const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    const auto record=std::find_if(cooked.program.actors.begin(),cooked.program.actors.end(),[](const auto& p){return RailHeavy::IsWeapon(p.actor.actorAssetId);});
+    runner.Expect(record!=cooked.program.actors.end(),"heavy lock actor compiles");if(record==cooked.program.actors.end())return;
+    std::ofstream report("logs/heavy_lock_defense_counter.csv");report<<"fps,mode,locks,partial,counter,damage_hits,counter_damage\n";
+    for(int fps:{30,60,120})for(int mode:{0,1,2}) {
+        const float dt=1.0f/fps,start=3350,speed=18,playerY=cart.vehicle.bodyVerticalOffset+cart.vehicle.mounts.player.y;
+        auto desc=record->actor;desc.spawnDistance=start;desc.distanceOffset=50;desc.lateralOffset=20;desc.verticalOffset=18;
+        desc.establishedEntrance=true;desc.suppressFire=true;CourseSpawnRuntime runtime;runtime.SpawnEnemyActor(desc);
+        RailMinibossCombatDirector cycle;cycle.Update(runtime,0,true,true,false,start);
+        auto saved=runtime.CaptureCheckpoint();auto& actor=saved.enemies.front();actor.age=3;actor.fireSequence=1;
+        actor.attackState.intentSequence=11;actor.attackState.tokenId=17;actor.attackState.tokenReserved=true;
+        actor.behaviorState.committedAttackSequence=actor.behaviorState.attackIntentSequence=11;actor.behaviorState.attackIntentActive=true;
+        actor.behaviorState.engagementBandVelocity=speed;runtime.RestoreCheckpoint(saved,true,&error);
+        EnemyTargetingSystem targeting;
+        for(int warm=0;warm<3;++warm){EnemyTargetingFrameInput ti;ti.railPath=&rail;ti.deltaTime=dt;ti.playerDistance=start-(2-warm)*speed*dt;ti.playerVerticalOffset=playerY;targeting.Update(runtime,ti);}
+        saved=runtime.CaptureCheckpoint();saved.enemies.front().attackState.tokenReserved=false;saved.enemies.front().behaviorState.attackIntentActive=false;
+        EnemyProjectileSystem emit;runner.Expect(emit.SpawnVolley(saved.enemies.front(),saved.bullets)==1,"real heavy volley is emitted");
+        runtime.RestoreCheckpoint(saved,true,&error);cycle.ObserveFire(runtime,start,speed);
+        const uint32_t owner=runtime.Enemies().front().actorId;
+        RailVehicleMovementSystem vehicle;vehicle.Initialize(cart.vehicle);RailVehicleCombatMountBridge mounts;
+        CourseCollisionSystem collision;collision.LoadWeaponDefinitions("Resources/weapons",&error);RailLockVolley volley;RailLockResolver resolver;
+        RailCameraDirector camera;RailTargetRegistry registry;
+        bool released=false,returning=false,counterReleased=false,partial=false,rewarded=false,paused=false;
+        float rewardAt=-1;unsigned damageHits=0,releasedCount=0;
+        for(int frame=0;frame<fps*3;++frame) {
+            const float t=frame*dt,at=start+(frame+1)*speed*dt;
+            WeaponFireInput idleLock;idleLock.weaponId=RailWeaponIds::LockOnIce;idleLock.enabled=false;idleLock.deltaTime=dt;
+            collision.UpdateWeaponFire(idleLock);
+            cycle.Update(runtime,dt,true,true,false,at);CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.playerDistance=at;safety.playerSpeed=speed;runtime.Update(dt,safety);
+            vehicle.Reset(at,speed,&rail);RailVehicleCombatMountInput mi;mi.vehicleDefinition=&cart.vehicle;mi.vehicleState=&vehicle.State();mounts.Update(mi);
+            const auto muzzle=RailMothership::Add(mounts.Frame().weaponWorldPosition,RailMothership::Scale(mounts.Frame().forward,4));
+            RailCameraDirectorFrameInput ci;ci.course=&course;ci.railPath=&rail;ci.spawnRuntime=&runtime;ci.distance=at;ci.deltaTime=dt;ci.viewportWidth=1600;ci.viewportHeight=900;
+            const auto view=camera.Evaluate(ci);
+            const auto unit=[](Vector3 p){return RailMothership::Scale(p,1.0f/std::sqrt(p.x*p.x+p.y*p.y+p.z*p.z));};
+            const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
+            const auto right=unit(cross(view.gameplayUp,view.gameplayForward)),up=cross(view.gameplayForward,right);
+            auto cameraWorld=MakeIdentity4x4();for(int row=0;row<3;++row){const auto v=row==0?right:row==1?up:view.gameplayForward;cameraWorld.m[row][0]=v.x;cameraWorld.m[row][1]=v.y;cameraWorld.m[row][2]=v.z;}
+            cameraWorld.m[3][0]=view.gameplayPosition.x;cameraWorld.m[3][1]=view.gameplayPosition.y;cameraWorld.m[3][2]=view.gameplayPosition.z;
+            const auto vp=Multiply(Inverse(cameraWorld),MakePerspectiveFovMatrix(view.fovY,16.0f/9,.1f,2000));
+            RailTargetRegistryFrameInput ri;ri.spawnRuntime=&runtime;ri.railPath=&rail;ri.playerDistance=at;ri.cameraPosition=view.gameplayPosition;registry.Build(ri);
+            const bool back=rewardAt>=0 && t-rewardAt>=.30f;const bool firstReturn=back && !returning;
+            if(firstReturn){resolver.Reset();returning=true;}
+            Vector2 cursor{1450,100};EditorViewportCoordinateService coordinates;coordinates.Update({{0,0,1600,900},1600,900,vp});
+            for(const auto& anchor:registry.Anchors())if(mode!=2 && ((back && anchor.target.kind==RailLockTargetKind::Enemy && anchor.target.actorId==owner)||
+                    (!back && anchor.target.kind==RailLockTargetKind::Projectile))) {const auto p=coordinates.ProjectWorld(anchor.worldPosition);cursor={p.render.x,p.render.y};break;}
+            RailReticleState reticle;reticle.lockHeld=back?!counterReleased:!released;reticle.lockPressed=frame==0 || firstReturn;
+            reticle.previousScreenPosition=reticle.currentScreenPosition=cursor;
+            RailLockResolverFrameInput lock;lock.anchors=&registry.Anchors();lock.reticle=&reticle;lock.viewProjection=&vp;lock.viewportWidth=1600;lock.viewportHeight=900;lock.elapsedTime=t;resolver.Update(lock);
+            volley.Update(dt,muzzle,rail,runtime,collision,nullptr);
+            if((!released && mode!=2 && ((mode==0 && resolver.Tokens().size()==2)||(mode==1 && t>=.05f && !resolver.Tokens().empty()))) ||
+                (back && !counterReleased && resolver.Tokens().size()==4)) {
+                auto tokens=resolver.ConsumeTokens();WeaponFireInput fire;fire.weaponId=RailWeaponIds::LockOnIce;fire.enabled=fire.triggerReleased=true;fire.deltaTime=dt;fire.requestedProjectileCount=static_cast<uint32_t>(tokens.size());
+                fire.deltaTime=0;auto result=collision.UpdateWeaponFire(fire);runner.Expect(result.fired,"actual lock release creates weapon shots");cycle.PrepareLockShots(tokens,result.shots);
+                if(!back){releasedCount=static_cast<unsigned>(tokens.size());released=true;}else counterReleased=true;
+                runner.Expect(volley.Enqueue(tokens,result.shots,muzzle,rail,runtime,{})==tokens.size(),"each real lock schedules one travelling laser");
+                runner.Expect(volley.Enqueue(tokens,result.shots,muzzle,rail,runtime,{})==0,"replayed lock releases never enqueue duplicate shots");
+            }
+            if(released && !paused && !volley.Lasers().empty()) {
+                const float age=volley.Lasers().front().age;volley.Update(0,muzzle,rail,runtime,collision,nullptr);
+                runner.Expect(volley.Lasers().front().age==age,"pause freezes heavy-interception laser travel");paused=true;
+            }
+            CourseCollisionFrameInput input;input.railPath=&rail;input.deltaTime=dt;input.externalBodyCollisionAuthority=true;input.player.distance=at;
+            input.player.verticalOffset=playerY;input.player.hitPoints=collision.Player().hitPoints;input.weapon.enabled=false;
+            damageHits+=collision.Update(runtime,input).enemyBulletHits;
+            for(const auto& hit:collision.ProjectileShootDown().Frame().results) {
+                if(hit.accepted && !hit.destroyed){partial=true;runner.Expect(hit.remainingHitPoints==2 && cycle.CounterRemaining()==0,"one lock leaves the heavy core alive and grants no early counter");}
+                if(cycle.NotifyIntercept(hit,runtime)){rewarded=true;rewardAt=t;}
+            }
+            for(const auto& hit:collision.WeaponFeedback().RecentEvents())cycle.NotifyCounterDamage(hit);
+        }
+        report<<fps<<','<<mode<<','<<releasedCount<<','<<partial<<','<<rewarded<<','<<damageHits<<','<<cycle.FeedbackDamage()<<'\n';
+        if(mode==0)runner.Expect(releasedCount==2 && partial && rewarded && damageHits==0 && counterReleased && std::abs(cycle.FeedbackDamage()-272)<.001f,
+            "two screen-acquired locks intercept the real heavy shot, then four fresh locks land 272 counter damage: fps="+std::to_string(fps)+" damage="+std::to_string(cycle.FeedbackDamage()));
+        else runner.Expect(!rewarded && damageHits==1,"an incomplete or absent heavy lock defense leaves a real damaging round");
+        volley.Reset();resolver.Reset();cycle.Reset();runner.Expect(volley.Lasers().empty() && resolver.Tokens().empty() && cycle.CounterRemaining()==0,"retry drops travelling locks, retained targets and counter credit");
+    }
+}
+
+void TestMinibossCounterDamageBudget(RegressionRunner& runner) {
+    CourseAsset course;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"counter budget course loads");
+    const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    CourseCollisionSystem collision;collision.LoadWeaponDefinitions("Resources/weapons",&error);
+    uint64_t shot=1;
+    for(const auto& record:cooked.program.actors) {
+        const int part=RailMothership::PartIndex(record.actor.actorAssetId);if(part<0)continue;
+        auto actor=record.actor;actor.establishedEntrance=true;
+        CourseSpawnRuntime runtime;runtime.SpawnEnemyActor(actor);
+        auto ready=runtime.CaptureCheckpoint();ready.enemies.front().combatState.phase=EnemyCombatPhase::Engaging;
+        ready.enemies.front().combatState.canReceiveDamage=true;runtime.RestoreCheckpoint(ready,true,&error);
+        const auto id=runtime.Enemies().front().actorId;const float hp=part==0?420.0f:480.0f;
+        runner.Expect(actor.hitPoints==hp && runtime.Enemies().front().combatDefinition.maximumHitPoints==hp,
+            "authored and runtime maximum HP share the two-cycle damage budget");
+        const auto* weapon=collision.FindWeaponDefinition(part==0?RailWeaponIds::PulseCannon:RailWeaponIds::LockOnIce);
+        runner.Expect(weapon!=nullptr,"counter budget uses the production player weapon");if(!weapon)continue;
+        const int contacts=part==0?10:4;float damage=0;
+        for(int cycle=0;cycle<2;++cycle) {
+            for(int i=0;i<contacts;++i) {
+                WeaponHitRequest request;request.shotId=shot++;request.targetActorId=id;request.hitKind=RailAimHitKind::Enemy;
+                request.damageType=weapon->definition.damageType;request.hitNormal={0,0,-1};
+                request.baseDamage=weapon->definition.baseDamage*RailMinibossCombatDirector::CounterDamageMultiplier;
+                damage+=collision.ApplyWeaponHit(runtime,nullptr,request).appliedDamage;
+            }
+            const float remaining=runtime.Enemies().front().desc.hitPoints;
+            if(cycle==0)runner.Expect(remaining>0 && damage/hp>.55f && damage/hp<.60f,
+                "an ordinary successful retaliation removes about 57 percent and leaves a second defense worthwhile");
+            else runner.Expect(remaining==0,"two ordinary successful retaliations can destroy either battery");
+        }
+    }
+}
+
+void TestHeavyLockCoverAndReplay(RegressionRunner& runner) {
+    RailPathControlPoint a{{0,0,0},40,30},b{{0,0,1200},40,30};a.tangentMode=b.tangentMode=RailPathTangentMode::Broken;
+    a.outgoingTangent={0,0,400};b.incomingTangent={0,0,-400};RailPath rail;rail.SetControlPoints({a,b});
+    CourseSpawnRuntime runtime;EnemyProjectileRuntimeState p;p.projectileId=0x100000007;p.ownerActorId=17;p.definitionId="enemy_mothership_heavy";
+    p.initialized=p.active=true;p.distanceOffset=30;p.verticalOffset=4;p.radius=1.05f;p.shootDownRadiusScale=1.5f;
+    p.shootDownHitPoints=p.shootDownMaximumHitPoints=36;p.lifetime=7;runtime.SpawnProjectile(p);
+    CourseObstacleActorDesc wall;wall.spawnDistance=12;wall.verticalOffset=4;wall.halfExtents={2,5,2};runtime.SpawnObstacle(wall);
+    std::array<RailLockToken,2> tokens;for(auto& token:tokens){token.target={RailLockTargetKind::Projectile,17,17};token.target.projectileId=p.projectileId;}
+    std::array<WeaponShot,2> shots;for(size_t i=0;i<shots.size();++i){shots[i].shotId=i+1;shots[i].damageType=WeaponDamageType::Ice;shots[i].damage=34;shots[i].range=120;}
+    CourseCollisionSystem collision;RailLockVolley volley;
+    runner.Expect(volley.Enqueue(tokens,shots,{0,4,0},rail,runtime,{})==2,"cover scenario schedules actual lock lasers");
+    const auto advance=[&]() {
+        for(int frame=0;frame<90;++frame){volley.Update(1.0f/60,{0,4,0},rail,runtime,collision,nullptr);
+            CourseCollisionFrameInput ci;ci.railPath=&rail;ci.weapon.enabled=false;ci.externalBodyCollisionAuthority=true;collision.Update(runtime,ci);}
+    };
+    advance();runner.Expect(runtime.Bullets().front().shootDownHitPoints==36,"muzzle-side world cover blocks both guided interception contacts");
+    auto clear=runtime.CaptureCheckpoint();clear.obstacles.clear();std::string error;runtime.RestoreCheckpoint(clear,true,&error);
+    runner.Expect(volley.Enqueue(tokens,shots,{0,4,0},rail,runtime,{})==0,"expired laser visuals do not permit a release ID to deal damage twice");
+    shots[0].shotId=3;shots[1].shotId=4;volley.Enqueue(tokens,shots,{0,4,0},rail,runtime,{});advance();
+    runner.Expect(runtime.Bullets().front().shootDownHitPoints==0,"two new unobstructed locks destroy the exact heavy projectile");
+    volley.Reset();runtime.ClearProjectiles();runtime.SpawnProjectile(p);shots[0].shotId=5;shots[1].shotId=6;
+    volley.Enqueue(tokens,shots,{0,4,0},rail,runtime,{});runtime.ClearProjectiles();p.ownerActorId=18;runtime.SpawnProjectile(p);advance();
+    runner.Expect(runtime.Bullets().front().shootDownHitPoints==36,"a stale projectile handle cannot retarget a reused ID with a different owner");
+}
+
+void TestMinibossVariableAttackOrder(RegressionRunner& runner) {
+    CourseAsset course;std::string error;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"variable attack course loads");
+    RailPath rail;course.ApplyToRailPath(rail);const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
+    std::ofstream report("logs/miniboss_variable_attack_order.csv");report<<"fps,index,part,time\n";
+    for(int fps:{30,60,120}) {
+        const float dt=1.0f/fps,at=3350;CourseSpawnRuntime runtime;
+        for(const auto& record:cooked.program.actors)if(RailMothership::PartIndex(record.actor.actorAssetId)>=0) {
+            auto desc=record.actor;desc.spawnDistance=at;desc.distanceOffset=50;desc.establishedEntrance=true;runtime.SpawnEnemyActor(desc);
+        }
+        RailMinibossCombatDirector director;RailCameraDirector camera;std::array<uint64_t,2> sequences{};
+        std::vector<int> order;bool repeated=false,killed=false,paused=false;unsigned survivorShots=0;
+        for(int frame=0;frame<120*fps && survivorShots<3;++frame) {
+            director.Update(runtime,dt,true,true,true,at);
+            unsigned gates=0;
+            for(const auto& actor:runtime.Enemies())if(actor.encounterPacingAttackAllowed && actor.desc.hitPoints>0) {
+                ++gates;const int part=RailMothership::PartIndex(actor.desc.actorAssetId);
+                runner.Expect(director.CooldownRemaining(runtime,part)<=.0001f && !director.InFlight() && director.CounterRemaining()==0,
+                    "a charge is admitted only after cooldown, live volley and counter ownership finish");
+            }
+            runner.Expect(gates<=1,"variable selection never admits both batteries together");
+            if(!paused && order.size()>=3) {
+                const int selected=director.Turn();const float c0=director.CooldownRemaining(runtime,0),c1=director.CooldownRemaining(runtime,1);
+                for(int i=0;i<50;++i)director.Update(runtime,dt,true,false,true,at);
+                runner.Expect(director.Turn()==selected && director.CooldownRemaining(runtime,0)==c0 && director.CooldownRemaining(runtime,1)==c1,
+                    "pause preserves selection and both real cooldowns");
+                auto restored=director;director.Reset();director=restored;
+                director.Update(runtime,0,true,true,true,at);paused=true;
+            }
+            RailCameraDirectorFrameInput ci;ci.course=&course;ci.railPath=&rail;ci.spawnRuntime=&runtime;
+            ci.distance=at;ci.deltaTime=dt;ci.viewportWidth=1600;ci.viewportHeight=900;const auto view=camera.Evaluate(ci);
+            const auto unit=[](Vector3 v){return RailMothership::Scale(v,1/std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z));};
+            const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
+            const auto f=unit(RailMothership::Add(view.target,RailMothership::Scale(view.position,-1))),r=unit(cross(view.up,f)),u=cross(f,r);
+            auto world=MakeIdentity4x4();const Vector3 rows[]={r,u,f,view.position};for(int i=0;i<4;++i){world.m[i][0]=rows[i].x;world.m[i][1]=rows[i].y;world.m[i][2]=rows[i].z;}
+            const auto vp=Multiply(Inverse(world),MakePerspectiveFovMatrix(view.fovY,16.0f/9,.1f,1500));
+            CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.playerDistance=at;safety.deltaTime=dt;
+            safety.viewProjection=&vp;safety.hasCameraPosition=true;safety.cameraPosition=view.position;
+            runtime.Update(dt,safety);director.ObserveFire(runtime,at,0);
+            for(const auto& actor:runtime.Enemies()) {
+                if(actor.attackState.tokenReserved)
+                    (void)runtime.MarkEnemyAttackTelegraphPresented(actor.actorId,actor.behaviorState.attackIntentSequence);
+                const int part=RailMothership::PartIndex(actor.desc.actorAssetId);if(part<0 || actor.fireSequence<=sequences[part])continue;
+                sequences[part]=actor.fireSequence;order.push_back(part);
+                runner.Expect(actor.turretMotion.initialized && actor.turretMotion.lastFireAge==actor.age &&
+                    (part==0?actor.turretMotion.rotorSpeed>13.9f:actor.turretMotion.rotorSpeed==0),
+                    "actual execution captures the firing pose: gatling fully spun up, heavy unrotated and ready for one recoil");
+                report<<fps<<','<<order.size()<<','<<part<<','<<frame*dt<<'\n';
+                if(killed){runner.Expect(part==1,"only the surviving weapon may attack");++survivorShots;}
+                else if(order.size()>2) {
+                    if(order.back()==order[order.size()-2])repeated=true;
+                    runner.Expect(!(order.size()>=3 && order.back()==order[order.size()-2] && order.back()==order[order.size()-3]),
+                        "both living weapons limit identical consecutive attacks to two");
+                }
+            }
+            if(order.size()>=12 && !killed) {
+                uint32_t rapid=0;for(const auto& actor:runtime.Enemies())if(RailMothership::PartIndex(actor.desc.actorAssetId)==0)rapid=actor.actorId;
+                runtime.DefeatEnemy(runtime.EnemyCombat(),rapid);killed=true;
+            }
+        }
+        runner.Expect(order.size()>=15 && order[0]==0 && order[1]==1 && repeated && paused && survivorShots==3,
+            "real warning/execution teaches rapid then heavy, varies later order, and keeps a sole survivor attacking: fps="+std::to_string(fps)+" volleys="+std::to_string(order.size())+
+            " reason="+runtime.Enemies().front().fireSafetyReason+" phase="+ToString(runtime.Enemies().front().behaviorState.state)+
+            " cd="+std::to_string(director.CooldownRemaining(runtime,0))+" turn="+std::to_string(director.Turn()));
+    }
+    RailShooterHudRenderer hud;auto definition=RailShooterHudDefinitionAsset::Defaults();RailShooterHudPresentationFrame presentation;presentation.visible=true;
+    RailShooterHudRenderInput input;input.definition=&definition;input.presentation=&presentation;input.viewportWidth=1600;input.viewportHeight=900;
+    input.bossVisible=input.miniBossParts=true;input.miniBossPartHealth={1,1};input.miniBossPartCharge={.6f,0};input.miniBossCooldownRemaining={0,1};input.miniBossCooldownDuration={2.4f,2.6f};hud.Update(input);
+    for(const auto label:{u8"チャージ",u8"冷却中"})runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& c){return c.text==Utf8ForTest(label);}),
+        "the HUD exposes the actual charging and cooling weapon states");
+}
+
 void TestCarrierIntroAndCounterCycle(RegressionRunner& runner) {
     CourseAsset course;std::string error;
     runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"counter cycle course loads");
@@ -39103,6 +39726,8 @@ void TestCarrierIntroAndCounterCycle(RegressionRunner& runner) {
         uint32_t rapid=0,heavy=0;
         for(const auto& actor:spawn.Enemies())(RailMothership::PartIndex(actor.desc.actorAssetId)==0?rapid:heavy)=actor.actorId;
         runner.Expect(spawn.DefeatEnemy(spawn.EnemyCombat(),rapid),"rapid can be destroyed before its first demonstration");
+        auto ready=spawn.CaptureCheckpoint();for(auto& actor:ready.enemies)actor.behaviorState.attackCooldownRemaining=0;
+        spawn.RestoreCheckpoint(ready,true,&error);
         RailMinibossCombatDirector cycle;cycle.Update(spawn,1.0f/60,true,true,true,3350);
         const auto survivor=std::find_if(spawn.Enemies().begin(),spawn.Enemies().end(),[&](const auto& a){return a.actorId==heavy;});
         runner.Expect(cycle.Turn()==1 && survivor!=spawn.Enemies().end() && survivor->encounterPacingAttackAllowed,
@@ -42436,6 +43061,12 @@ int RunEditorCoreRegressionTests() {
          {"gatling held primary cancellation", [&]() { TestGatlingHeldPrimaryCancellation(runner); }},
          {"gatling defensive aim and counter switch", [&]() { TestGatlingHeldPrimaryCancellation(runner,true); }},
          {"gatling primary depth and cover", [&]() { TestGatlingPrimaryDepthAndCover(runner); }},
+         {"heavy battery forward accuracy", [&]() { TestHeavyBatteryForwardAccuracy(runner); }},
+         {"heavy projectile lock identity and shell", [&]() { TestHeavyProjectileLockIdentity(runner); }},
+         {"heavy lock defense and counter", [&]() { TestHeavyLockDefenseAndCounter(runner); }},
+         {"heavy lock cover and replay", [&]() { TestHeavyLockCoverAndReplay(runner); }},
+         {"miniboss counter damage budget", [&]() { TestMinibossCounterDamageBudget(runner); }},
+         {"miniboss variable attack order", [&]() { TestMinibossVariableAttackOrder(runner); }},
          {"primary contact presentation coherence", [&]() { TestPrimaryContactPresentationCoherence(runner); }},
          {"carrier intro and interception counter cycle", [&]() { TestCarrierIntroAndCounterCycle(runner); }},
          {"carrier pursuit reachability", [&]() { TestCarrierPursuitReachability(runner); }},
@@ -42470,6 +43101,13 @@ int RunEditorCoreRegressionTests() {
          {"weapon source warning phases and audio", [&]() { TestWeaponSourceWarningPresentation(runner); }},
          {"battery warning readability", [&]() { TestBatteryWarningReadability(runner); }},
          {"warning energy color and onset", [&]() { TestWarningEnergyColorAndOnset(runner); }},
+         {"battery projectile visual identity", [&]() { TestBatteryProjectileVisualIdentity(runner); }},
+         {"carrier battery geometry and sockets", [&]() { TestCarrierBatteryGeometryAndSockets(runner); }},
+         {"carrier battery surface materials", [&]() { TestCarrierBatterySurfaceMaterials(runner); }},
+         {"carrier battery mechanical motion", [&]() { TestCarrierBatteryMotion(runner); }},
+         {"battery charge and cooling timeline", [&]() { TestBatteryChargeCoolingTimeline(runner); }},
+         {"battery thermal pause counter and HUD", [&]() { TestBatteryThermalPauseCounterAndHud(runner); }},
+         {"heavy shell contact presentation", [&]() { TestHeavyShellContactPresentation(runner); }},
          {"projectile orb surface vehicle occlusion", [&]() { TestProjectileOrbSurfaceOcclusion(runner); }},
          {"incoming warning collision course", [&]() { TestIncomingWarningCollisionCourse(runner); }},
          {"game session presentation and retry", [&]() {

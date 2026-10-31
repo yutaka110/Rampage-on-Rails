@@ -2806,6 +2806,8 @@ bool AppSceneResources::Initialize(
         {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
         {"siegeTurret", "Resources/enemies/SiegeTurret/SiegeTurret.bmp"},
+        {"carrierGatling", "Resources/enemies/GatlingTurretHead/GatlingTurretHead.bmp"},
+        {"carrierHeavy", "Resources/enemies/CarrierHeavyTurretHead/CarrierHeavyTurretHead.bmp"},
         {"courseVistaRock", "Resources/course_meshes/materials/vista_rock_albedo.bmp"},
         {"titleSandstone", "Resources/course_meshes/TitleLandscape/title_sandstone.bmp"},
         {"titleCaveRock", "Resources/terrain/Rocks016_1K-JPG/Rocks016.png"},
@@ -3226,8 +3228,13 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
     registerCourseMesh("siege_turret_head", "Resources/enemies/SiegeTurretHead", "SiegeTurretHead.obj", "siegeTurret");
     registerCourseMesh("siege_turret", "Resources/enemies/SiegeTurret", "SiegeTurret.obj", "siegeTurret");
-    registerCourseMesh("gatling_turret_head", "Resources/enemies/GatlingTurretHead", "GatlingTurretHead.obj", "siegeTurret");
-    registerCourseMesh("gatling_turret_rotor", "Resources/enemies/GatlingTurretRotor", "GatlingTurretRotor.obj", "siegeTurret");
+    registerCourseMesh("gatling_turret_base", "Resources/enemies/GatlingTurretBase", "GatlingTurretBase.obj", "carrierGatling");
+    registerCourseMesh("gatling_turret_head", "Resources/enemies/GatlingTurretHead", "GatlingTurretHead.obj", "carrierGatling");
+    registerCourseMesh("gatling_turret_rotor", "Resources/enemies/GatlingTurretRotor", "GatlingTurretRotor.obj", "carrierGatling");
+    registerCourseMesh("carrier_heavy_turret_base", "Resources/enemies/CarrierHeavyTurretBase", "CarrierHeavyTurretBase.obj", "carrierHeavy");
+    registerCourseMesh("carrier_heavy_turret_head", "Resources/enemies/CarrierHeavyTurretHead", "CarrierHeavyTurretHead.obj", "carrierHeavy");
+    registerCourseMesh("carrier_heavy_turret_barrel", "Resources/enemies/CarrierHeavyTurretBarrel", "CarrierHeavyTurretBarrel.obj", "carrierHeavy");
+    registerCourseMesh("carrier_heavy_turret_vent", "Resources/enemies/CarrierHeavyTurretVent", "CarrierHeavyTurretVent.obj", "carrierHeavy");
     registerCourseMesh("combat_turret_base", "Resources/enemies/CombatTurretBase", "CombatTurretBase.obj", "default");
     registerCourseMesh("combat_turret_head", "Resources/enemies/CombatTurretHead", "CombatTurretHead.obj", "default");
     registerCourseMesh("carrier_hull", "Resources/enemies/MothershipBlockout", "MothershipHull.obj", "default");

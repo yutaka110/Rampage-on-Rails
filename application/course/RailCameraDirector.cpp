@@ -1391,7 +1391,7 @@ void RailCameraDirector::UpdateLookAtTarget(
                     resolved = true;
                     break;
                 }
-            } else {
+            } else if(token.target.kind==RailLockTargetKind::Obstacle) {
                 for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
                     if (obstacle.actorId != token.target.actorId) {
                         continue;
@@ -1590,7 +1590,7 @@ void RailCameraDirector::ApplyCompositionSafety(
                     }
                     break;
                 }
-            } else {
+            } else if(token.target.kind==RailLockTargetKind::Obstacle) {
                 for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
                     if (obstacle.actorId != token.target.actorId) {
                         continue;
@@ -1839,7 +1839,7 @@ void RailCameraDirector::ApplyLineOfSightSafety(
                     }
                     break;
                 }
-            } else {
+            } else if(token.target.kind==RailLockTargetKind::Obstacle) {
                 for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
                     if (obstacle.actorId != token.target.actorId) {
                         continue;

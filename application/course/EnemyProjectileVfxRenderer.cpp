@@ -80,6 +80,23 @@ void AppendProjectilePrimitive(
     ge3::debug::DebugDrawSystem& draw) {
     const float coreRadius = proxy.coreRadius;
     const float haloRadius = proxy.haloRadius;
+    if(proxy.batteryKind!=RailEnemyEnergy::BatteryKind::None) {
+        // Tools without the shaded world backend retain the same color,
+        // compact tail and armored-versus-rapid distinction.
+        draw.AddLine(proxy.trailStart,proxy.worldPosition,WithAlphaScale(proxy.trailColor,.08f),proxy.trailColor);
+        draw.AddPoint(proxy.worldPosition,coreRadius,proxy.bodyColor);
+        draw.AddPoint(proxy.worldPosition,coreRadius*.32f,proxy.hotColor);
+        draw.AddCircle(proxy.worldPosition,proxy.cameraRight,proxy.cameraUp,coreRadius,proxy.haloColor,24);
+        if(proxy.batteryKind==RailEnemyEnergy::BatteryKind::Heavy) {
+            for(int segment=0;segment<18;++segment) {
+                if(proxy.shellIntegrity<.999f && segment%3==0)continue;
+                const float a=float(segment)*6.2831853f/18,b=float(segment+1)*6.2831853f/18;
+                const auto point=[&](float angle){return Add(proxy.worldPosition,Add(Scale(proxy.cameraRight,std::cos(angle)*coreRadius*.80f),Scale(proxy.cameraUp,std::sin(angle)*coreRadius*.80f)));};
+                draw.AddLine(point(a),point(b),proxy.surfaceColor);
+            }
+        }
+        return;
+    }
     const Vector3 head = Add(
         proxy.worldPosition,
         Scale(proxy.motionDirection, coreRadius * 1.15f));
@@ -504,6 +521,18 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.coreColor = visual.coreColor;
         proxy.haloColor = visual.haloColor;
         proxy.trailColor = visual.trailColor;
+        proxy.batteryKind=RailEnemyEnergy::KindForProjectile(projectile.definitionId);
+        if(proxy.batteryKind!=RailEnemyEnergy::BatteryKind::None) {
+            const auto& palette=RailEnemyEnergy::For(proxy.batteryKind);
+            proxy.bodyColor=palette.body;proxy.haloColor=palette.halo;proxy.trailColor=palette.trail;
+            proxy.hotColor=palette.hot;proxy.surfaceColor=palette.surface;
+            proxy.shellIntegrity=projectile.shootDownMaximumHitPoints>0?
+                (std::clamp)(projectile.shootDownHitPoints/projectile.shootDownMaximumHitPoints,0.0f,1.0f):1;
+            proxy.bodyUvBase=proxy.batteryKind==RailEnemyEnergy::BatteryKind::Gatling?2100.0f:proxy.shellIntegrity<.999f?2300.0f:2200.0f;
+            // Only internal light breathes. The aimable body never expands.
+            proxy.energyPulse=proxy.batteryKind==RailEnemyEnergy::BatteryKind::Heavy?
+                1+.09f*std::sin(clock*1.2f*6.2831853f+float(projectile.projectileId%13)):1;
+        }
         proxy.coreRadius = coreRadius;
         proxy.haloRadius = haloRadius;
         proxy.trailWidth = readability.trailWidth;
@@ -532,9 +561,11 @@ void EnemyProjectileVfxRenderer::Update(
         const Vector3 motionDirection = NormalizeOr(
             projectile.motionDirection, {0.0f, 0.0f, -1.0f});
         proxy.motionDirection = motionDirection;
+        const float maximumTail=proxy.batteryKind==RailEnemyEnergy::BatteryKind::Gatling?1.4f:
+            proxy.batteryKind==RailEnemyEnergy::BatteryKind::Heavy?2.1f:4.0f;
         proxy.trailStart = Add(
             projectile.worldPosition,
-            Scale(motionDirection, -coreRadius * (std::clamp)(visual.trailLengthInRadii, 2.0f, 4.0f)));
+            Scale(motionDirection, -coreRadius * (std::clamp)(visual.trailLengthInRadii, 1.0f, maximumTail)));
 
         ManagedEffect& managed = managedEffects_[projectile.projectileId];
         if (managed.visualDefinitionId != visual.id) {
@@ -621,6 +652,7 @@ void EnemyProjectileVfxRenderer::Update(
         burst.clashCenter=event.clashCenter;
         burst.clashRadius=event.clashRadius;
         burst.secondaryClash=event.secondaryClash;
+        burst.batteryKind=RailEnemyEnergy::KindForProjectile(event.definitionId);burst.bodyRadius=event.bodyRadius;
         burst.motionDirection = NormalizeOr(
             event.motionDirection, {0.0f, 0.0f, -1.0f});
         burst.color = event.color;
@@ -646,6 +678,8 @@ void EnemyProjectileVfxRenderer::Update(
             break;
         case EnemyProjectilePresentationEventKind::Expired:
             continue;
+        case EnemyProjectilePresentationEventKind::ShellCracked:
+            burst.kind=EnemyProjectileLifecycleVisualKind::ShellCracked;burst.durationSeconds=.32f;break;
         }
         lifecycleBursts_.push_back(std::move(burst));
     }
@@ -676,6 +710,13 @@ void EnemyProjectileVfxRenderer::Update(
             (std::max)(0.70f, cameraDistance * 0.010f),
             0.70f,
             4.50f);
+        proxy.batteryKind=burst.batteryKind;
+        proxy.spriteBacked=input.settings.orbSpritesEnabled && burst.batteryKind!=RailEnemyEnergy::BatteryKind::None;
+        if(burst.batteryKind!=RailEnemyEnergy::BatteryKind::None) {
+            const bool heavy=burst.batteryKind==RailEnemyEnergy::BatteryKind::Heavy;
+            proxy.radius=(std::max)(.28f,burst.bodyRadius*(burst.kind==EnemyProjectileLifecycleVisualKind::Launch?.55f:
+                burst.kind==EnemyProjectileLifecycleVisualKind::ShellCracked?1.0f:heavy?1.5f:.75f));
+        }
         switch (burst.kind) {
         case EnemyProjectileLifecycleVisualKind::Launch:
             proxy.primaryColor = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -692,6 +733,12 @@ void EnemyProjectileVfxRenderer::Update(
             proxy.secondaryColor = {0.08f, 0.92f, 1.0f, 0.94f};
             ++frame_.interceptBursts;
             break;
+        case EnemyProjectileLifecycleVisualKind::ShellCracked:
+            proxy.primaryColor=RailEnemyEnergy::Heavy.hot;proxy.secondaryColor=RailEnemyEnergy::Heavy.surface;break;
+        }
+        if(burst.batteryKind!=RailEnemyEnergy::BatteryKind::None) {
+            const auto& palette=RailEnemyEnergy::For(burst.batteryKind);
+            proxy.primaryColor=palette.hot;proxy.secondaryColor=palette.trail;
         }
         frame_.lifecycleBursts.push_back(std::move(proxy));
     }
@@ -709,6 +756,7 @@ void EnemyProjectileVfxRenderer::AppendProductionWorldPrimitives(
         AppendProjectilePrimitive(proxy, productionDraw);
     }
     for (const EnemyProjectileLifecycleVfxProxy& burst : frame_.lifecycleBursts) {
+        if(burst.spriteBacked)continue;
         AppendLifecyclePrimitive(burst, productionDraw);
     }
 }

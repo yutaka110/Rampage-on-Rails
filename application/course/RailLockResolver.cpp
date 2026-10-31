@@ -59,7 +59,7 @@ float DistancePointToSegment(Vector2 point, Vector2 start, Vector2 end) {
 }
 
 bool SameTarget(const RailLockTargetHandle& a, const RailLockTargetHandle& b) {
-    return a.kind == b.kind && a.actorId == b.actorId && a.generationId == b.generationId;
+    return SameRailLockTarget(a,b);
 }
 
 float Clamp01(float value) {
@@ -86,6 +86,8 @@ float KindPriorityBonus(RailLockTargetKind kind, const RailLockSettings& setting
         return settings.lockPriorityEnemyBonus;
     case RailLockTargetKind::Obstacle:
         return settings.lockPriorityObstacleBonus;
+    case RailLockTargetKind::Projectile:
+        return settings.lockPriorityEnemyBonus;
     }
     return 0.0f;
 }

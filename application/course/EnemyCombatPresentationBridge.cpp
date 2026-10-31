@@ -1,5 +1,7 @@
 #include "RailTurretGeometry.h"
 #include "EnemyCombatPresentationBridge.h"
+#include "RailEnemyEnergyPalette.h"
+#include "RailBatteryThermalPresentation.h"
 
 #include "CourseSpawnRuntime.h"
 #include "EnemyEncounterReadabilityDirector.h"
@@ -494,6 +496,9 @@ void EnemyCombatPresentationBridge::Reset() {
 
 void EnemyCombatPresentationBridge::Update(
     const EnemyCombatPresentationInput& input) {
+    std::array<std::pair<uint32_t,RailBatteryThermalFrame>,2> previousThermals{};size_t previousCount=0;
+    for(const auto& actor:frame_.actors)if(actor.batteryThermal.valid && previousCount<previousThermals.size())
+        previousThermals[previousCount++]={actor.actorId,actor.batteryThermal};
     frame_.actors.clear();
     frame_.audioCues.clear();
     frame_.vfxCommands.clear();
@@ -570,6 +575,20 @@ void EnemyCombatPresentationBridge::Update(
                 (std::max)(0.05f,actor.behaviorDefinition.attackLeadSeconds)) : (firing ? 1.0f : 0.0f);
             output.coreColor = firing ? Vector4{1.0f,1.0f,0.90f,output.materialColor.w} :
                 Vector4{1.0f,0.32f+0.60f*output.weaponCharge,0.06f,output.materialColor.w};
+            if(actor.desc.actorAssetId=="short_mothership_rapid" || actor.desc.actorAssetId=="short_mothership_heavy") {
+                output.batteryThermal=BuildRailBatteryThermalFrame(actor,*input.runtime,input.minibossCombat,input.attackWarnings,
+                    input.counterActorId,input.counterAmount);
+                if(input.deltaTime<=0 && input.attackWarnings && alive)for(size_t i=0;i<previousCount;++i)
+                    if(previousThermals[i].first==actor.actorId && previousThermals[i].second.clock==actor.age)
+                        output.batteryThermal=previousThermals[i].second;
+                const auto phase=output.batteryThermal.phase;
+                const bool charge=phase==RailBatteryThermalPhase::Charging || phase==RailBatteryThermalPhase::Imminent;
+                const bool emitted=phase==RailBatteryThermalPhase::Firing;
+                output.turretMuzzleActive=charge || emitted;
+                output.weaponCharge=charge?.18f+.82f*output.batteryThermal.charge:emitted?1.0f:0;
+                const auto& palette=RailEnemyEnergy::ForActor(actor.desc.actorAssetId);
+                output.coreColor=RailEnemyEnergy::Alpha(emitted?palette.hot:palette.surface,output.materialColor.w);
+            }
             if (alive) {
                 // A planted pedestal and rotating head, not a hovering drone.
                 output.forwardOffset = output.lateralOffset = output.verticalOffset = 0;

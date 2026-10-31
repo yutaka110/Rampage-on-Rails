@@ -5,11 +5,15 @@
 #include "TwinShieldDronePose.h"
 #include <array>
 #include <span>
+#include <deque>
+#include <unordered_set>
 
 class CourseSpawnRuntime;
 class CourseCollisionSystem;
 struct CourseAsset;
 class RailPath;
+struct TerrainGenerationSettings;
+class TerrainEditLayer;
 
 struct RailLockLaser final {
     RailLockTargetHandle target{};
@@ -67,7 +71,8 @@ public:
     size_t Enqueue(std::span<const RailLockToken> tokens,std::span<const WeaponShot> weapons,
         Vector3 muzzle,const RailPath& rail,const CourseSpawnRuntime& runtime,const RailLockSettings& settings);
     void Update(float dt,Vector3 muzzle,const RailPath& rail,CourseSpawnRuntime& runtime,
-        CourseCollisionSystem& collision,const CourseAsset* course);
+        CourseCollisionSystem& collision,const CourseAsset* course,
+        const TerrainGenerationSettings* terrainSettings=nullptr,const TerrainEditLayer* terrainPreview=nullptr);
     void UpdateDefeatPresentation(float dt);
     bool Visible() const;
     std::span<const RailLockLaser> Lasers() const {return lasers_;}
@@ -83,5 +88,7 @@ private:
     std::vector<Batch> batches_;
     std::vector<DamageResult> hits_;
     std::vector<RailLockVolleyResult> completed_;
+    std::deque<uint64_t> shotHistory_;
+    std::unordered_set<uint64_t> seenShots_;
     uint64_t nextId_=1;
 };

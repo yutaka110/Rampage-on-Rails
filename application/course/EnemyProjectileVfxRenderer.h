@@ -10,6 +10,7 @@
 #include "EnemyProjectilePresentationBridge.h"
 #include "EnemyProjectileScreenSpaceReadabilityPolicy.h"
 #include "EnemyProjectileVisualDefinitionAsset.h"
+#include "RailEnemyEnergyPalette.h"
 
 class EffectRuntime;
 namespace ge3::debug { class DebugDrawSystem; }
@@ -70,12 +71,16 @@ struct EnemyProjectileVfxProxy final {
     bool spriteBacked = false;
     EnemyProjectileVisualState visualState =
         EnemyProjectileVisualState::Unavailable;
+    RailEnemyEnergy::BatteryKind batteryKind=RailEnemyEnergy::BatteryKind::None;
+    Vector4 bodyColor=RailEnemyEnergy::Body,hotColor=RailEnemyEnergy::Hot,surfaceColor=RailEnemyEnergy::Surface;
+    float bodyUvBase=2000,energyPulse=1,shellIntegrity=1;
 };
 
 enum class EnemyProjectileLifecycleVisualKind : unsigned char {
     Launch,
     PlayerImpact,
     Intercepted,
+    ShellCracked,
 };
 
 struct EnemyProjectileLifecycleVfxProxy final {
@@ -93,6 +98,8 @@ struct EnemyProjectileLifecycleVfxProxy final {
     Vector3 clashCenter{};
     float clashRadius = 0.0f;
     bool secondaryClash = false;
+    RailEnemyEnergy::BatteryKind batteryKind=RailEnemyEnergy::BatteryKind::None;
+    bool spriteBacked=false;
 };
 
 struct EnemyProjectileVfxRenderFrame final {
@@ -183,6 +190,8 @@ private:
         Vector3 clashCenter{};
         float clashRadius = 0.0f;
         bool secondaryClash = false;
+        RailEnemyEnergy::BatteryKind batteryKind=RailEnemyEnergy::BatteryKind::None;
+        float bodyRadius=0;
     };
 
     const EnemyProjectileVisualDefinitionAsset& ResolveVisual(
