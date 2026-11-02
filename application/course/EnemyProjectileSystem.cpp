@@ -2,6 +2,8 @@
 
 #include "CourseSpawnRuntime.h"
 #include "RailGatlingAttack.h"
+#include "RailGroundBatteryAttack.h"
+#include "RailMothershipBattle.h"
 
 #include <algorithm>
 #include <cmath>
@@ -145,6 +147,8 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
             target.x;
         projectile.lockedTargetVerticalOffset =
             target.y;
+        projectile.automaticForwardIntercept=actor.targetingState.compensatesForwardTravel &&
+            definition.trajectory==EnemyProjectileTrajectory::Homing;
         RailVector direction{
             projectile.lockedTargetDistance - projectile.distanceOffset,
             projectile.lockedTargetLateralOffset - projectile.lateralOffset,
@@ -182,6 +186,7 @@ void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile,fl
     RailVector velocity{projectile.forwardSpeed,projectile.lateralSpeed,projectile.verticalSpeed};
     float speed=std::sqrt((std::max)(0.0f,LengthSquared(velocity)));
     const RailVector direction=NormalizeOr(velocity,{-1.0f,0.0f,0.0f});
+    const float initialSpeed=speed;
     speed = (std::clamp)(
         speed + projectile.acceleration * dt,
         0.0f,
@@ -193,9 +198,16 @@ void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile,fl
     projectile.forwardSpeed = velocity.forward;
     projectile.lateralSpeed = velocity.lateral;
     projectile.verticalSpeed = velocity.vertical;
-    projectile.distanceOffset += projectile.forwardSpeed * dt;
-    projectile.lateralOffset += projectile.lateralSpeed * dt;
-    projectile.verticalOffset += projectile.verticalSpeed * dt;
+    float travel=speed*dt;
+    if(projectile.automaticForwardIntercept && projectile.acceleration>0.0f) {
+        const float accelerated=(std::min)(dt,(std::max)(0.0f,
+            projectile.maximumSpeed-initialSpeed)/projectile.acceleration);
+        travel=initialSpeed*accelerated+0.5f*projectile.acceleration*accelerated*accelerated+
+            speed*(dt-accelerated);
+    }
+    projectile.distanceOffset += projectile.automaticForwardIntercept ? direction.forward*travel : projectile.forwardSpeed*dt;
+    projectile.lateralOffset += projectile.automaticForwardIntercept ? direction.lateral*travel : projectile.lateralSpeed*dt;
+    projectile.verticalOffset += projectile.automaticForwardIntercept ? direction.vertical*travel : projectile.verticalSpeed*dt;
     projectile.age += dt;
 }
 
@@ -258,6 +270,9 @@ uint32_t EnemyProjectileSystem::SpawnVolley(
         launches.push_back(std::move(projectile));
     }
     for(auto& projectile:launches) {
+        projectile.frameEndLaunch=RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
+            (actor.targetingState.compensatesForwardTravel && !RailMothership::IsCombatActor(actor.desc.actorAssetId) &&
+                (projectile.trajectory==EnemyProjectileTrajectory::Predictive || projectile.trajectory==EnemyProjectileTrajectory::Homing));
         projectile.projectileId=nextProjectileId_++;
         if(nextProjectileId_==0) nextProjectileId_=1;
         projectiles.push_back(std::move(projectile));
@@ -302,13 +317,19 @@ void EnemyProjectileSystem::Update(
         projectile.previousLateralOffset = projectile.lateralOffset;
         projectile.previousVerticalOffset = projectile.verticalOffset;
 
+        if(projectile.frameEndLaunch) {
+            if(dt>0)projectile.frameEndLaunch=false;
+            continue;
+        }
+
         if (projectile.trajectory == EnemyProjectileTrajectory::Homing &&
             projectile.homingTurnRateRadians > 0.0f) {
             const RailVector velocity{projectile.forwardSpeed,projectile.lateralSpeed,projectile.verticalSpeed};
             const float speed=std::sqrt((std::max)(0.0f,LengthSquared(velocity)));
             RailVector direction=NormalizeOr(velocity,{-1.0f,0.0f,0.0f});
             const RailVector desired{
-                input.playerDistance - projectile.distanceOffset,
+                (projectile.automaticForwardIntercept ? projectile.lockedTargetDistance-projectile.spawnDistance :
+                    input.playerDistance) - projectile.distanceOffset,
                 input.playerLateralOffset - projectile.lateralOffset,
                 input.playerVerticalOffset - projectile.verticalOffset};
             direction = TurnTowards(

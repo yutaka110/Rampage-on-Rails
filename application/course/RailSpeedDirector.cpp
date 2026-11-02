@@ -92,6 +92,7 @@ bool RailSpeedDirector::Configure(
 
 void RailSpeedDirector::Reset() {
     manualBoost_.Reset();
+    killBoost_.Reset();
     eventSlowTimer_ = 0.0f;
     eventBoostTimer_ = 0.0f;
     lastFrame_ = {};
@@ -130,6 +131,7 @@ RailSpeedDirectorFrame RailSpeedDirector::Evaluate(const RailSpeedDirectorFrameI
 
     const float dt = (std::max)(0.0f, input.deltaTime);
     manualBoost_.Update(dt);
+    killBoost_.Update(dt,true,input.killBoostAllowed);
     const RailPathSample sample = input.railPath->Evaluate(input.distance);
     frame.baseSpeed = (std::max)(settings_.minSpeed, sample.speed);
     frame.mode = ResolveMode(input.rideProfile, input.section);

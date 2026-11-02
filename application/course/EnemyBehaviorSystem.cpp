@@ -1,6 +1,7 @@
 #include "EnemyBehaviorSystem.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailGroundBatteryAttack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -354,7 +355,7 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         const float discontinuityThreshold = (std::max)(24.0f, dt * 96.0f);
         if (distanceDelta >= 0.0f && distanceDelta <= discontinuityThreshold) {
             playerForwardSpeed = (std::clamp)(
-                distanceDelta / dt, 0.0f, 72.0f);
+                distanceDelta / dt, 0.0f, 160.0f);
         }
     }
     previousPlayerDistance_ = playerDistance;
@@ -419,6 +420,14 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         case EnemyBehaviorState::Positioning:
             if (state.stateElapsedSeconds >= definition.positioningDurationSeconds &&
                 state.attackCooldownRemaining <= 0.0f &&
+                (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
+                    actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance >=
+                        RailGroundBattery::MinimumFireDistance+playerForwardSpeed*
+                            (definition.aimingDurationSeconds+definition.attackLeadSeconds)) &&
+                (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) || actor.fireSequence>0 ||
+                    actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance <=
+                        RailGroundBattery::FirstShotDistance+playerForwardSpeed*
+                            (definition.aimingDurationSeconds+definition.attackLeadSeconds)) &&
                 (!definition.maintainForwardEngagementBand ||
                     state.engagementBandAttackAllowed) &&
                 (!definition.choreographedAttackPass ||

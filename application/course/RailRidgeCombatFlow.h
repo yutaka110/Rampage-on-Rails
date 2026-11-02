@@ -1,5 +1,6 @@
 #pragma once
 #include "CourseSpawnRuntime.h"
+#include "RailGroundBatteryAttack.h"
 #include "EnemyEncounterReadabilityDirector.h"
 #include "RailWorldRaycast.h"
 #include <array>
@@ -78,7 +79,7 @@ public:
         if(!Active(distance))return;
         for(const auto& actor:runtime.Enemies()) {
             const float at=actor.desc.spawnDistance+actor.desc.distanceOffset;
-            const bool climbBattery=actor.desc.actorAssetId=="short_turret" && at>2100 && at<2350;
+            const bool climbBattery=RailGroundBattery::IsBattery(actor.desc.actorAssetId) && at>2100 && at<2350;
             if(Living(actor) && (hold_ || (primaryBusy_ && climbBattery)))
                 runtime.SetEnemyEncounterPacing(actor.actorId,true,false);
         }

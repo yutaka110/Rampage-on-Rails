@@ -548,6 +548,7 @@ private:
     audio::SoundHandle railPulseFireSound_{};
     audio::SoundHandle railPrimaryKillSound_{};
     audio::SoundHandle railBoostIgnitionSound_{};
+    audio::SoundHandle railBoostReleaseSound_{};
     audio::SoundHandle railLockAcquireSound_{}, railLockFullSound_{}, railLockReleaseSound_{};
     RailAimAssistPresetRegistry railAimAssistPresetRegistry_{};
     struct RailHudAtlasVertex {

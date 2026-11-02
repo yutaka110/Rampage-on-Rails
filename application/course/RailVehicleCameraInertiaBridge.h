@@ -42,6 +42,7 @@ struct RailVehicleCameraInertiaInput final {
     bool aimFocusActive = false;
     float manualBoostStrength = 0.0f;
     float manualBoostIgnition = 0.0f;
+    float rewardBoostSurge = 0.0f;
     RailVehicleCameraInertiaSettings settings{};
 };
 
@@ -76,6 +77,7 @@ private:
     Spring targetLead_{};
     Spring roll_{};
     Spring fov_{};
+    Spring surge_{};
     float previousDistance_ = 0.0f;
     std::string previousVehicleId_;
     bool initialized_ = false;

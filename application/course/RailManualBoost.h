@@ -9,6 +9,9 @@ class RailManualBoost final {
 public:
     static constexpr float SpeedGain = 1.0f;
     static constexpr float MaximumMultiplier = 1.0f + SpeedGain;
+    // Keep the shared movement/checkpoint ceiling; held input now supplies the
+    // smaller sustained assist, while the six-kill reward owns the strong burst.
+    static constexpr float HeldMaximumMultiplier = 1.30f;
     static constexpr float MinimumBoostSpeed = 40.0f;
     static constexpr float AttackSeconds = 0.22f;
     static constexpr float AccelerationMultiplier = 1.9f;
@@ -36,7 +39,7 @@ public:
             remaining -= dt;
         }
     }
-    float SpeedMultiplier() const { return 1.0f + SpeedGain * Blend(); }
+    float SpeedMultiplier() const { return 1.0f + (HeldMaximumMultiplier-1.0f) * Blend(); }
     static float ClampMultiplier(float value) {
         return std::isfinite(value) ? (std::clamp)(value, 1.0f, MaximumMultiplier) : 1.0f;
     }

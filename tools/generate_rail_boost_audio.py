@@ -1,4 +1,4 @@
-"""Original short propulsion ignition; deterministic synthesis, no samples."""
+"""Original propulsion ignition and pressure release; no sampled audio."""
 from pathlib import Path
 import wave
 import numpy as np
@@ -24,6 +24,21 @@ def main():
         output.setsampwidth(2)
         output.setframerate(rate)
         output.writeframes((samples * 32767).astype('<i2').tobytes())
+    print(f'{target.name}: {len(samples)/rate:.3f}s, peak={np.abs(samples).max():.3f}')
+    # A falling turbine and soft air vent mark the beginning of deceleration.
+    duration=.56
+    t=np.arange(int(rate*duration),dtype=np.float64)/rate
+    noise=np.random.default_rng(20261101).standard_normal(len(t))
+    low=np.convolve(noise,np.ones(41)/41,mode='same')
+    air=np.convolve(noise,np.ones(7)/7,mode='same')-low
+    phase=2*np.pi*(260*t-145*t*t)
+    envelope=(1-np.exp(-t*100))*np.clip((duration-t)/duration,0,1)**1.5
+    samples=(.22*np.sin(phase)*np.exp(-t*5)+.85*air+.4*low)*envelope
+    samples*=.65/max(float(np.abs(samples).max()),.001)
+    target=target.with_name('rail_kill_boost_release.wav')
+    with wave.open(str(target),'wb') as output:
+        output.setnchannels(1);output.setsampwidth(2);output.setframerate(rate)
+        output.writeframes((samples*32767).astype('<i2').tobytes())
     print(f'{target.name}: {len(samples)/rate:.3f}s, peak={np.abs(samples).max():.3f}')
 
 

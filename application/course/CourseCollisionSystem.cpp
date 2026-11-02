@@ -4,6 +4,7 @@
 #include "RailWorldRaycast.h"
 #include "RailGatlingAttack.h"
 #include "RailHeavyAttack.h"
+#include "RailGroundBatteryAttack.h"
 
 #include <Windows.h>
 
@@ -517,13 +518,18 @@ void CourseCollisionSystem::FirePlayerShot(
     bool focusedGatlingClash=true;
     if (input.railPath != nullptr) {
         bool projectileDepth=false;
-        if(input.convergePrimaryOnGatling) {
+        const bool groundBatteryClash=std::any_of(runtime.Bullets().begin(),runtime.Bullets().end(),[](const auto& bullet) {
+            return bullet.active && !bullet.hitConsumed && RailGroundBattery::IsProjectile(bullet.definitionId);
+        });
+        if(input.convergePrimaryOnGatling || groundBatteryClash) {
             const auto cameraDirection=NormalizeOr(shotAim.worldRayDirection,{0,0,1});
             float nearest=shotAim.hasWorldHit ? shotAim.aimDistance : shotAim.maxDistance;
             if(nearest<=0)nearest=shot.range+64;
             for(const auto& bullet:runtime.Bullets()) {
                 if(!bullet.active || bullet.hitConsumed || !bullet.shootDownEnabled ||
-                    bullet.age>=bullet.lifetime || !RailGatling::IsProjectile(bullet.definitionId))continue;
+                    bullet.age>=bullet.lifetime ||
+                    !((input.convergePrimaryOnGatling && RailGatling::IsProjectile(bullet.definitionId)) ||
+                        RailGroundBattery::IsProjectile(bullet.definitionId)))continue;
                 const auto center=ResolveEnemyProjectileWorldPosition(*input.railPath,
                     {bullet.lateralOffset,bullet.verticalOffset,bullet.spawnDistance+bullet.distanceOffset});
                 const auto delta=Add(center,Scale(shotAim.worldRayOrigin,-1));

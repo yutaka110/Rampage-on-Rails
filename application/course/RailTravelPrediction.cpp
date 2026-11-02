@@ -55,6 +55,7 @@ std::shared_ptr<const RailTravelPrediction> BuildRailTravelPrediction(
         speedInput.rideProfile = input.course->FindRideProfile(courseRuntime.Distance());
         speedInput.distance = courseRuntime.Distance();
         speedInput.deltaTime = dt;
+        speedInput.killBoostAllowed = speedDirector.KillBoost().ActivationAllowed();
         const auto speed = speedDirector.Evaluate(speedInput);
         RailRideDirectorInput rideInput;
         rideInput.course = input.course;
@@ -68,7 +69,8 @@ std::shared_ptr<const RailTravelPrediction> BuildRailTravelPrediction(
         envelopeInput.ride = &ride;
         envelopeInput.railPath = input.railPath;
         envelopeInput.normalSpeedScale = speedDirector.Settings().normalSpeedScale;
-        envelopeInput.manualBoostMultiplier = speedDirector.ManualBoost().SpeedMultiplier();
+        envelopeInput.manualBoostMultiplier = speedDirector.BoostMultiplier();
+        envelopeInput.rewardBoostAttack = speedDirector.KillBoost().Accelerating()?1.0f:0.0f;
         const auto& motion = envelope.Evaluate(envelopeInput);
         RailVehicleMovementInput movement;
         movement.deltaTime = dt;

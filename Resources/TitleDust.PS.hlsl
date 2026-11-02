@@ -93,6 +93,15 @@ float4 main(PixelInput input) : SV_TARGET0 {
     float2 p=uv*2.0f-1.0f;
     // Negative offsets mark angular grains using the same depth-tested pass.
     if(seed<0.0f) {
+        if(seed<=-10.0f) {
+            // Irregular, non-emissive ground grit. Random dimensions and
+            // orientation come from fixed world geometry, not screen drift.
+            float2 offset=float2(abs(seed)*.37f,abs(seed)*.71f);
+            float2 warped=p+float2(Noise(p*3.1f+offset),Noise(p*3.7f+offset+17))*.32f-.16f;
+            float edge=length(warped*float2(1.12f,.94f))+.20f*(Noise(p*5+offset)-.5f);
+            float coverage=1-smoothstep(.30f,.95f,edge);
+            return float4(input.color.rgb*(.65f+.25f*Noise(p*4+offset)),input.color.a*coverage);
+        }
         if(seed<-3.0f) {
             float edge=length(p*float2(1.12f,0.92f));
             float coverage=1.0f-smoothstep(0.25f,0.95f,edge);

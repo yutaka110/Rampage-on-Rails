@@ -2,6 +2,7 @@
 #include "EnemyTargetingSystem.h"
 #include "RailGatlingAttack.h"
 #include "RailHeavyAttack.h"
+#include "RailGroundBatteryAttack.h"
 
 #include "CourseSpawnRuntime.h"
 #include "EnemyCombatPresentationBridge.h"
@@ -12,6 +13,13 @@
 #include <limits>
 
 namespace {
+bool CompensatesAutomaticTravel(const CourseEnemyActor& actor) {
+    const auto trajectory=actor.desc.projectileDefinition.trajectory;
+    return (actor.HoldsCombatPositionUntilResolved() || RailGroundBattery::IsPredictive(actor.desc.actorAssetId)) &&
+        (trajectory==EnemyProjectileTrajectory::Direct || trajectory==EnemyProjectileTrajectory::Predictive ||
+            trajectory==EnemyProjectileTrajectory::Homing);
+}
+
 Vector3 Unit(Vector3 v) {
     const float length = std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
     return length > 0.0001f ? Vector3{v.x/length,v.y/length,v.z/length} : Vector3{0,0,-1};
@@ -139,7 +147,7 @@ uint32_t PrepareScheduledWeaponMount(CourseEnemyActor& actor,
         const float time=index==count?delay:(std::min)(delay,index*step);
         const float dt=time-previousTime;
         const float distance=input.playerDistance+travel->DistanceAt(time)-startDistance;
-        const float speed=(std::clamp)((distance-previousDistance)/dt,0.0f,72.0f);
+        const float speed=(std::clamp)((distance-previousDistance)/dt,0.0f,160.0f);
         EnemyCombatSystem::AdvancePoseForPrediction(future,dt);
         future.behaviorState.stateElapsedSeconds+=dt;
         future.behaviorState.attackTimeRemaining=(std::max)(0.0f,
@@ -317,7 +325,8 @@ EnemyProjectileAimSolution ResolveEnemyProjectileAimSolution(
     const float playerAtLaunch = state.forwardTravelReferenceDistance + playerTravel;
     // Hover enemies follow automatic rail motion too. Preserve only their
     // current relative band correction when estimating a delayed muzzle.
-    const float muzzleAtLaunch = muzzle.z + (forecast ? playerTravel +
+    const float muzzleAtLaunch = RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ? muzzle.z :
+        muzzle.z + (forecast ? playerTravel +
         (enemyVelocity - state.playerForwardVelocity)*wait : enemyVelocity*wait);
     result.muzzleRail.z = muzzleAtLaunch;
     const auto& mount=actor.weaponMount;
@@ -335,10 +344,52 @@ EnemyProjectileAimSolution ResolveEnemyProjectileAimSolution(
     }
     const Vector3 relative{result.targetRail.x-result.muzzleRail.x,result.targetRail.y-result.muzzleRail.y,
         playerAtLaunch-result.muzzleRail.z};
-    const auto flight = forecast ? SolveEnemyPredictedForwardIntercept(*forecast,wait,relative,
+    auto flight = forecast ? SolveEnemyPredictedForwardIntercept(*forecast,wait,relative,
         actor.desc.projectileDefinition.initialSpeed,actor.desc.projectileDefinition.lifetime) :
         SolveEnemyForwardIntercept(relative,state.playerForwardVelocity,
             actor.desc.projectileDefinition.initialSpeed,actor.desc.projectileDefinition.lifetime);
+    const auto& definition=actor.desc.projectileDefinition;
+    if(definition.trajectory==EnemyProjectileTrajectory::Homing && definition.acceleration>0.0f) {
+        // Integrate the same acceleration/cap as the live projectile. The first
+        // crossing is used even when the rail carries the cart past the muzzle.
+        const double speed=definition.initialSpeed;
+        const double cap=(std::max)(definition.initialSpeed,definition.maximumSpeed);
+        const double acceleration=definition.acceleration;
+        const auto residual=[&](double seconds) {
+            const double accelerated=(std::min)(seconds,(cap-speed)/acceleration);
+            const double travelled=speed*accelerated+0.5*acceleration*accelerated*accelerated+
+                cap*(seconds-accelerated);
+            const double z=relative.z+(forecast ?
+                forecast->DistanceAt(wait+static_cast<float>(seconds))-forecast->DistanceAt(wait) :
+                state.playerForwardVelocity*seconds);
+            return std::sqrt(static_cast<double>(relative.x)*relative.x+
+                static_cast<double>(relative.y)*relative.y+z*z)-travelled;
+        };
+        const float horizon=forecast ? (std::min)(definition.lifetime,forecast->HorizonSeconds()-wait) : definition.lifetime;
+        if(horizon<=0.0f) {result.reachable=false;return result;}
+        double lo=0.0;
+        bool found=false;
+        // A constant-speed solution bounds the accelerated crossing. Otherwise
+        // search the authored lifetime without extrapolating past the forecast.
+        const double end=flight.Reachable()?flight.flightSeconds:horizon;
+        const int steps=(std::max)(1,static_cast<int>(std::ceil(end*120.0)));
+        for(int i=1;i<=steps;++i) {
+            double hi=end*i/steps;
+            if(residual(hi)<=0.000001) {
+                for(int iteration=0;iteration<24;++iteration) {
+                    const double middle=(lo+hi)*0.5;
+                    if(residual(middle)>0.0)lo=middle;else hi=middle;
+                }
+                const float seconds=static_cast<float>((lo+hi)*0.5);
+                flight={seconds,seconds<definition.lifetime ? EnemyForwardInterceptStatus::Reachable :
+                    EnemyForwardInterceptStatus::BeyondLifetime};
+                found=true;
+                break;
+            }
+            lo=hi;
+        }
+        if(!found)flight={0.0f,EnemyForwardInterceptStatus::NoFutureIntersection};
+    }
     result.reachable=flight.Reachable();
     result.flightSeconds=flight.flightSeconds;
     result.targetRail.z = forecast ? state.forwardTravelReferenceDistance +
@@ -403,9 +454,7 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
     if (input.travelPredictionInput && input.deltaTime > 0.0f && !input.travelPrediction) {
         float horizon = 0.0f;
         for (const auto& actor : actors) {
-            if (actor.behaviorDefinition.commercialBehavior && actor.HoldsCombatPositionUntilResolved() &&
-                (actor.desc.projectileDefinition.trajectory == EnemyProjectileTrajectory::Direct ||
-                    RailGatling::IsWeapon(actor.desc.actorAssetId) || RailHeavy::IsWeapon(actor.desc.actorAssetId))) {
+            if (actor.behaviorDefinition.commercialBehavior && CompensatesAutomaticTravel(actor)) {
                 horizon = (std::max)(horizon, actor.desc.projectileDefinition.lifetime +
                     (std::max)(actor.behaviorDefinition.attackLeadSeconds, actor.behaviorState.attackTimeRemaining) + 0.1f);
             }
@@ -428,7 +477,7 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         verticalVelocity =
             (input.playerVerticalOffset - previousPlayerVerticalOffset_) / dt;
     }
-    forwardVelocity = (std::clamp)(forwardVelocity, -120.0f, 120.0f);
+    forwardVelocity = (std::clamp)(forwardVelocity, -160.0f, 160.0f);
     lateralVelocity = (std::clamp)(lateralVelocity, -40.0f, 40.0f);
     verticalVelocity = (std::clamp)(verticalVelocity, -40.0f, 40.0f);
     previousPlayerDistance_ = input.playerDistance;
@@ -565,9 +614,7 @@ void EnemyTargetingSystem::LockSolution(
         playerLateralVelocity * predictionSeconds;
     state.targetVerticalOffset = input.playerVerticalOffset +
         playerVerticalVelocity * predictionSeconds;
-    state.compensatesForwardTravel=actor.HoldsCombatPositionUntilResolved() &&
-        (definition.trajectory==EnemyProjectileTrajectory::Direct || RailGatling::IsWeapon(actor.desc.actorAssetId) ||
-            RailHeavy::IsWeapon(actor.desc.actorAssetId));
+    state.compensatesForwardTravel=CompensatesAutomaticTravel(actor);
     state.forwardTravelPrediction = input.travelPrediction;
     state.solutionLocked = true;
     if(state.compensatesForwardTravel) RefreshForwardIntercept(actor,input,playerForwardVelocity);

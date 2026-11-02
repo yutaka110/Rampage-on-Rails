@@ -1,3 +1,4 @@
+#include "RailGroundBatteryAttack.h"
 #include "EncounterDirector.h"
 
 #include "CourseSpawnRuntime.h"
@@ -139,7 +140,7 @@ EncounterDirectorFrameOutput EncounterDirector::Update(const EncounterDirectorFr
                     return actor.desc.hitPoints>0;
                 const bool shortPrimaryEntrance = !actor.carrierDeployment.initialized && actor.age < 0.5f;
                 return (auxiliary || shortPrimaryEntrance) && actor.desc.hitPoints > 0.0f && actor.age < 4.5f &&
-                    actor.desc.actorAssetId != "short_turret" &&
+                    !RailGroundBattery::IsBattery(actor.desc.actorAssetId) &&
                     (!actor.entranceExitState.initialized ||
                      actor.entranceExitState.phase == EnemyEntranceExitPhase::Pending ||
                      actor.entranceExitState.phase == EnemyEntranceExitPhase::Entering);

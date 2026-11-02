@@ -60,6 +60,12 @@ struct EnemyProjectileRuntimeState final {
     // A committed burst reserves IDs up front; queued rounds are neither
     // rendered nor collidable until their individual launch time.
     float launchDelayRemaining = 0.0f;
+    // Corrected aimed shots fire from the already advanced cart-frame boundary.
+    // Their new round is visible at the muzzle now and first travels next tick.
+    bool frameEndLaunch = false;
+    // Automatic rail travel defines the forward crossing point. Homing may
+    // still follow lateral/up input at its authored turn rate.
+    bool automaticForwardIntercept = false;
 };
 
 using CourseBulletActor = EnemyProjectileRuntimeState;
@@ -75,7 +81,7 @@ struct EnemyProjectileLaunchSolution final {
 EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
     const CourseEnemyActor& actor, int index, float launchDelaySeconds);
 // Shared fixed-trajectory sampling/integration. Homing still uses its live
-// target in Update; ordinary Direct/Predictive shots never reacquire a target.
+// lateral/up target in Update; ordinary Direct/Predictive shots never reacquire.
 void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile, float deltaTime);
 
 struct EnemyProjectileFrameInput final {

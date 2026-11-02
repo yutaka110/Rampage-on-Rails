@@ -2,7 +2,11 @@
 #include "../course/RailTurretGeometry.h"
 #include "core/ShaderCompiler.h"
 #include "../course/RailGatlingAimCycle.h"
+#include "../course/RailGatlingRingVisual.h"
+#include "../course/RailKillBoostPose.h"
+#include "../course/RailKillBoostFeedback.h"
 #include "../course/RailHeavyAttack.h"
+#include "../course/RailGroundBatteryAttack.h"
 #include "../course/RailMothershipBattle.h"
 #include "../course/CourseValidation.h"
 #include "../course/RailShortCourse.h"
@@ -26298,8 +26302,8 @@ void TestManualRailBoost(RegressionRunner& runner) {
         }
         runner.Expect(repeatedStarts == 0 && boost.IgnitionPulse() == 0.0f,
             "holding boost never restarts ignition and the onset ends before sustained thrust");
-        runner.Expect(std::abs(boost.SpeedMultiplier() - 2.0f) < 0.001f,
-            "manual boost reaches double speed after its 0.22 second ramp at every frame rate");
+        runner.Expect(std::abs(boost.SpeedMultiplier() - RailManualBoost::HeldMaximumMultiplier) < 0.001f,
+            "held manual boost reaches its smaller assist after the ramp at every frame rate");
         const float pausedBlend = boost.Blend();
         boost.Update(0.0f);
         runner.Expect(boost.Blend() == pausedBlend,
@@ -26414,8 +26418,8 @@ void TestManualRailBoost(RegressionRunner& runner) {
         onsetMotion.brakingLimit=ramp.brakingLimit; onsetMotion.jerkLimit=ramp.jerkLimit;
         vehicle.Update(onsetMotion);
     }
-    runner.Expect(vehicle.State().speed>80.0f && vehicle.State().acceleration>30.0f,
-        "real boost acceleration is already substantial within 0.6 seconds, below any speed cap");
+    runner.Expect(vehicle.State().speed>74.0f && vehicle.State().speed<=64*RailManualBoost::HeldMaximumMultiplier+.01f,
+        "held assist accelerates promptly while reserving the larger speed reward for kills");
 
     limits.normalSpeedScale=1.35f; limits.manualBoostMultiplier=1;
     ride.requestedSpeed=12;
@@ -26666,7 +26670,7 @@ void TestAutomaticRailTravelPrediction(RegressionRunner& runner) {
             RailRideMotionEnvelopeInput envelopeInput; envelopeInput.vehicleDefinition = &vehicle.Definition();
             envelopeInput.vehicleState = &vehicle.State(); envelopeInput.ride = &rideFrame; envelopeInput.railPath = &rail;
             envelopeInput.normalSpeedScale = policy.Settings().normalSpeedScale;
-            envelopeInput.manualBoostMultiplier = policy.ManualBoost().SpeedMultiplier();
+            envelopeInput.manualBoostMultiplier = policy.BoostMultiplier();
             const auto& limits = envelope.Evaluate(envelopeInput);
             RailVehicleMovementInput movement; movement.courseRuntime = &travel; movement.railPath = &rail;
             movement.deltaTime = dt; movement.requestedSpeed = limits.requestedSpeed; movement.motionEnvelopeActive = limits.active;
@@ -37014,7 +37018,7 @@ void TestRidgeCrestProtection(RegressionRunner& runner) {
     RailRidgeCombatFlow flow;EnemyEncounterReadabilityFrame frame;
     flow.Update(.1f,2200,runtime,frame);flow.ApplyAttackGates(runtime,2200);
     bool held=false;
-    for(const auto& actor:runtime.Enemies())if(actor.desc.actorAssetId=="short_turret" &&
+    for(const auto& actor:runtime.Enemies())if(RailGroundBattery::IsBattery(actor.desc.actorAssetId) &&
         actor.desc.spawnDistance+actor.desc.distanceOffset==2220)
         held=actor.encounterPacingEvaluated && !actor.encounterPacingAttackAllowed;
     runner.Expect(flow.PrimaryBusy() && flow.SuppressReinforcements(2200) && held,
@@ -38005,6 +38009,226 @@ void TestTerrainIngressCinematicMotion(RegressionRunner& runner) {
     renderReport.close();
     runner.Expect(discontinuity.empty(),"rendered entry heading and hover handoff never snap between frames: "+discontinuity);
 
+}
+
+#include "OrdinaryEnemyHighSpeedAudit.inl"
+
+void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=false) {
+    CourseAsset course;RailVehicleControlDefinitionAsset controls;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) &&
+        controls.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),"first battery loads the production course and vehicle");
+    RailPath rail;course.ApplyToRailPath(rail);TerrainGenerationSettings terrain;
+    std::vector<CourseEventMarker> markers;
+    for(const auto& event:course.events)if(event.payload=="route:turret" && (allBatteries || event.id=="short_turret_left"))markers.push_back(event);
+    runner.Expect(markers.size()==(allBatteries?4u:1u),"authored battery markers exist");
+    std::vector<std::string> failures;
+    const auto check=[&](bool success,const std::string& message){
+        if(allBatteries){if(!success)failures.push_back(message);}else runner.Expect(success,message);
+    };
+    std::ofstream report(allBatteries?"logs/all_ground_battery_combat.csv":"logs/first_ground_battery_combat.csv");
+    if(allBatteries)report<<"event_distance,event,peak_speed,";
+    report<<"fps,speed,mode,first_warning,first_fire,fire_forward,first_hit,damage,cancelled,killed,warning_seconds\n";
+    std::ofstream trace;
+    if(allBatteries){trace.open("logs/all_ground_battery_admission.csv");trace<<"event_distance,forward,state,remaining,reason,reserved,presented\n";}
+    std::ofstream lockTrace;
+    if(allBatteries)lockTrace.open("logs/all_ground_battery_lock_arrival.csv");
+    const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
+    const auto unit=[](Vector3 v){return RailMothership::Scale(v,1/std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z));};
+    for(const auto& marker:markers) {
+    TerrainCollisionWorld collisionWorld;
+    collisionWorld.BuildSynchronously(rail,terrain,&course.terrainEditLayer,nullptr,marker.distance-250,marker.distance+300);
+    for(int fps:{30,60,120})for(float speed:allBatteries?std::vector<float>{10,30,64,68*RailManualBoost::HeldMaximumMultiplier,68*RailKillBoost::MaximumMultiplier}:std::vector<float>{10,30,64})for(int mode:{0,1,2}) {
+        const bool boosted=speed>64,reward=speed>100;
+        const float dt=1.0f/fps,start=marker.distance-(boosted?180:30),playerY=controls.vehicle.bodyVerticalOffset+controls.vehicle.mounts.player.y;
+        CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;auto preplaced=marker;preplaced.payload="preplaced:turret";
+        dispatcher.Dispatch({preplaced},runtime,0);
+        runner.Expect(runtime.Enemies().size()==1 && RailGroundBattery::IsPredictive(runtime.Enemies().front().desc.actorAssetId),
+            "the selected battery uses the forward-intercept profile");
+        if(runtime.Enemies().empty())return;
+        const uint32_t owner=runtime.Enemies().front().actorId;
+        CourseCollisionSystem collision;collision.LoadWeaponDefinitions("Resources/weapons",&error);
+        RailVehicleMovementSystem vehicle;vehicle.Initialize(controls.vehicle);RailVehicleCombatMountBridge mounts;
+        CourseRuntime travel;travel.Bind(&course);travel.Reset(start);vehicle.Reset(start,boosted?64:speed,&rail);
+        RailSpeedDirector speedPolicy;speedPolicy.Configure(controls.speedPolicy);speedPolicy.SetManualBoostInput(boosted && !reward,true);
+        if(reward)for(unsigned id=1;id<=6;++id) {
+            EnemyCombatEvent e;e.kind=EnemyCombatEventKind::Defeated;e.actorId=id;e.shotId=id;
+            e.actorAssetId="short_scout";e.appliedDamage=24;e.feedbackKind=HitFeedbackKind::Destroyed;
+            speedPolicy.KillBoost().ObserveDefeat(e);
+        }
+        RailRideDirector ride;RailRideMotionEnvelope envelope;
+        RailTravelPredictionInput forecast;forecast.vehicle=&vehicle;forecast.speedDirector=&speedPolicy;
+        forecast.courseRuntime=&travel;forecast.course=&course;forecast.railPath=&rail;forecast.simulationStepSeconds=dt;
+        RailVehicleCameraMountBridge cameraMount;cameraMount.Initialize(controls.camera);
+        RailCameraDirector camera;EnemyAttackTelegraphSystem warnings;RailTargetRegistry registry;
+        RailLockResolver locks;RailLockVolley volley;bool released=false,killed=false;unsigned lockReleases=0;
+        float firstWarning=-1,firstFire=-1,fireForward=-1,firstHit=-1,warningSeconds=0;
+        unsigned cancelled=0;Vector3 fixed{};bool anchored=false;uint64_t observedFire=0;float peakSpeed=0;
+        for(int step=0;step<int(23*fps);++step) {
+            const float t=step*dt;
+            if(boosted && step>0) {
+                RailSpeedDirectorFrameInput si;si.course=&course;si.railPath=&rail;si.section=travel.CurrentSection();
+                si.rideProfile=course.FindRideProfile(travel.Distance());si.distance=travel.Distance();si.deltaTime=dt;
+                const auto& request=speedPolicy.Evaluate(si);
+                RailRideDirectorInput rideInput;rideInput.course=&course;rideInput.railPath=&rail;rideInput.distance=travel.Distance();rideInput.baseRequestedSpeed=request.requestedSpeed;
+                const auto& profile=ride.Evaluate(rideInput);
+                RailRideMotionEnvelopeInput ei;ei.vehicleDefinition=&vehicle.Definition();ei.vehicleState=&vehicle.State();ei.ride=&profile;ei.railPath=&rail;
+                ei.normalSpeedScale=speedPolicy.Settings().normalSpeedScale;ei.manualBoostMultiplier=speedPolicy.BoostMultiplier();
+                ei.rewardBoostAttack=speedPolicy.KillBoost().Accelerating()?1.0f:0.0f;
+                const auto& limits=envelope.Evaluate(ei);
+                RailVehicleMovementInput movement;movement.deltaTime=dt;movement.requestedSpeed=limits.requestedSpeed;movement.manualBoostMultiplier=limits.manualBoostMultiplier;
+                movement.movementEnabled=true;movement.motionEnvelopeActive=limits.active;movement.accelerationLimit=limits.accelerationLimit;
+                movement.brakingLimit=limits.brakingLimit;movement.jerkLimit=limits.jerkLimit;movement.courseRuntime=&travel;movement.railPath=&rail;
+                speedPolicy.NotifyCourseEvents(vehicle.Update(movement).triggeredEvents);
+            }
+            const float at=boosted?travel.Distance():start+speed*t;if(at>marker.distance+185)break;
+            if(!boosted)vehicle.Reset(at,speed,&rail);
+            const float actualSpeed=vehicle.State().speed;peakSpeed=(std::max)(peakSpeed,actualSpeed);
+            RailVehicleCombatMountInput mi;mi.vehicleDefinition=&controls.vehicle;mi.vehicleState=&vehicle.State();mounts.Update(mi);
+            RailVehicleCameraMountInput cm;cm.vehicleDefinition=&controls.vehicle;cm.vehicleState=&vehicle.State();cameraMount.Update(cm);
+            RailCameraDirectorFrameInput ci;ci.course=&course;ci.railPath=&rail;ci.spawnRuntime=&runtime;ci.section=course.FindSection(at);
+            ci.distance=at;ci.deltaTime=dt;ci.railSpeed=actualSpeed;ci.viewportWidth=1600;ci.viewportHeight=900;
+            ci.mountedCameraActive=cameraMount.Frame().active;ci.mountedCameraAnchor=cameraMount.Frame().anchorWorldPosition;
+            ci.mountedCameraOffset=cameraMount.Frame().cameraOffset;ci.mountedTargetOffset=cameraMount.Frame().targetOffset;
+            ci.mountedCameraBlend=cameraMount.Frame().anchorBlend;ci.mountedMaximumCorrection=cameraMount.Frame().maximumAnchorCorrection;
+            const auto view=camera.Evaluate(ci);auto cameraWorld=MakeIdentity4x4();
+            const auto right=unit(cross(view.gameplayUp,view.gameplayForward)),up=cross(view.gameplayForward,right);
+            const Vector3 rows[]={right,up,view.gameplayForward,view.gameplayPosition};
+            for(int row=0;row<4;++row){cameraWorld.m[row][0]=rows[row].x;cameraWorld.m[row][1]=rows[row].y;cameraWorld.m[row][2]=rows[row].z;}
+            const auto vp=Multiply(Inverse(cameraWorld),MakePerspectiveFovMatrix(view.fovY,16.0f/9,.1f,2000));
+            CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.course=&course;safety.terrainSettings=&terrain;
+            safety.terrainCollision=&collisionWorld;safety.terrainEdits=&course.terrainEditLayer;safety.playerDistance=at;safety.playerSpeed=actualSpeed;
+            if(boosted)safety.travelPredictionInput=&forecast;
+            safety.playerVerticalOffset=playerY;safety.viewProjection=&vp;safety.hasCameraPosition=true;safety.cameraPosition=view.gameplayPosition;
+            runtime.Update(dt,safety);
+            for(const auto& actor:runtime.Enemies())if(actor.actorId==owner) {
+                if(actor.fireSequence>observedFire) {
+                    runner.Expect(actor.desc.spawnDistance+actor.desc.distanceOffset-at>=RailGroundBattery::MinimumFireDistance,
+                        "every repeated volley retains a visible forward interception interval");
+                    observedFire=actor.fireSequence;
+                }
+                if(allBatteries && fps==30 && speed==64 && mode==0)
+                    trace<<marker.distance<<','<<actor.desc.spawnDistance+actor.desc.distanceOffset-at<<','<<int(actor.behaviorState.state)<<','
+                        <<actor.behaviorState.attackTimeRemaining<<','<<actor.fireSafetyReason<<','<<actor.attackState.tokenReserved<<','<<actor.behaviorState.telegraphPresented<<'\n';
+                if(actor.groundPlacementResolved) {
+                    const Vector3 position{actor.desc.lateralOffset,actor.desc.verticalOffset,actor.desc.spawnDistance+actor.desc.distanceOffset};
+                    if(!anchored){fixed=position;anchored=true;}
+                    runner.Expect(std::abs(position.x-fixed.x)+std::abs(position.y-fixed.y)+std::abs(position.z-fixed.z)<.002f,
+                        "predictive battery remains fixed to its real terrain foundation");
+                }
+                if(firstFire<0 && actor.fireSequence>0) {
+                    firstFire=t;fireForward=actor.desc.spawnDistance+actor.desc.distanceOffset-at;
+                    runner.Expect(actor.targetingState.compensatesForwardTravel && actor.targetingState.forwardInterceptReachable,
+                        "the actual admitted shot uses reachable fixed-muzzle interception");
+                }
+            }
+            EnemyAttackTelegraphFrameInput wi;wi.spawnRuntime=&runtime;wi.railPath=&rail;wi.viewProjection=&vp;
+            wi.course=&course;wi.terrainSettings=&terrain;wi.terrainEdits=&course.terrainEditLayer;wi.cameraPosition=view.gameplayPosition;
+            wi.playerDistance=at;wi.deltaTime=dt;wi.viewportWidth=1600;wi.viewportHeight=900;warnings.Update(wi);
+            for(const auto& cue:warnings.Frame().cues)if(cue.actorId==owner && cue.onScreen && !cue.occluded && cue.timeToFire>0) {
+                if(firstWarning<0)firstWarning=t;
+                if(firstFire<0)warningSeconds+=dt;
+                runtime.MarkEnemyAttackTelegraphPresented(owner,cue.attackIntentSequence);
+            }
+            RailTargetRegistryFrameInput ri;ri.spawnRuntime=&runtime;ri.railPath=&rail;ri.playerDistance=at;ri.cameraPosition=view.gameplayPosition;registry.Build(ri);
+            Vector2 cursor{1450,100};EditorViewportCoordinateService coordinates;coordinates.Update({{0,0,1600,900},1600,900,vp});
+            if(mode==1)for(const auto& anchor:registry.Anchors())if(anchor.target.actorId==owner){const auto p=coordinates.ProjectWorld(anchor.worldPosition);cursor={p.render.x,p.render.y};break;}
+            if(mode==2)for(const auto& bullet:runtime.Bullets())if(bullet.active && !bullet.hitConsumed && bullet.ownerActorId==owner) {
+                const auto world=ResolveEnemyProjectileWorldPosition(rail,{bullet.lateralOffset,bullet.verticalOffset,bullet.spawnDistance+bullet.distanceOffset});
+                const auto p=coordinates.ProjectWorld(world);if(!p.onscreen)continue;cursor={p.render.x,p.render.y};break;
+            }
+            RailReticleState reticle;reticle.lockHeld=mode==1 && !released;reticle.lockPressed=step==0;
+            reticle.currentScreenPosition=reticle.previousScreenPosition=cursor;
+            RailLockResolverFrameInput li;li.anchors=&registry.Anchors();li.reticle=&reticle;li.viewProjection=&vp;li.viewportWidth=1600;li.viewportHeight=900;li.elapsedTime=t;locks.Update(li);
+            WeaponFireInput idle;idle.weaponId=RailWeaponIds::LockOnIce;idle.enabled=false;idle.deltaTime=dt;const auto idleState=collision.UpdateWeaponFire(idle);
+            const auto muzzle=RailMothership::Add(mounts.Frame().weaponWorldPosition,RailMothership::Scale(mounts.Frame().forward,4));
+            Vector3 lockPoint;bool lockInRange=false;
+            if(!locks.Tokens().empty() && RailLockVolley::TargetPosition(locks.Tokens().front().target,rail,runtime,lockPoint)) {
+                const auto delta=RailMothership::Add(lockPoint,RailMothership::Scale(muzzle,-1));
+                lockInRange=delta.x*delta.x+delta.y*delta.y+delta.z*delta.z<=120*120;
+            }
+            if(mode==1 && !released && lockInRange && !locks.Tokens().empty() && idleState.cooldownRemaining<=0) {
+                auto tokens=locks.ConsumeTokens();WeaponFireInput fire;fire.weaponId=RailWeaponIds::LockOnIce;
+                fire.enabled=fire.triggerReleased=true;fire.requestedProjectileCount=static_cast<uint32_t>(tokens.size());
+                auto result=collision.UpdateWeaponFire(fire);
+                if(volley.Enqueue(tokens,result.shots,muzzle,rail,runtime,{})==tokens.size())++lockReleases;
+                if(allBatteries && fps==30 && boosted)lockTrace<<marker.distance<<','<<t<<",release,"<<tokens.size()<<','<<lockReleases<<','<<at<<'\n';
+                released=lockReleases>=2;
+            }
+            volley.Update(dt,muzzle,rail,runtime,collision,&course,&terrain);
+            if(allBatteries && fps==30 && boosted)for(const auto& hit:volley.Hits())lockTrace<<marker.distance<<','<<t<<",hit,"<<hit.appliedDamage<<','<<hit.remainingHitPoints<<','<<hit.destroyed<<'\n';
+            for(const auto& hit:volley.Hits())if(hit.targetActorId==owner && hit.destroyed)killed=true;
+            RailAimRayBuildInput ray;ray.viewportWidth=1600;ray.viewportHeight=900;ray.gameplayViewProjection=vp;
+            ray.gameplayCameraPosition=view.gameplayPosition;ray.pixelPosition=cursor;ray.maxDistance=120;
+            auto aim=BuildRailAimState(ray);RailWorldRaycastInput query;query.aim=&aim;query.railPath=&rail;query.spawnRuntime=&runtime;
+            query.course=&course;query.terrainSettings=&terrain;query.terrainCollision=&collisionWorld;query.terrainEdits=&course.terrainEditLayer;
+            query.playerDistance=at;ApplyRailAimHit(aim,RailWorldRaycast::Query(query));
+            CourseCollisionFrameInput input;input.railPath=&rail;input.course=&course;input.deltaTime=dt;input.player.distance=at;
+            input.player.verticalOffset=playerY;input.player.hitPoints=collision.Player().hitPoints;input.externalBodyCollisionAuthority=true;
+            input.combatMount=&mounts.Frame();input.worldAim=&aim;input.primaryTerrainSettings=&terrain;
+            input.weapon.enabled=input.weapon.triggerHeld=mode==2;input.weapon.triggerPressed=mode==2 && step==0;
+            const auto stats=collision.Update(runtime,input);cancelled+=stats.enemyProjectilesShotDown;
+            if(stats.enemyBulletHits>0 && firstHit<0)firstHit=t;
+        }
+        const float damage=100-collision.Player().hitPoints;
+        if(allBatteries)report<<marker.distance<<','<<marker.id<<','<<peakSpeed<<',';
+        report<<fps<<','<<speed<<','<<mode<<','<<firstWarning<<','<<firstFire<<','<<fireForward<<','<<firstHit<<','<<damage<<','<<cancelled<<','<<killed<<','<<warningSeconds<<std::endl;
+        const auto context=" event="+std::to_string(marker.distance)+" fps="+std::to_string(fps)+" speed="+std::to_string(speed)+" mode="+std::to_string(mode)+
+            " fire="+std::to_string(firstFire)+" forward="+std::to_string(fireForward)+" damage="+std::to_string(damage)+" cancelled="+std::to_string(cancelled);
+        if(mode==1)check(killed && firstFire<0 && damage==0,"two actual travelling locks preempt the first shot"+context);
+        else {
+            check(firstWarning>=0 && firstFire>firstWarning && warningSeconds+dt>=.70f && fireForward>=50 && fireForward<=115,
+                "the readable first warning finishes before passing the planned firing window"+context);
+            check(mode==0 ? damage>0 : (damage==0 && cancelled>=3),
+                "ignoring the battery is damaging; screen-aimed primary interception prevents its real volley"+context);
+        }
+    }
+    }
+    std::string details;for(const auto& failure:failures)details+="\n"+failure;
+    runner.Expect(failures.empty(),"every placement supports warning, arrival, preemption and interception"+details);
+}
+
+void TestFirstGroundBatteryForecast(RegressionRunner& runner,bool allBatteries=false) {
+    CourseAsset course;RailVehicleControlDefinitionAsset controls;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) &&
+        controls.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),"fixed forecast loads the production movement policy");
+    RailPath rail;course.ApplyToRailPath(rail);
+    std::vector<CourseEventMarker> markers;
+    for(const auto& event:course.events)if(event.payload=="route:turret" && (allBatteries || event.id=="short_turret_left"))markers.push_back(event);
+    runner.Expect(markers.size()==(allBatteries?4u:1u),"forecast markers exist");
+    for(const auto& marker:markers) {
+    const float start=marker.distance+5;
+    for(int fps:{30,60,120})for(float initialSpeed:{10.0f,30.0f,64.0f}) {
+        CourseRuntime travel;travel.Bind(&course);travel.Reset(start);
+        RailVehicleMovementSystem vehicle;vehicle.Initialize(controls.vehicle);vehicle.Reset(start,initialSpeed,&rail);
+        RailSpeedDirector speed;speed.Configure(controls.speedPolicy);
+        RailTravelPredictionInput source;source.vehicle=&vehicle;source.speedDirector=&speed;source.courseRuntime=&travel;
+        source.course=&course;source.railPath=&rail;source.simulationStepSeconds=1.0f/fps;
+        const auto forecast=BuildRailTravelPrediction(source,6);
+        runner.Expect(forecast!=nullptr,"production acceleration/braking produces a shared forecast");if(!forecast)continue;
+        CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;dispatcher.Dispatch({marker},runtime,marker.distance);
+        auto saved=runtime.CaptureCheckpoint();auto& actor=saved.enemies.front();
+        actor.combatState.phase=EnemyCombatPhase::Engaging;actor.combatState.canTelegraph=actor.combatState.canFire=true;
+        actor.behaviorState.initialized=true;actor.behaviorState.state=EnemyBehaviorState::RequestingAttack;
+        actor.behaviorState.attackIntentActive=true;actor.behaviorState.attackIntentSequence=17;actor.behaviorState.attackTimeRemaining=.70f;
+        actor.attackState.tokenReserved=true;actor.attackState.intentSequence=17;actor.attackState.tokenId=31;
+        runner.Expect(runtime.RestoreCheckpoint(saved,true,&error),"fixed forecast attack restores real actor identity");
+        EnemyTargetingSystem targeting;EnemyTargetingFrameInput input;input.railPath=&rail;input.travelPrediction=forecast;
+        input.deltaTime=1.0f/fps;input.playerDistance=start;input.playerVerticalOffset=controls.vehicle.bodyVerticalOffset+controls.vehicle.mounts.player.y;
+        targeting.Update(runtime,input);const auto& aimed=runtime.Enemies().front();
+        const auto muzzle=ResolveEnemyProjectileMuzzleRailPosition(aimed,1);
+        const auto launch=ResolveEnemyProjectileScheduledLaunch(aimed,1,.70f);
+        const auto& shot=launch.projectile;const float flight=launch.flightSeconds;
+        runner.Expect(aimed.targetingState.compensatesForwardTravel && launch.projectile.active && flight>0 &&
+            std::abs(shot.distanceOffset-muzzle.z)<.001f,"scheduled fixed muzzle never inherits the cart's forecast displacement");
+        const float future=forecast->DistanceAt(.70f+flight);
+        runner.Expect(std::abs(shot.distanceOffset+shot.forwardSpeed*flight-future)<.01f &&
+            std::abs(shot.lateralOffset+shot.lateralSpeed*flight)<.01f &&
+            std::abs(shot.verticalOffset+shot.verticalSpeed*flight-input.playerVerticalOffset)<.01f,
+            "actual straight-flight central round crosses the production forecast after warning and flight");
+        runner.Expect(travel.Distance()==start && vehicle.State().speed==initialSpeed,
+            "aim forecasting never advances the live cart or changes its speed");
+    }
+    }
 }
 
 void TestShortRunGroundBatteries(RegressionRunner& runner) {
@@ -39490,6 +39714,53 @@ void TestPrimaryContactPresentationCoherence(RegressionRunner& runner) {
     runner.Expect(collision.PlayerShotTraces().size()>1,"coherence fixture actually exercised catch-up shots");
 }
 
+#include "KillBoostRegressionTests.inl"
+
+void TestGatlingRingMaterial(RegressionRunner& runner) {
+    ge3::core::ShaderCompiler compiler;
+    runner.Expect(compiler.Initialize(),"ring material initializes native DXC");
+    const auto shader=compiler.CompileFromFile(L"Resources/RailHudAtlas.PS.hlsl",L"main",L"ps_6_0",{L"-O3",L"-WX"});
+    runner.Expect(shader && shader->GetBufferSize()>0,"production HUD and ring shader compile with Release optimization and no warnings");
+    for(float scale:{.65f,.82f,1.0f,1.16f,1.7f}) {
+        const Vector2 center{800,450};
+        const auto empty=RailGatlingRing::BuildGuide(center,scale,0);
+        const auto partial=RailGatlingRing::BuildGuide(center,scale,16.0f/24.0f);
+        const auto full=RailGatlingRing::BuildGuide(center,scale,1);
+        runner.Expect(empty.valid && empty.fillCount==0 && partial.fillCount>0 && partial.fillCount<full.fillCount,
+            "the outside gauge distinguishes zero, sixteen and twenty-four actual interceptions");
+        for(const auto* guide:{&empty,&partial,&full}) {
+            for(const auto& tick:guide->ticks) {
+                const float x=tick.start.x-center.x,y=tick.start.y-center.y;
+                runner.Expect(std::sqrt(x*x+y*y)>RailGatlingRing::GaugeRadius*scale,
+                    "all four direction ticks remain outside the gauge and central aiming area");
+            }
+            for(unsigned i=0;i<guide->fillCount;++i) {
+                const auto& line=guide->fill[i];
+                const float x=line.end.x-center.x,y=line.end.y-center.y;
+                runner.Expect(std::abs(std::sqrt(x*x+y*y)/scale-RailGatlingRing::GaugeRadius)<.002f,
+                    "gauge fill follows the outer circle without covering the four inner arcs");
+            }
+        }
+        const auto& tip=partial.fill[partial.fillCount-1].end;
+        const float angle=std::atan2(tip.y-center.y,tip.x-center.x);
+        runner.Expect(std::abs(angle-2.617993878f)<.002f,"sixteen of twenty-four fills clockwise from top to the lower-left");
+    }
+    for(float scale:{.65f,.82f,1.0f,1.16f,1.7f})for(float life:{0.0f,.05f,.5f,1.0f})for(uint64_t sequence:{1ULL,24ULL,100000ULL}) {
+        const Vector2 center{800,450};const auto discharge=RailGatlingRing::BuildDischarge(center,scale,life,sequence,.65f);
+        runner.Expect(life>0?discharge.count==24:discharge.count==0,"discharge geometry is bounded and disappears when the contact pulse expires");
+        for(unsigned i=0;i<discharge.count;++i) {
+            const auto& segment=discharge.segments[i];
+            const auto distance=[&](Vector2 p){const float x=p.x-center.x,y=p.y-center.y;return std::sqrt(x*x+y*y)/scale;};
+            runner.Expect(std::isfinite(segment.start.x) && std::isfinite(segment.end.y) &&
+                distance(segment.start)>RailGatlingRing::Radius && distance(segment.end)>RailGatlingRing::Radius &&
+                distance(segment.start)<32 && distance(segment.end)<32 && segment.color.w>0 && segment.color.w<=1,
+                "electricity stays outside the open centre at every HUD scale and contact age");
+        }
+    }
+    runner.Expect(RailGatlingRing::BuildDischarge({0,0},0,1,1,0).count==0 &&
+        RailGatlingRing::BuildDischarge({0,0},1,-1,1,0).count==0,"invalid or expired visual inputs do not emit strokes");
+}
+
 void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOnly=false) {
     std::array<float,3> guardedDamage{};
     std::ofstream comparison;
@@ -39573,6 +39844,17 @@ void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOn
         viewCourse.cameraKeys={course.EvaluateCamera(3350)};viewCourse.cameraKeys.front().distance=0;
         viewCourse.cinematicCameraShots.clear();viewCourse.sections.clear();
         Vector3 guardRail;runner.Expect(cycle.GatlingGuardPoint(startAt,guardRail),"fired burst provides one actual defensive aim point");
+        runner.Expect(cycle.GatlingInterceptFeedback().remaining==0,"unopposed firing cannot create an interception discharge");
+        for(int invalid=0;invalid<4;++invalid) {
+            EnemyProjectileShootDownResult miss;miss.ownerActorId=runtime.Enemies().front().actorId;
+            miss.projectileId=runtime.Bullets().front().projectileId;miss.accepted=miss.destroyed=true;
+            if(invalid==0)miss.accepted=false;
+            if(invalid==1)miss.destroyed=false;
+            if(invalid==2)miss.ownerActorId+=100;
+            if(invalid==3)miss.projectileId+=100000;
+            runner.Expect(!cycle.NotifyIntercept(miss,runtime) && cycle.GatlingInterceptFeedback().remaining==0,
+                "rejected, partial, foreign or unrelated contacts cannot light the ring");
+        }
         const Vector3 guardOffset{guardRail.x,guardRail.y,guardRail.z-startAt};
         float rewardAt=-1,bonusDamage=0,minSeparation=10000;
         unsigned cancelled=0,pulses=0,damageHits=0;bool partial=false,rewarded=false;
@@ -39662,7 +39944,24 @@ void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOn
                     }
                 }
                 ++contacts;++cancelled;
+                const auto previousFeedback=cycle.GatlingInterceptFeedback();
                 const bool counter=cycle.NotifyIntercept(hit,runtime);
+                const auto& ringFeedback=cycle.GatlingInterceptFeedback();
+                runner.Expect(ringFeedback.sequence==previousFeedback.sequence+1 &&
+                    ringFeedback.remaining==RailGatlingInterceptFeedback::Duration && ringFeedback.owner==hit.ownerActorId,
+                    "only each real accepted gatling destruction produces one ring discharge");
+                const uint64_t feedbackSequence=ringFeedback.sequence;
+                runner.Expect(!cycle.NotifyIntercept(hit,runtime) && cycle.GatlingInterceptFeedback().sequence==feedbackSequence,
+                    "replayed interception does not retrigger ring discharge");
+                if(cancelled==1) {
+                    auto restored=cycle;
+                    restored.Update(runtime,.25f,true,false,false,at);
+                    runner.Expect(restored.GatlingInterceptFeedback().remaining==ringFeedback.remaining &&
+                        restored.GatlingInterceptFeedback().sequence==feedbackSequence,
+                        "copied retry state and pause preserve the existing ring pulse without replaying a contact");
+                    for(int decay=0;decay<fps;++decay)restored.Update(runtime,dt,true,true,false,at);
+                    runner.Expect(restored.GatlingInterceptFeedback().remaining==0,"a contact discharge fades without more interceptions at every framerate");
+                }
                 if(cancelled>=6 && cancelled<24) {
                     runner.Expect(!counter && cycle.CounterRemaining()==0 && cycle.UnlockPulse()==0 && cycle.FeedbackRemaining()==0 && cycle.InFlight(),
                         "partial cancellation leaves the burst live and cannot create a premature safe window");
@@ -39707,6 +40006,8 @@ void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOn
             if(mode==6)runner.Expect(cancelled==0 && !rewarded && damageHits>0,
                 "without guarding, actual production-targeted rounds reach the player instead of granting harmless grazes");
             cycle.Reset();Vector3 ignored;
+            runner.Expect(cycle.GatlingInterceptFeedback().remaining==0 && cycle.GatlingInterceptFeedback().sequence==0,
+                "retry clears old ring discharges");
             runner.Expect(!cycle.GatlingGuardPoint(300,ignored) && BuildRailGatlingAimCue(cycle,runtime,rail,300).phase==RailGatlingAimPhase::None,
                 "retry clears the defensive cue and counter opportunity");
         }
@@ -39757,9 +40058,9 @@ void TestGatlingPrimaryDepthAndCover(RegressionRunner& runner) {
     runner.Expect(preset.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),"reticle depth uses real cart tuning");
     RailVehicleMovementSystem vehicle;vehicle.Initialize(preset.vehicle);vehicle.Reset(0,18,&rail);
     RailVehicleCombatMountBridge mount;RailVehicleCombatMountInput mi;mi.vehicleDefinition=&preset.vehicle;mi.vehicleState=&vehicle.State();mount.Update(mi);
-    for(int mode=0;mode<6;++mode) {
+    for(bool ground:{false,true})for(int mode=0;mode<6;++mode) {
         CourseSpawnRuntime runtime;EnemyProjectileRuntimeState p;
-        p.projectileId=1;p.ownerActorId=17;p.definitionId="enemy_mothership_rapid";
+        p.projectileId=1;p.ownerActorId=17;p.definitionId=ground?"enemy_turret_predictive":"enemy_mothership_rapid";
         p.initialized=p.active=true;p.radius=.28f;p.shootDownRadiusScale=2.5f;p.lifetime=6;
         p.shootDownHitPoints=p.shootDownMaximumHitPoints=1;p.lateralOffset=-10;p.verticalOffset=5;
         p.distanceOffset=mode==4?150.0f:20.0f;
@@ -39776,10 +40077,10 @@ void TestGatlingPrimaryDepthAndCover(RegressionRunner& runner) {
         aim.worldRayDirection={delta.x/length,delta.y/length,delta.z/length};ApplyRailAimHit(aim,{});
         CourseCollisionSystem collision;runner.Expect(collision.LoadWeaponDefinitions("Resources/weapons",&error),"reticle-depth loads primary");
         CourseCollisionFrameInput input;input.railPath=&rail;input.worldAim=&aim;input.combatMount=&mount.Frame();
-        input.convergePrimaryOnGatling=mode!=0;input.externalBodyCollisionAuthority=true;
+        input.convergePrimaryOnGatling=!ground && mode!=0;input.externalBodyCollisionAuthority=true;
         input.weapon.enabled=input.weapon.triggerHeld=input.weapon.triggerPressed=true;
         const auto stats=collision.Update(runtime,input);
-        runner.Expect(stats.enemyProjectilesShotDown==(mode==1?1u:0u),
+        runner.Expect(stats.enemyProjectilesShotDown==((mode==1 || (ground && mode==0))?1u:0u),
             "visible depth fixes parallax but cannot cross muzzle cover, hit queued rounds, exceed range or snap an off-axis aim: mode="+std::to_string(mode));
     }
     for(float age:{.1f,RailGatling::ClashArmSeconds+.1f}) {
@@ -40437,7 +40738,7 @@ void TestCarrierPursuitReachability(RegressionRunner& runner) {
             RailVehicleMovementInput move;move.deltaTime=dt;move.courseRuntime=&travel;move.railPath=&rail;
             RailRideDirectorInput ri;ri.course=&course;ri.railPath=&rail;ri.distance=travel.Distance();ri.baseRequestedSpeed=wanted.requestedSpeed;
             const auto& intent=ride.Evaluate(ri);RailRideMotionEnvelopeInput ei;ei.vehicleDefinition=&vehicle.Definition();ei.vehicleState=&vehicle.State();
-            ei.ride=&intent;ei.railPath=&rail;ei.normalSpeedScale=speed.Settings().normalSpeedScale;ei.manualBoostMultiplier=speed.ManualBoost().SpeedMultiplier();
+            ei.ride=&intent;ei.railPath=&rail;ei.normalSpeedScale=speed.Settings().normalSpeedScale;ei.manualBoostMultiplier=speed.BoostMultiplier();
             const auto& limit=envelope.Evaluate(ei);move.requestedSpeed=limit.requestedSpeed;move.manualBoostMultiplier=limit.manualBoostMultiplier;
             move.motionEnvelopeActive=true;move.accelerationLimit=limit.accelerationLimit;move.brakingLimit=limit.brakingLimit;move.jerkLimit=limit.jerkLimit;
             const auto moved=vehicle.Update(move);
@@ -41865,7 +42166,7 @@ void TestShortCompleteRun(RegressionRunner& runner) {
             const auto& intent=ride.Evaluate(rideInput);
             RailRideMotionEnvelopeInput mi;mi.vehicleDefinition=&vehicle.Definition();mi.vehicleState=&vehicle.State();
             mi.ride=&intent;mi.railPath=&rail;mi.normalSpeedScale=policy.Settings().normalSpeedScale;
-            mi.manualBoostMultiplier=policy.ManualBoost().SpeedMultiplier();const auto& limit=envelope.Evaluate(mi);
+            mi.manualBoostMultiplier=policy.BoostMultiplier();const auto& limit=envelope.Evaluate(mi);
             RailVehicleMovementInput movement;movement.deltaTime=dt;movement.courseRuntime=&travel;movement.railPath=&rail;
             movement.requestedSpeed=limit.requestedSpeed;movement.manualBoostMultiplier=limit.manualBoostMultiplier;
             movement.motionEnvelopeActive=true;movement.accelerationLimit=limit.accelerationLimit;
@@ -43716,6 +44017,16 @@ int RunEditorCoreRegressionTests() {
          {"carrier miniboss parts", [&]() { TestCarrierMinibossParts(runner); }},
          {"carrier gatling scheduled burst", [&]() { TestCarrierGatlingBurst(runner); }},
          {"gatling held primary cancellation", [&]() { TestGatlingHeldPrimaryCancellation(runner); }},
+         {"six kill boost counting activation and retry", [&]() { TestKillBoostCountAndActivation(runner); }},
+         {"six kill boost actual movement and enemy forecast", [&]() { TestKillBoostTravelPrediction(runner); }},
+         {"six kill boost real primary and lock defeat credit", [&]() { TestKillBoostRealDefeats(runner); }},
+         {"six kill boost spin stable camera and muzzle", [&]() { TestKillBoostSpinAndMuzzle(runner); }},
+         {"six kill boost immediate defeat ignition during carrier flyby", [&]() { TestKillBoostImmediateOnset(runner); }},
+         {"six kill boost independent rapid acceleration and camera catchup", [&]() { TestKillBoostRapidTravelAndSurge(runner); }},
+         {"six kill boost smooth floating turn and rigid exhaust sync", [&]() { TestKillBoostFloatingTurn(runner); }},
+         {"six kill boost world anchored close ground and side flow", [&]() { TestKillBoostNearFieldFlow(runner); }},
+         {"six kill boost achieved speed visual and audio feedback", [&]() { TestKillBoostFeedback(runner); }},
+         {"gatling ring emissive material and hollow discharge", [&]() { TestGatlingRingMaterial(runner); }},
          {"gatling defensive aim and counter switch", [&]() { TestGatlingHeldPrimaryCancellation(runner,true); }},
          {"gatling primary depth and cover", [&]() { TestGatlingPrimaryDepthAndCover(runner); }},
          {"heavy battery forward accuracy", [&]() { TestHeavyBatteryForwardAccuracy(runner); }},
@@ -43748,6 +44059,13 @@ int RunEditorCoreRegressionTests() {
         {"mixed enemy role choices and bounded reinforcements", [&]() { TestMixedEnemyRoleChoices(runner); }},
         {"distinct combat showcases and authoritative rewards", [&]() { TestDistinctCombatShowcases(runner); }},
         {"short run grounded turret combat and pass cleanup", [&]() { TestShortRunGroundBatteries(runner); }},
+        {"first ground battery prediction timing and defense", [&]() { TestFirstGroundBatteryCombat(runner); }},
+        {"first ground battery production travel forecast", [&]() { TestFirstGroundBatteryForecast(runner); }},
+        {"all ground batteries prediction timing and defense", [&]() { TestFirstGroundBatteryCombat(runner,true); }},
+        {"all ground batteries production travel forecast", [&]() { TestFirstGroundBatteryForecast(runner,true); }},
+        {"ordinary enemy high speed diagnostic", [&]() { TestOrdinaryEnemyHighSpeedAudit(runner); }},
+        {"persistent ordinary encounter lifetime and retry", [&]() { TestPersistentOrdinaryEncounterPacing(runner); }},
+        {"ordinary sniper and homing forward interception", [&]() { TestOrdinaryAimedIntercept(runner); }},
         {"terrain enemy ingress cover flight and retry", [&]() { TestTerrainEnemyIngresses(runner); }},
         {"terrain ingress cinematic speed facing and handoff", [&]() { TestTerrainIngressCinematicMotion(runner); }},
         {"mothership blockout camera and bay deployment", [&]() { TestMothershipBlockoutDeployment(runner); }},

@@ -184,10 +184,17 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
         input.currentDistance + 0.001f >= definition.triggerRailDistance;
     const bool waveAlreadyCleared = input.waveRuntime &&
         input.waveRuntime->Phase(definition.waveGuid) == CourseGameplayWavePhase::Completed;
-    const bool livingPersistentBoss=std::any_of(runtime.Enemies().begin(),runtime.Enemies().end(),
+    const bool livingPersistent=std::any_of(runtime.Enemies().begin(),runtime.Enemies().end(),
         [&](const auto& actor) { return MatchesWave(actor,definition) && IsLivingActor(actor) &&
-            actor.HoldsCombatPositionUntilResolved() && actor.behaviorDefinition.archetype==EnemyBehaviorArchetype::Boss; });
-    if (((input.currentDistance >= definition.endRailDistance && !livingPersistentBoss) || waveAlreadyCleared) &&
+            actor.HoldsCombatPositionUntilResolved(); });
+    const bool ongoingPersistentCombat=livingPersistent && !waveAlreadyCleared;
+    // A pursuing formation owns combat until defeated, even after the cart
+    // leaves its authored scenery interval. Recovery still separates cycles.
+    if (input.gameplayActive && ongoingPersistentCombat && next.phase==EnemyEncounterBeatPhase::ExitResolve) {
+        EnterPhase(EnemyEncounterBeatPhase::Threaten,next,"living formation resumes after restored resolve phase");
+        formationExitRequested_=false;resolveStallReported_=false;
+    }
+    if (((input.currentDistance >= definition.endRailDistance && !ongoingPersistentCombat) || waveAlreadyCleared) &&
         (next.phase == EnemyEncounterBeatPhase::Establish ||
          next.phase == EnemyEncounterBeatPhase::Threaten ||
          next.phase == EnemyEncounterBeatPhase::Attack)) {
@@ -225,8 +232,8 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
         break;
     case EnemyEncounterBeatPhase::Recovery:
         if (next.phaseElapsedSeconds >= definition.recoverySeconds) {
-            EnterPhase(livingPersistentBoss ? EnemyEncounterBeatPhase::Threaten : EnemyEncounterBeatPhase::ExitResolve, next,
-                livingPersistentBoss ? "living boss begins its next warning cycle" : "recovery complete");
+            EnterPhase(ongoingPersistentCombat ? EnemyEncounterBeatPhase::Threaten : EnemyEncounterBeatPhase::ExitResolve, next,
+                ongoingPersistentCombat ? "living formation begins its next warning cycle" : "recovery complete");
         }
         break;
     case EnemyEncounterBeatPhase::ExitResolve: {

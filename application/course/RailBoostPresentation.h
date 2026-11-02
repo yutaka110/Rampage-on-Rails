@@ -26,7 +26,7 @@ struct RailBoostExhaust final {
 };
 
 struct RailBoostPresentationInput final {
-    float deltaTime=0, distance=0, speed=0, strength=0, ignition=0;
+    float deltaTime=0, distance=0, speed=0, strength=0, ignition=0,nearFlow=0;
     bool gameplayActive=false;
     Matrix4x4 bodyWorld=MakeIdentity4x4();
     Vector3 ground{}, forward{0,0,1}, right{1,0,0}, up{0,1,0};
@@ -41,13 +41,20 @@ struct RailBoostDust final {
     float radius=0, opacity=0;
     uint32_t seed=0;
 };
+struct RailBoostGroundMark final {
+    Vector3 center{},horizontal{},vertical{};
+    float opacity=0;
+    uint32_t seed=0;
+};
 struct RailBoostPresentationFrame final {
     // Enough world streaks to cover their approach at the full 2x speed;
     // premature recycling used to remove them before reaching the near field.
     static constexpr size_t MaximumWindRibbons=96;
     std::array<RailBoostRibbon,MaximumWindRibbons+2> ribbons{};
     std::array<RailBoostDust,40> dust{};
+    std::array<RailBoostGroundMark,32> groundMarks{};
     size_t ribbonCount=0, dustCount=0;
+    size_t groundMarkCount=0;
     float strength=0, animationUvY=0, ignition=0, ignitionShock=0;
     std::array<Vector4,2> lights{}; // world position + local radiance strength
     Vector3 exhaustRight{1,0,0}, exhaustUp{0,1,0};
@@ -60,7 +67,7 @@ class RailBoostPresentation final {
 public:
     static constexpr float IgnitionShockSeconds=0.12f;
     void Reset() { *this=RailBoostPresentation{}; }
-    bool Visible() const { return frame_.ribbonCount>0 || frame_.dustCount>0; }
+    bool Visible() const { return frame_.ribbonCount>0 || frame_.dustCount>0 || frame_.groundMarkCount>0; }
     const RailBoostPresentationFrame& Frame() const { return frame_; }
     void Update(const RailBoostPresentationInput& in) {
         if (!std::isfinite(in.deltaTime) || in.deltaTime<=0) return;
@@ -74,12 +81,25 @@ public:
         const float target=(std::max)(ignition*0.65f,
             std::isfinite(in.strength) ? (std::clamp)(in.strength,0.0f,1.0f) : 0.0f);
         strength_+=(target-strength_)*(1-std::exp(-(target>strength_?18.0f:9.0f)*dt));
+        const float nearTarget=std::isfinite(in.nearFlow)?(std::clamp)(in.nearFlow,0.0f,1.0f):0;
+        nearStrength_+=(nearTarget-nearStrength_)*(1-std::exp(-18.0f*dt));
         clock_+=dt;
         for (auto& p:particles_) if (p.live) {
             p.age+=dt;
             if (p.age>=p.life || rail_boost_detail::Dot(
                 rail_boost_detail::Add(p.origin,rail_boost_detail::Mul(in.ground,-1)),in.forward)<-15) p.live=false;
         }
+        for(auto& p:ground_)if(p.live) {
+            p.age+=dt;
+            if(p.age>=p.life || rail_boost_detail::Dot(rail_boost_detail::Add(p.mark.center,
+                rail_boost_detail::Mul(in.ground,-1)),in.forward)<-15)p.live=false;
+        }
+        if(nearStrength_>.05f && travel>0 && in.speed>1) {
+            const float total=nearDistance_+travel;
+            const unsigned count=(std::min)(6u,unsigned(total/1.1f));
+            for(unsigned i=0;i<count;++i)for(float side:{-1.0f,1.0f})SpawnGround(in,side);
+            nearDistance_=std::fmod(total,1.1f);
+        }else nearDistance_=0;
         if (strength_>0.05f && travel>0 && in.speed>1) {
             const auto emitAlong=[&](float& remainder,float spacing,bool wind) {
                 const float total=remainder+travel;
@@ -98,6 +118,12 @@ public:
             emitAlong(windDistance_,0.48f/(0.35f+0.65f*strength_),true);
         } else { dustDistance_=windDistance_=0; }
         frame_={}; frame_.strength=strength_; frame_.ignition=ignition;
+        for(const auto& p:ground_)if(p.live && nearStrength_>.006f && frame_.groundMarkCount<frame_.groundMarks.size()) {
+            auto mark=p.mark;
+            mark.opacity=nearStrength_*.30f*rail_boost_detail::Smooth(p.age/.04f)*
+                rail_boost_detail::Smooth((p.life-p.age)/.18f);
+            frame_.groundMarks[frame_.groundMarkCount++]=mark;
+        }
         // Reuse the real ignition clock. Rendering at a higher rate, pausing,
         // or holding the key cannot retrigger the brief optical response.
         const float ignitionAge=RailManualBoost::IgnitionSeconds*(1.0f-std::sqrt(ignition));
@@ -152,9 +178,10 @@ private:
             if (particles_[i].age/particles_[i].life>particles_[slot].age/particles_[slot].life) slot=i;
         }
         const float sign=(serial_++%2)?-1.0f:1.0f;
-        const float ahead=wind?14+Random()*22:-2.0f;
-        const float lateral=sign*(wind?3.8f+Random()*5.5f:1.75f+Random()*0.30f);
-        const float height=wind?0.22f+Random()*1.35f:0.12f;
+        const bool close=wind && in.nearFlow>.05f;
+        const float ahead=wind?(close?6+Random()*16:14+Random()*22):-2.0f;
+        const float lateral=sign*(wind?(close?5.5f+Random()*4.0f:3.8f+Random()*5.5f):1.75f+Random()*0.30f);
+        const float height=wind?(close?.25f+Random()*2.7f:.22f+Random()*1.35f):.12f;
         Particle p;
         p.origin=rail_boost_detail::Add(ground,rail_boost_detail::Add(
             rail_boost_detail::Mul(in.forward,ahead),rail_boost_detail::Add(
@@ -168,10 +195,26 @@ private:
         p.strength=strength_; p.seed=seed_%128; p.live=true; p.wind=wind;
         particles_[slot]=p;
     }
+    void SpawnGround(const RailBoostPresentationInput& in,float side) {
+        auto slot=std::find_if(ground_.begin(),ground_.end(),[](const auto& p){return !p.live;});
+        if(slot==ground_.end())slot=std::max_element(ground_.begin(),ground_.end(),[](const auto& a,const auto& b){return a.age/a.life<b.age/b.life;});
+        const float ahead=5+Random()*15,lateral=side*(3.9f+Random()*3.4f);
+        GroundParticle p;p.live=true;p.life=(std::min)(2.6f,(ahead+14)/(std::max)(1.0f,in.speed));
+        p.mark.center=rail_boost_detail::Add(in.ground,rail_boost_detail::Add(rail_boost_detail::Mul(in.forward,ahead),
+            rail_boost_detail::Add(rail_boost_detail::Mul(in.right,lateral),rail_boost_detail::Mul(in.up,.06f))));
+        const float angle=(Random()-.5f)*1.4f,c=std::cos(angle),s=std::sin(angle);
+        const auto right=rail_boost_detail::Add(rail_boost_detail::Mul(in.right,c),rail_boost_detail::Mul(in.forward,s));
+        const auto along=rail_boost_detail::Add(rail_boost_detail::Mul(in.forward,c),rail_boost_detail::Mul(in.right,-s));
+        p.mark.horizontal=rail_boost_detail::Mul(right,.06f+Random()*.10f);
+        p.mark.vertical=rail_boost_detail::Mul(along,.10f+Random()*.15f+(std::min)(.3f,in.speed*.003f));
+        p.mark.seed=seed_;*slot=p;
+    }
+    struct GroundParticle {RailBoostGroundMark mark{};float age=0,life=1;bool live=false;};
+    std::array<GroundParticle,32> ground_{};
     std::array<Particle,40+RailBoostPresentationFrame::MaximumWindRibbons> particles_{};
     RailBoostPresentationFrame frame_{};
     Vector3 previousGround_{};
-    float previousDistance_=0, strength_=0,clock_=0,dustDistance_=0,windDistance_=0;
+    float previousDistance_=0, strength_=0,nearStrength_=0,clock_=0,dustDistance_=0,windDistance_=0,nearDistance_=0;
     bool initialized_=false;
     uint32_t seed_=8041,serial_=0;
 };

@@ -37,6 +37,19 @@ def main():
             continue
         if (target/'GE3.exe').resolve() != exe.resolve():
             shutil.copy2(exe, target/'GE3.exe')
+        for relative in ['RailHudAtlas.PS.hlsl','TitleDust.PS.hlsl','RailGatlingRing.hlsli','RailKillBoostOverlay.hlsli',
+                         'audio/rail_kill_boost_release.wav',
+                         'courses/actors/short_turret_predictive.actor',
+                         'courses/bullet_patterns/turret_predictive_spread.pattern',
+                         'courses/projectiles/enemy_turret_predictive.projectile',
+                         'courses/projectile_visuals/enemy_turret_predictive.projectilevisual',
+                         'courses/waves/short_turret_left.wave',
+                         'courses/waves/short_turret_right.wave',
+                         'courses/waves/route_turret_left.wave',
+                         'courses/waves/route_turret_right.wave']:
+            for suffix in ['', '.meta']:
+                source=ROOT/'Resources'/(relative+suffix)
+                if source.exists():shutil.copy2(source,target/'Resources'/(relative+suffix))
         for projectile in ['enemy_mothership_rapid','enemy_mothership_heavy']:
             source=ROOT/'Resources/courses/projectiles'/(projectile+'.projectile')
             shutil.copy2(source,target/'Resources/courses/projectiles'/source.name)
@@ -94,6 +107,36 @@ def main():
         '@echo off\nsetlocal\ncd /d "%~dp0RidgeCombat"\n'
         'set "GE3_SUNFALL_PREVIEW_DISTANCE=2100"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
         'set "GE3_COURSE_FRAME_EXPORT="\nstart "" "%~dp0GE3.exe"\n',encoding='utf-8')
+    first_resources=PREVIEW/'FirstGroundBattery/Resources'
+    shutil.copytree(ROOT/'Resources',first_resources,dirs_exist_ok=True)
+    first=[]
+    for line in course.splitlines():
+        p=line.split('|')
+        if p[0]=='wave' and p[1]!='short-mothership':continue
+        if p[0] in ('enemy_placement','encounter_beat') and p[4]!='short-mothership':continue
+        if p[0]=='event' and p[2]=='enemy_wave' and p[3]!='short_turret_left':continue
+        first.append(line)
+    (first_resources/'courses/ShortCompleteRun.course').write_text('\n'.join(first)+'\n',encoding='utf-8')
+    (PREVIEW/'PlayFirstGroundBattery.cmd').write_text(
+        '@echo off\nsetlocal\ncd /d "%~dp0FirstGroundBattery"\n'
+        'set "GE3_SUNFALL_PREVIEW_DISTANCE=1110"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
+        'set "GE3_COURSE_FRAME_EXPORT="\nstart "" "%~dp0GE3.exe"\n',encoding='utf-8')
+    battery_resources=PREVIEW/'GroundBatteries/Resources'
+    shutil.copytree(ROOT/'Resources',battery_resources,dirs_exist_ok=True)
+    batteries=[]
+    for line in course.splitlines():
+        p=line.split('|')
+        if p[0]=='wave' and p[1]!='short-mothership':continue
+        if p[0] in ('enemy_placement','encounter_beat') and p[4]!='short-mothership':continue
+        if p[0]=='event' and p[2]=='enemy_wave' and p[4]!='route:turret':continue
+        batteries.append(line)
+    (battery_resources/'courses/ShortCompleteRun.course').write_text('\n'.join(batteries)+'\n',encoding='utf-8')
+    for name,distance in [('PlayGroundBatteries',1110),('PlaySecondGroundBattery',1360),
+                          ('PlayClimbGroundBattery',2030),('PlayFinalGroundBattery',2810)]:
+        (PREVIEW/(name+'.cmd')).write_text(
+            '@echo off\nsetlocal\ncd /d "%~dp0GroundBatteries"\n'
+            f'set "GE3_SUNFALL_PREVIEW_DISTANCE={distance}"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
+            'set "GE3_COURSE_FRAME_EXPORT="\nstart "" "%~dp0GE3.exe"\n',encoding='utf-8')
     shots = json.loads((ROOT/'generated/course-blockout/shots.json').read_text(encoding='utf-8'))
     for i, shot in enumerate(shots, 1):
         launcher = ('@echo off\nsetlocal\ncd /d "%~dp0"\n'

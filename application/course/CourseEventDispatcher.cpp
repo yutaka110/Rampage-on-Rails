@@ -1,3 +1,4 @@
+#include "RailGroundBatteryAttack.h"
 #include "CourseEventDispatcher.h"
 #include "../AppLogFile.h"
 
@@ -373,7 +374,7 @@ std::vector<CourseEnemyActorDesc> CourseEventDispatcher::GroundBatteryPlacements
         if(!wave) continue;
         for(const auto& unit:wave->units) {
             const auto* asset=LoadActorAsset(unit.actorAssetId);
-            if(!asset || asset->id!="short_turret") continue;
+            if(!asset || !RailGroundBattery::IsBattery(asset->id)) continue;
             CourseEnemyActorDesc desc{};ApplyActorAsset(desc,*asset);
             desc.spawnDistance=event.distance;desc.distanceOffset=unit.distanceOffset;
             desc.lateralOffset=unit.lateralOffset;desc.verticalOffset=unit.verticalOffset;

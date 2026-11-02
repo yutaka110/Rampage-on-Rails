@@ -14,6 +14,15 @@
 
 // Refines the encounter's attack gate. Runtime, targeting, warning admission
 // and execution retain ownership of actual fire; no synthetic shots or hits.
+struct RailGatlingInterceptFeedback final {
+    static constexpr float Duration=.16f;
+    Vector3 guardOffset{};
+    Vector3 worldHitPoint{};
+    float remaining=0;
+    uint64_t sequence=0;
+    uint32_t owner=0;
+};
+
 class RailMinibossCombatDirector final {
 public:
     static constexpr float RapidCounterSeconds=1.15f,HeavyCounterSeconds=1.80f;
@@ -78,6 +87,7 @@ public:
         railPoint={guardOffset_.x,guardOffset_.y,playerDistance+guardOffset_.z};return true;
     }
     unsigned InterceptedCount()const{return std::popcount(intercepted_);}
+    const RailGatlingInterceptFeedback& GatlingInterceptFeedback()const{return gatlingInterceptFeedback_;}
     float CooldownRemaining(const CourseSpawnRuntime& runtime,int part)const {
         if(part<0 || part>1)return 0;
         const auto* actor=FindLiving(runtime,ids_[part]);
@@ -94,10 +104,13 @@ public:
         if(!enabled){Reset();return;}
         Bind(runtime);
         active_=Living(runtime,0) || Living(runtime,1);
-        if(!active_){counterRemaining_=0;ClearVolley();return;}
+        if(!active_){counterRemaining_=0;gatlingInterceptFeedback_.remaining=0;ClearVolley();return;}
         if(!gameplayActive){ApplyGate(runtime,false);return;}
         const float dt=gameplayActive && std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,.25f):0;
         elapsed_+=dt;
+        gatlingInterceptFeedback_.remaining=(std::max)(0.0f,gatlingInterceptFeedback_.remaining-dt);
+        if(gatlingInterceptFeedback_.remaining>0 && !FindLiving(runtime,gatlingInterceptFeedback_.owner))
+            gatlingInterceptFeedback_.remaining=0;
         for(auto& cooldown:cooldown_)cooldown=(std::max)(0.0f,cooldown-dt);
         counterRemaining_=(std::max)(0.0f,counterRemaining_-dt);
         gapRemaining_=(std::max)(0.0f,gapRemaining_-dt);
@@ -169,6 +182,16 @@ public:
         const unsigned bit=1u<<unsigned(it-projectiles_.begin());
         if(intercepted_&bit)return false;
         intercepted_|=bit;
+        if(volleyPart_==0 && guardValid_) {
+            // Only a new, accepted destruction in the owned stream may light
+            // the ring. Retain the defensive anchor through the final contact,
+            // when FinishTurn clears the volley and the gold cue moves away.
+            gatlingInterceptFeedback_.guardOffset=guardOffset_;
+            gatlingInterceptFeedback_.worldHitPoint=result.worldHitPoint;
+            gatlingInterceptFeedback_.remaining=RailGatlingInterceptFeedback::Duration;
+            gatlingInterceptFeedback_.owner=volleyOwner_;
+            ++gatlingInterceptFeedback_.sequence;
+        }
         // Each launched round must actually be intercepted. A short opening
         // volley cannot erase the remainder of the gun's firing schedule.
         if(size_t(std::popcount(intercepted_))<count_)return false;
@@ -243,6 +266,7 @@ private:
     float elapsed_=0;
     Vector3 guardOffset_{};
     bool guardValid_=false;
+    RailGatlingInterceptFeedback gatlingInterceptFeedback_{};
     struct Credit {uint64_t shot=0;uint32_t owner=0;uint64_t cycle=0;int part=-1;};
     std::array<Credit,64> credits_{};
     size_t nextCredit_=0;

@@ -1,4 +1,5 @@
-﻿#include "RailTurretGeometry.h"
+#include "RailGroundBatteryAttack.h"
+#include "RailTurretGeometry.h"
 #include "CourseSpawnRuntime.h"
 #include "../diagnostics/DronePerformanceProfile.h"
 #include "RailWorldRaycast.h"
@@ -455,7 +456,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
             enemy.desc.bulletCount=damaged?5:3;
             enemy.desc.bulletLateralSpreadSpeed=damaged?2.25f:2.8f;
         }
-        if(enemy.desc.actorAssetId=="short_turret") {
+        if(RailGroundBattery::IsBattery(enemy.desc.actorAssetId)) {
             // A fixed emplacement must not be chased by the engagement band,
             // launched from the carrier, or left alive behind the camera.
             if(safetyInput.playerDistance>enemy.desc.spawnDistance+enemy.desc.distanceOffset+35.0f) {
@@ -914,8 +915,11 @@ bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
         (!safetyInput.cameraAllowsEnemyFire ||
             !safetyInput.cameraStableForAiming ||
             safetyInput.cameraHardTransition);
+    const float minimumForwardDistance = RailGroundBattery::IsPredictive(enemy.desc.actorAssetId) ?
+        (std::max)(fireSafetySettings_.minForwardDistance,RailGroundBattery::MinimumFireDistance) :
+        fireSafetySettings_.minForwardDistance;
     const bool inFireRange =
-        forwardDistance >= fireSafetySettings_.minForwardDistance &&
+        forwardDistance >= minimumForwardDistance &&
         forwardDistance <= fireSafetySettings_.maxForwardDistance;
 
     if (!cameraBlocks && inFireRange) {
@@ -933,7 +937,7 @@ bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
     }
     if (!inFireRange) {
         enemy.fireSafetyAllowed = false;
-        enemy.fireSafetyReason = forwardDistance < fireSafetySettings_.minForwardDistance
+        enemy.fireSafetyReason = forwardDistance < minimumForwardDistance
             ? "too close / behind safety window"
             : "too far for readable fire";
         ++fireSafetyStats_.blockedByRange;
@@ -961,7 +965,7 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             enemies_.begin(),
             enemies_.end(),
             [](const CourseEnemyActor& enemy) {
-                if (!enemy.HoldsCombatPositionUntilResolved() && enemy.desc.actorAssetId!="short_turret" &&
+                if (!enemy.HoldsCombatPositionUntilResolved() && !RailGroundBattery::IsBattery(enemy.desc.actorAssetId) &&
                     enemy.age >= enemy.desc.lifetime) {
                     return true;
                 }

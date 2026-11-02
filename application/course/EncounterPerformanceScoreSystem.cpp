@@ -1,3 +1,4 @@
+#include "RailGroundBatteryAttack.h"
 #include "EncounterPerformanceScoreSystem.h"
 
 #include <algorithm>
@@ -230,7 +231,7 @@ void EncounterPerformanceScoreSystem::UpdateShowcases(const EncounterPerformance
                 settings.lockSweepScore,settings.maximumResultsPerFrame);
     }
     if (input.weaponFeedback) for (const auto& event:input.combatEvents) {
-        if (event.kind!=EnemyCombatEventKind::Defeated || event.actorAssetId!="short_turret") continue;
+        if (event.kind!=EnemyCombatEventKind::Defeated || !RailGroundBattery::IsBattery(event.actorAssetId)) continue;
         const auto& recent=input.weaponFeedback->RecentEvents();
         const auto hit=std::find_if(recent.begin(),recent.end(),[&](const auto& feedback) {
             return feedback.shotId==event.shotId && feedback.targetActorId==event.actorId &&

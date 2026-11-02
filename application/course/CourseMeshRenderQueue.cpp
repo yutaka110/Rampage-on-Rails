@@ -1,3 +1,4 @@
+#include "RailGroundBatteryAttack.h"
 #include "RailTurretGeometry.h"
 #include "CourseMeshRenderQueue.h"
 
@@ -541,7 +542,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
     const EnemyCombatPresentationBridge* enemyPresentation,
     const EnemyEncounterReadabilityDirector* enemyReadability) {
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
-        if(enemy.desc.actorAssetId=="short_turret" && !enemy.groundPlacementResolved) continue;
+        if(RailGroundBattery::IsBattery(enemy.desc.actorAssetId) && !enemy.groundPlacementResolved) continue;
         // A frozen visual wreck owns all four parts after defeat. Do not also
         // draw the shrinking, camera-facing live actor during its retirement.
         if(enemyPresentation && std::any_of(enemyPresentation->Frame().destructionBursts.begin(),

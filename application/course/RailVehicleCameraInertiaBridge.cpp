@@ -22,7 +22,7 @@ bool RailVehicleCameraInertiaSettings::Validate(std::string* errorMessage) const
 }
 
 void RailVehicleCameraInertiaBridge::Reset() {
-    frame_={}; longitudinal_={}; lateral_={}; targetLead_={}; roll_={}; fov_={};
+    frame_={}; longitudinal_={}; lateral_={}; targetLead_={}; roll_={}; fov_={}; surge_={};
     previousDistance_=0.0f; previousVehicleId_.clear(); initialized_=false; revision_=0;
 }
 
@@ -46,7 +46,7 @@ const RailVehicleCameraInertiaFrame& RailVehicleCameraInertiaBridge::Update(
     const bool discontinuity=!initialized_ || previousVehicleId_!=input.state->vehicleId ||
         std::abs(input.state->distance-previousDistance_)>input.settings.distanceDiscontinuityThreshold;
     if (discontinuity) {
-        longitudinal_={}; lateral_={}; targetLead_={}; roll_={}; fov_={};
+        longitudinal_={}; lateral_={}; targetLead_={}; roll_={}; fov_={}; surge_={};
         next.historyResetThisFrame=true;
     }
     initialized_=true;
@@ -100,6 +100,7 @@ const RailVehicleCameraInertiaFrame& RailVehicleCameraInertiaBridge::Update(
     fovTarget += (input.aimFocusActive ? 3.0f : 5.0f) *
         (std::clamp)(input.manualBoostStrength, 0.0f, 1.0f) * kPi / 180.0f;
     fovTarget += (input.aimFocusActive ? 0.45f : 0.9f) * ignition * kPi / 180.0f;
+    const float surge=std::isfinite(input.rewardBoostSurge)?(std::clamp)(input.rewardBoostSurge,0.0f,1.0f):0;
 
     float remaining=(std::clamp)(input.deltaTime,0.0f,0.25f);
     while (remaining>0.0f) {
@@ -109,12 +110,15 @@ const RailVehicleCameraInertiaFrame& RailVehicleCameraInertiaBridge::Update(
         StepSpring(targetLead_,leadTarget,input.settings.targetResponseHz,step);
         StepSpring(roll_,rollTarget,input.settings.positionResponseHz,step);
         StepSpring(fov_,fovTarget,input.settings.fovResponseHz,step);
+        StepSpring(surge_,surge,6.0f,step);
         remaining-=step;
     }
-    next.gameplayPositionOffset=Add(Scale(forward,longitudinal_.value),Scale(right,lateral_.value));
+    // A single critically-damped catch-up shared by aim and display.
+    next.gameplayPositionOffset=Add(Scale(forward,longitudinal_.value-
+        surge_.value*(input.aimFocusActive?1.35f:3.2f)),Scale(right,lateral_.value));
     next.gameplayTargetOffset=Scale(right,targetLead_.value);
     next.rollOffsetRadians=roll_.value;
-    next.fovOffsetRadians=fov_.value;
+    next.fovOffsetRadians=fov_.value+surge_.value*(input.aimFocusActive?1.25f:2.5f)*kPi/180.0f;
     if (input.rideDynamics && input.rideDynamics->valid) {
         const float suspension=ClampAbs(
             -input.rideDynamics->suspensionOffset*input.settings.suspensionFollow,

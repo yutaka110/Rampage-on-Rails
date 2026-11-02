@@ -1,5 +1,6 @@
 #include "RailRideMotionEnvelope.h"
 #include "RailManualBoost.h"
+#include "RailKillBoost.h"
 
 #include <algorithm>
 #include <cmath>
@@ -79,6 +80,16 @@ const RailRideMotionEnvelopeFrame& RailRideMotionEnvelope::Evaluate(
     const float boostBlend = (boost - 1.0f) / RailManualBoost::SpeedGain;
     next.accelerationLimit *= Lerp(1.0f, RailManualBoost::AccelerationMultiplier, boostBlend);
     if (boost > 1.00001f) next.jerkLimit = (std::min)(next.jerkLimit, RailManualBoost::MaximumJerk);
+    const float rewardAttack=std::isfinite(input.rewardBoostAttack)?(std::clamp)(input.rewardBoostAttack,0.0f,1.0f):0;
+    if(rewardAttack>0 && boost>1.00001f) {
+        // Budget the derivative and curvature of the independent 0.2s speed
+        // ramp. Raising only the target leaves the normal motor/jerk limits
+        // stretching actual acceleration back across the body spin.
+        const float gain=RailManualBoost::RequestedSpeed(next.normalRequestedSpeed,RailKillBoost::MaximumMultiplier)-next.normalRequestedSpeed;
+        const float attack=RailKillBoost::AccelerationSeconds;
+        next.accelerationLimit=(std::max)(next.accelerationLimit,1.5f*gain/attack*rewardAttack);
+        next.jerkLimit=(std::max)(next.jerkLimit,6.0f*gain/(attack*attack)*rewardAttack);
+    }
     if (input.railPath != nullptr && input.railPath->Length() > 0.0f) {
         const float distance = input.vehicleState != nullptr
             ? input.vehicleState->distance : ride.distance;

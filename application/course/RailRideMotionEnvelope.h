@@ -12,6 +12,7 @@ struct RailRideMotionEnvelopeInput final {
     const RailPath* railPath = nullptr;
     float normalSpeedScale = 1.0f;
     float manualBoostMultiplier = 1.0f;
+    float rewardBoostAttack = 0.0f;
 };
 
 struct RailRideMotionEnvelopeFrame final {

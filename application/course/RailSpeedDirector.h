@@ -5,6 +5,7 @@
 
 #include "CourseAsset.h"
 #include "RailManualBoost.h"
+#include "RailKillBoost.h"
 #include "../terrain/RailPath.h"
 
 enum class RailSpeedZoneMode {
@@ -46,6 +47,7 @@ struct RailSpeedDirectorFrameInput {
     const CourseRideProfileDefinition* rideProfile = nullptr;
     float distance = 0.0f;
     float deltaTime = 0.016f;
+    bool killBoostAllowed = true;
 };
 
 struct RailSpeedDirectorFrame {
@@ -72,6 +74,17 @@ public:
     void Reset();
     void SetManualBoostInput(bool held, bool enabled) { manualBoost_.SetInput(held, enabled); }
     const RailManualBoost& ManualBoost() const { return manualBoost_; }
+    RailKillBoost& KillBoost() { return killBoost_; }
+    const RailKillBoost& KillBoost() const { return killBoost_; }
+    float BoostMultiplier() const {return (std::max)(manualBoost_.SpeedMultiplier(),killBoost_.SpeedMultiplier());}
+    float BoostPresentationStrength(float speed,float normalSpeed) const {
+        if(!std::isfinite(speed) || !std::isfinite(normalSpeed) || normalSpeed<1)return 0;
+        const float gain=RailManualBoost::RequestedSpeed(normalSpeed,RailKillBoost::MaximumMultiplier)-normalSpeed;
+        return (std::min)((BoostMultiplier()-1)/(RailKillBoost::MaximumMultiplier-1),
+            (std::clamp)((speed-normalSpeed)/(std::max)(1.0f,gain),0.0f,1.0f));
+    }
+    float BoostIgnitionPulse()const{return (std::max)(manualBoost_.IgnitionPulse()*.45f,killBoost_.IgnitionPulse());}
+    bool BoostStartedThisFrame()const{return manualBoost_.StartedThisFrame() || killBoost_.StartedThisFrame();}
     void NotifyCourseEvents(const std::vector<CourseEventMarker>& events);
     RailSpeedDirectorFrame Evaluate(const RailSpeedDirectorFrameInput& input);
 
@@ -86,6 +99,7 @@ private:
 
     RailSpeedDirectorSettings settings_{};
     RailManualBoost manualBoost_{};
+    RailKillBoost killBoost_{};
     RailSpeedDirectorFrame lastFrame_{};
     float eventSlowTimer_ = 0.0f;
     float eventBoostTimer_ = 0.0f;
