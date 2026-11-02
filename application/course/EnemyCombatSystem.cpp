@@ -131,6 +131,7 @@ void EnemyCombatSystem::Reset() {
 }
 
 void EnemyCombatSystem::InitializeActor(CourseEnemyActor& actor) {
+    actor.energyShield.Initialize(actor.desc.energyShield);
     actor.combatDefinition = ResolveEnemyCombatDefinition(actor.desc);
     EnemyCombatRuntimeState& state = actor.combatState;
     state = {};
@@ -180,6 +181,7 @@ void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors, float d
         ++frameStats_.activeActors;
 
         state.phaseElapsedSeconds += dt;
+        actor.energyShield.Update(dt);
         state.hitFlash = (std::max)(0.0f, state.hitFlash - dt * 8.0f);
         if (actor.desc.hitPoints < state.currentHitPoints) {
             state.currentHitPoints = (std::max)(0.0f, actor.desc.hitPoints);

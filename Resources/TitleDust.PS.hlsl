@@ -1,4 +1,5 @@
 // Seeded billows, with dense shaded centres and broken translucent edges.
+#include "RailEnergyShield.hlsli"
 struct PixelInput {
     float4 position : SV_POSITION;
     float2 texcoord : TEXCOORD0;
@@ -14,6 +15,7 @@ float Fbm(float2 p) {
     return Noise(p)*0.5f+Noise(p*2.07f+7.1f)*0.28f+Noise(p*4.13f+17.3f)*0.15f+Noise(p*8.3f)*0.07f;
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=3000 && input.texcoord.x<3002)return RenderRailEnergyShieldBacking(input.texcoord,input.color);
     if(input.texcoord.x>=4000.0f) {
         float2 p=float2((input.texcoord.x-4000.5f)*2,input.texcoord.y*2-1);
         float edge=max(abs(p.x)*0.82f+abs(p.y)*0.36f,abs(p.y)*0.94f)+0.12f*(p.x+p.y);

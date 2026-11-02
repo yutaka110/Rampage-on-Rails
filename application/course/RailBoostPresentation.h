@@ -26,7 +26,7 @@ struct RailBoostExhaust final {
 };
 
 struct RailBoostPresentationInput final {
-    float deltaTime=0, distance=0, speed=0, strength=0, ignition=0,nearFlow=0;
+    float deltaTime=0, distance=0, speed=0, strength=0, ignition=0,nearFlow=0,thrust=0;
     bool gameplayActive=false;
     Matrix4x4 bodyWorld=MakeIdentity4x4();
     Vector3 ground{}, forward{0,0,1}, right{1,0,0}, up{0,1,0};
@@ -55,7 +55,7 @@ struct RailBoostPresentationFrame final {
     std::array<RailBoostGroundMark,32> groundMarks{};
     size_t ribbonCount=0, dustCount=0;
     size_t groundMarkCount=0;
-    float strength=0, animationUvY=0, ignition=0, ignitionShock=0;
+    float strength=0, animationUvY=0, ignition=0, ignitionShock=0,thrust=0;
     std::array<Vector4,2> lights{}; // world position + local radiance strength
     Vector3 exhaustRight{1,0,0}, exhaustUp{0,1,0};
 };
@@ -117,7 +117,8 @@ public:
             emitAlong(dustDistance_,1.10f/(0.35f+0.65f*strength_),false);
             emitAlong(windDistance_,0.48f/(0.35f+0.65f*strength_),true);
         } else { dustDistance_=windDistance_=0; }
-        frame_={}; frame_.strength=strength_; frame_.ignition=ignition;
+        const float thrust=std::isfinite(in.thrust)?(std::clamp)(in.thrust,0.0f,1.0f):0;
+        frame_={}; frame_.strength=strength_; frame_.ignition=ignition; frame_.thrust=thrust;
         for(const auto& p:ground_)if(p.live && nearStrength_>.006f && frame_.groundMarkCount<frame_.groundMarks.size()) {
             auto mark=p.mark;
             mark.opacity=nearStrength_*.30f*rail_boost_detail::Smooth(p.age/.04f)*
@@ -131,7 +132,7 @@ public:
         frame_.ignitionShock=shock*shock;
         frame_.exhaustRight={in.bodyWorld.m[0][0],in.bodyWorld.m[0][1],in.bodyWorld.m[0][2]};
         frame_.exhaustUp={in.bodyWorld.m[1][0],in.bodyWorld.m[1][1],in.bodyWorld.m[1][2]};
-        frame_.animationUvY=2*float(uint32_t(clock_*18.0f)%64);
+        frame_.animationUvY=2*float(uint32_t(clock_*60.0f)%64);
         if (strength_>0.012f) for (float side:{-1.0f,1.0f}) {
             // The aperture and plume share the rendered suspension/banking
             // matrix. A short ignition overshoot settles into a thick jet.
@@ -140,13 +141,13 @@ public:
             const auto head=rail_boost_detail::Point(root,in.bodyWorld);
             const auto tail=rail_boost_detail::Point(
                 {root.x+side*(0.45f+0.22f*strength_),root.y-0.12f,
-                    root.z-(2.9f+2.4f*strength_+0.7f*ignition)},in.bodyWorld);
-            frame_.ribbons[frame_.ribbonCount++]={head,tail,0.70f+0.40f*strength_+0.26f*ignition,
+                    root.z-(2.9f+2.4f*strength_+0.7f*ignition+2.4f*thrust)},in.bodyWorld);
+            frame_.ribbons[frame_.ribbonCount++]={head,tail,(0.70f+0.40f*strength_+0.26f*ignition)*(1-.14f*thrust),
                 (std::min)(1.0f,strength_+ignition*0.65f),true};
             // Small unshadowed lights stay outside the hull; their six-unit
             // cutoff bounds the bounce to the cart and passing rail/ground.
             const auto light=rail_boost_detail::Point({root.x+side*0.16f,root.y+0.10f,root.z-0.32f},in.bodyWorld);
-            frame_.lights[side<0 ? 0:1]={light.x,light.y,light.z,0.95f*strength_+2.0f*ignition};
+            frame_.lights[side<0 ? 0:1]={light.x,light.y,light.z,0.95f*strength_+2.0f*ignition+1.2f*thrust};
         }
         for (const auto& p:particles_) if (p.live && strength_>0.006f) {
             const float fade=rail_boost_detail::Smooth(p.age/0.06f)*

@@ -70,6 +70,11 @@ struct DamageResult {
     bool destroyed = false;
     bool duplicate = false;
     bool armorReduced = false;
+    bool shieldHit = false;
+    bool shieldBroken = false;
+    float shieldDamage = 0.0f;
+    float remainingShield = 0.0f;
+    Vector3 surfacePosition{},surfaceNormal{};
 };
 
 // Actor-ID based damage reception boundary for runtime Course actors and

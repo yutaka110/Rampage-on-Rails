@@ -4,6 +4,7 @@
 
 #include "utils/math/Vector.h"
 #include "EnemyBehaviorSystem.h"
+#include "EnemyEnergyShield.h"
 
 struct CourseActorAsset {
     std::string id;
@@ -19,6 +20,7 @@ struct CourseActorAsset {
     float bulletSpeed = 48.0f;
     Vector4 color{1.0f, 0.25f, 0.18f, 1.0f};
     EnemyBehaviorDefinition behaviorDefinition{};
+    EnemyEnergyShieldDefinition energyShield{};
 
     bool LoadFromFile(const std::string& path, std::string* errorMessage = nullptr);
 };

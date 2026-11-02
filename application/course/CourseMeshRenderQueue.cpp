@@ -409,7 +409,7 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 *item->materialData=timber;
                 item->useMaterialOverride=true;
             }
-            if (placement.meshId == "course_blockout_bridge" && item->materialData != nullptr) {
+            if ((placement.meshId == "course_blockout_bridge" || placement.meshId == "rail_speed_marker") && item->materialData != nullptr) {
                 Material steel{};
                 steel.color={1,1,1,1};
                 steel.enableLighting=true;
@@ -674,7 +674,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             pose.flash = presentation ? presentation->flashStrength : 0.0f;
             pose.death = presentation && presentation->animation == EnemyCombatAnimationState::Death
                 ? presentation->animationNormalizedTime : 0.0f;
-            WriteTwinShieldDrone(*item,pose,models,viewProjection);
+            WriteTwinShieldDrone(*item,pose,models,viewProjection,enemy.desc.energyShield.enabled);
             continue;
         }
         if (item->materialData != nullptr) {
@@ -1291,7 +1291,7 @@ void CourseMeshRenderQueue::AppendTwinShieldDrone(const TwinShieldDronePose& pos
 
 void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
     const TwinShieldDronePose& pose, std::span<const CourseMeshModelBinding> models,
-    const Matrix4x4& viewProjection) {
+    const Matrix4x4& viewProjection,bool energyShield) {
     const bool wreck=pose.destructionAge>=0;
     const auto breakup=wreck ? EvaluateTwinShieldDroneBreakup(pose) : TwinShieldDroneBreakupFrame{};
     auto attachment = [&](float side) {
@@ -1335,6 +1335,7 @@ void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
         part->visible = part->transformData != nullptr;
         if (part->materialData && hull.materialData) {
             *part->materialData = *hull.materialData;
+            if(std::string_view(id)=="energy_shield_emitter")part->materialData->specularMode=3;
             if (core) {
                 part->materialData->enableLighting = false;
                 part->materialData->specularMode = 11;
@@ -1364,4 +1365,8 @@ void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
     addReferencePart("twin_shield_panel","/left-shield",{-spread,-pose.death*0.30f,0},-opening,false);
     addReferencePart("twin_shield_panel","/right-shield",{spread,-pose.death*0.30f,0},opening,false);
     addReferencePart("twin_shield_core","/sensor-core",{},0,true);
+    if(energyShield && !wreck) {
+        addReferencePart("energy_shield_emitter","/left-emitter",{-1.34f,0,-.76f},0,false);
+        addReferencePart("energy_shield_emitter","/right-emitter",{1.34f,0,-.76f},0,false);
+    }
 }

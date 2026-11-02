@@ -3,6 +3,7 @@
 #include "CourseCollisionSystem.h"
 #include "../terrain/RailPath.h"
 #include "RailHeavyAttack.h"
+#include "EnemyEnergyShieldActor.h"
 #include <algorithm>
 #include <cmath>
 
@@ -207,10 +208,9 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
         if(laser.resolved) continue;
         Vector3 target;
         const bool valid=TargetPosition(laser.target,rail,runtime,target);
-        if(valid) laser.end=target;
+        if(valid) laser.end=ResolveEnemyShieldLockEndpoint(laser.target,muzzle,target,runtime);
         if(laser.age<laser.delay && valid) continue;
         if(!laser.launched && valid) {laser.start=laser.position=muzzle;laser.launched=true;}
-        const auto previous=laser.position;
         if(laser.launched) laser.position=laser.Curve(laser.Progress());
         if(valid && laser.Progress()<1) continue;
         laser.resolved=true;laser.endedAge=laser.age;
@@ -226,7 +226,11 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 if(contacts_.size()>=ContactCapacity)contacts_.erase(contacts_.begin());contacts_.push_back(contact);
             }
         } else if(valid) {
-            auto origin=previous;
+            // The curved fan is presentation. Classify front protection from
+            // the actual firing side, using the same ray as the surface endpoint.
+            // A moving shield can otherwise cross the previous ribbon sample
+            // and be incorrectly treated as a rear hit in the arrival frame.
+            auto origin=muzzle;
             auto delta=Add(laser.end,Scale(origin,-1));
             float distance=Length(delta);
             if(distance<0.001f){origin=laser.start;delta=Add(laser.end,Scale(origin,-1));distance=Length(delta);}

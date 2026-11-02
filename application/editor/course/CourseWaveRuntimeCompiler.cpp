@@ -63,6 +63,7 @@ void ApplyActorAsset(CourseEnemyActorDesc& actor, const CourseActorAsset& asset)
     actor.bulletSpeed = asset.bulletSpeed;
     actor.color = asset.color;
     actor.behaviorDefinition = asset.behaviorDefinition;
+    actor.energyShield = asset.energyShield;
 }
 
 void ApplyBulletPattern(CourseEnemyActorDesc& actor, const BulletPatternAsset& asset) {

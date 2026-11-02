@@ -144,6 +144,24 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 result.remainingHitPoints = currentHitPoints;
                 return result;
             }
+            if(enemy.energyShield.lastShotId==request.shotId) {
+                result.rejectReason=DamageRejectReason::DuplicateShot;result.duplicate=true;
+                return result;
+            }
+            if(enemy.energyShield.Active(enemy.desc.energyShield) && enemy.weaponMount.ready) {
+                const auto contact=EnemyEnergyShield::Intersect(enemy.weaponMount.dronePose,
+                    request.rayOrigin,request.rayDirection,request.hitDistance);
+                if(contact.hit) {
+                    result.hitPointsBefore=result.remainingHitPoints=currentHitPoints;
+                    result.blocked=result.shieldHit=true;
+                    result.surfacePosition=contact.position;result.surfaceNormal=contact.normal;
+                    result.shieldDamage=request.lockOnContact?0.0f:(std::min)(enemy.energyShield.hitPoints,request.baseDamage);
+                    enemy.energyShield.Contact(request.shotId,contact.uv,request.lockOnContact,result.shieldDamage);
+                    result.remainingShield=enemy.energyShield.hitPoints;
+                    result.shieldBroken=result.remainingShield<=0;
+                    return result;
+                }
+            }
             const bool counter = request.counterTargetActorId==enemy.actorId &&
                 RailBatteryDamage::IsCounterWeapon(enemy.desc.actorAssetId,request.lockOnContact) &&
                 request.damageType==(request.lockOnContact?WeaponDamageType::Ice:WeaponDamageType::Energy);

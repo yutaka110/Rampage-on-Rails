@@ -26,9 +26,9 @@ void TestKillBoostCountAndActivation(RegressionRunner& runner) {
         runner.Expect(!retry.ObserveDefeat(defeat(6)),"checkpoint copies preserve kill deduplication");
         retry.Update(dt);runner.Expect(retry.Serial()==1 && retry.Charge()==0,"retry restores a pending reward exactly once");
         for(unsigned id=7;id<=30;++id)boost.ObserveDefeat(defeat(id));
-        runner.Expect(boost.Charge()==6,"kills during a boost retain at most one next activation");
-        for(int frame=0;frame<int(std::ceil((RailKillBoost::TotalSeconds+.1f)*fps));++frame)boost.Update(dt);
-        runner.Expect(boost.Serial()==2 && boost.Active() && boost.Charge()==0,"one banked boost begins after the release, without speed stacking");
+        runner.Expect(boost.Charge()==0 && boost.HoldRemaining()<=RailKillBoost::MaximumHoldRemaining+.001f,"kills extend the current boost up to six seconds without banking a second reward");
+        for(int frame=0;frame<int(std::ceil((RailKillBoost::MaximumHoldRemaining+RailKillBoost::ReleaseSeconds+.1f)*fps));++frame)boost.Update(dt);
+        runner.Expect(boost.Serial()==1 && !boost.Active() && boost.Charge()==0,"an extended boost ends once without spinning or igniting again");
         boost.Reset();runner.Expect(boost.TotalKills()==0 && boost.Charge()==0 && !boost.Active(),"a fresh run clears reward and counted IDs");
     }
 }
@@ -124,6 +124,226 @@ struct KillBoostTravelFixture final {
     }
 };
 
+__declspec(noinline) void TestFastNormalTravel(RegressionRunner& runner) {
+    CourseAsset course;RailVehicleControlDefinitionAsset preset;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) &&
+        preset.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),"normal travel loads production course and tuning");
+    RailPath rail;course.ApplyToRailPath(rail);
+    std::ofstream report("logs/fast_normal_full_travel.csv");report<<"fps,E,seconds,distance,speed,normal,requested,corner_limited,forecast_error\n";
+    for(int fps:{30,60,120})for(bool held:{false,true}) {
+        const float dt=1.0f/fps;CourseRuntime travel;travel.Bind(&course);travel.SetTraversalEndDistance(3800);travel.Reset(160);
+        RailVehicleMovementSystem vehicle;vehicle.Initialize(preset.vehicle);vehicle.Reset(160,29.45f,&rail);
+        auto state=vehicle.State();state.movementEnabled=true;vehicle.RestoreState(state,&rail);
+        RailSpeedDirector speed;speed.Configure(preset.speedPolicy);speed.SetManualBoostInput(held,true);
+        RailRideDirector ride;RailRideMotionEnvelope envelope;float elapsed=0,nextSample=160;unsigned samples=0;
+        for(int step=0;step<fps*180 && travel.Distance()<3799.98f;++step) {
+            const bool sampling=travel.Distance()>=nextSample;
+            std::shared_ptr<const RailTravelPrediction> forecast;
+            if(sampling) {
+                RailTravelPredictionInput fi;fi.vehicle=&vehicle;fi.speedDirector=&speed;fi.courseRuntime=&travel;
+                fi.course=&course;fi.railPath=&rail;fi.simulationStepSeconds=dt;forecast=BuildRailTravelPrediction(fi,dt);
+                nextSample+=100;++samples;
+            }
+            RailSpeedDirectorFrameInput si;si.course=&course;si.railPath=&rail;si.distance=travel.Distance();si.deltaTime=dt;
+            si.section=travel.CurrentSection();si.rideProfile=course.FindRideProfile(si.distance);const auto policy=speed.Evaluate(si);
+            RailRideDirectorInput ri;ri.course=&course;ri.railPath=&rail;ri.distance=travel.Distance();ri.baseRequestedSpeed=policy.requestedSpeed;
+            const auto intent=ride.Evaluate(ri);
+            RailRideMotionEnvelopeInput ei;ei.vehicleDefinition=&preset.vehicle;ei.vehicleState=&vehicle.State();ei.ride=&intent;ei.railPath=&rail;
+            ei.normalSpeedScale=preset.speedPolicy.normalSpeedScale;ei.manualBoostMultiplier=speed.BoostMultiplier();
+            const auto motion=envelope.Evaluate(ei);
+            RailVehicleMovementInput mi;mi.deltaTime=dt;mi.requestedSpeed=motion.requestedSpeed;mi.motionEnvelopeActive=motion.active;
+            mi.manualBoostMultiplier=motion.manualBoostMultiplier;mi.accelerationLimit=motion.accelerationLimit;mi.brakingLimit=motion.brakingLimit;
+            mi.jerkLimit=motion.jerkLimit;mi.courseRuntime=&travel;mi.railPath=&rail;
+            speed.NotifyCourseEvents(vehicle.Update(mi).triggeredEvents);elapsed+=dt;
+            if(sampling) {
+                const float delta=forecast?std::abs(travel.Distance()-forecast->DistanceAt(dt)):1000;
+                runner.Expect(delta<.02f,"full normal/E travel matches the prediction used by enemy fire, including bridge and profile boundaries");
+                report<<fps<<','<<held<<','<<elapsed<<','<<travel.Distance()<<','<<vehicle.State().speed<<','<<motion.normalRequestedSpeed<<','<<motion.requestedSpeed<<','<<motion.cornerLimited<<','<<delta<<'\n';
+            }
+        }
+        runner.Expect(travel.Distance()>3799.9f && elapsed<180 && samples>=36 && speed.KillBoost().Serial()==0,
+            "the complete rail is traversable at the new ordinary pace without E or injected reward activations");
+    }
+    for(const auto& sample:std::array<std::pair<float,float>,6>{{{500.0f,29.45f},{1000.0f,44.55f},{1750.0f,36.0f},{2200.0f,46.575f},{2800.0f,54.675f},{3500.0f,36.45f}}}) {
+        RailSpeedDirector speed;speed.Configure(preset.speedPolicy);
+        RailSpeedDirectorFrameInput si;si.course=&course;si.railPath=&rail;si.distance=sample.first;si.section=course.FindSection(sample.first);
+        si.rideProfile=course.FindRideProfile(sample.first);const auto policy=speed.Evaluate(si);
+        RailRideDirector ride;RailRideDirectorInput ri;ri.course=&course;ri.railPath=&rail;ri.distance=sample.first;ri.baseRequestedSpeed=policy.requestedSpeed;
+        const auto intent=ride.Evaluate(ri);RailRideMotionEnvelope envelope;RailRideMotionEnvelopeInput ei;ei.vehicleDefinition=&preset.vehicle;ei.ride=&intent;
+        ei.normalSpeedScale=preset.speedPolicy.normalSpeedScale;const auto normal=envelope.Evaluate(ei);
+        runner.Expect(std::abs(normal.normalRequestedSpeed-sample.second)<.002f,"ordinary section targets match former E travel and the bridge has one shared baseline");
+        ei.manualBoostMultiplier=RailManualBoost::HeldMaximumMultiplier;const auto manual=envelope.Evaluate(ei);
+        ei.manualBoostMultiplier=RailKillBoost::MaximumMultiplier;const auto reward=envelope.Evaluate(ei);
+        runner.Expect(std::abs(manual.requestedSpeed/sample.second-1.2f)<.001f && std::abs(reward.requestedSpeed/sample.second-1.4f)<.001f &&
+            reward.requestedSpeed>manual.requestedSpeed && manual.requestedSpeed>normal.requestedSpeed,
+            "ordinary, E and defeat reward retain distinct increasing tiers in every main section");
+    }
+}
+
+__declspec(noinline) void TestManualSpeedFeel(RegressionRunner& runner) {
+    std::ofstream metrics("logs/manual_speed_feel.csv");
+    metrics<<"fps,multiplier,base,speed,target,flow,peak_lag,forecast_error\n";
+    for(int fps:{30,60,120})for(float multiplier:{1.15f,1.20f})for(float base:{18.9f,32.0f,64.0f}) {
+        const float dt=1.0f/fps;KillBoostTravelFixture live(base);
+        live.speed.SetManualBoostMaximum(multiplier);live.speed.SetManualBoostInput(true,true);
+        const auto forecast=live.Forecast(dt,3);
+        RailVehicleCameraInertiaBridge camera;RailBoostPresentation flow;
+        float peakLag=0,error=0;size_t groundPeak=0;
+        for(int frame=0;frame<fps*3;++frame) {
+            live.Step(dt);const auto& state=live.vehicle.State();
+            const float strength=live.speed.TravelPresentationStrength(state.speed,base);
+            RailVehicleCameraInertiaInput ci;ci.definition=&live.vehicle.Definition();ci.state=&state;ci.deltaTime=dt;
+            ci.manualBoostStrength=strength;ci.manualBoostSurge=live.speed.ManualBoost().SurgePulse();
+            const auto view=camera.Update(ci);peakLag=(std::min)(peakLag,view.gameplayPositionOffset.z);
+            RailBoostPresentationInput vi;vi.gameplayActive=true;vi.deltaTime=dt;vi.speed=state.speed;
+            vi.distance=live.travel.Distance();vi.ground={0,0,vi.distance};vi.strength=strength;vi.nearFlow=strength;
+            flow.Update(vi);groundPeak=(std::max)(groundPeak,flow.Frame().groundMarkCount);
+            error=(std::max)(error,std::abs(live.travel.Distance()-forecast->DistanceAt((frame+1)*dt)));
+        }
+        const float target=RailManualBoost::RequestedSpeed(base,multiplier);
+        runner.Expect(std::abs(live.vehicle.State().speed-target)<.03f && error<.06f,
+            "both manual speed candidates achieve real travel and match enemy forecasts at 30/60/120fps");
+        runner.Expect(live.speed.ManualPresentationStrength(live.vehicle.State().speed,base)>.81f &&
+            live.speed.TravelPresentationStrength(base,base)==0 && groundPeak>8 && peakLag<-.3f &&
+            std::abs(camera.Frame().gameplayPositionOffset.z)<.01f,
+            "manual-only travel has sustained near flow, a single settling catch-up and no effects without achieved speed");
+        metrics<<fps<<','<<multiplier<<','<<base<<','<<live.vehicle.State().speed<<','<<target<<','<<groundPeak<<','<<peakLag<<','<<error<<'\n';
+        runner.Expect(!live.speed.KillBoost().Active() && live.speed.KillBoost().TotalKills()==0,
+            "manual comparison never injects a reward or defeats");
+    }
+}
+
+__declspec(noinline) void TestKillBoostExtension(RegressionRunner& runner) {
+    const auto defeat=[](unsigned id) {
+        EnemyCombatEvent e;e.kind=EnemyCombatEventKind::Defeated;e.actorId=id;e.shotId=id;
+        e.actorAssetId="short_scout";e.appliedDamage=24;e.feedbackKind=HitFeedbackKind::Destroyed;return e;
+    };
+    for(int fps:{30,60,120})for(bool manual:{false,true}) {
+        const float dt=1.0f/fps;KillBoostTravelFixture live(18.9f);
+        live.speed.SetManualBoostInput(manual,true);live.Charge();live.speed.KillBoost().ActivatePending();
+        for(int i=0;i<2*fps;++i)live.Step(dt);
+        auto& reward=live.speed.KillBoost();const auto age=reward.Age();const auto remaining=reward.Remaining();
+        runner.Expect(reward.ObserveDefeat(defeat(7)) && std::abs(reward.Remaining()-remaining-1.5f)<.0001f &&
+            reward.Age()==age && reward.Serial()==1 && reward.Charge()==0 && reward.SpinDegrees()==0,
+            "a real kill adds 1.5 seconds without rewinding age, spinning or banking another reward");
+        runner.Expect(!reward.ObserveDefeat(defeat(7)),"a repeated defeat cannot extend duration twice");
+        for(unsigned id=8;id<30;++id)reward.ObserveDefeat(defeat(id));
+        runner.Expect(std::abs(reward.HoldRemaining()-6)<.0001f && reward.Charge()==0,
+            "a multi-kill clamps remaining hold to six seconds without excess charge");
+        const auto checkpoint=live.speed;const auto forecast=live.Forecast(dt,8);
+        runner.Expect(checkpoint.KillBoost().Remaining()==reward.Remaining() && checkpoint.KillBoost().Extensions()==reward.Extensions(),
+            "checkpoint and forecast snapshots retain the extended expiry and duplicate guards");
+        reward.Update(dt,false);reward.Update(dt,true,false);
+        runner.Expect(reward.Age()==age,"pause and disabled control cannot drain an extended boost");
+        for(int i=1;i<=8*fps;++i) {
+            live.Step(dt);
+            runner.Expect(std::abs(live.travel.Distance()-forecast->DistanceAt(i*dt))<.06f,
+                "extended hold and release agree with production enemy travel prediction");
+        }
+        runner.Expect(!reward.Active() && reward.Serial()==1 && reward.Charge()==0,
+            "extended boost eventually releases with no automatic second ignition");
+        live.speed.KillBoost().Reset();live.Charge();reward.ActivatePending();
+        while(reward.HoldRemaining()>.001f)live.Step(dt);
+        for(int i=0;i<fps/3;++i)live.Step(dt);
+        const float before=reward.Blend();const auto serial=reward.Serial();
+        reward.ObserveDefeat(defeat(40));
+        runner.Expect(before>0 && before<.8f && std::abs(reward.Blend()-before)<.0001f && reward.Serial()==serial && !reward.Spinning(),
+            "a last-moment kill rescues release without a speed, pose or ignition discontinuity");
+        for(int i=0;i<fps/4;++i)live.Step(dt);
+        runner.Expect(reward.Blend()>.999f && reward.HoldRemaining()>1,
+            "release rescue smoothly recovers full speed through the normal acceleration envelope");
+    }
+    CourseAsset course;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"speed-feel audit loads the shipped complete course");
+    unsigned markers=0;
+    for(const auto& p:course.terrainPlacements)if(p.meshId=="rail_speed_marker") {
+        ++markers;
+        runner.Expect(std::abs(p.lateralOffset)>=6.6f && p.collisionMode==CourseTerrainCollisionMode::None,
+            "trackside markers keep the vehicle and firing corridor clear without introducing collisions");
+    }
+    runner.Expect(markers>=70 && markers<100,"near-field markers are bounded and authored across bridge and open valleys");
+    runner.Expect(ShortRunAllowsAdaptivePatrol(1750) && !ShortRunAllowsAdaptivePatrol(1400),
+        "bridge recovery permits gap filling while the grounded battery fight remains protected");
+}
+
+__declspec(noinline) void TestBoostLaunchComposition(RegressionRunner& runner) {
+    CourseAsset course;std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"boost composition loads the production rail and camera keys");
+    RailPath rail;course.ApplyToRailPath(rail);
+    std::ofstream report("logs/boost_launch_composition.csv");report<<"fps,aspect,focus,section,age,top,bottom,width,safe\n";
+    for(int fps:{30,60,120})for(float aspect:{4.0f/3,16.0f/9,21.0f/9})for(bool focus:{false,true})
+    for(float start:{280.0f,650.0f,850.0f,1200.0f,1780.0f,2330.0f,2650.0f,3000.0f}) {
+        RailKillBoost boost;
+        for(unsigned id=1;id<=6;++id) {
+            EnemyCombatEvent e;e.kind=EnemyCombatEventKind::Defeated;e.actorId=id;e.shotId=id;
+            e.actorAssetId="short_scout";e.appliedDamage=24;e.feedbackKind=HitFeedbackKind::Destroyed;boost.ObserveDefeat(e);
+        }
+        boost.ActivatePending();RailCameraDirector director;RailVehicleCameraInertiaBridge inertia;
+        RailVehicleDefinition definition;RailVehicleRuntimeState state;state.initialized=true;state.vehicleId="launch-framing";
+        const float dt=1.0f/fps;
+        for(int frame=0;frame<fps*2;++frame) {
+            const float age=frame*dt;const float distance=start+35.78f*age;const auto sample=rail.Evaluate(distance);
+            state.distance=distance;state.speed=35.78f;state.forward=sample.tangent;state.up=sample.up;state.right=sample.right;
+            state.position=sample.position;
+            RailVehicleCameraInertiaInput ii;ii.definition=&definition;ii.state=&state;ii.deltaTime=dt;ii.aimFocusActive=focus;
+            ii.rewardBoostSurge=boost.SurgePulse();ii.manualBoostStrength=boost.Blend();const auto motion=inertia.Update(ii);
+            RailCameraDirectorFrameInput ci;ci.course=&course;ci.railPath=&rail;ci.distance=distance;ci.deltaTime=dt;
+            ci.viewportHeight=900;ci.viewportWidth=uint32_t(900*aspect);ci.vehicleFramingActive=true;ci.vehicleActionFramingWeight=1;
+            ci.cameraInertiaActive=true;ci.cameraInertiaGameplayPositionOffset=motion.gameplayPositionOffset;
+            ci.cameraInertiaGameplayTargetOffset=motion.gameplayTargetOffset;ci.cameraInertiaFovOffsetRadians=motion.fovOffsetRadians;
+            ci.lockAimFeelActive=focus;ci.railSpeed=state.speed;
+            auto world=MakeIdentity4x4();
+            for(int axis=0;axis<3;++axis) {
+                const Vector3 v=axis==0?sample.right:axis==1?sample.up:sample.tangent;
+                world.m[axis][0]=v.x;world.m[axis][1]=v.y;world.m[axis][2]=v.z;
+            }
+            const Vector3 pivot=RailMothership::Add(sample.position,RailMothership::Scale(sample.up,1.4f));
+            world.m[3][0]=pivot.x;world.m[3][1]=pivot.y;world.m[3][2]=pivot.z;
+            world=RailKillBoostPose::Apply(world,pivot,sample.up,boost.SpinDegrees(),boost.Lift()+boost.BodyCompression(),boost.BodyPitchDegrees());
+            for(size_t i=0;i<ci.vehicleBoundsCorners.size();++i)
+                ci.vehicleBoundsCorners[i]=rail_boost_detail::Point({(i&1)?3.1f:-3.1f,(i&2)?2.0f:-2.0f,(i&4)?4.3f:-4.3f},world);
+            const auto view=director.Evaluate(ci);
+            if(!view.vehicleFramingSafe)report<<fps<<','<<aspect<<','<<focus<<','<<start<<','<<age<<','<<view.vehicleScreenTop<<','<<view.vehicleScreenBottom<<','<<view.vehicleScreenWidth<<",0\n";
+            runner.Expect(view.vehicleFramingSafe && view.vehicleScreenBottom<=.921f && view.vehicleScreenTop>=.619f,
+                "spinning chassis and wheels stay inside both vertical margins through launch, hold, turns and grade changes: section="+
+                std::to_string(start)+" age="+std::to_string(age)+" top="+std::to_string(view.vehicleScreenTop)+" bottom="+std::to_string(view.vehicleScreenBottom));
+            boost.Update(dt);
+        }
+    }
+}
+
+__declspec(noinline) void TestBoostLaunchImpulse(RegressionRunner& runner) {
+    ge3::core::ShaderCompiler compiler;runner.Expect(compiler.Initialize(),"boost jet compiler initializes");
+    const auto shader=compiler.CompileFromFile(L"Resources/TitleTracer.PS.hlsl",L"main",L"ps_6_0",{L"-O3",L"-WX"});
+    runner.Expect(shader && shader->GetBufferSize()>0,"directional jet flow compiles under strict Release shader checks");
+    for(int fps:{30,60,120}) {
+        KillBoostTravelFixture live(29.45f);live.Charge();auto& boost=live.speed.KillBoost();boost.ActivatePending();
+        RailVehicleCameraInertiaBridge camera;RailBoostPresentation exhaust;
+        float thrustTime=0,pitchTime=0,cameraTime=0,maxThrust=0,minPitch=0,minLag=0,launchLength=0,steadyLength=0;
+        for(int i=0;i<fps;++i) {
+            live.Step(1.0f/fps);const float age=boost.Age();const auto& state=live.vehicle.State();
+            RailVehicleCameraInertiaInput ci;ci.definition=&live.vehicle.Definition();ci.state=&state;ci.deltaTime=1.0f/fps;
+            ci.rewardBoostSurge=boost.SurgePulse();const auto view=camera.Update(ci);
+            if(boost.ThrustPulse()>maxThrust){maxThrust=boost.ThrustPulse();thrustTime=age;}
+            if(boost.BodyPitchDegrees()<minPitch){minPitch=boost.BodyPitchDegrees();pitchTime=age;}
+            if(view.gameplayPositionOffset.z<minLag){minLag=view.gameplayPositionOffset.z;cameraTime=age;}
+            RailBoostPresentationInput vi;vi.gameplayActive=true;vi.deltaTime=1.0f/fps;vi.strength=1;vi.speed=state.speed;
+            vi.distance=live.travel.Distance();vi.thrust=boost.ThrustPulse();vi.ignition=boost.IgnitionPulse();exhaust.Update(vi);
+            const auto& jet=exhaust.Frame().ribbons[0];
+            const float length=std::abs(jet.tail.z-jet.head.z);
+            if(age<.3f)launchLength=(std::max)(launchLength,length);
+            if(age>.9f)steadyLength=length;
+        }
+        runner.Expect(maxThrust>.95f && minPitch<-3 && minLag<-1.7f &&
+            std::abs(thrustTime-pitchTime)<.12f && std::abs(cameraTime-thrustTime)<.18f && launchLength>steadyLength+1.7f,
+            "thrust, chassis recoil and camera catch-up form one short launch beat at each frame rate");
+        runner.Expect(boost.BodyCompression()==0 && boost.BodyPitchDegrees()==0 && boost.OccupantPitchDegrees()==0 && boost.ThrustPulse()==0,
+            "steady high speed has no repeated pitch, preload, rider lag or launch jet");
+        runner.Expect(std::abs(live.vehicle.State().speed-RailManualBoost::RequestedSpeed(29.45f,RailKillBoost::MaximumMultiplier))<.03f && boost.Serial()==1 && !boost.Spinning(),
+            "visual impulse leaves configured reward movement, stunt lifetime and defeat accounting authoritative");
+    }
+}
+
 __declspec(noinline) void TestKillBoostFloatingTurn(RegressionRunner& runner) {
     const auto at=[](float age) {
         RailKillBoost boost;
@@ -208,7 +428,7 @@ __declspec(noinline) void TestKillBoostRapidTravelAndSurge(RegressionRunner& run
             if(time>RailKillBoost::SpinSeconds+.05f)runner.Expect(!boost.Spinning(),"the fast launch does not shorten or repeat the float-and-turn sequence");
             if(time<.8f && frame%(fps/30)==0)metrics<<fps<<','<<base<<','<<manual<<','<<time<<','<<live.vehicle.State().speed<<','<<target<<','<<boost.SpinDegrees()<<','<<error<<'\n';
         }
-        runner.Expect(std::abs(live.vehicle.State().speed-RailManualBoost::RequestedSpeed(base,manual?1.3f:1.0f))<.03f,
+        runner.Expect(std::abs(live.vehicle.State().speed-RailManualBoost::RequestedSpeed(base,manual?RailManualBoost::HeldMaximumMultiplier:1.0f))<.03f,
             "the independent fast attack still releases back to the current ordinary or held-assist request");
     }
     for(int fps:{30,60,120})for(bool focus:{false,true}) {
@@ -337,10 +557,10 @@ __declspec(noinline) void TestKillBoostImmediateOnset(RegressionRunner& runner) 
             runner.Expect(std::abs(live.travel.Distance()-forecast->DistanceAt(frame*dt))<.02f,
                 "the enemy travel forecast includes the same end-of-frame reward activation as real movement");
         }
-        runner.Expect(live.vehicle.State().speed>before+20 && live.travel.Distance()>startDistance+40 && turned && sounds==1,
+        runner.Expect(live.vehicle.State().speed>=before+.95f*(RailManualBoost::RequestedSpeed(32,RailKillBoost::MaximumMultiplier)-before) && live.travel.Distance()>startDistance+40 && turned && sounds==1,
             "ignition flows into the complete turn and real speed ramp, with a single sound at each tested frame rate");
         for(unsigned id=7;id<=12;++id) {reward.ObserveDefeat(defeat(id));reward.ActivatePending(true,true);}
-        runner.Expect(reward.Serial()==1 && reward.Charge()==6,"rapid batch defeats can bank the next six without restarting the current point ignition");
+        runner.Expect(reward.Serial()==1 && reward.Charge()==0 && reward.HoldRemaining()>5.99f,"rapid batch defeats extend the current hold without restarting the point ignition");
     }
 }
 
@@ -361,14 +581,14 @@ __declspec(noinline) void TestKillBoostTravelPrediction(RegressionRunner& runner
             if(frame==8*fps)final=live.vehicle.State().speed;
             if(frame%(fps/10)==0)metrics<<fps<<','<<time<<','<<live.vehicle.State().speed<<','<<live.speed.BoostMultiplier()<<','<<error<<'\n';
         }
-        runner.Expect(onset>32*1.5f && std::abs(hold-32*1.8f)<.03f && std::abs(final-32)<.03f,
-            "the real cart kicks forward within half a second, sustains 1.8x, then settles to cruise: onset="+std::to_string(onset));
+        runner.Expect(onset>32*(1+.9f*(RailKillBoost::MaximumMultiplier-1)) && std::abs(hold-32*RailKillBoost::MaximumMultiplier)<.03f && std::abs(final-32)<.03f,
+            "the real cart kicks forward within half a second, sustains its configured reward, then settles to cruise: onset="+std::to_string(onset));
         live.speed.SetManualBoostInput(true,true);
         for(int frame=0;frame<fps;++frame)live.Step(dt);
-        runner.Expect(std::abs(live.speed.BoostMultiplier()-1.3f)<.001f,"held assist is 1.3x after the reward ends");
+        runner.Expect(std::abs(live.speed.BoostMultiplier()-RailManualBoost::HeldMaximumMultiplier)<.001f,"held assist returns to its configured speed after the reward ends");
         live.speed.KillBoost().Reset();live.Charge();
         for(int frame=0;frame<fps;++frame)live.Step(dt);
-        runner.Expect(std::abs(live.speed.BoostMultiplier()-1.8f)<.001f,"manual and reward boosts select the stronger multiplier instead of multiplying");
+        runner.Expect(std::abs(live.speed.BoostMultiplier()-RailKillBoost::MaximumMultiplier)<.001f,"manual and reward boosts select the stronger multiplier instead of multiplying");
     }
     // Exact future travel must survive a shot launched across the timed release.
     CourseAsset production;std::string error;runner.Expect(production.LoadFromFile(RailShortCoursePath,&error),"reward prediction loads actual enemies");

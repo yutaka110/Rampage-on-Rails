@@ -326,6 +326,8 @@ void WriteActorDesc(BinaryWriter& writer, const CourseEnemyActorDesc& value) {
     WriteFormationDefinition(writer, value.formationDefinition);
     writer.Bool(value.previewOnly);
     writer.Bool(value.suppressFire);
+    writer.Bool(value.energyShield.enabled);
+    writer.F32(value.energyShield.maximumHitPoints);
 }
 
 bool ReadActorDesc(BinaryReader& reader, CourseEnemyActorDesc& value) {
@@ -364,7 +366,9 @@ bool ReadActorDesc(BinaryReader& reader, CourseEnemyActorDesc& value) {
         !ReadBehaviorDefinition(reader, value.behaviorDefinition) ||
         !ReadFormationDefinition(reader, value.formationDefinition) ||
         !reader.Bool(value.previewOnly) ||
-        !reader.Bool(value.suppressFire)) {
+        !reader.Bool(value.suppressFire) ||
+        !reader.Bool(value.energyShield.enabled) ||
+        !reader.F32(value.energyShield.maximumHitPoints) || !value.energyShield.Validate()) {
         return false;
     }
     if (firePattern > static_cast<uint32_t>(CourseEnemyFirePattern::BossArc)) return false;
@@ -451,7 +455,7 @@ bool CourseRuntimeProgramAsset::Validate(std::string* errorMessage) const {
             !std::isfinite(actor.actor.spawnDistance) ||
             actor.actor.spawnDistance < 0.0f || actor.actor.spawnDistance > railLength ||
             !std::isfinite(actor.actor.radius) || actor.actor.radius <= 0.0f ||
-            !std::isfinite(actor.actor.hitPoints) || actor.actor.hitPoints <= 0.0f) {
+            !std::isfinite(actor.actor.hitPoints) || actor.actor.hitPoints <= 0.0f || !actor.actor.energyShield.Validate()) {
             return fail("Course runtime program contains invalid Actor transform or combat data.");
         }
         if (!actor.actor.behaviorDefinition.definitionId.empty() &&

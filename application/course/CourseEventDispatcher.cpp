@@ -320,6 +320,7 @@ void CourseEventDispatcher::ApplyActorAsset(CourseEnemyActorDesc& desc, const Co
     desc.bulletSpeed = asset.bulletSpeed;
     desc.color = asset.color;
     desc.behaviorDefinition = asset.behaviorDefinition;
+    desc.energyShield = asset.energyShield;
 }
 
 const EnemyProjectileDefinitionAsset*
@@ -409,7 +410,11 @@ void CourseEventDispatcher::SpawnEnemyWave(
         desc.spawnDistance = event.distance;
         desc.entrySource = wave.entrySource;
         desc.establishedEntrance = wave.localApproach;
-        if(event.payload=="preplaced:turret") desc.stationaryActivationDistance=event.distance;
+        // Wake fixed batteries before the old trigger so their spawn, aiming
+        // and exposure gates finish before a fast cart enters the warning window.
+        // The distance-based first-shot gate still owns when they may attack.
+        if(event.payload=="preplaced:turret")
+            desc.stationaryActivationDistance=(std::max)(0.0f,event.distance-40.0f);
         const std::string actorAssetId = !unit.actorAssetId.empty()
             ? unit.actorAssetId
             : DefaultActorAssetForRole(unit.role);

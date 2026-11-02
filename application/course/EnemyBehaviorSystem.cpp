@@ -418,16 +418,18 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
             }
             break;
         case EnemyBehaviorState::Positioning:
+            // Include the aiming handoff and token admission frames before
+            // the visible warning countdown, even at high speed and 30 fps.
             if (state.stateElapsedSeconds >= definition.positioningDurationSeconds &&
                 state.attackCooldownRemaining <= 0.0f &&
                 (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
                     actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance >=
                         RailGroundBattery::MinimumFireDistance+playerForwardSpeed*
-                            (definition.aimingDurationSeconds+definition.attackLeadSeconds)) &&
+                            (definition.aimingDurationSeconds+definition.attackLeadSeconds+2.0f*dt)) &&
                 (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) || actor.fireSequence>0 ||
                     actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance <=
                         RailGroundBattery::FirstShotDistance+playerForwardSpeed*
-                            (definition.aimingDurationSeconds+definition.attackLeadSeconds)) &&
+                            (definition.aimingDurationSeconds+definition.attackLeadSeconds+2.0f*dt)) &&
                 (!definition.maintainForwardEngagementBand ||
                     state.engagementBandAttackAllowed) &&
                 (!definition.choreographedAttackPass ||

@@ -9,8 +9,8 @@
 // projectile truth remain authoritative; passing a battery never earns a clear.
 class RailGateBridgeFlow final {
 public:
-    static constexpr float BridgeStart=1640, LookoutDistance=1730;
-    static constexpr float ReleaseDuration=3.0f, LookoutEstablishDuration=2.8f;
+    static constexpr float BridgeStart=1640, LookoutDistance=1680;
+    static constexpr float ReleaseDuration=1.4f, LookoutEstablishDuration=1.6f;
     enum class Phase { Gate, Release, Lookout, Complete };
     void Reset() { *this={}; }
     void Observe(const CourseSpawnRuntime& runtime) {
@@ -55,18 +55,14 @@ public:
     }
     bool BlockNewEnemies(float distance) const {
         return phase_==Phase::Release || phase_==Phase::Lookout ||
-            (distance>=1480 && distance<1900);
+            (distance>=1480 && distance<1900 && !ClearedBatteries());
     }
     bool ProtectAuthoredCombat(float distance) const {
-        return (distance>=1080 && distance<1900) ||
+        return (distance>=1080 && distance<1900 && !ClearedBatteries()) ||
             phase_==Phase::Release || phase_==Phase::Lookout;
     }
     bool TakeLookout() const { return dispatchLookout_; }
     bool ClearedBatteries() const { return defeated_[0] && defeated_[1]; }
-    float ScenicSpeed(float distance) const {
-        return clearAcknowledged_ && distance>=1480 &&
-            (phase_==Phase::Gate || phase_==Phase::Release) ? 36.0f : 0.0f;
-    }
     float ClearPulse() const { return clearPulse_/1.2f; }
     float ReleaseSeconds() const { return releaseSeconds_; }
     Phase CurrentPhase() const { return phase_; }

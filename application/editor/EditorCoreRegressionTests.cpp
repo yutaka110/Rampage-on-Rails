@@ -7,6 +7,7 @@
 #include "../course/RailKillBoostFeedback.h"
 #include "../course/RailHeavyAttack.h"
 #include "../course/RailGroundBatteryAttack.h"
+#include "../course/EnemyEnergyShieldPresentation.h"
 #include "../course/RailMothershipBattle.h"
 #include "../course/CourseValidation.h"
 #include "../course/RailShortCourse.h"
@@ -37195,8 +37196,8 @@ void TestGateBridgeEarnedRelease(RegressionRunner& runner) {
             if(flow.TakeLookout()) {++lookoutCount;lookoutAt=at;break;}
             at+=speed*dt;
         }
-        runner.Expect(lookoutCount==1 && release+dt>=3 && lookoutAt>=1730,
-            "one precision arrival follows at least three quiet seconds and the bridge vista");
+        runner.Expect(lookoutCount==1 && release+dt>=RailGateBridgeFlow::ReleaseDuration && lookoutAt>=RailGateBridgeFlow::LookoutDistance,
+            "one precision arrival follows the bounded quiet interval and the bridge vista");
         RailRetryFollowState saved;saved.gateBridge=flow;RailRetryPresentationCheckpoint checkpoint;
         checkpoint.Capture(1,1,BindRailRetryFollowState(saved));saved.gateBridge.Reset();
         runner.Expect(checkpoint.Restore(1,1,BindRailRetryFollowState(saved)) &&
@@ -37283,9 +37284,9 @@ void TestGateBridgeMovingHandoff(RegressionRunner& runner) {
                 waves.NotifyEnemyDefeated(event.placementGuid);
             CombatTruthGateInput ti;ti.runtime=&runtime;ti.deltaTime=dt;ti.activeWaves=waves.Stats().activeWaves;truth.Update(ti);
             if(ambushAt>0 && dispatches>0 && flow.CurrentPhase()==RailGateBridgeFlow::Phase::Complete)break;
-            at+=(std::max)(speed,flow.ScenicSpeed(at))*dt;
+            at+=speed*dt;
         }
-        runner.Expect(flow.ClearedBatteries() && dispatches==1 && quiet+dt>=3 && lookoutAt>=1730 && ambushAt>lookoutAt && peak<=10,
+        runner.Expect(flow.ClearedBatteries() && dispatches==1 && quiet+dt>=RailGateBridgeFlow::ReleaseDuration && lookoutAt>=RailGateBridgeFlow::LookoutDistance && ambushAt>lookoutAt && peak<=10,
             "visible-target clear leads to quiet, one lookout and later ambush at fps="+std::to_string(fps)+
             " speed="+std::to_string(speed)+" quiet="+std::to_string(quiet)+" lookout="+std::to_string(lookoutAt)+
             " ambush="+std::to_string(ambushAt)+" killed="+std::to_string(flow.ClearedBatteries()));
@@ -37355,7 +37356,7 @@ void TestCourseBlockoutComposition(RegressionRunner& runner) {
     auto previous=course.EvaluateCamera(160);
     for(float d=161;d<=3800;d+=1) {
         const auto c=course.EvaluateCamera(d);
-        runner.Expect(c.backDistance>=24 && c.lookAheadDistance>=64 && std::abs(c.roll)<0.001f &&
+        runner.Expect(c.backDistance>=20 && c.backDistance<=24 && c.verticalOffset>=5.5f && c.lookAheadDistance>=64 && std::abs(c.roll)<0.001f &&
             std::abs(c.fovY-previous.fovY)<0.002f &&
             std::abs(c.lateralOffset-previous.lateralOffset)<0.2f,
             "authored camera stays forward, unbanked and continuous");
@@ -37382,6 +37383,8 @@ void TestFirstTurretCameraStability(RegressionRunner& runner) {
         "first battery camera uses production course and vehicle tuning: "+error);
     RailPath rail;course.ApplyToRailPath(rail);
     std::ofstream report("logs/first_turret_camera_stability.csv");
+    std::ofstream trace("logs/first_turret_camera_trace.csv");
+    trace<<"fps,batteries,distance,step,offset_x,offset_y,offset_z,pullback,lift,top,bottom\n";
     report<<"fps,batteries,max_eye_step,max_cart_width,max_width_step,max_fov_step\n";
     const auto length=[](Vector3 v){return std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);};
     const auto cross=[](Vector3 a,Vector3 b){return Vector3{
@@ -37431,6 +37434,11 @@ void TestFirstTurretCameraStability(RegressionRunner& runner) {
             const auto frame=camera.Evaluate(ci);const auto sample=rail.Evaluate(at);
             const auto delta=RailMothership::Add(frame.position,RailMothership::Scale(sample.position,-1));
             const Vector3 offset{dot(delta,sample.right),dot(delta,sample.up),dot(delta,sample.tangent)};
+            if(step>0) {
+                const float jump=length(RailMothership::Add(offset,RailMothership::Scale(previousOffset,-1)));
+                if(jump>.3f)trace<<fps<<','<<batteries<<','<<at<<','<<jump<<','<<offset.x<<','<<offset.y<<','<<offset.z<<','
+                    <<frame.vehicleFramingPullback<<','<<frame.vehicleFramingLift<<','<<frame.vehicleScreenTop<<','<<frame.vehicleScreenBottom<<'\n';
+            }
             auto right=cross(frame.up,frame.forward);right=RailMothership::Scale(right,1.0f/length(right));
             float left=1000,rightEdge=-1000;
             for(const auto& corner:ci.vehicleBoundsCorners) {
@@ -38029,7 +38037,7 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
     if(allBatteries)report<<"event_distance,event,peak_speed,";
     report<<"fps,speed,mode,first_warning,first_fire,fire_forward,first_hit,damage,cancelled,killed,warning_seconds\n";
     std::ofstream trace;
-    if(allBatteries){trace.open("logs/all_ground_battery_admission.csv");trace<<"event_distance,forward,state,remaining,reason,reserved,presented\n";}
+    if(allBatteries){trace.open("logs/all_ground_battery_admission.csv");trace<<"event_distance,nominal_speed,forward,state,remaining,reason,reserved,presented\n";}
     std::ofstream lockTrace;
     if(allBatteries)lockTrace.open("logs/all_ground_battery_lock_arrival.csv");
     const auto cross=[](Vector3 a,Vector3 b){return Vector3{a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};};
@@ -38038,7 +38046,7 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
     TerrainCollisionWorld collisionWorld;
     collisionWorld.BuildSynchronously(rail,terrain,&course.terrainEditLayer,nullptr,marker.distance-250,marker.distance+300);
     for(int fps:{30,60,120})for(float speed:allBatteries?std::vector<float>{10,30,64,68*RailManualBoost::HeldMaximumMultiplier,68*RailKillBoost::MaximumMultiplier}:std::vector<float>{10,30,64})for(int mode:{0,1,2}) {
-        const bool boosted=speed>64,reward=speed>100;
+        const bool boosted=speed>64,reward=speed>68*RailManualBoost::HeldMaximumMultiplier+.1f;
         const float dt=1.0f/fps,start=marker.distance-(boosted?180:30),playerY=controls.vehicle.bodyVerticalOffset+controls.vehicle.mounts.player.y;
         CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;auto preplaced=marker;preplaced.payload="preplaced:turret";
         dispatcher.Dispatch({preplaced},runtime,0);
@@ -38106,8 +38114,8 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
                         "every repeated volley retains a visible forward interception interval");
                     observedFire=actor.fireSequence;
                 }
-                if(allBatteries && fps==30 && speed==64 && mode==0)
-                    trace<<marker.distance<<','<<actor.desc.spawnDistance+actor.desc.distanceOffset-at<<','<<int(actor.behaviorState.state)<<','
+                if(allBatteries && fps==30 && (speed==64 || boosted) && mode==0)
+                    trace<<marker.distance<<','<<speed<<','<<actor.desc.spawnDistance+actor.desc.distanceOffset-at<<','<<int(actor.behaviorState.state)<<','
                         <<actor.behaviorState.attackTimeRemaining<<','<<actor.fireSafetyReason<<','<<actor.attackState.tokenReserved<<','<<actor.behaviorState.telegraphPresented<<'\n';
                 if(actor.groundPlacementResolved) {
                     const Vector3 position{actor.desc.lateralOffset,actor.desc.verticalOffset,actor.desc.spawnDistance+actor.desc.distanceOffset};
@@ -38176,7 +38184,8 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
             " fire="+std::to_string(firstFire)+" forward="+std::to_string(fireForward)+" damage="+std::to_string(damage)+" cancelled="+std::to_string(cancelled);
         if(mode==1)check(killed && firstFire<0 && damage==0,"two actual travelling locks preempt the first shot"+context);
         else {
-            check(firstWarning>=0 && firstFire>firstWarning && warningSeconds+dt>=.70f && fireForward>=50 && fireForward<=115,
+            check(firstWarning>=0 && firstFire>firstWarning && warningSeconds+dt>=.90f &&
+                fireForward>=RailGroundBattery::MinimumFireDistance && fireForward<=115,
                 "the readable first warning finishes before passing the planned firing window"+context);
             check(mode==0 ? damage>0 : (damage==0 && cancelled>=3),
                 "ignoring the battery is damaging; screen-aimed primary interception prevents its real volley"+context);
@@ -39715,6 +39724,7 @@ void TestPrimaryContactPresentationCoherence(RegressionRunner& runner) {
 }
 
 #include "KillBoostRegressionTests.inl"
+#include "EnergyShieldRegressionTests.inl"
 
 void TestGatlingRingMaterial(RegressionRunner& runner) {
     ge3::core::ShaderCompiler compiler;
@@ -42198,8 +42208,8 @@ void TestShortCompleteRun(RegressionRunner& runner) {
         runner.Expect(IsRunResult(simulated.State()) && !simulated.State().gameplaySimulationEnabled,
             "completed production traversal reaches a frozen result at 30/60/120 fps with and without boost");
         timings<<fps<<','<<boost<<','<<elapsed<<','<<rail.Length()<<'\n';
-        runner.Expect(travel.Distance()>=ShortRunFinishDistance(rail.Length())-0.5f && elapsed>=100 && elapsed<=180,
-            "short run production traversal with/without periodic boost is 100-180 seconds: "+std::to_string(elapsed));
+        runner.Expect(travel.Distance()>=ShortRunFinishDistance(rail.Length())-0.5f && elapsed>=75 && elapsed<=120,
+            "faster short run traversal with/without periodic E is 75-120 seconds: "+std::to_string(elapsed));
     }
 }
 
@@ -42372,10 +42382,12 @@ void TestShortRunFinishAndEarlyWaves(RegressionRunner& runner) {
     for(int i=0;i<40;++i) tick(0.1f,300);
     runner.Expect(waves.Phase("short_lock")!=CourseGameplayWavePhase::Active,"remaining attack warning blocks the next fight after all drones die");
     warnings.cues.clear();
-    for(int i=0;i<12;++i) tick(0.1f,300);
+    const int partialRecoveryTicks=int(std::ceil((CombatTruthGateSettings{}.clearConfirmationSeconds+
+        ShortRunWaveSettings().earlyClearRecoverySeconds*.45f)/.1f));
+    for(int i=0;i<partialRecoveryTicks;++i) tick(0.1f,300);
     runner.Expect(waves.Phase("short_lock")!=CourseGameplayWavePhase::Active,"all-clear still leaves a visible recovery interval");
     const auto recovering=waves.CaptureCheckpoint();
-    runner.Expect(recovering.clearRecoverySeconds>0 && recovering.clearRecoverySeconds<1.5f,"checkpoint captures partial recovery");
+    runner.Expect(recovering.clearRecoverySeconds>0 && recovering.clearRecoverySeconds<ShortRunWaveSettings().earlyClearRecoverySeconds,"checkpoint captures partial recovery");
     CourseGameplayWaveFrameInput paused;paused.playerDistance=300;paused.deltaTime=0;
     for(int i=0;i<100;++i) waves.Update(paused);
     runner.Expect(waves.CaptureCheckpoint().clearRecoverySeconds==recovering.clearRecoverySeconds,"pause neither consumes nor resets recovery");
@@ -44017,12 +44029,22 @@ int RunEditorCoreRegressionTests() {
          {"carrier miniboss parts", [&]() { TestCarrierMinibossParts(runner); }},
          {"carrier gatling scheduled burst", [&]() { TestCarrierGatlingBurst(runner); }},
          {"gatling held primary cancellation", [&]() { TestGatlingHeldPrimaryCancellation(runner); }},
+         {"energy shield damage authority and lock defense", [&]() { TestEnergyShieldAuthority(runner); }},
+         {"energy shield real travelling lock interception", [&]() { TestEnergyShieldVolley(runner); }},
+         {"energy shield banked geometry checkpoint and pause", [&]() { TestEnergyShieldPoseAndRetry(runner); }},
+         {"energy shield authored production and shader", [&]() { TestEnergyShieldAuthoring(runner); }},
+         {"energy shield contrast and accepted defense cue timeline", [&]() { TestEnergyShieldDefenseReadability(runner); }},
          {"six kill boost counting activation and retry", [&]() { TestKillBoostCountAndActivation(runner); }},
          {"six kill boost actual movement and enemy forecast", [&]() { TestKillBoostTravelPrediction(runner); }},
          {"six kill boost real primary and lock defeat credit", [&]() { TestKillBoostRealDefeats(runner); }},
          {"six kill boost spin stable camera and muzzle", [&]() { TestKillBoostSpinAndMuzzle(runner); }},
          {"six kill boost immediate defeat ignition during carrier flyby", [&]() { TestKillBoostImmediateOnset(runner); }},
          {"six kill boost independent rapid acceleration and camera catchup", [&]() { TestKillBoostRapidTravelAndSurge(runner); }},
+         {"manual boost speed feel comparison and forecast", [&]() { TestManualSpeedFeel(runner); }},
+         {"fast normal full course travel and three speed tiers", [&]() { TestFastNormalTravel(runner); }},
+         {"boost launch full vehicle composition", [&]() { TestBoostLaunchComposition(runner); }},
+         {"boost launch synchronized thrust chassis and camera", [&]() { TestBoostLaunchImpulse(runner); }},
+         {"kill boost extension rescue checkpoint and forecast", [&]() { TestKillBoostExtension(runner); }},
          {"six kill boost smooth floating turn and rigid exhaust sync", [&]() { TestKillBoostFloatingTurn(runner); }},
          {"six kill boost world anchored close ground and side flow", [&]() { TestKillBoostNearFieldFlow(runner); }},
          {"six kill boost achieved speed visual and audio feedback", [&]() { TestKillBoostFeedback(runner); }},

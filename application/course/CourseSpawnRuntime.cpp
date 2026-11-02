@@ -35,7 +35,7 @@ bool ValidEnemyDescription(const CourseEnemyActorDesc& d) {
         d.localScale.x, d.localScale.y, d.localScale.z, d.stationaryActivationDistance}) &&
         d.stationaryActivationDistance >= -1.0f &&
         d.hitPoints >= 0.0f && d.lifetime > 0.0f && d.radius > 0.0f &&
-        d.entrySource<=EnemyEntrySource::LocalApproach;
+        d.entrySource<=EnemyEntrySource::LocalApproach && d.energyShield.Validate();
 }
 
 bool ValidObstacleDescription(const CourseObstacleActorDesc& d) {
@@ -329,7 +329,7 @@ bool CourseSpawnRuntime::ValidateCheckpoint(
     };
     bool valid = checkpoint.nextActorId != 0;
     for (const CourseEnemyActor& actor : checkpoint.enemies) {
-        valid = valid && validId(actor.actorId) && ValidEnemyDescription(actor.desc) &&
+        valid = valid && validId(actor.actorId) && ValidEnemyDescription(actor.desc) && actor.energyShield.Validate(actor.desc.energyShield) &&
             FiniteValues({actor.age, actor.fireTimer, actor.fireVisibleTime}) && actor.age >= 0.0f &&
             FiniteValues({actor.turretMotion.rotorAngle,actor.turretMotion.rotorSpeed,actor.turretMotion.lastFireAge}) &&
             actor.turretMotion.rotorSpeed>=0 && actor.turretMotion.rotorSpeed<=RailTurret::SpinSpeed+.001f &&

@@ -35,7 +35,12 @@ bool PayloadMatchesDamage(
         (damage.damageApplied != (damage.appliedDamage > 0.0f)) ||
         (damage.destroyed && !damage.damageApplied) ||
         (damage.weakPointHit && !damage.damageApplied) ||
-        (damage.blocked && damage.damageApplied)) {
+        (damage.blocked && damage.damageApplied) ||
+        (damage.shieldHit && (!damage.blocked || damage.damageApplied || damage.destroyed ||
+            !Finite(damage.surfacePosition) || !Finite(damage.surfaceNormal) || LengthSquared(damage.surfaceNormal)<.0001f ||
+            !std::isfinite(damage.shieldDamage) || damage.shieldDamage<0 || damage.shieldDamage>damage.requestedDamage+.001f ||
+            !std::isfinite(damage.remainingShield) || damage.remainingShield<0 ||
+            damage.shieldBroken!=(damage.remainingShield<=0)))) {
         return false;
     }
     return true;
@@ -269,6 +274,18 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
     event.destroyed = damageResult.destroyed;
     event.lockOnContact = request.lockOnContact && damageResult.damageApplied;
     ConfigurePresentation(event);
+    event.shieldHit=damageResult.shieldHit;event.shieldBroken=damageResult.shieldBroken;
+    if(event.shieldHit) {
+        // The shield owns its localized ripple/fracture; never report a hull
+        // hit, kill, ice freeze or long orange world impact for an absorbed shot.
+        event.worldPosition=damageResult.surfacePosition;event.worldNormal=damageResult.surfaceNormal;
+        event.impactColor={.18f,.85f,1,.9f};event.impactEffectName.clear();
+        event.impactCueId=event.shieldBroken?"energy_shield_break":"energy_shield_hit";
+        event.audioCueId=request.lockOnContact?"energy_shield_lock_block":event.impactCueId;event.hitStopSeconds=0;
+        event.cameraShake=event.shieldBroken?.20f:0;
+        event.intensity=event.shieldBroken?.75f:.25f;
+        event.hudDuration=event.shieldBroken?.22f:request.lockOnContact?.24f:.08f;
+    }
 
     const bool droneCoreBreak=event.destroyed && event.hitKind==RailAimHitKind::Enemy &&
         std::any_of(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& actor) {
@@ -280,9 +297,9 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
         event.impactCueId=droneCoreBreak ? "weapon_feedback_drone_core_break" : "weapon_feedback_lock_contact";
         event.impactEffectName.clear();
         event.hudDuration=0.18f;
-    } else SpawnImpactVfx(runtime, event);
+    } else if(!event.shieldHit) SpawnImpactVfx(runtime, event);
     result.accepted = true;
-    result.vfxSpawned = !droneCoreBreak && !event.lockOnContact;
+    result.vfxSpawned = !droneCoreBreak && !event.lockOnContact && !event.shieldHit;
     ++acceptedEventCount_;
     lastAcceptedEvent_ = event;
     recentEvents_.push_back(event);

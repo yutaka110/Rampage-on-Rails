@@ -100,6 +100,8 @@ def main():
         rows.append(f'cinematic_shot_set|{start}|{end}|blockout-shot-{key}|{label}|{ids}|-|{light}|-|first_contact_readable_strata|clear-combat|{note}')
         shots.append(dict(id=key,label=label,start=start,end=end,distance=distance,hero_landmarks=ids.split(','),composition=note))
     path.write_text('\n'.join(kept).rstrip()+'\n\n'+'\n'.join(rows)+'\n',encoding='utf-8')
+    from tune_rail_speed_feel import main as tune_speed_feel
+    tune_speed_feel()
     output=ROOT/'generated/course-blockout';output.mkdir(exist_ok=True)
     (output/'shots.json').write_text(json.dumps(shots,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     print('Authored 6 visual beats,',len(cameras),'camera keys and',sum(r.startswith('terrain|') for r in rows),'landmark placements')

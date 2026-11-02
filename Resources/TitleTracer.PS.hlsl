@@ -1,4 +1,5 @@
 // Depth-tested world ribbons and readable projectile heads. Impact flashes retain their own profile.
+#include "RailEnergyShield.hlsli"
 struct PixelInput {
     float4 position : SV_POSITION;
     float2 texcoord : TEXCOORD0;
@@ -21,6 +22,7 @@ void ImpactCoordinates(float2 uv,float baseX,out float2 p,out float phase,out fl
     p=float2((uv.x-baseX-0.5f)*2.0f,frac(uv.y*0.5f)*4.0f-1.0f);
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>63.5f)return RenderRailEnergyShield(input.texcoord,input.color);
     if(input.texcoord.x>51.5f && input.texcoord.x<53.5f) {
         // Soft rising vent vapor. Geometry carries the paused gameplay age;
         // this shader has no independent clock and no projectile-shaped head.
@@ -58,7 +60,9 @@ float4 main(PixelInput input) : SV_TARGET0 {
         float u=saturate(input.texcoord.x-40);
         float across=frac(input.texcoord.y*0.5f)*4-1;
         float clock=fmod(floor(input.texcoord.y*0.5f),64)/64*6.2831853f;
-        float wave=sin(u*19-clock*4)*0.075f+sin(u*31+clock*3)*0.035f;
+        // u=1 is the aperture; increasing phase must carry both filaments
+        // toward u=0 (the tail), rather than sending one back into the nozzle.
+        float wave=sin(u*23+clock*5)*0.055f+sin(u*37+clock*7)*0.025f;
         float noise=ImpactNoise(float2(u*17+cos(clock)*3,across*4+sin(clock)*2));
         // The head is finite-width and luminous all the way to the metal
         // lip. Only the tail breaks up; the root must never dissolve away.
@@ -66,9 +70,10 @@ float4 main(PixelInput input) : SV_TARGET0 {
         float edge=exp(-pow((across+wave)/width,2)*4);
         float core=exp(-pow((across-wave*0.5f)/width,2)*38);
         float tail=smoothstep(0,0.30f,u);
-        float diamonds=0.80f+0.20f*pow(0.5f+0.5f*cos(u*35-clock*2),4);
+        float diamonds=0.80f+0.20f*pow(0.5f+0.5f*cos(u*35+clock*6),4);
         float root=exp(-pow((u-0.88f)/0.17f,2));
-        float fibers=lerp(0.55f+0.45f*noise,1.0f,smoothstep(0.70f,1.0f,u));
+        float flowing=.5f+.5f*sin(u*51+clock*9+across*3);
+        float fibers=lerp(0.55f+0.30f*noise+0.15f*flowing,1.0f,smoothstep(0.70f,1.0f,u));
         float3 color=lerp(input.color.rgb,float3(2.8f,3.0f,3.1f),core*(0.28f+u*0.55f));
         return float4(color,(edge*0.52f+core*(0.48f+root*0.20f))*tail*fibers*diamonds*input.color.a);
     }

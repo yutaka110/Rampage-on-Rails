@@ -106,6 +106,8 @@ void RailLockOnSystem::Update(const RailLockOnFrameInput& input) {
     reticleInput.viewportHeight = input.viewportHeight;
     reticleInput.hasCursorPosition = input.hasCursorPosition;
     reticleInput.cursorPosition = input.cursorPosition;
+    reticleInput.hasLockHeldOverride=input.hasLockHeldOverride;
+    reticleInput.lockHeldOverride=input.lockHeldOverride;
     reticleInput.anchors = &registry_.Anchors();
     reticleInput.gameplayViewProjection = input.gameplayViewProjection;
     reticleInput.gameplayCameraPosition = input.gameplayCameraPosition;

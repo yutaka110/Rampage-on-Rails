@@ -57,6 +57,17 @@ bool CourseActorAsset::LoadFromFile(const std::string& path, std::string* errorM
             if (parts.size() >= 5 && !parts[4].empty()) {
                 loaded.bulletPatternId = parts[4];
             }
+        } else if (parts[0] == "energy_shield") {
+            if(parts.size()!=3) {
+                if(errorMessage)*errorMessage="energy_shield requires enabled and maximum hit points";
+                return false;
+            }
+            loaded.energyShield.enabled=ParseBoolOr(parts,1,false);
+            loaded.energyShield.maximumHitPoints=ParseFloatOr(parts,2,0);
+            if(!loaded.energyShield.Validate()) {
+                if(errorMessage)*errorMessage="Invalid energy shield health";
+                return false;
+            }
         } else if (parts[0] == "movement") {
             loaded.forwardSpeed = ParseFloatOr(parts, 1, loaded.forwardSpeed);
         } else if (parts[0] == "behavior") {
@@ -169,6 +180,10 @@ bool CourseActorAsset::LoadFromFile(const std::string& path, std::string* errorM
         }
     }
 
+    if(loaded.energyShield.enabled && loaded.meshId!="twin_shield_hull") {
+        if(errorMessage)*errorMessage="Energy shield requires the twin shield drone chassis";
+        return false;
+    }
     *this = std::move(loaded);
     return true;
 }

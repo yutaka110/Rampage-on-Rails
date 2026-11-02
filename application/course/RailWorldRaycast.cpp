@@ -730,6 +730,11 @@ RailAimHit RailWorldRaycast::Query(const RailWorldRaycastInput& input) {
                 continue;
             }
             const float railDistance = enemy.desc.spawnDistance + enemy.desc.distanceOffset;
+            if(enemy.energyShield.Active(enemy.desc.energyShield) && enemy.weaponMount.ready) {
+                const auto shield=EnemyEnergyShield::Intersect(enemy.weaponMount.dronePose,origin,direction,maxDistance);
+                if(shield.hit)ConsiderHit(best,RailAimHitKind::Enemy,shield.distance,origin,direction,
+                    shield.normal,enemy.actorId,UINT32_MAX);
+            }
             const Vector3 center = ResolveRailLocal(
                 *input.railPath,
                 railDistance,

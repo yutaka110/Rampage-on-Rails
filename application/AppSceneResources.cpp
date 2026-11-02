@@ -3226,6 +3226,7 @@ bool AppSceneResources::Initialize(
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("course_blockout_bridge", "Resources/course_meshes/CourseBlockoutBridge", "CourseBlockoutBridge.obj", "courseBlockoutSteel");
+    registerCourseMesh("rail_speed_marker", "Resources/course_meshes/RailSpeedMarker", "RailSpeedMarker.obj", "courseBlockoutSteel");
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
     registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
     registerCourseMesh("siege_turret_head", "Resources/enemies/SiegeTurretHead", "SiegeTurretHead.obj", "siegeTurret");
@@ -3245,6 +3246,7 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("twin_shield_hull", "Resources/enemies/TwinShieldDrone", "TwinShieldHull.obj", "default");
     registerCourseMesh("twin_shield_panel", "Resources/enemies/TwinShieldDrone", "TwinShieldPanel.obj", "default");
     registerCourseMesh("twin_shield_core", "Resources/enemies/TwinShieldDrone", "TwinShieldCore.obj", "default");
+    registerCourseMesh("energy_shield_emitter", "Resources/course_meshes/EnergyShieldEmitter", "EnergyShieldEmitter.obj", "default");
     registerCourseMesh("root_spire_column", "Resources/course_meshes/RootSpireColumn", "RootSpireColumn.obj", "courseRootRock");
     registerCourseMesh("title_ground", "Resources/course_meshes/TitleLandscape", "TitleGround.obj", "titleCaveRock");
     registerCourseMesh("title_cliff", "Resources/course_meshes/TitleLandscape", "TitleCliff.obj", "titleCaveRock");

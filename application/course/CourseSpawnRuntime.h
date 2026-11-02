@@ -15,6 +15,7 @@
 #include "EnemyAttackCoordinator.h"
 #include "EnemyAttackExecutionSystem.h"
 #include "EnemyCombatSystem.h"
+#include "EnemyEnergyShield.h"
 #include "EnemyBehaviorSystem.h"
 #include "EnemyProjectileDefinitionAsset.h"
 #include "EnemyProjectileSystem.h"
@@ -132,6 +133,7 @@ struct CourseEnemyActorDesc {
     // ActorAssets and legacy-compatible timing for anonymous/event actors.
     EnemyCombatDefinition combatDefinition{};
     EnemyBehaviorDefinition behaviorDefinition{};
+    EnemyEnergyShieldDefinition energyShield{};
     EnemyProjectileDefinitionAsset projectileDefinition{};
     EnemyFormationDefinition formationDefinition{};
     bool previewOnly = false;
@@ -174,6 +176,7 @@ struct CourseVfxCueDesc {
 };
 
 struct CourseEnemyActor {
+    EnemyEnergyShieldState energyShield{};
     RailTurret::MotionState turretMotion{};
     EnemyWeaponMountFrame weaponMount{};
     CourseEnemyActorDesc desc;

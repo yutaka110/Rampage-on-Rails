@@ -26,7 +26,8 @@ public:
     static constexpr float MaximumLift=.40f,LandingCompression=.035f;
     static constexpr float IgnitionLeadSeconds=.06f,KillConfirmationSeconds=.16f;
     static constexpr float TotalSeconds=SpinSeconds+HoldSeconds+ReleaseSeconds;
-    static constexpr float MaximumMultiplier=1.80f;
+    static constexpr float MaximumMultiplier=1.40f;
+    static constexpr float KillExtensionSeconds=1.50f,MaximumHoldRemaining=6.0f;
     void Reset(){*this=RailKillBoost{};}
     bool ObserveDefeat(const EnemyCombatEvent& event) {
         if(event.kind!=EnemyCombatEventKind::Defeated || !event.actorId || !event.shotId ||
@@ -34,7 +35,16 @@ public:
             !std::isfinite(event.remainingHitPoints) || event.remainingHitPoints>0 || event.actorAssetId.empty() ||
             event.actorAssetId.starts_with("short_mothership") || event.waveId.starts_with("ready") ||
             event.waveId.starts_with("startup") || !counted_.insert(event.actorId).second)return false;
-        charge_=(std::min)(RequiredKills,charge_+1);++totalKills_;
+        ++totalKills_;
+        if(Active()) {
+            const float before=Blend();
+            const float previousExpiry=expiresAt_;
+            const bool wasReleasing=age_>ReleaseStartAge();
+            expiresAt_=(std::min)((std::max)(expiresAt_,age_+ReleaseSeconds)+KillExtensionSeconds,
+                age_+MaximumHoldRemaining+ReleaseSeconds);
+            if(wasReleasing) { recoveryAge_=age_;recoveryBlend_=before; }
+            if(expiresAt_>previousExpiry+.00001f) {lastExtensionAge_=age_;++extensions_;}
+        } else charge_=(std::min)(RequiredKills,charge_+1);
         return true;
     }
     // Called after each accepted defeat, before presentation is submitted.
@@ -42,7 +52,8 @@ public:
     // authoritative movement advances on the next simulation step.
     bool ActivatePending(bool gameplayActive=true,bool activationAllowed=true) {
         if(!gameplayActive || !activationAllowed || Active() || charge_<RequiredKills)return false;
-        charge_-=RequiredKills;age_=0;++serial_;started_=true;allowed_=true;return true;
+        charge_-=RequiredKills;age_=0;expiresAt_=TotalSeconds;recoveryAge_=-1;lastExtensionAge_=-1;
+        ++serial_;started_=true;allowed_=true;return true;
     }
     void Update(float deltaTime,bool gameplayActive=true,bool activationAllowed=true) {
         if(!gameplayActive || !std::isfinite(deltaTime) || deltaTime<=0)return;
@@ -54,7 +65,7 @@ public:
             ActivatePending(true,allowed_);
             if(Active()) {
                 age_+=dt;
-                if(age_>=TotalSeconds-.00001f)age_=-1;
+                if(age_>=expiresAt_-.00001f)age_=-1;
             }
             remaining-=dt;
         }
@@ -62,18 +73,26 @@ public:
     unsigned Charge()const{return charge_;}
     uint64_t TotalKills()const{return totalKills_;}
     uint64_t Serial()const{return serial_;}
+    uint64_t Extensions()const{return extensions_;}
     bool Active()const{return age_>=0;}
     bool ActivationAllowed()const{return allowed_;}
     bool StartedThisFrame()const{return started_;}
     bool Spinning()const{return allowed_ && Active() && age_<SpinSeconds;}
-    bool Accelerating()const{return allowed_ && Active() && age_<=AccelerationSeconds+.05f;}
+    bool Accelerating()const{return allowed_ && Active() && (age_<=AccelerationSeconds+.05f ||
+        (recoveryAge_>=0 && age_-recoveryAge_<=AccelerationSeconds+.05f));}
     float Age()const{return age_;}
-    float Remaining()const{return Active()?(std::max)(0.0f,TotalSeconds-age_):0;}
+    float ReleaseStartAge()const{return expiresAt_-ReleaseSeconds;}
+    float Remaining()const{return Active()?(std::max)(0.0f,expiresAt_-age_):0;}
+    float HoldRemaining()const{return Active()?(std::max)(0.0f,ReleaseStartAge()-age_):0;}
+    float ExtensionPulse()const{return Active() && allowed_ && lastExtensionAge_>=0?
+        1-Smooth((age_-lastExtensionAge_)/.35f):0;}
     float Blend()const {
         if(!Active() || !allowed_)return 0;
         if(age_<AccelerationSeconds)return LaunchFraction*Smooth(age_/AccelerationSeconds);
         if(age_<SpinSeconds)return LaunchFraction+(1-LaunchFraction)*Smooth((age_-AccelerationSeconds)/(SpinSeconds-AccelerationSeconds));
-        return age_>SpinSeconds+HoldSeconds?Smooth((TotalSeconds-age_)/ReleaseSeconds):1;
+        const float release=age_>ReleaseStartAge()?Smooth((expiresAt_-age_)/ReleaseSeconds):1;
+        const float recovery=recoveryAge_<0?1:recoveryBlend_+(1-recoveryBlend_)*Smooth((age_-recoveryAge_)/AccelerationSeconds);
+        return (std::min)(release,recovery);
     }
     float SpeedMultiplier()const{return 1+(MaximumMultiplier-1)*Blend();}
     float SpinDegrees()const{return Spinning()?360.0f*SpinPhase():0;}
@@ -89,6 +108,27 @@ public:
     float SurgePulse()const {
         if(!Active() || !allowed_)return 0;
         return Smooth(age_/.06f)*(1-Smooth((age_-.08f)/.28f));
+    }
+    float ThrustPulse()const {
+        if(!Active() || !allowed_)return 0;
+        // Point ignition leads a directional jet; the same launch age drives
+        // chassis load and camera catch-up, independently of render frequency.
+        return Smooth(age_/.035f)*(1-Smooth((age_-.09f)/.25f));
+    }
+    float BodyCompression()const {
+        if(!Spinning())return 0;
+        const float preload=age_<.07f?std::sin(3.141592654f*age_/.07f):0;
+        const float landing=age_>TurnEndSeconds?
+            std::sin(3.141592654f*(age_-TurnEndSeconds)/(SpinSeconds-TurnEndSeconds)):0;
+        return -.075f*preload*preload-.050f*landing*landing;
+    }
+    float BodyPitchDegrees()const {
+        if(!Spinning())return 0;
+        return -3.5f*SurgePulse()-.65f*BodyCompression()/.05f;
+    }
+    float OccupantPitchDegrees()const {
+        if(!Spinning())return 0;
+        return -2.2f*Smooth((age_-.045f)/.06f)*(1-Smooth((age_-.16f)/.25f));
     }
     float IgnitionPulse()const {
         if(!Active() || !allowed_)return 0;
@@ -111,6 +151,8 @@ private:
     std::unordered_set<uint32_t> counted_;
     unsigned charge_=0;
     uint64_t totalKills_=0,serial_=0;
+    uint64_t extensions_=0;
     float age_=-1;
+    float expiresAt_=TotalSeconds,recoveryAge_=-1,recoveryBlend_=1,lastExtensionAge_=-1;
     bool started_=false,allowed_=true;
 };

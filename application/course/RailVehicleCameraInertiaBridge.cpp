@@ -22,7 +22,7 @@ bool RailVehicleCameraInertiaSettings::Validate(std::string* errorMessage) const
 }
 
 void RailVehicleCameraInertiaBridge::Reset() {
-    frame_={}; longitudinal_={}; lateral_={}; targetLead_={}; roll_={}; fov_={}; surge_={};
+    frame_={}; longitudinal_={}; lateral_={}; targetLead_={}; roll_={}; fov_={}; surge_={}; manualSurge_={};
     previousDistance_=0.0f; previousVehicleId_.clear(); initialized_=false; revision_=0;
 }
 
@@ -46,7 +46,7 @@ const RailVehicleCameraInertiaFrame& RailVehicleCameraInertiaBridge::Update(
     const bool discontinuity=!initialized_ || previousVehicleId_!=input.state->vehicleId ||
         std::abs(input.state->distance-previousDistance_)>input.settings.distanceDiscontinuityThreshold;
     if (discontinuity) {
-        longitudinal_={}; lateral_={}; targetLead_={}; roll_={}; fov_={}; surge_={};
+        longitudinal_={}; lateral_={}; targetLead_={}; roll_={}; fov_={}; surge_={}; manualSurge_={};
         next.historyResetThisFrame=true;
     }
     initialized_=true;
@@ -101,6 +101,7 @@ const RailVehicleCameraInertiaFrame& RailVehicleCameraInertiaBridge::Update(
         (std::clamp)(input.manualBoostStrength, 0.0f, 1.0f) * kPi / 180.0f;
     fovTarget += (input.aimFocusActive ? 0.45f : 0.9f) * ignition * kPi / 180.0f;
     const float surge=std::isfinite(input.rewardBoostSurge)?(std::clamp)(input.rewardBoostSurge,0.0f,1.0f):0;
+    const float manualSurge=std::isfinite(input.manualBoostSurge)?(std::clamp)(input.manualBoostSurge,0.0f,1.0f):0;
 
     float remaining=(std::clamp)(input.deltaTime,0.0f,0.25f);
     while (remaining>0.0f) {
@@ -110,12 +111,14 @@ const RailVehicleCameraInertiaFrame& RailVehicleCameraInertiaBridge::Update(
         StepSpring(targetLead_,leadTarget,input.settings.targetResponseHz,step);
         StepSpring(roll_,rollTarget,input.settings.positionResponseHz,step);
         StepSpring(fov_,fovTarget,input.settings.fovResponseHz,step);
-        StepSpring(surge_,surge,6.0f,step);
+        StepSpring(surge_,surge,7.5f,step);
+        StepSpring(manualSurge_,manualSurge,6.0f,step);
         remaining-=step;
     }
     // A single critically-damped catch-up shared by aim and display.
     next.gameplayPositionOffset=Add(Scale(forward,longitudinal_.value-
-        surge_.value*(input.aimFocusActive?1.35f:3.2f)),Scale(right,lateral_.value));
+        (std::max)(surge_.value*(input.aimFocusActive?1.35f:3.2f),
+            manualSurge_.value*(input.aimFocusActive?.65f:1.6f))),Scale(right,lateral_.value));
     next.gameplayTargetOffset=Scale(right,targetLead_.value);
     next.rollOffsetRadians=roll_.value;
     next.fovOffsetRadians=fov_.value+surge_.value*(input.aimFocusActive?1.25f:2.5f)*kPi/180.0f;

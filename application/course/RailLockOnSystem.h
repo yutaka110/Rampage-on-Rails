@@ -18,6 +18,9 @@ struct RailLockOnFrameInput {
     uint32_t viewportHeight = 0;
     bool hasCursorPosition = false;
     Vector2 cursorPosition{};
+    // Deterministic host input; defaults to the ordinary Win32 RMB path.
+    bool hasLockHeldOverride=false;
+    bool lockHeldOverride=false;
     const Matrix4x4* gameplayViewProjection = nullptr;
     const RailPath* railPath = nullptr;
     const CourseSpawnRuntime* spawnRuntime = nullptr;

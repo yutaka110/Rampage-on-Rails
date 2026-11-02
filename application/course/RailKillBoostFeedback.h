@@ -23,7 +23,7 @@ inline RailKillBoostFeedbackFrame BuildRailKillBoostFeedback(const RailKillBoost
     frame.ignition=canAccelerate?boost.IgnitionPulse():0;
     if(!std::isfinite(deltaTime) || deltaTime<=0)return frame;
     frame.ignitionSound=boost.StartedThisFrame() && frame.ignition>0;
-    constexpr float releaseAge=RailKillBoost::SpinSeconds+RailKillBoost::HoldSeconds;
+    const float releaseAge=boost.ReleaseStartAge();
     frame.releaseSound=previousAge>=0 && previousAge<releaseAge && boost.Age()>=releaseAge && frame.strength>.02f;
     return frame;
 }

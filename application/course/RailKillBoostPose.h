@@ -14,8 +14,8 @@ inline Vector3 Turn(Vector3 v,Vector3 axis,float radians) {
         v.y*c+(axis.z*v.x-axis.x*v.z)*s+axis.y*dot*(1-c),
         v.z*c+(axis.x*v.y-axis.y*v.x)*s+axis.z*dot*(1-c)};
 }
-inline Matrix4x4 Apply(Matrix4x4 world,Vector3 pivot,Vector3 up,float degrees,float lift) {
-    if(!std::isfinite(degrees) || !std::isfinite(lift))return world;
+inline Matrix4x4 Apply(Matrix4x4 world,Vector3 pivot,Vector3 up,float degrees,float lift,float pitchDegrees=0) {
+    if(!std::isfinite(degrees) || !std::isfinite(lift) || !std::isfinite(pitchDegrees))return world;
     const float radians=degrees*.01745329251994329577f;
     for(int row=0;row<3;++row) {
         const auto v=Turn({world.m[row][0],world.m[row][1],world.m[row][2]},up,radians);
@@ -23,6 +23,11 @@ inline Matrix4x4 Apply(Matrix4x4 world,Vector3 pivot,Vector3 up,float degrees,fl
     }
     const auto p=Turn({world.m[3][0]-pivot.x,world.m[3][1]-pivot.y,world.m[3][2]-pivot.z},up,radians);
     world.m[3][0]=pivot.x+p.x+up.x*lift;world.m[3][1]=pivot.y+p.y+up.y*lift;world.m[3][2]=pivot.z+p.z+up.z*lift;
+    const Vector3 right{world.m[0][0],world.m[0][1],world.m[0][2]};
+    for(int row=0;row<3;++row) {
+        const auto v=Turn({world.m[row][0],world.m[row][1],world.m[row][2]},right,pitchDegrees*.01745329251994329577f);
+        world.m[row][0]=v.x;world.m[row][1]=v.y;world.m[row][2]=v.z;
+    }
     return world;
 }
 } // namespace RailKillBoostPose

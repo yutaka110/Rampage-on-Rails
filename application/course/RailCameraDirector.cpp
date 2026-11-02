@@ -985,6 +985,7 @@ void RailCameraDirector::MeasureVehicleFraming(
     float left = 1.0e6f;
     float right = -1.0e6f;
     frame.vehicleScreenTop = 1.0f;
+    frame.vehicleScreenBottom = 0.0f;
     for (const Vector3& corner : input.vehicleBoundsCorners) {
         const auto projected = ProjectCompositionPoint(frame, corner, aspect);
         if (!projected.inFront || projected.forwardDistance <= input.nearClipDistance) {
@@ -995,12 +996,16 @@ void RailCameraDirector::MeasureVehicleFraming(
         right = (std::max)(right, projected.normalized.x);
         frame.vehicleScreenTop = (std::min)(frame.vehicleScreenTop,
             (1.0f - projected.normalized.y) * 0.5f);
+        frame.vehicleScreenBottom = (std::max)(frame.vehicleScreenBottom,
+            (1.0f - projected.normalized.y) * 0.5f);
     }
     frame.vehicleScreenWidth = (right - left) * 0.5f;
     // Allow a small presentation-shake margin beyond the correction target.
     const float handoffWeight = std::isfinite(input.titleHandoffWeight)
         ? (std::clamp)(input.titleHandoffWeight, 0.0f, 1.0f) : 0.0f;
     frame.vehicleFramingSafe = frame.vehicleScreenTop >= Lerp(0.62f, 0.47f, handoffWeight) &&
+        frame.vehicleScreenBottom <= Lerp(0.92f, 0.97f, handoffWeight) &&
+        left >= -.90f && right <= .90f &&
         frame.vehicleScreenWidth <= Lerp(0.36f, 0.62f, handoffWeight);
 }
 
@@ -1026,6 +1031,20 @@ void RailCameraDirector::ApplyVehicleFraming(
     const float handoffWeight = std::isfinite(input.titleHandoffWeight)
         ? (std::clamp)(input.titleHandoffWeight, 0.0f, 1.0f) : 0.0f;
     const float widthLimit = Lerp(0.34f, 0.60f, handoffWeight);
+    const float topNdc = 1.0f-2.0f*Lerp(.65f,.50f,handoffWeight);
+    const float bottomNdc = 1.0f-2.0f*Lerp(.90f,.95f,handoffWeight);
+    // Solve both vertical edges. The previous one-sided lift could place the
+    // roof below 65% while leaving the wheels outside the bottom of the frame.
+    const auto verticalInterval = [&](float pullback,float topSlack=0.0f,float bottomSlack=0.0f) {
+        Vector2 interval{-16.0f,16.0f};
+        for(const auto& corner:input.vehicleBoundsCorners) {
+            const Vector3 delta=Subtract(corner,frame.position);
+            const float depth=Dot(delta,forward)+pullback;
+            interval.x=(std::max)(interval.x,Dot(delta,up)-(topNdc+topSlack)*tanY*depth);
+            interval.y=(std::min)(interval.y,Dot(delta,up)-(bottomNdc-bottomSlack)*tanY*depth);
+        }
+        return interval;
+    };
     // Move along the view axes without changing aim direction or zooming FOV.
     // The title reveal permits its close hero shot; the combat lane's ordinary
     // 34% width and 65% top limits return smoothly before input unlocks.
@@ -1042,12 +1061,14 @@ void RailCameraDirector::ApplyVehicleFraming(
             left = (std::min)(left, x);
             rightEdge = (std::max)(rightEdge, x);
         }
-        return (rightEdge - left) * 0.5f <= widthLimit;
+        const auto vertical=verticalInterval(pullback);
+        return (rightEdge - left) * 0.5f <= widthLimit &&
+            left>=-.88f && rightEdge<=.88f && vertical.x<=vertical.y;
     };
     float pullback = 0.0f;
     if (!fitsWidth(0.0f)) {
         float low = 0.0f;
-        float high = 12.0f;
+        float high = 32.0f;
         // Sub-millimetre search avoids visible quarter-unit camera steps.
         for (int iteration = 0; iteration < 14; ++iteration) {
             const float mid = (low + high) * 0.5f;
@@ -1058,22 +1079,31 @@ void RailCameraDirector::ApplyVehicleFraming(
     }
     const float decay = std::exp(-(std::max)(0.0f, input.deltaTime) * 4.0f);
     // Resolve occlusion immediately; return to the authored rig gradually.
-    vehicleFramingPullback_ = (std::max)(pullback, vehicleFramingPullback_ * decay);
-    float lift = 0.0f;
-    for (const Vector3& corner : input.vehicleBoundsCorners) {
-        const Vector3 delta = Subtract(corner, frame.position);
-        const float depth = Dot(delta, forward) + vehicleFramingPullback_;
-        lift = (std::max)(lift, Dot(delta, up) + 0.30f * (1.0f-handoffWeight) * tanY * depth);
-    }
-    vehicleFramingLift_ = (std::max)(
-        (std::clamp)(lift, 0.0f, 8.0f), vehicleFramingLift_ * decay);
+    // A large safety pullback must not shed metres in one frame when a
+    // turret changes the base rig. A bounded return also reaches the rig in
+    // finite time, avoiding a long tail after the launch has settled.
+    const float returnStep=7.5f*(std::clamp)(input.deltaTime,0.0f,.25f);
+    const float returningPullback=(std::max)(0.0f,vehicleFramingPullback_-returnStep);
+    vehicleFramingPullback_ = (std::max)(pullback, returningPullback);
+    const auto vertical=verticalInterval(vehicleFramingPullback_);
+    // Keep the decaying correction when safe; clamp immediately at either
+    // edge, including a downward correction when the wheels need more room.
+    const float desiredLift=vertical.x<=vertical.y?
+        (std::clamp)(vehicleFramingLift_*decay,vertical.x,vertical.y):vertical.x;
+    const auto hardVertical=verticalInterval(vehicleFramingPullback_,.05f*(1-handoffWeight),.03f*(1-handoffWeight));
+    const float smoothLift=hasPreviousComfortFrame_ && input.deltaTime>0?
+        Lerp(vehicleFramingLift_,desiredLift,1-std::exp(-10.0f*(std::min)(input.deltaTime,.25f))):desiredLift;
+    vehicleFramingLift_=hardVertical.x<=hardVertical.y?
+        (std::clamp)(smoothLift,hardVertical.x,hardVertical.y):desiredLift;
     // During the boss portrait, ship composition owns the frame. Retain the
     // vehicle solver's history and restore it continuously for gameplay.
     const float hero=std::isfinite(input.mothershipHeroWeight)
         ? (std::clamp)(input.mothershipHeroWeight,0.0f,1.0f) : 0.0f;
     const float carrier=std::isfinite(input.mothershipCameraWeight)
         ? (std::clamp)(input.mothershipCameraWeight,0.0f,1.0f) : 0.0f;
-    const float retention=1.0f-hero*carrier;
+    const float action=std::isfinite(input.vehicleActionFramingWeight)?
+        (std::clamp)(input.vehicleActionFramingWeight,0.0f,1.0f):0;
+    const float retention=(std::max)(1.0f-hero*carrier,action);
     const Vector3 correction = Scale(Add(
         Scale(forward, -vehicleFramingPullback_), Scale(up, vehicleFramingLift_)),retention);
     frame.position = Add(frame.position, correction);

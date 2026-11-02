@@ -29,7 +29,7 @@ inline float ShortRunTravelEndDistance(float railLength) {
 inline CourseGameplayWaveRuntimeSettings ShortRunWaveSettings() {
     CourseGameplayWaveRuntimeSettings settings;
     settings.earlyClearAdvanceEnabled = true;
-    settings.earlyClearRecoverySeconds = 1.0f;
+    settings.earlyClearRecoverySeconds = 0.65f;
     settings.maximumEarlyAdvanceDistance = 180.0f;
     return settings;
 }
@@ -42,7 +42,7 @@ inline bool ShortRunAllowsAdaptivePatrol(float distance) {
     // their authored breathing room. Ridge combat also protects its crest.
     return distance >= 160.0f && distance < 3270.0f &&
         !(distance >= 420.0f && distance < 620.0f) &&
-        !(distance >= 950.0f && distance < 1950.0f) &&
+        !(distance >= 950.0f && distance < 1680.0f) &&
         !(distance >= 2440.0f && distance < 2560.0f);
 }
 inline bool ShortRunPrimaryEncounterDue(const CourseGameplayWaveRuntimeBridge& waves,

@@ -9,9 +9,8 @@ class RailManualBoost final {
 public:
     static constexpr float SpeedGain = 1.0f;
     static constexpr float MaximumMultiplier = 1.0f + SpeedGain;
-    // Keep the shared movement/checkpoint ceiling; held input now supplies the
-    // smaller sustained assist, while the six-kill reward owns the strong burst.
-    static constexpr float HeldMaximumMultiplier = 1.30f;
+    // The faster ordinary pace has a small assist; the reward remains stronger.
+    static constexpr float HeldMaximumMultiplier = 1.20f;
     static constexpr float MinimumBoostSpeed = 40.0f;
     static constexpr float AttackSeconds = 0.22f;
     static constexpr float AccelerationMultiplier = 1.9f;
@@ -20,6 +19,12 @@ public:
     static constexpr float ReleaseSeconds = 0.70f;
 
     void Reset() { *this = RailManualBoost{}; }
+    // Copied with forecasts/checkpoints. Also permits controlled 1.15/1.20
+    // comparisons without changing the movement or curve-safety contracts.
+    void SetHeldMaximumMultiplier(float value) {
+        heldMaximumMultiplier_ = std::isfinite(value)
+            ? (std::clamp)(value, 1.0f, HeldMaximumMultiplier) : HeldMaximumMultiplier;
+    }
     void SetInput(bool held, bool enabled) { held_ = held; enabled_ = enabled; }
     void Update(float deltaTime) {
         if (!std::isfinite(deltaTime) || deltaTime <= 0.0f) return;
@@ -39,7 +44,7 @@ public:
             remaining -= dt;
         }
     }
-    float SpeedMultiplier() const { return 1.0f + (HeldMaximumMultiplier-1.0f) * Blend(); }
+    float SpeedMultiplier() const { return 1.0f + (heldMaximumMultiplier_-1.0f) * Blend(); }
     static float ClampMultiplier(float value) {
         return std::isfinite(value) ? (std::clamp)(value, 1.0f, MaximumMultiplier) : 1.0f;
     }
@@ -59,6 +64,11 @@ public:
         const float t = (std::clamp)(ignitionAge_ / IgnitionSeconds, 0.0f, 1.0f);
         return (1.0f - t) * (1.0f - t);
     }
+    float SurgePulse() const {
+        if (!enabled_ || !held_) return 0.0f;
+        const float t = ignitionAge_ / IgnitionSeconds;
+        return std::sin(3.141592654f * (std::clamp)(t, 0.0f, 1.0f));
+    }
     // Curves, collisions and speed caps must also suppress the sensation of
     // acceleration: effects follow the speed actually achieved, not the key.
     float PresentationStrength(float speed, float normalSpeed) const {
@@ -70,6 +80,7 @@ public:
 
 private:
     float blend_ = 0.0f;
+    float heldMaximumMultiplier_ = HeldMaximumMultiplier;
     float ignitionAge_ = IgnitionSeconds;
     bool wasActive_ = false;
     bool startedThisFrame_ = false;

@@ -112,7 +112,7 @@ private:
         std::span<const CourseMeshModelBinding> models, const Matrix4x4& viewProjection);
     void WriteTwinShieldDrone(CourseMeshRenderItem& hull,
         const TwinShieldDronePose& pose, std::span<const CourseMeshModelBinding> models,
-        const Matrix4x4& viewProjection);
+        const Matrix4x4& viewProjection,bool energyShield=false);
     void AddObstacleInstances(
         const CourseSpawnRuntime& runtime,
         const RailPath& railPath,

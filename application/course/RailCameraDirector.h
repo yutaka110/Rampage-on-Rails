@@ -199,6 +199,7 @@ struct RailCameraDirectorFrameInput {
     Vector3 startupCameraWingmanOffset{};
     // Conservative rendered vehicle bounds, including bank and suspension.
     bool vehicleFramingActive = false;
+    float vehicleActionFramingWeight = 0.0f;
     std::array<Vector3, 8> vehicleBoundsCorners{};
     const CourseAsset* course = nullptr;
     const RailPath* railPath = nullptr;
@@ -255,6 +256,7 @@ struct RailCameraDirectorFrame {
     float vehicleFramingPullback = 0.0f;
     float vehicleFramingLift = 0.0f;
     float vehicleScreenTop = 1.0f;
+    float vehicleScreenBottom = 0.0f;
     float vehicleScreenWidth = 0.0f;
     bool vehicleFramingSafe = true;
     CourseCameraKey rig{};
