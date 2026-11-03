@@ -333,3 +333,6 @@ terrain|3214|hero_landmark|speed-feel-marker-3214|rail_speed_marker|-6.6|0|0|1|1
 terrain|3242|hero_landmark|speed-feel-marker-3242|rail_speed_marker|6.6|0|0|1|1|1|0|0|0|none|14|70|140|speed-feel-marker-3242|1|0
 terrain|3270|hero_landmark|speed-feel-marker-3270|rail_speed_marker|-6.6|0|0|1|1|1|0|180|0|none|14|70|140|speed-feel-marker-3270|1|0
 terrain|3298|hero_landmark|speed-feel-marker-3298|rail_speed_marker|6.6|0|0|1|1|1|0|0|0|none|14|70|140|speed-feel-marker-3298|1|0
+
+# Boss-relative prototype: withdrawal, valley vista, white bridge, rear pair.
+event|3350|setpiece|post-boss-white-bridge|boss_relative|post-boss-white-bridge|1|0

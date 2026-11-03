@@ -86,6 +86,7 @@ float KindPriorityBonus(RailLockTargetKind kind, const RailLockSettings& setting
         return settings.lockPriorityEnemyBonus;
     case RailLockTargetKind::Obstacle:
         return settings.lockPriorityObstacleBonus;
+    case RailLockTargetKind::RearPanel:
     case RailLockTargetKind::Projectile:
         return settings.lockPriorityEnemyBonus;
     }

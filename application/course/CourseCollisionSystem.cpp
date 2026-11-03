@@ -1,3 +1,4 @@
+#include "RailRearPursuitRules.h"
 #include "CourseCollisionSystem.h"
 #include "../AppLogFile.h"
 #include "RailVehicleCombatMountBridge.h"
@@ -120,6 +121,7 @@ void CourseCollisionSystem::Reset() {
     lastWeaponFeedbackResult_ = {};
     lastWeaponFireResult_ = {};
     playerShotTraces_.clear();
+    projectileSurfaceContacts_.clear();
     weaponFireSystem_.Reset();
     weaponDefinitionRegistry_.SynchronizeFireSystem(weaponFireSystem_);
     weaponFeedbackSystem_.Reset();
@@ -178,22 +180,31 @@ EnemyProjectileShootDownResult CourseCollisionSystem::ApplyProjectileLockHit(Cou
 DamageResult CourseCollisionSystem::ApplyWeaponHit(
     CourseSpawnRuntime& runtime,
     const CourseAsset* course,
-    const WeaponHitRequest& request) {
+    const WeaponHitRequest& contact) {
+    WeaponHitRequest request=contact;
+    if(request.hitKind==RailAimHitKind::Enemy && request.sourceIndex==UINT32_MAX) {
+        for(const auto& actor:runtime.Enemies()) {
+            if(actor.actorId!=request.targetActorId) continue;
+            if(actor.rearArmor.exposedRemaining>0) request.baseDamage*=1.7f;
+            break;
+        }
+    }
     lastWeaponHitRequest_ = request;
     lastDamageResult_ = damageReceiver_.Apply(runtime, course, request);
-    const EnemyAttackInterruptResult interruptResult =
-        attackInterruptSystem_.Submit(runtime, lastDamageResult_);
-    if (interruptResult.interrupted) {
+    const bool subsystemContact=request.hitKind==RailAimHitKind::Enemy &&
+        (IsRearSubsystemHit(request.sourceIndex) || IsRearPanelHit(request.sourceIndex));
+    if (!subsystemContact && attackInterruptSystem_.Submit(runtime,lastDamageResult_).interrupted)
         ++lastFrameStats_.enemyAttacksInterrupted;
-    }
     lastWeaponFeedbackResult_ =
         weaponFeedbackSystem_.Submit(runtime, request, lastDamageResult_);
-    runtime.EnemyCombat().SubmitDamageResult(
-        runtime,
-        lastDamageResult_,
-        lastWeaponFeedbackResult_.accepted
-            ? &lastWeaponFeedbackResult_.event
-            : nullptr);
+    if (!subsystemContact) {
+        runtime.EnemyCombat().SubmitDamageResult(
+            runtime,
+            lastDamageResult_,
+            lastWeaponFeedbackResult_.accepted
+                ? &lastWeaponFeedbackResult_.event
+                : nullptr);
+    }
     return lastDamageResult_;
 }
 
@@ -212,6 +223,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     projectileLockFramePrepared_=false;
     lastFrameStats_.enemyProjectilesShotDown=projectileShootDownSystem_.Frame().projectilesDestroyed;
     playerShotTraces_.clear();
+    projectileSurfaceContacts_.clear();
     attackInterruptSystem_.BeginFrame();
     lastShotVisible_ = false;
 
@@ -300,6 +312,63 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         }
         const PlayerProjectileContact contact =
             playerHitboxSystem_.EvaluateProjectile(bullet);
+        if(bullet.definitionId=="enemy_fang_chase" && input.railPath &&
+            contact.kind!=PlayerProjectileContactKind::Hit) {
+            const float previous=bullet.spawnDistance+bullet.previousDistanceOffset;
+            const float current=bullet.spawnDistance+bullet.distanceOffset;
+            const auto point=[&](float distance,float lateral,float vertical) {
+                const auto sample=input.railPath->Evaluate(distance);
+                return Add(sample.position,Add(Scale(sample.right,lateral),Scale(sample.up,vertical)));
+            };
+            const auto start=point(previous,bullet.previousLateralOffset,bullet.previousVerticalOffset);
+            const auto end=point(current,bullet.lateralOffset,bullet.verticalOffset);
+            const auto travel=Add(end,Scale(start,-1));
+            const float length=std::sqrt(LengthSquared(travel));
+            if(length>.001f) {
+                RailAimState aim;
+                aim.valid=true;
+                aim.worldRayOrigin=start;
+                aim.worldRayDirection=Scale(travel,1/length);
+                aim.maxDistance=length;
+                RailWorldRaycastInput query;
+                query.aim=&aim;query.railPath=input.railPath;query.course=input.course;
+                query.playerDistance=input.player.distance;
+                query.terrainSettings=input.primaryTerrainSettings;
+                query.terrainEdits=input.course?&input.course->terrainEditLayer:nullptr;
+                query.terrainPreview=input.primaryTerrainPreview;
+                auto hit=RailWorldRaycast::Query(query);
+                // The white bridge is placed procedurally for this encounter.
+                // Its deck mesh is 8 units wide at -0.4 in the rail frame.
+                constexpr float deck=-.4f;
+                if(bullet.previousVerticalOffset>deck && bullet.verticalOffset<=deck) {
+                    const float t=(bullet.previousVerticalOffset-deck)/
+                        (bullet.previousVerticalOffset-bullet.verticalOffset);
+                    const float distance=std::lerp(previous,current,t);
+                    const float lane=std::lerp(bullet.previousLateralOffset,bullet.lateralOffset,t);
+                    if(distance>=input.rearBridgeStart && distance<input.rearBridgeEnd &&
+                        std::abs(lane)<=4 && (!hit.hit || t*length<hit.distance)) {
+                        hit.hit=true;
+                        hit.position=point(distance,lane,deck);
+                        hit.normal=input.railPath->Evaluate(distance).up;
+                    }
+                }
+                if(hit.hit && runtime.ConsumeProjectile(bullet.projectileId)) {
+                    EnemyProjectilePresentationEvent event;
+                    event.kind=EnemyProjectilePresentationEventKind::Impacted;
+                    event.projectileId=bullet.projectileId;
+                    event.ownerActorId=bullet.ownerActorId;
+                    event.definitionId=bullet.definitionId;
+                    event.trajectory=bullet.trajectory;
+                    event.worldPosition=hit.position;
+                    event.motionDirection=aim.worldRayDirection;
+                    event.impactNormal=hit.normal;
+                    event.surfaceImpact=true;
+                    event.bodyRadius=bullet.radius;
+                    projectileSurfaceContacts_.push_back(std::move(event));
+                    continue;
+                }
+            }
+        }
         if (contact.kind == PlayerProjectileContactKind::None) {
             continue;
         }

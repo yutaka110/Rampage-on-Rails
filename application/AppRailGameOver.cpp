@@ -42,6 +42,7 @@ RailRetryFollowBindings AppRunLoop::BindRailRetryFollowers() {
         .mothershipReveal=railMothershipReveal_,
         .mothershipBattle=railMothershipBattle_,
         .minibossCombat=railMinibossCombat_,
+        .postBoss=railPostBossSequence_,
         .hudRuntime=railShooterHudRuntimeModel_,
         .hud=railShooterHudPresentation_,
         .view=frameState_.viewMatrix,
@@ -194,7 +195,7 @@ void AppRunLoop::UpdateRailGameOver(float deltaTime) {
         motion.course=&railShooterCourse_;
         motion.terrainSettings=&runtimeState_.terrain.settings;
         motion.terrainEdits=&railShooterCourse_.terrainEditLayer;
-        motion.terrainPreview=&runtimeState_.terrain.previewEditLayer;
+        motion.terrainPreview=&railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
         motion.terrainCollision=&terrainCollisionWorld_;
         motion.playerDistance=railShooterDistance_+railShooterVehicleMovement_.State().speed*frame.elapsed;
         motion.playerSpeed=railShooterVehicleMovement_.State().speed;
@@ -284,7 +285,7 @@ bool AppRunLoop::RetryRailCheckpoint() {
         railEnemyEncounterCameraCompositionBridge_.Reset();
         railShooterCameraDirector_.Reset();
         railMothershipBattle_.Reset();railMothershipReveal_.Reset();
-        railMinibossCombat_.Reset();
+        railMinibossCombat_.Reset();railPostBossSequence_.Reset();
         railShooterLockOnSystem_.Reset(); railLockVolley_.Reset();
         railShooterSpeedDirector_.Reset();
         railShooterRideDirector_.Reset();

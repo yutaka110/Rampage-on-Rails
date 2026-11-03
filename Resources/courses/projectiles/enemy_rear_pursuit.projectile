@@ -1,0 +1,3 @@
+# Faster world speed is necessary to catch a cart travelling in the same direction.
+# At maximum reward speed this leaves about 1.5-2 seconds of visible flight.
+projectile|enemy_rear_pursuit|Rear Pursuit Round|direct|92|0|92|0|0|0|0|0.45|4.0|6|1.0|0.10|0.88|1.0|enemy_projectile_trail|ice_impact|shootdown,interrupt,lean|1|1.75

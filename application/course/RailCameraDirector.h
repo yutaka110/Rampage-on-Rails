@@ -181,6 +181,9 @@ struct RailCameraEncounterFramingSettings {
 };
 
 struct RailCameraDirectorFrameInput {
+    // Gameplay sequence view, evaluated by the shared collision/comfort path.
+    CourseCameraViewDefinition sequenceView{};
+    float sequenceViewWeight=0;
     // Title-to-game match cut, resolved in rail space before vehicle/terrain safety.
     float titleHandoffWeight = 0.0f;
     CourseCameraKey titleHandoffRig{};

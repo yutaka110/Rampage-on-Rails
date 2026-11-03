@@ -39725,6 +39725,7 @@ void TestPrimaryContactPresentationCoherence(RegressionRunner& runner) {
 
 #include "KillBoostRegressionTests.inl"
 #include "EnergyShieldRegressionTests.inl"
+#include "PostBossRegressionTests.inl"
 
 void TestGatlingRingMaterial(RegressionRunner& runner) {
     ge3::core::ShaderCompiler compiler;
@@ -44029,6 +44030,9 @@ int RunEditorCoreRegressionTests() {
          {"carrier miniboss parts", [&]() { TestCarrierMinibossParts(runner); }},
          {"carrier gatling scheduled burst", [&]() { TestCarrierGatlingBurst(runner); }},
          {"gatling held primary cancellation", [&]() { TestGatlingHeldPrimaryCancellation(runner); }},
+         {"post boss relative vista bridge and rear timing", [&]() { TestPostBossTiming(runner); }},
+         {"post boss rear pursuit real combat and speed", [&]() { TestRearPursuitCombat(runner); }},
+         {"post boss rear camera authoring and retry", [&]() { TestPostBossCameraAndRetry(runner); }},
          {"energy shield damage authority and lock defense", [&]() { TestEnergyShieldAuthority(runner); }},
          {"energy shield real travelling lock interception", [&]() { TestEnergyShieldVolley(runner); }},
          {"energy shield banked geometry checkpoint and pause", [&]() { TestEnergyShieldPoseAndRetry(runner); }},

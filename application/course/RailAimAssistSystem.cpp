@@ -179,6 +179,7 @@ void RailAimAssistSystem::Update(const RailAimAssistFrameInput& input) {
     const float baseAcquireAngle = (std::max)(0.01f, AcquireAngle(input.inputDevice, settings));
     frame_.candidates.reserve(input.anchors->size());
     for (const RailLockAnchor& anchor : *input.anchors) {
+        if(anchor.target.kind==RailLockTargetKind::RearPanel) continue;
         RailAimAssistCandidate candidate{};
         candidate.target = anchor.target;
         candidate.worldPosition = anchor.worldPosition;

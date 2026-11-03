@@ -1,3 +1,4 @@
+#include "RailRearPursuitRules.h"
 #include "EnemyBehaviorSystem.h"
 
 #include "CourseSpawnRuntime.h"
@@ -658,7 +659,7 @@ bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
             ? state.attackPassHoldForwardDistance
             : state.hoverPreferredForwardDistance > 0.0f
                 ? state.hoverPreferredForwardDistance : definition.engagementBandPreferredForwardDistance;
-        const float error = desiredForwardDistance - baseForwardDistance;
+        const float error = RailEnemyEngagementSign(actor.desc.actorAssetId)*desiredForwardDistance - baseForwardDistance;
         const float correction = (std::clamp)(
             error * definition.engagementBandPositionGain,
             -definition.engagementBandMaximumCorrectionSpeed,
@@ -800,8 +801,8 @@ bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
         state.behaviorLateralOffset + state.safetyLateralOffset;
     actor.desc.verticalOffset = state.authoredVerticalOffset +
         state.behaviorVerticalOffset;
-    state.engagementBandForwardDistance =
-        actor.desc.spawnDistance + actor.desc.distanceOffset - playerDistance;
+    state.engagementBandForwardDistance = RailEnemyEngagementSign(actor.desc.actorAssetId)*
+        (actor.desc.spawnDistance + actor.desc.distanceOffset - playerDistance);
     state.engagementBandAttackAllowed =
         !definition.maintainForwardEngagementBand ||
         (state.engagementBandForwardDistance >=

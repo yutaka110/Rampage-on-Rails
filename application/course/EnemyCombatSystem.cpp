@@ -1,6 +1,7 @@
-﻿#include "EnemyCombatSystem.h"
+#include "EnemyCombatSystem.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailRearPursuitRules.h"
 
 #include <algorithm>
 #include <cmath>
@@ -395,7 +396,8 @@ void EnemyCombatSystem::EnterPhase(
     if (state.phase == phase) {
         return;
     }
-    if(phase==EnemyCombatPhase::Dying && actor.desc.meshId=="twin_shield_hull") {
+    if(phase==EnemyCombatPhase::Dying && actor.desc.meshId=="twin_shield_hull" &&
+        !IsRailElitePursuer(actor.desc.actorAssetId)) {
         actor.hasDefeatedPose=actor.weaponMount.ready;
         if(actor.hasDefeatedPose) actor.defeatedPose=actor.weaponMount.dronePose;
     }

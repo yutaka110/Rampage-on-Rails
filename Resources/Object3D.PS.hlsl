@@ -302,7 +302,10 @@ PixelShaderOutput main(VertexShaderOutput input)
         output.color=float4(lit,gMaterial.color.a);return output;
     }
 
-    float4 texColor = gTexture.Sample(gSampler, uv);
+    // Only the forward surfaces of exposed pursuit hardware use the extra U band.
+    const bool pursuitWound = gMaterial.specularMode == 17 && uv.x > 1.0f;
+    const float2 albedoUv = pursuitWound ? float2(3.5f/9.0f, .5f) : uv;
+    float4 texColor = gTexture.Sample(gSampler, albedoUv);
     float4 maskColor = motionMaskTex.Sample(gSampler, uv);
 
     float3 baseRgb = texColor.rgb * gMaterial.color.rgb;
@@ -666,6 +669,21 @@ PixelShaderOutput main(VertexShaderOutput input)
         outRgb+=RailBoostSurfaceLighting(lerp(baseRgb,texColor.rgb*gMaterial.caveSurface.rgb,caveSurfaceWeight),
             gMaterial.caveResponse.x,gMaterial.caveSurface.w,SafeNormalize(input.normal),
             SafeNormalize(cameraWorldPosition-input.worldPosition),input.worldPosition);
+    }
+    if (pursuitWound) {
+        float2 p = (uv - float2(1.5f,.5f)) * 2.0f;
+        float2 shape = float2(p.x + .28f*p.y, p.y - .18f*p.x);
+        float grain = CartSurfaceNoise(p*9.0f + 14.0f);
+        float broad = CartSurfaceNoise(p*4.0f + 3.0f);
+        float boundary = length(shape*float2(1.05f,1.40f)) + .34f*(broad-.5f) + .13f*(grain-.5f);
+        float halo = 1.0f - smoothstep(.38f,.98f,boundary);
+        float red = (1.0f - smoothstep(.24f,.78f,boundary)) * (.78f+.22f*broad);
+        float hot = (1.0f - smoothstep(.08f,.51f,boundary)) * (.61f+.39f*grain);
+        // Leave a saturated fringe around the hot centre after bloom and tone mapping.
+        float3 emission = float3(2.3f,.016f,.046f)*halo +
+                          float3(5.0f,.075f,.17f)*red +
+                          float3(6.4f,1.75f,1.30f)*hot;
+        outRgb += emission * gMaterial.pad_;
     }
     output.color = float4(outRgb, baseA);
     return output;

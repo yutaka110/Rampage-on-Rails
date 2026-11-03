@@ -1,4 +1,4 @@
-﻿#include "course/RailVehicleBreakawayGeometry.h"
+#include "course/RailVehicleBreakawayGeometry.h"
 #include "AppSceneResources.h"
 
 #include <cassert>
@@ -2803,6 +2803,7 @@ bool AppSceneResources::Initialize(
         {"fence", "Resources/fence/fence.png"},
         {"iceShard", "Resources/iceShard.png"},
         {"courseOrganicRock", "Resources/course_meshes/materials/organic_rock_albedo.bmp"},
+        {"elitePursuerPalette", "Resources/enemies/ElitePursuers/ElitePursuers.bmp"},
         {"courseBlockoutSteel", "Resources/course_meshes/CourseBlockoutBridge/CourseBlockoutBridge.bmp"},
         {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
@@ -3226,6 +3227,13 @@ bool AppSceneResources::Initialize(
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("course_blockout_bridge", "Resources/course_meshes/CourseBlockoutBridge", "CourseBlockoutBridge.obj", "courseBlockoutSteel");
+    registerCourseMesh("rear_boost_panel", "Resources/enemies/ElitePursuers", "RearBoostPanel.obj", "elitePursuerPalette");
+    registerCourseMesh("rear_fang", "Resources/enemies/ElitePursuers", "Fang.obj", "elitePursuerPalette");
+    registerCourseMesh("rear_fang_exposed", "Resources/enemies/ElitePursuers", "FangExposed.obj", "elitePursuerPalette");
+    registerCourseMesh("rear_fang_damaged", "Resources/enemies/ElitePursuers", "FangDamaged.obj", "elitePursuerPalette");
+    registerCourseMesh("rear_veil", "Resources/enemies/ElitePursuers", "Veil.obj", "elitePursuerPalette");
+    registerCourseMesh("rear_veil_exposed", "Resources/enemies/ElitePursuers", "VeilExposed.obj", "elitePursuerPalette");
+    registerCourseMesh("rear_veil_damaged", "Resources/enemies/ElitePursuers", "VeilDamaged.obj", "elitePursuerPalette");
     registerCourseMesh("rail_speed_marker", "Resources/course_meshes/RailSpeedMarker", "RailSpeedMarker.obj", "courseBlockoutSteel");
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
     registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
@@ -3924,7 +3932,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     const EnemyEncounterReadabilityDirector* enemyReadability,
     const TwinShieldDronePose* titlePursuer,
     bool includeStartupRearScenery,
-    const RailMothership::Frame* mothership) {
+    const RailMothership::Frame* mothership,std::span<const CourseTerrainPlacement> sequenceScenery) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3949,6 +3957,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         enemyPresentation,
         enemyReadability,
         includeStartupRearScenery);
+    courseMeshRenderQueue.AppendTerrain(sequenceScenery,currentDistance,railPath,bindings,viewMatrix,projMatrix);
     if (mothership) courseMeshRenderQueue.AppendMothership(*mothership,bindings,viewMatrix,projMatrix);
     if (titlePursuer) courseMeshRenderQueue.AppendTwinShieldDrone(*titlePursuer,bindings,viewMatrix,projMatrix);
 }

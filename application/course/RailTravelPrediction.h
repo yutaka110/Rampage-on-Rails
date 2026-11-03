@@ -16,6 +16,8 @@ struct RailTravelPredictionInput final {
     const CourseAsset* course = nullptr;
     const RailPath* railPath = nullptr;
     float simulationStepSeconds = 1.0f / 60.0f;
+    float panelBoostRemaining = 0.0f;
+    float panelBoostMultiplier = 1.0f;
 };
 
 struct RailTravelPredictionSample final {

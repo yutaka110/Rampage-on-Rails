@@ -1,0 +1,2 @@
+# Finite chase window: a panel boost can pull away from a committed burst.
+projectile|enemy_fang_chase|Fang Chase Round|direct|58|0|58|0|0|0|0|0.45|2.4|6|1.0|0.10|0.88|1.0|enemy_projectile_trail|ice_impact|shootdown,interrupt,lean|1|1.75

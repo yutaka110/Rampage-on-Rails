@@ -1,3 +1,4 @@
+#include "RailRearPursuitRules.h"
 #include "RailGroundBatteryAttack.h"
 #include "CourseEventDispatcher.h"
 #include "../AppLogFile.h"
@@ -166,6 +167,7 @@ void CourseEventDispatcher::Dispatch(
     CourseSpawnRuntime& spawnRuntime,
     float currentDistance) {
     for (const CourseEventMarker& event : events) {
+        if(event.id=="post-boss-white-bridge")continue;
         if (event.type == "enemy_wave") {
             const EnemyWaveAsset* wave = LoadEnemyWave(event.id);
             if (wave != nullptr) {
@@ -207,6 +209,7 @@ bool CourseEventDispatcher::SpawnAuthoredEnemy(
     desc.lateralOffset = lateralOffset;
     desc.verticalOffset = verticalOffset;
     ApplyActorAsset(desc, *actorAsset);
+    if(IsRailRearPursuer(desc.actorAssetId)) desc.establishedEntrance=true;
     if (const BulletPatternAsset* patternAsset =
             LoadBulletPatternAsset(desc.bulletPatternId)) {
         ApplyBulletPatternAsset(desc, *patternAsset);
@@ -214,8 +217,7 @@ bool CourseEventDispatcher::SpawnAuthoredEnemy(
         desc.firePattern = FirePatternForRole(desc.role);
         desc.bulletCount = DefaultBulletCountForPattern(desc.firePattern);
     }
-    spawnRuntime.SpawnEnemyActor(std::move(desc));
-    return true;
+    return spawnRuntime.SpawnEnemyActor(std::move(desc),errorMessage);
 }
 
 const EnemyWaveAsset* CourseEventDispatcher::LoadEnemyWave(const std::string& id) {

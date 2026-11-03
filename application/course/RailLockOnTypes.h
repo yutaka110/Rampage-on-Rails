@@ -12,6 +12,7 @@ enum class RailLockTargetKind {
     Enemy,
     Obstacle,
     Projectile,
+    RearPanel,
 };
 
 enum class RailLockRejectReason {
@@ -33,11 +34,13 @@ struct RailLockTargetHandle {
     uint32_t actorId = 0;
     uint32_t generationId = 0;
     uint64_t projectileId = 0;
+    uint8_t panelIndex = 0;
 };
 
 inline bool SameRailLockTarget(const RailLockTargetHandle& a,const RailLockTargetHandle& b) {
     return a.kind==b.kind && a.actorId==b.actorId && a.generationId==b.generationId &&
-        (a.kind!=RailLockTargetKind::Projectile || a.projectileId==b.projectileId);
+        (a.kind!=RailLockTargetKind::Projectile || a.projectileId==b.projectileId) &&
+        (a.kind!=RailLockTargetKind::RearPanel || a.panelIndex==b.panelIndex);
 }
 
 struct RailLockAnchor {

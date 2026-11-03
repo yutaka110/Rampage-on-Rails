@@ -1,0 +1,62 @@
+newmtl gunmetal
+Ka 0.08 0.08 0.08
+Kd 0.180 0.240 0.300
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2
+
+newmtl armour
+Ka 0.08 0.08 0.08
+Kd 0.320 0.400 0.470
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2
+
+newmtl edge
+Ka 0.08 0.08 0.08
+Kd 0.450 0.530 0.580
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2
+
+newmtl joint
+Ka 0.08 0.08 0.08
+Kd 0.095 0.125 0.150
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2
+
+newmtl glass
+Ka 0.08 0.08 0.08
+Kd 0.055 0.105 0.140
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2
+
+newmtl copper
+Ka 0.08 0.08 0.08
+Kd 0.680 0.340 0.160
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2
+
+newmtl ivory
+Ka 0.08 0.08 0.08
+Kd 0.830 0.830 0.740
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2
+
+newmtl sensor
+Ka 0.08 0.08 0.08
+Kd 0.190 0.720 0.800
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2
+
+newmtl nozzle
+Ka 0.08 0.08 0.08
+Kd 0.240 0.420 0.560
+Ks 0.18 0.21 0.24
+Ns 45
+illum 2

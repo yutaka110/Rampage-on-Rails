@@ -181,6 +181,10 @@ void EnemyProjectilePresentationBridge::Update(
     std::unordered_set<uint64_t> impactedIds;
     impactedIds.reserve(input.playerDamageResults.size());
     if (input.gameplayActive) {
+        for(const auto& event:input.surfaceContacts) {
+            impactedIds.insert(event.projectileId);
+            PushEvent(event,input.settings.maximumEventsPerFrame);
+        }
         for (const PlayerDamageResult& result : input.playerDamageResults) {
             if (!result.accepted ||
                 result.request.kind != PlayerHitKind::EnemyProjectile ||
@@ -197,6 +201,11 @@ void EnemyProjectilePresentationBridge::Update(
                 result.request.railDistance,
                 result.request.lateralOffset,
                 result.request.verticalOffset);
+            if(result.request.hasWorldImpact) {
+                event.worldPosition=result.request.impactWorldPosition;
+                event.impactNormal=result.request.impactNormalWorld;
+            }
+            event.definitionId=result.request.sourceId;
             event.effectId = result.request.impactEffectId;
             event.lethal = result.lethal;
             const auto tracked = tracked_.find(event.projectileId);

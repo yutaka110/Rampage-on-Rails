@@ -66,6 +66,7 @@ struct RailShooterHudRenderInput final {
     Vector2 titleTransitionFocus{0.5f,0.4f};
     const GameSessionRuntimeState* resultSession=nullptr;
     bool shortRun=false;
+    float attemptTimeLimitSeconds=210;
     float gateClearPulse=0;
     std::string courseVisualLabel;
     unsigned courseVisualIndex=0,courseVisualCount=0;

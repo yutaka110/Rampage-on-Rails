@@ -72,6 +72,7 @@ struct DamageResult {
     bool armorReduced = false;
     bool shieldHit = false;
     bool shieldBroken = false;
+    bool rearPanelBroken = false;
     float shieldDamage = 0.0f;
     float remainingShield = 0.0f;
     Vector3 surfacePosition{},surfaceNormal{};

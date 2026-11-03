@@ -1,3 +1,4 @@
+#include "RailRearPursuitRules.h"
 #include "RailTurretGeometry.h"
 #include "EnemyTargetingSystem.h"
 #include "RailGatlingAttack.h"
@@ -96,13 +97,19 @@ void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& 
     float readableScale=1.0f;
     if(input.readability) if(const auto* readable=input.readability->FindActor(actor.actorId))
         readableScale=(std::max)(1.0f,readable->presentationScale);
-    const float size=(std::max)(0.01f,actor.desc.radius*kTwinShieldGameplayModelScale*
+    const bool elite=IsRailElitePursuer(actor.desc.actorAssetId);
+    const float modelSize=elite?kElitePursuerModelScale:actor.desc.radius*kTwinShieldGameplayModelScale;
+    const float size=(std::max)(0.01f,modelSize*
         (actor.combatState.initialized?actor.combatState.presentationScale:1.0f)*animation.scaleMultiplier*readableScale);
     pose.scale={size*(std::max)(0.01f,actor.desc.localScale.x),size*(std::max)(0.01f,actor.desc.localScale.y),
         size*(std::max)(0.01f,actor.desc.localScale.z)};
     // Authored gun lips in TwinShieldHull.obj after Assimp's LH conversion.
-    for(int barrel=0;barrel<2;++barrel) mount.muzzleRail[barrel]=ProjectMuzzleToRail(*input.railPath,
-        TransformAnchor({barrel==0?-0.30f:0.30f,-0.61f,-0.94f},pose),distance);
+    for(int barrel=0;barrel<2;++barrel) {
+        const float side=barrel==0?-1.0f:1.0f;
+        const Vector3 local=elite ? Vector3{side*.73f,-.18f,actor.desc.actorAssetId=="rear_fang"?-2.03f:-1.43f}
+            : Vector3{side*.30f,-.61f,-.94f};
+        mount.muzzleRail[barrel]=ProjectMuzzleToRail(*input.railPath,TransformAnchor(local,pose),distance);
+    }
     mount.ready=true;
 }
 
@@ -299,7 +306,8 @@ Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,i
             actor.desc.spawnDistance+actor.desc.distanceOffset+r*(-forward.z*p.z+right.z*p.x+up.z*p.y)};
     }
     if(actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready)
-        return actor.weaponMount.muzzleRail[index & 1];
+        return actor.weaponMount.muzzleRail[actor.desc.actorAssetId=="rear_fang" &&
+            actor.fangCannonHitPoints<=0 ? 0 : index & 1];
     if(actor.desc.meshId=="carrier_heavy_turret")return ResolveTurretMuzzleRailPosition(actor,0);
     if(RailTurret::IsMesh(actor.desc.meshId) && actor.targetingState.solutionLocked &&
         actor.targetingState.attackIntentSequence==actor.attackState.intentSequence &&
@@ -491,6 +499,10 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
     for (CourseEnemyActor& actor : actors) {
         if(actor.stationaryDormant) continue;
         PrepareWeaponMount(actor,input);
+        if(actor.veilSensorExposed && !actor.veilDescentAimCaptured) {
+            actor.veilDescentAim={input.playerLateralOffset,input.playerVerticalOffset};
+            actor.veilDescentAimCaptured=true;
+        }
         const bool turret = RailTurret::IsMesh(actor.desc.meshId);
         const Vector3 previousAim = actor.targetingState.turretAimDirection;
         if (turret && actor.combatState.canBeTargeted) {
@@ -595,8 +607,7 @@ void EnemyTargetingSystem::LockSolution(
     state.playerForwardVelocity = playerForwardVelocity;
     state.playerLateralVelocity = playerLateralVelocity;
     state.playerVerticalVelocity = playerVerticalVelocity;
-    const float distanceToPlayer = (std::max)(
-        0.0f, state.originDistance - input.playerDistance);
+    const float distanceToPlayer = std::abs(state.originDistance - input.playerDistance);
     const float speed = (std::max)(1.0f, definition.initialSpeed);
     state.predictedFlightSeconds = (std::clamp)(
         distanceToPlayer / speed,
@@ -614,6 +625,13 @@ void EnemyTargetingSystem::LockSolution(
         playerLateralVelocity * predictionSeconds;
     state.targetVerticalOffset = input.playerVerticalOffset +
         playerVerticalVelocity * predictionSeconds;
+    // A damaged sensor keeps the position it acquired when the descent began.
+    // The forward intercept still accounts for the cart's automatic travel.
+    if(actor.desc.actorAssetId=="rear_veil" && actor.veilSensorHitPoints<=0 &&
+        actor.veilDescentAimCaptured) {
+        state.targetLateralOffset=actor.veilDescentAim.x;
+        state.targetVerticalOffset=actor.veilDescentAim.y;
+    }
     state.compensatesForwardTravel=CompensatesAutomaticTravel(actor);
     state.forwardTravelPrediction = input.travelPrediction;
     state.solutionLocked = true;

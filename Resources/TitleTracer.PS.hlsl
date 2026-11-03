@@ -21,8 +21,55 @@ void ImpactCoordinates(float2 uv,float baseX,out float2 p,out float phase,out fl
     seed=floor(packed/32.0f)*2.713f;
     p=float2((uv.x-baseX-0.5f)*2.0f,frac(uv.y*0.5f)*4.0f-1.0f);
 }
+float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
+    float c=cos(tilt),s=sin(tilt);
+    float2 q=float2(dot(p,float2(c,s)),dot(p,float2(-s,c)));
+    q.y*=1.40f;
+    float angle=atan2(q.y,q.x),r=length(q);
+    float tick=floor(clock*3.0f+seed);
+    float2 orbit=float2(cos(angle),sin(angle));
+    float radius=.71f+.16f*(ImpactNoise(orbit*7.0f+tick*.71f+seed)-.5f);
+    float distance=r-radius;
+    float width=max(.031f,fwidth(distance)*.72f);
+    float head=cos(angle-clock*2.0f+seed);
+    float segment=smoothstep(-.38f,.54f,head)*
+        (.42f+.58f*smoothstep(-.55f,.32f,sin(angle*6+tick)));
+    float core=exp(-pow(distance/width,2))*segment;
+    float halo=exp(-pow(distance/.105f,2))*segment;
+    float branch=exp(-pow((distance-.11f*sin(angle*8+seed))/width,2))*
+        smoothstep(.62f,.96f,head);
+    return float2(core+branch*.45f,halo);
+}
+
 float4 main(PixelInput input) : SV_TARGET0 {
     if(input.texcoord.x>63.5f)return RenderRailEnergyShield(input.texcoord,input.color);
+    if(input.texcoord.x>=56.0f && input.texcoord.x<=57.0f) {
+        float2 p=float2((input.texcoord.x-56.5f)*2,frac(input.texcoord.y*.5f)*4-1);
+        float packed=floor(input.texcoord.y*.5f);
+        float clock=fmod(packed,64.0f)/64.0f*6.2831853f;
+        float seed=floor(packed/64.0f)*1.73f;
+        float2 arc=FangOrbitArc(p,clock+seed,clock,seed);
+        arc+=FangOrbitArc(p,-clock*.5f+seed+1.42f,-clock,seed+3.5f)*.72f;
+        float3 color=lerp(input.color.rgb,float3(3.1f,.54f,.47f),saturate(arc.x));
+        return float4(color,saturate(arc.x*.79f+arc.y*.31f)*input.color.a);
+    }
+    if(input.texcoord.x>=54.0f && input.texcoord.x<=55.0f) {
+        float along=input.texcoord.x-54.0f, across=frac(input.texcoord.y*.5f)*4-1;
+        float packed=floor(input.texcoord.y*.5f);
+        float phase=fmod(packed,32.0f)/31.0f,seed=floor(packed/32.0f)*3.17f;
+        float displacement=(ImpactNoise(float2(along*11,seed+phase*6))-.5f)*.90f;
+        displacement*=sin(along*3.14159265f);
+        float d=across-displacement;
+        float core=exp(-d*d*95),halo=exp(-d*d*10)*.23f;
+        float branch=d+.43f*sin(along*8+seed);
+        float fork=exp(-branch*branch*180)*smoothstep(.12f,.35f,along)*(1-smoothstep(.64f,.88f,along));
+        // A gap opens in the arc as the shot pulls free from the muzzle.
+        float gap=smoothstep(.35f,.72f,phase)*.22f;
+        float intact=smoothstep(gap,gap+.04f,abs(along-.5f));
+        float ends=smoothstep(0,.045f,along)*(1-smoothstep(.94f,1,along));
+        float3 color=lerp(input.color.rgb,float3(4.6f,.82f,.67f),core*.8f);
+        return float4(color,(core+halo+fork*.57f)*ends*lerp(1,intact,smoothstep(.35f,.50f,phase))*input.color.a);
+    }
     if(input.texcoord.x>51.5f && input.texcoord.x<53.5f) {
         // Soft rising vent vapor. Geometry carries the paused gameplay age;
         // this shader has no independent clock and no projectile-shaped head.

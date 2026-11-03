@@ -88,6 +88,9 @@ public:
     void AppendTwinShieldDrone(const TwinShieldDronePose& pose,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix, const Matrix4x4& projMatrix);
+    void AppendTerrain(std::span<const CourseTerrainPlacement> placements,float currentDistance,
+        const RailPath& railPath,std::span<const CourseMeshModelBinding> models,
+        const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix);
     void AppendMothership(const RailMothership::Frame& carrier,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix);

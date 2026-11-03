@@ -78,6 +78,8 @@ struct EnemyProjectilePresentationEvent final {
     bool secondaryClash = false;
     std::string definitionId;
     float bodyRadius=0;
+    Vector3 impactNormal{};
+    bool surfaceImpact=false;
 };
 
 struct EnemyProjectilePresentationFrame final {
@@ -94,6 +96,7 @@ struct EnemyProjectilePresentationInput final {
     const CourseSpawnRuntime* runtime = nullptr;
     const RailPath* railPath = nullptr;
     std::span<const PlayerDamageResult> playerDamageResults{};
+    std::span<const EnemyProjectilePresentationEvent> surfaceContacts{};
     std::span<const EnemyProjectileShootDownResult> shootDownResults{};
     float playerDistance = 0.0f;
     float playerLateralOffset = 0.0f;

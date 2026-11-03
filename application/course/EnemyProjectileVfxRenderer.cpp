@@ -521,6 +521,12 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.coreColor = visual.coreColor;
         proxy.haloColor = visual.haloColor;
         proxy.trailColor = visual.trailColor;
+        if(projectile.definitionId=="enemy_fang_chase") {
+            proxy.bodyUvBase=2400;
+            proxy.bodyColor={.17f,.012f,.018f,1};
+            proxy.haloColor={2.5f,.045f,.10f,.85f};
+            proxy.trailColor={3.0f,.075f,.11f,.72f};
+        }
         proxy.batteryKind=RailEnemyEnergy::KindForProjectile(projectile.definitionId);
         if(proxy.batteryKind!=RailEnemyEnergy::BatteryKind::None) {
             const auto& palette=RailEnemyEnergy::For(proxy.batteryKind);
@@ -656,6 +662,10 @@ void EnemyProjectileVfxRenderer::Update(
         burst.motionDirection = NormalizeOr(
             event.motionDirection, {0.0f, 0.0f, -1.0f});
         burst.color = event.color;
+        burst.fangImpact=event.kind==EnemyProjectilePresentationEventKind::Impacted &&
+            event.definitionId=="enemy_fang_chase";
+        burst.surfaceImpact=event.surfaceImpact;
+        burst.impactNormal=event.impactNormal;
         const auto source=std::find_if(frame_.proxies.begin(),frame_.proxies.end(),
             [&](const auto& p){return p.projectileId==event.projectileId;});
         if(source!=frame_.proxies.end() && source->style==EnemyProjectileVisualStyle::Orb)
@@ -711,7 +721,11 @@ void EnemyProjectileVfxRenderer::Update(
             0.70f,
             4.50f);
         proxy.batteryKind=burst.batteryKind;
-        proxy.spriteBacked=input.settings.orbSpritesEnabled && burst.batteryKind!=RailEnemyEnergy::BatteryKind::None;
+        proxy.fangImpact=burst.fangImpact;
+        proxy.surfaceImpact=burst.surfaceImpact;
+        proxy.impactNormal=burst.impactNormal;
+        proxy.spriteBacked=input.settings.orbSpritesEnabled &&
+            (burst.fangImpact || burst.batteryKind!=RailEnemyEnergy::BatteryKind::None);
         if(burst.batteryKind!=RailEnemyEnergy::BatteryKind::None) {
             const bool heavy=burst.batteryKind==RailEnemyEnergy::BatteryKind::Heavy;
             proxy.radius=(std::max)(.28f,burst.bodyRadius*(burst.kind==EnemyProjectileLifecycleVisualKind::Launch?.55f:

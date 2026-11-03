@@ -878,11 +878,14 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     // same weight as the chase pose, including the first/last blend frames.
     // Solving against the cinematic eye would instead chase its close-up.
     ApplyVehicleFraming(frame, input, cameraSample);
+    if(input.sequenceViewWeight>0 && input.sequenceView.Validate())
+        frame.authoredView=input.sequenceView;
     // Explicit camera sections own the pose, while the common collision,
     // visibility and comfort passes below still inspect the final result.
     if (frame.authoredView.mode != CourseCameraViewMode::Inherit && frame.authoredView.Validate()) {
         const auto& view = frame.authoredView;
-        const float w = SmoothStep(frame.cinematicShotWeight) *
+        const float w = (input.sequenceViewWeight>0 ?
+            (std::clamp)(input.sequenceViewWeight,0.0f,1.0f) : SmoothStep(frame.cinematicShotWeight)) *
             (1.0f - (std::max)({handoffWeight, carrierWeight, startWeight}));
         frame.authoredViewWeight = w;
         const Vector3 baseForward = NormalizeOr(Subtract(frame.target, frame.position), cameraSample.tangent);

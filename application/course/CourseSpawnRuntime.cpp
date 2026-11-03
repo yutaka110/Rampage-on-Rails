@@ -1,3 +1,4 @@
+#include "RailRearPursuitRules.h"
 #include "RailGroundBatteryAttack.h"
 #include "RailTurretGeometry.h"
 #include "CourseSpawnRuntime.h"
@@ -213,6 +214,28 @@ void CourseSpawnRuntime::ResetEnemyScreenPresence() {
     }
 }
 
+void CourseSpawnRuntime::UpdateRearArmor(float dt) {
+    for(auto& actor:enemies_) {
+        if(actor.desc.hitPoints>0 && IsRailElitePursuer(actor.desc.actorAssetId))
+            actor.rearArmor.Update(dt);
+    }
+}
+
+void CourseSpawnRuntime::SetRearPursuerFormation(uint32_t actorId, float gap, float lateral, float height, float bank, bool exposeSubsystem) {
+    for(auto& actor:enemies_) {
+        if(actor.actorId!=actorId || !IsRailElitePursuer(actor.desc.actorAssetId) || actor.desc.hitPoints<=0)continue;
+        actor.behaviorState.hoverPreferredForwardDistance=gap;
+        actor.behaviorState.authoredLateralOffset=lateral;
+        actor.behaviorState.authoredVerticalOffset=height;
+        actor.desc.localRotation.z=bank;
+        actor.fangCannonExposed=exposeSubsystem && actor.desc.actorAssetId=="rear_fang";
+        const bool sensorExposed=exposeSubsystem && actor.desc.actorAssetId=="rear_veil";
+        if(sensorExposed && !actor.veilSensorExposed) actor.veilDescentAimCaptured=false;
+        actor.veilSensorExposed=sensorExposed;
+        return;
+    }
+}
+
 void CourseSpawnRuntime::ResetEnemyEncounterPacing() {
     for (CourseEnemyActor& actor : enemies_) {
         actor.encounterPacingEvaluated = false;
@@ -330,6 +353,14 @@ bool CourseSpawnRuntime::ValidateCheckpoint(
     bool valid = checkpoint.nextActorId != 0;
     for (const CourseEnemyActor& actor : checkpoint.enemies) {
         valid = valid && validId(actor.actorId) && ValidEnemyDescription(actor.desc) && actor.energyShield.Validate(actor.desc.energyShield) &&
+            FiniteValues({actor.rearArmor.rebuildRemaining,actor.rearArmor.exposedRemaining}) &&
+            actor.rearArmor.intact<=RailRearArmor::FullMask &&
+            actor.rearArmor.rebuildRemaining>=0 && actor.rearArmor.rebuildRemaining<=RailRearArmor::RebuildSeconds &&
+            actor.rearArmor.exposedRemaining>=0 && actor.rearArmor.exposedRemaining<=RailRearArmor::ExposedSeconds &&
+            std::isfinite(actor.fangCannonHitPoints) &&
+            actor.fangCannonHitPoints>=0 && actor.fangCannonHitPoints<=kFangCannonHitPoints &&
+            FiniteValues({actor.veilSensorHitPoints,actor.veilDescentAim.x,actor.veilDescentAim.y}) &&
+            actor.veilSensorHitPoints>=0 && actor.veilSensorHitPoints<=kVeilSensorHitPoints &&
             FiniteValues({actor.age, actor.fireTimer, actor.fireVisibleTime}) && actor.age >= 0.0f &&
             FiniteValues({actor.turretMotion.rotorAngle,actor.turretMotion.rotorSpeed,actor.turretMotion.lastFireAge}) &&
             actor.turretMotion.rotorSpeed>=0 && actor.turretMotion.rotorSpeed<=RailTurret::SpinSpeed+.001f &&
@@ -624,12 +655,13 @@ void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
 
         // Hard floor survives sudden acceleration and additive staging. The
         // correction is also stored in Behavior so BeginFrame cannot undo it.
-        const float forward = actor.desc.spawnDistance + actor.desc.distanceOffset -
-            input.playerDistance;
+        const float engagementSign=RailEnemyEngagementSign(actor.desc.actorAssetId);
+        const float forward = engagementSign*(actor.desc.spawnDistance + actor.desc.distanceOffset -
+            input.playerDistance);
         const float correction = (std::max)(
             0.0f, definition.engagementBandMinimumForwardDistance - forward);
-        actor.desc.distanceOffset += correction;
-        behavior.integratedForwardOffset += correction;
+        actor.desc.distanceOffset += engagementSign*correction;
+        behavior.integratedForwardOffset += engagementSign*correction;
         behavior.engagementBandForwardDistance = forward + correction;
 
         bool unsafeSpatialPose = false;
@@ -663,7 +695,7 @@ void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
                     const float currentDistance = actor.desc.spawnDistance + actor.desc.distanceOffset;
                     for (float ahead = definition.engagementBandMinimumForwardDistance;
                          ahead <= definition.engagementBandMaximumForwardDistance; ahead += 2.0f) {
-                        const float distance = input.playerDistance + ahead;
+                        const float distance = input.playerDistance + engagementSign*ahead;
                         const Vector3 candidate = ResolveRailLocal(rail, distance, 0.0f,
                             actor.desc.lateralOffset, actor.desc.verticalOffset);
                         const Vector3 cartDelta = subtract(candidate, cart);
@@ -680,7 +712,7 @@ void CourseSpawnRuntime::EnforceEnemyEngagementClearance(
                     if (relocatedForward) {
                         actor.desc.distanceOffset += bestDelta;
                         behavior.integratedForwardOffset += bestDelta;
-                        behavior.engagementBandForwardDistance += bestDelta;
+                        behavior.engagementBandForwardDistance += engagementSign*bestDelta;
                     }
                 }
                 if (!relocatedForward) {
@@ -909,7 +941,7 @@ bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
     }
 
     const float actorDistance = enemy.desc.spawnDistance + enemy.desc.distanceOffset;
-    const float forwardDistance = actorDistance - safetyInput.playerDistance;
+    const float forwardDistance = RailEnemyEngagementSign(enemy.desc.actorAssetId)*(actorDistance - safetyInput.playerDistance);
     const bool cameraBlocks =
         fireSafetySettings_.requireCameraAllowsFire &&
         (!safetyInput.cameraAllowsEnemyFire ||
@@ -1055,6 +1087,8 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
 
     CourseEnemyActor actor{};
     actor.desc = std::move(desc);
+    if(actor.desc.actorAssetId=="rear_fang") actor.fangCannonHitPoints=kFangCannonHitPoints;
+    if(actor.desc.actorAssetId=="rear_veil") actor.veilSensorHitPoints=kVeilSensorHitPoints;
     actor.stationaryDormant=actor.desc.stationaryActivationDistance>=0;
     actor.fireTimer = actor.desc.firstShotDelay;
     actor.actorId = nextActorId_++;
@@ -1230,7 +1264,7 @@ void CourseSpawnRuntime::UpdateTerrainIngresses(float deltaTime,const CourseEnem
     for(auto& actor:enemies_) {
         auto& entry=actor.terrainIngress;
         if(entry.finished) {entry.elapsed+=(std::min)(deltaTime,0.25f);continue;}
-        if(actor.desc.hitPoints<=0 || actor.carrierDeployment.initialized ||
+        if(actor.desc.hitPoints<=0 || actor.carrierDeployment.initialized || IsRailRearPursuer(actor.desc.actorAssetId) ||
             RailTurret::IsMesh(actor.desc.meshId) || RailMothership::IsCombatActor(actor.desc.actorAssetId)) continue;
         if(!entry.waiting && !entry.initialized) {
             if(actor.age>0 || actor.desc.establishedEntrance) continue;

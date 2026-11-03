@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "RailRearPursuitRules.h"
 
 #include <cstdint>
 #include <functional>
@@ -194,6 +195,13 @@ struct CourseEnemyActor {
     float fireTimer = 0.0f;
     float fireVisibleTime = 0.0f;
     uint64_t fireSequence = 0;
+    float fangCannonHitPoints = 0.0f;
+    bool fangCannonExposed = false;
+    RailRearArmor rearArmor{};
+    float veilSensorHitPoints = 0.0f;
+    bool veilSensorExposed = false;
+    bool veilDescentAimCaptured = false;
+    Vector2 veilDescentAim{}; // Lateral and vertical cart position at descent entry.
     uint32_t bulletsEmittedThisFrame = 0;
     bool fireSafetyAllowed = false;
     std::string fireSafetyReason = "not evaluated";
@@ -309,6 +317,8 @@ public:
     void ClearProjectiles();
     void SetEnemyScreenPresence(uint32_t actorId, bool evaluated, bool attackAllowed);
     void SetEnemyEncounterPacing(uint32_t actorId, bool evaluated, bool attackAllowed);
+    void UpdateRearArmor(float dt);
+    void SetRearPursuerFormation(uint32_t actorId, float gap, float lateral, float height, float bank, bool exposeSubsystem = false);
     void ResetEnemyScreenPresence();
     void ResetEnemyEncounterPacing();
     bool SetEnemyRailPose(uint32_t actorId, float distanceOffset, float lateralOffset,

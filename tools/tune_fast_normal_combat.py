@@ -36,6 +36,8 @@ def main():
         path.write_text('\n'.join(rows)+'\n', encoding='utf-8')
     from tune_energy_shield_encounters import main as tune_shields
     tune_shields()
+    from tune_post_boss_bridge import main as tune_post_boss
+    tune_post_boss()
 
 
 if __name__ == '__main__':

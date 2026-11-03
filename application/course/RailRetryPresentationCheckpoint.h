@@ -32,6 +32,7 @@
 #include "RailTitleScene.h"
 #include "RailMothershipPresentation.h"
 #include "RailMothershipBattle.h"
+#include "RailPostBossSequence.h"
 #include "RailShooterHudRuntimeModel.h"
 #include "RailShooterHudPresentationBridge.h"
 
@@ -68,6 +69,7 @@ struct RailRetryFollowState final {
     RailMothership::Reveal mothershipReveal{};
     RailMothership::Battle mothershipBattle{};
     RailMinibossCombatDirector minibossCombat{};
+    RailPostBossSequence postBoss{};
     RailShooterHudRuntimeModel hudRuntime{};
     RailShooterHudPresentationBridge hud{};
     Matrix4x4 view{};
@@ -112,6 +114,7 @@ struct RailRetryFollowBindings final {
     RailMothership::Reveal& mothershipReveal;
     RailMothership::Battle& mothershipBattle;
     RailMinibossCombatDirector& minibossCombat;
+    RailPostBossSequence& postBoss;
     RailShooterHudRuntimeModel& hudRuntime;
     RailShooterHudPresentationBridge& hud;
     Matrix4x4& view;
@@ -157,6 +160,7 @@ inline RailRetryFollowBindings BindRailRetryFollowState(RailRetryFollowState& st
         .mothershipReveal=state.mothershipReveal,
         .mothershipBattle=state.mothershipBattle,
         .minibossCombat=state.minibossCombat,
+        .postBoss=state.postBoss,
         .hudRuntime=state.hudRuntime,
         .hud=state.hud,
         .view=state.view,
@@ -206,6 +210,7 @@ public:
         saved->mothershipReveal=live.mothershipReveal;
         saved->mothershipBattle=live.mothershipBattle;
         saved->minibossCombat=live.minibossCombat;
+        saved->postBoss=live.postBoss;
         saved->hudRuntime=live.hudRuntime;
         saved->hud=live.hud;
         saved->view=live.view;
@@ -251,6 +256,7 @@ public:
         live.mothershipReveal=state_->mothershipReveal;
         live.mothershipBattle=state_->mothershipBattle;
         live.minibossCombat=state_->minibossCombat;
+        live.postBoss=state_->postBoss;
         live.hudRuntime=state_->hudRuntime;
         live.hud=state_->hud;
         live.view=state_->view;

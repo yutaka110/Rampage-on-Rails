@@ -100,6 +100,9 @@ struct EnemyProjectileLifecycleVfxProxy final {
     bool secondaryClash = false;
     RailEnemyEnergy::BatteryKind batteryKind=RailEnemyEnergy::BatteryKind::None;
     bool spriteBacked=false;
+    bool fangImpact=false;
+    bool surfaceImpact=false;
+    Vector3 impactNormal{};
 };
 
 struct EnemyProjectileVfxRenderFrame final {
@@ -192,6 +195,9 @@ private:
         bool secondaryClash = false;
         RailEnemyEnergy::BatteryKind batteryKind=RailEnemyEnergy::BatteryKind::None;
         float bodyRadius=0;
+        bool fangImpact=false;
+        bool surfaceImpact=false;
+        Vector3 impactNormal{};
     };
 
     const EnemyProjectileVisualDefinitionAsset& ResolveVisual(

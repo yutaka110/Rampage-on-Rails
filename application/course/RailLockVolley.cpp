@@ -153,9 +153,17 @@ bool RailLockVolley::TargetPosition(RailLockTargetHandle target,const RailPath& 
             p->age>=p->lifetime || !p->shootDownEnabled || p->shootDownHitPoints<=0 || !RailHeavy::IsProjectile(p->definitionId))return false;
         position=Point(rail,p->spawnDistance+p->distanceOffset,p->lateralOffset,p->verticalOffset);return true;
     }
-    if(target.kind==RailLockTargetKind::Enemy) for(const auto& e:runtime.Enemies()) {
+    if(target.kind==RailLockTargetKind::Enemy || target.kind==RailLockTargetKind::RearPanel)
+        for(const auto& e:runtime.Enemies()) {
         if(e.actorId!=target.actorId) continue;
         if(e.desc.hitPoints<=0 || (e.combatState.initialized && !e.combatState.canReceiveDamage)) return false;
+        if(target.kind==RailLockTargetKind::RearPanel) {
+            const auto index=target.panelIndex;
+            if(!e.weaponMount.ready || !e.rearArmor.HasPanel(index) ||
+                e.rearArmor.generation[index]!=target.generationId) return false;
+            position=RearSubsystemWorldCenter(e.weaponMount.dronePose,kRearPanelAnchors[index]);
+            return true;
+        }
         if(e.desc.meshId=="twin_shield_hull" && e.weaponMount.ready) {
             const auto m=BuildTwinShieldDroneWorldMatrix(e.weaponMount.dronePose);
             position={m.m[3][0]-0.77f*m.m[2][0],m.m[3][1]-0.77f*m.m[2][1],m.m[3][2]-0.77f*m.m[2][2]};
@@ -236,7 +244,9 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
             if(distance<0.001f){origin=laser.start;delta=Add(laser.end,Scale(origin,-1));distance=Length(delta);}
             if(distance>0.001f) {
                 WeaponHitRequest request;request.shotId=laser.weapon.shotId;request.targetActorId=laser.target.actorId;
-                request.hitKind=laser.target.kind==RailLockTargetKind::Enemy?RailAimHitKind::Enemy:RailAimHitKind::Obstacle;
+                request.hitKind=laser.target.kind==RailLockTargetKind::Obstacle?RailAimHitKind::Obstacle:RailAimHitKind::Enemy;
+                if(laser.target.kind==RailLockTargetKind::RearPanel)
+                    request.sourceIndex=kRearPanelSourceBase+laser.target.panelIndex;
                 request.damageType=laser.weapon.damageType;request.rayOrigin=origin;
                 request.rayDirection=Scale(delta,1/distance);request.hitPoint=laser.end;
                 request.hitNormal=Scale(request.rayDirection,-1);request.hitDistance=distance;request.baseDamage=laser.weapon.damage;
@@ -258,8 +268,9 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 laser.hit=damage.damageApplied;
                 if(laser.hit) {
                     hits_.push_back(damage);
-                    contact.destroyed=damage.destroyed;
-                    if(contact.destroyed) for(const auto& actor:runtime.Enemies()) {
+                    contact.destroyed=damage.destroyed || damage.rearPanelBroken;
+                    if(damage.rearPanelBroken) contact.size=.65f;
+                    if(damage.destroyed) for(const auto& actor:runtime.Enemies()) {
                         if(actor.actorId!=contact.actorId || !actor.hasDefeatedPose) continue;
                         contact.wreckPose=actor.defeatedPose;
                         // Match the presentation bridge's frozen flight drift.

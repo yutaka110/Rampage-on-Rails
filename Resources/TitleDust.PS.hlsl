@@ -16,6 +16,15 @@ float Fbm(float2 p) {
 }
 float4 main(PixelInput input) : SV_TARGET0 {
     if(input.texcoord.x>=3000 && input.texcoord.x<3002)return RenderRailEnergyShieldBacking(input.texcoord,input.color);
+    if(input.texcoord.x>=3100 && input.texcoord.x<=3101) {
+        float2 p=float2((input.texcoord.x-3100.5f)*2,input.texcoord.y*2-1);
+        float body=max(abs(p.x)-.24f,abs(p.y-.06f)-.76f);
+        float pod=max(abs(abs(p.x)-.54f)-.23f,abs(p.y+.11f)-.45f);
+        float crossbeam=max(abs(p.x)-.67f,abs(p.y+.09f)-.14f);
+        float edge=min(body,min(pod,crossbeam));
+        float softness=max(.13f,fwidth(edge));
+        return float4(input.color.rgb,input.color.a*(1-smoothstep(-softness,softness,edge)));
+    }
     if(input.texcoord.x>=4000.0f) {
         float2 p=float2((input.texcoord.x-4000.5f)*2,input.texcoord.y*2-1);
         float edge=max(abs(p.x)*0.82f+abs(p.y)*0.36f,abs(p.y)*0.94f)+0.12f*(p.x+p.y);
@@ -58,6 +67,31 @@ float4 main(PixelInput input) : SV_TARGET0 {
         float gaps=lerp(1,smoothstep(.15f,.55f,sin(angle*3+seed)),cracked);
         color+=input.color.rgb*band*plates*gaps*.35f;
         return float4(color,coverage*input.color.a);
+    }
+    if(input.texcoord.x>=2400.0f && input.texcoord.x<=2401.0f) {
+        float packed=floor(input.texcoord.y*.5f);
+        float clock=fmod(packed,64.0f)/64.0f*6.2831853f;
+        float seed=floor(packed/64.0f)*2.713f;
+        float2 p=float2((input.texcoord.x-2400.5f)*2,frac(input.texcoord.y*.5f)*4-1);
+        float2 drift=float2(cos(clock),sin(clock));
+        float broad=Noise(p*3.4f+drift*.7f+seed);
+        float fine=Noise(p*9.0f-drift*1.1f+seed);
+        float r=length(p),angle=atan2(p.y,p.x);
+        float shape=r+.12f*sin(angle*5+clock*2+seed)+.13f*(broad-.5f);
+        float aa=max(fwidth(shape),.014f);
+        float coverage=1-smoothstep(.82f-aa,.94f+aa,shape);
+        float seam=p.y+.24f*sin(p.x*5+clock*2)+.30f*(broad-.5f);
+        float hot=exp(-seam*seam*19)*(1-smoothstep(.26f,.91f,shape));
+        float shell=exp(-pow((shape-.73f)*9,2))*(.45f+.55f*fine);
+        float3 plasma=input.color.rgb*(.32f+1.10f*broad+1.3f*shell);
+        plasma+=float3(2.15f,.24f,.18f)*hot*(.64f+.36f*fine);
+        float pulse=floor(clock*2.55f);
+        float arcRadius=.70f+.12f*(Noise(float2(angle*5.0f,pulse+seed))-.5f);
+        float arcWidth=max(.021f,fwidth(r)*.72f);
+        float arc=exp(-pow((r-arcRadius)/arcWidth,2));
+        float breaks=smoothstep(.03f,.62f,sin(angle*3+seed+pulse*.74f));
+        plasma+=float3(2.2f,.13f,.12f)*arc*breaks;
+        return float4(plasma,coverage*input.color.a);
     }
     if(input.texcoord.x>=2000.0f) {
         // Dense plasma, not a lit plastic sphere. Broad dark channels and a

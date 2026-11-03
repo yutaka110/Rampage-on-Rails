@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include "course/RailTitleScene.h"
 #include "AppInputEdges.h"
 #include "course/RailLockVolley.h"
@@ -8,6 +8,7 @@
 #include "SunfallAtmosphere.h"
 #include "course/RailMothershipPresentation.h"
 #include "course/RailMothershipBattle.h"
+#include "course/RailPostBossSequence.h"
 #include "course/RailAttackWarningPresentation.h"
 #include "CaveLighting.h"
 #include "terrain/TerrainCollisionWorld.h"
@@ -879,6 +880,7 @@ private:
     SunfallExposure sunfallExposure_{};
     RailMothership::Reveal railMothershipReveal_{};
     RailMothership::Battle railMothershipBattle_{};
+    RailPostBossSequence railPostBossSequence_{};
     RailMinibossCombatDirector railMinibossCombat_{};
     CaveOpeningLighting caveOpeningLighting_{};
     float railTitleDustTimer_ = 0.0f;

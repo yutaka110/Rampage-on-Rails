@@ -176,6 +176,27 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
             input.settings,
             anchor.lineOfSightOccluderActorId,
             anchor.lineOfSightBlockT);
+        if(input.viewRelativeTargeting && enemy.weaponMount.ready) {
+            for(size_t index=0;index<kRearPanelAnchors.size();++index) {
+                if(!enemy.rearArmor.HasPanel(index)) continue;
+                RailLockAnchor panel;
+                panel.target.kind=RailLockTargetKind::RearPanel;
+                panel.target.actorId=enemy.actorId;
+                panel.target.panelIndex=static_cast<uint8_t>(index);
+                panel.target.generationId=enemy.rearArmor.generation[index];
+                panel.label="BOOST PANEL";
+                panel.worldPosition=RearSubsystemWorldCenter(enemy.weaponMount.dronePose,kRearPanelAnchors[index]);
+                panel.screenRadius=15.0f;
+                const auto delta=Subtract(panel.worldPosition,input.cameraPosition);
+                const auto f=input.viewForward;
+                panel.forwardDistance=delta.x*f.x+delta.y*f.y+delta.z*f.z;
+                panel.priority=1.4f;
+                panel.lineOfSightBlocked=ResolveLineOfSightBlock(*input.spawnRuntime,*input.railPath,
+                    panel.target,input.cameraPosition,panel.worldPosition,input.settings,
+                    panel.lineOfSightOccluderActorId,panel.lineOfSightBlockT);
+                anchors_.push_back(std::move(panel));
+            }
+        }
         anchors_.push_back(std::move(anchor));
     }
 

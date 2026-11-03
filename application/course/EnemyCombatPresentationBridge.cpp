@@ -4,6 +4,7 @@
 #include "RailBatteryThermalPresentation.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailRearPursuitRules.h"
 #include "EnemyEncounterReadabilityDirector.h"
 #include "../diagnostics/DebugDrawSystem.h"
 
@@ -766,7 +767,8 @@ void EnemyCombatPresentationBridge::Update(
                     if (!alreadyVisible && frame_.destructionBursts.size() < 16) {
                         EnemyDestructionBurst burst{actor->actorId,mix.position,
                             (std::clamp)(actor->desc.radius,0.6f,4.0f),0.0f};
-                        burst.twinShield=actor->desc.meshId=="twin_shield_hull";
+                        burst.twinShield=actor->desc.meshId=="twin_shield_hull" &&
+                            !IsRailElitePursuer(actor->desc.actorAssetId);
                         if(burst.twinShield) {
                             auto& pose=burst.frozenPose;
                             if(actor->hasDefeatedPose) pose=actor->defeatedPose;

@@ -1,0 +1,4 @@
+# Orange-core energy sphere: stable solid silhouette, compact halo and short tail.
+# Visuals only; projectile IDs, collision and flight remain authored separately.
+visual|visual_fang_chase|enemy_fang_chase|orb|enemy_projectile_core|enemy_projectile_halo|1.0|1.0|1.0|1.0|1.0|0.20|0.025|0.40|1.0|0.32|0.045|0.55|1.70|1.35|0.0052|5.2|1.0|0.0|2.0|3.0|0.28|true
+

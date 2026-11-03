@@ -10,6 +10,7 @@
 #include "PlayerHitboxSystem.h"
 #include "PlayerNearMissSystem.h"
 #include "EnemyProjectileShootDownSystem.h"
+#include "EnemyProjectilePresentationBridge.h"
 #include "EnemyAttackInterruptSystem.h"
 #include "RailAimState.h"
 #include "WeaponDamageSystem.h"
@@ -73,6 +74,8 @@ struct CourseCollisionFrameInput {
     // the player's camera ray and the actual mounted muzzle.
     bool convergePrimaryOnGatling = false;
     const TerrainGenerationSettings* primaryTerrainSettings = nullptr;
+    float rearBridgeStart = 0;
+    float rearBridgeEnd = 0;
     const TerrainEditLayer* primaryTerrainPreview = nullptr;
 };
 
@@ -114,6 +117,7 @@ public:
 
     const CourseCollisionPlayerState& Player() const { return player_; }
     const CourseCollisionWeaponState& Weapon() const { return weapon_; }
+    std::span<const EnemyProjectilePresentationEvent> ProjectileSurfaceContacts() const { return projectileSurfaceContacts_; }
     const CourseCollisionFrameStats& LastFrameStats() const { return lastFrameStats_; }
     const PlayerDamageSystem& PlayerDamage() const noexcept {
         return playerDamageSystem_;
@@ -185,6 +189,7 @@ public:
     PlayerDamageResult ApplyPlayerHit(const PlayerHitRequest& request);
 
 private:
+    std::vector<EnemyProjectilePresentationEvent> projectileSurfaceContacts_;
     void FirePlayerShot(
         CourseSpawnRuntime& runtime,
         const CourseCollisionFrameInput& input,

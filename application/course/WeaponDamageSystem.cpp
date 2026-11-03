@@ -1,3 +1,4 @@
+#include "RailRearPursuitRules.h"
 #include "WeaponDamageSystem.h"
 
 #include "CourseAsset.h"
@@ -142,6 +143,35 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 result.rejectReason = DamageRejectReason::TargetNotDamageable;
                 result.hitPointsBefore = currentHitPoints;
                 result.remainingHitPoints = currentHitPoints;
+                return result;
+            }
+            if (IsRearPanelHit(request.sourceIndex)) {
+                result.hitPointsBefore=result.remainingHitPoints=currentHitPoints;
+                if (!request.lockOnContact || request.baseDamage<=0 ||
+                    !enemy.rearArmor.Break(request.sourceIndex-kRearPanelSourceBase)) {
+                    result.rejectReason=DamageRejectReason::TargetNotDamageable;
+                    return result;
+                }
+                result.rearPanelBroken=result.damageApplied=true;
+                result.appliedDamage=request.baseDamage;
+                return result;
+            }
+            if (IsRearSubsystemHit(request.sourceIndex)) {
+                const bool cannon=request.sourceIndex==kFangCannonHitSource;
+                const bool exposed=cannon?enemy.fangCannonExposed:enemy.veilSensorExposed;
+                float& hitPoints=cannon?enemy.fangCannonHitPoints:enemy.veilSensorHitPoints;
+                result.hitPointsBefore=currentHitPoints;
+                result.remainingHitPoints=currentHitPoints;
+                if (!exposed || hitPoints<=0 ||
+                    request.lockOnContact || request.damageType!=WeaponDamageType::Energy) {
+                    result.rejectReason=DamageRejectReason::TargetNotDamageable;
+                    return result;
+                }
+                result.appliedDamage=(std::min)(hitPoints,request.baseDamage);
+                hitPoints-=result.appliedDamage;
+                result.damageApplied=result.appliedDamage>0;
+                result.weakPointHit=result.damageApplied;
+                if (cannon && hitPoints<=0) enemy.desc.bulletCount=2;
                 return result;
             }
             if(enemy.energyShield.lastShotId==request.shotId) {

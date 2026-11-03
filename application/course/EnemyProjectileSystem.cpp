@@ -1,12 +1,14 @@
 #include "EnemyProjectileSystem.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailRearPursuitRules.h"
 #include "RailGatlingAttack.h"
 #include "RailGroundBatteryAttack.h"
 #include "RailMothershipBattle.h"
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <utility>
 
 namespace {
@@ -74,7 +76,8 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
             actor.attackState.intentSequence &&
         actor.targetingState.attackTokenId == actor.attackState.tokenId;
 
-    const float lane=RailGatling::IsWeapon(actor.desc.actorAssetId) ? 0.0f : static_cast<float>(index)-centerLane;
+    const float lane=(RailGatling::IsWeapon(actor.desc.actorAssetId) || actor.desc.actorAssetId=="rear_fang")
+        ? 0.0f : static_cast<float>(index)-centerLane;
     EnemyProjectileLaunchSolution solution;
     auto& projectile = solution.projectile;
     if (!std::isfinite(launchDelaySeconds) || launchDelaySeconds < 0.0f) {
@@ -259,11 +262,14 @@ uint32_t EnemyProjectileSystem::SpawnVolley(
     if(!CanEnemyProjectileVolleyReachTarget(actor)) return 0;
     const int projectileCount=(std::max)(1,actor.desc.bulletCount);
     const bool gatling=RailGatling::IsWeapon(actor.desc.actorAssetId);
+    const bool fang=actor.desc.actorAssetId=="rear_fang";
     std::vector<EnemyProjectileRuntimeState> launches;
     launches.reserve(projectileCount);
+    auto burstActor=fang?std::optional<CourseEnemyActor>(actor):std::nullopt;
+    if(burstActor)burstActor->weaponMount.scheduledPredictionRequested=false;
     for(int index=0;index<projectileCount;++index) {
-        const float delay=gatling ? index*RailGatling::ShotInterval : 0.0f;
-        auto projectile=ResolveEnemyProjectileScheduledLaunch(actor,index,delay).projectile;
+        const float delay=gatling ? index*RailGatling::ShotInterval : fang ? index*kFangShotInterval : 0.0f;
+        auto projectile=ResolveEnemyProjectileScheduledLaunch(fang && index>0?*burstActor:actor,index,delay).projectile;
         if(!projectile.active)return 0;
         projectile.launchDelayRemaining=delay;
         projectile.active=delay<=0;
@@ -277,7 +283,7 @@ uint32_t EnemyProjectileSystem::SpawnVolley(
         if(nextProjectileId_==0) nextProjectileId_=1;
         projectiles.push_back(std::move(projectile));
     }
-    pendingSpawned_ += gatling ? 1u : static_cast<uint32_t>(projectileCount);
+    pendingSpawned_ += (gatling || fang) ? 1u : static_cast<uint32_t>(projectileCount);
     return static_cast<uint32_t>(projectileCount);
 }
 

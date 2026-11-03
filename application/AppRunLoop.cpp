@@ -15,6 +15,7 @@
 #include "course/RailHeavyAttack.h"
 #include "course/RailBatteryThermalPresentation.h"
 
+#include <unordered_set>
 #include <DirectXMath.h>
 #include <algorithm>
 #include <array>
@@ -2186,6 +2187,8 @@ void AppRunLoop::ApplyRailShooterCourse() {
     GameSessionDefinition sessionDefinition = IsRailShortCourse(railShooterCoursePath_)
         ? ShortRunSessionDefinition() : GameSessionDefinition::RailShooterDefaults();
     sessionDefinition.unlimitedCheckpointRetries=true;
+    if(IsRailShortCourse(railShooterCoursePath_) && RailPostBossSequence::Enabled(railShooterCourse_))
+        sessionDefinition.timeLimitSeconds+=RailPostBossSequence::TimeBudgetSeconds;
     if (!railShooterCourse_.name.empty()) {
         sessionDefinition.sessionId = railShooterCourse_.name;
     }
@@ -4229,7 +4232,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const auto& titleEntry=railTitleGameplayEntry_.Frame();
     const Vector2 entryReticle=titleEntry.blockingGameplay && titleEntry.reticleProgress<=0.0f?
         Vector2{float(hudWidth)*0.5f,float(hudHeight)*0.5f}:reticle.currentScreenPosition;
-    const auto aimVisual=BuildRailAimReticleVisual(entryReticle,reticle.lockHeld,hudScale,opacity,
+    const bool rearCameraTurning=railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Turning;
+    const auto aimVisual=BuildRailAimReticleVisual(entryReticle,reticle.lockHeld,hudScale,rearCameraTurning?0.0f:opacity,
         titleEntry.blockingGameplay?1.0f-titleEntry.reticleProgress:0.0f);
     const uint32_t entryPipBegin=railLockOnHudAtlasVertexCount_;
     if(aimVisual.visible) {
@@ -4240,6 +4244,80 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const uint32_t entryBracketBegin=railLockOnHudAtlasVertexCount_;
     drawReticleFrame(aimVisual);
     const uint32_t entryBracketEnd=railLockOnHudAtlasVertexCount_;
+    const auto drawSubsystemMarker=[&](const TwinShieldDronePose& pose,bool fang) {
+        const auto marker=ProjectRailOverlayPoint(fang?FangCannonWorldCenter(pose):VeilSensorWorldCenter(pose),
+            frameState_.viewProjectionMatrix,hudWidth,hudHeight);
+        if(!marker.onscreen) return;
+        const Vector3 face=fang?Vector3{1.02f,.22f,-1.08f}:Vector3{-1.10f,.38f,-.97f};
+        const auto surfaceWorld=RearSubsystemWorldCenter(pose,face);
+        const auto surface=ProjectRailOverlayPoint(surfaceWorld,
+            frameState_.viewProjectionMatrix,hudWidth,hudHeight);
+        if(surface.onscreen) {
+            // Retain a small optical glow after the canyon's exposure and fog.
+            const Vector3 eye=frameState_.cameraWorldPosition;
+            const float distance=std::hypot(surfaceWorld.x-eye.x,surfaceWorld.y-eye.y,surfaceWorld.z-eye.z);
+            const float radius=(std::clamp)(.24f*float(hudHeight)*pose.scale.x/(std::max)(distance,1.0f),
+                8.0f*hudScale,18.0f*hudScale);
+            addQuad(surface.screen.x-radius,surface.screen.y-radius,2*radius,2*radius,
+                {50,0,51,1},{1,1,1,opacity});
+        }
+        addCircleLine(marker.screen,11*hudScale,1.25f*hudScale,{1,.32f,.36f,.28f*opacity},24);
+    };
+    const uint32_t fangFollowupId=railPostBossSequence_.FangFollowupTarget();
+    const bool veilCanBeInterrupted=railPostBossSequence_.VeilCanBeInterrupted();
+    std::string rearChoice,veilChoice;
+    if(fangFollowupId || veilCanBeInterrupted) {
+        for(const auto& enemy:railShooterSpawnRuntime_.Enemies()) {
+            if(enemy.actorId==fangFollowupId) {
+                if(enemy.fangCannonHitPoints<=0) {
+                    rearChoice=HudUtf8(u8"ファング 砲ユニット破壊　次は2連射");
+                } else {
+                    rearChoice=HudUtf8(u8"ファング 砲ユニット ")+
+                        std::to_string(int(std::ceil(enemy.fangCannonHitPoints)))+"/"+
+                        std::to_string(int(kFangCannonHitPoints));
+                    if(enemy.weaponMount.ready)
+                        drawSubsystemMarker(enemy.weaponMount.dronePose,true);
+                }
+            }
+            if(!veilCanBeInterrupted || enemy.actorId!=railPostBossSequence_.ActorIds()[1]) continue;
+            if(enemy.veilSensorHitPoints<=0) {
+                veilChoice=HudUtf8(u8"ヴェイル センサー破壊　照準が固定・横に回避");
+            } else if(enemy.veilSensorExposed) {
+                veilChoice=HudUtf8(u8"ヴェイル センサー ")+
+                    std::to_string(int(std::ceil(enemy.veilSensorHitPoints)))+"/"+
+                    std::to_string(int(kVeilSensorHitPoints))+HudUtf8(u8"　／　ロックで発射阻止");
+                if(enemy.weaponMount.ready)
+                    drawSubsystemMarker(enemy.weaponMount.dronePose,false);
+            }
+        }
+    }
+    if(railPostBossSequence_.VeilInterrupted()) veilChoice=HudUtf8(u8"ヴェイルの発射を阻止");
+    const auto drawRearChoice=[&](const std::string& choice,float row) {
+        if(choice.empty()) return;
+        const float x=float(hudWidth)*.5f,y=float(hudHeight)*row;
+        addCenteredText(choice,x+hudScale,y+hudScale,.73f*hudScale,{0,0,0,.92f*opacity});
+        addCenteredText(choice,x,y,.73f*hudScale,{.80f,.95f,1.0f,opacity});
+    };
+    drawRearChoice(rearChoice,.19f);
+    drawRearChoice(veilChoice,rearChoice.empty()?.19f:.225f);
+    if(railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Combat) {
+        const bool boost=railPostBossSequence_.PanelBoostRemaining()>0;
+        if(boost) drawRearChoice(HudUtf8(u8"外装破壊　加速中"),.145f);
+        for(const auto& enemy:railShooterSpawnRuntime_.Enemies()) {
+            if(!enemy.rearArmor.enabled || enemy.desc.hitPoints<=0 || !enemy.weaponMount.ready) continue;
+            if(enemy.rearArmor.exposedRemaining>0) {
+                const auto point=ProjectRailOverlayPoint(enemy.weaponMount.dronePose.position,
+                    frameState_.viewProjectionMatrix,hudWidth,hudHeight);
+                if(point.onscreen) {
+                    const auto label=HudUtf8(u8"本体露出 ×1.7");
+                    addCenteredText(label,point.screen.x+hudScale,point.screen.y-25*hudScale,
+                        .68f*hudScale,{0,0,0,.9f*opacity});
+                    addCenteredText(label,point.screen.x,point.screen.y-26*hudScale,
+                        .68f*hudScale,{1,.74f,.36f,opacity});
+                }
+            }
+        }
+    }
     const WeaponFeedbackSystem& feedbackSystem = railShooterCollisionSystem_.WeaponFeedback();
     if (feedbackSystem.HitMarkerActive()) {
         const WeaponFeedbackEvent& feedback = feedbackSystem.LastAcceptedEvent();
@@ -4450,6 +4528,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.checkpointRetryAvailable=railShooterRetryCoordinator_.CanRetry();
     hudRenderInput.unlimitedCheckpointRetries=railShooterGameSession_.Definition().unlimitedCheckpointRetries;
     hudRenderInput.shortRun=IsRailShortCourse(railShooterCoursePath_);
+    hudRenderInput.attemptTimeLimitSeconds=railShooterGameSession_.Definition().timeLimitSeconds;
     hudRenderInput.gateClearPulse=hudRenderInput.shortRun?railGateBridgeFlow_.ClearPulse():0;
     if(const auto* shot=railShooterCourse_.FindCinematicShotSet(railShooterDistance_);
             shot && shot->id.starts_with("blockout-shot-")) {
@@ -4459,6 +4538,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
     if(hudRenderInput.shortRun && RailRidgeCombatFlow::Active(railShooterDistance_))
         hudRenderInput.courseVisualLabel=railRidgeCombatFlow_.Label(railShooterDistance_);
+    if(hudRenderInput.shortRun && railPostBossSequence_.Started())hudRenderInput.courseVisualLabel=railPostBossSequence_.Label();
     hudRenderInput.bossVisible=hudRenderInput.shortRun && railMothershipBattle_.Current().battleActive;
     hudRenderInput.bossHealth=railMothershipBattle_.Current().battleHealth;
     hudRenderInput.miniBossParts=railMothershipBattle_.Current().partsBattle;
@@ -4739,7 +4819,11 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             return actor.desc.energyShield.enabled && actor.desc.hitPoints>0 &&
                 (actor.energyShield.Active(actor.desc.energyShield) || actor.energyShield.breakAge<.48f);
         });
-    const bool hasWorldEffects=railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    const bool showPursuitShadows=!railTitleScreenVisible_ && !railGameOverScene_.Active() &&
+        railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Notice;
+    const bool hasFangImpacts=std::any_of(enemyBulletFrame.lifecycleBursts.begin(),enemyBulletFrame.lifecycleBursts.end(),
+        [](const auto& burst){return burst.fangImpact && burst.spriteBacked;});
+    const bool hasWorldEffects=hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     if (hasWorldEffects) {
         // Suppress every gameplay overlay, including the reticle built above.
         if (railTitleScreenVisible_) railLockOnHudAtlasVertexCount_ = 0;
@@ -4842,6 +4926,17 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         };
         if(hasEnemyOrbs) for(const auto& p:enemyBulletFrame.proxies) {
             if(p.spriteBacked) orbBody(p.worldPosition,p.coreRadius,1.0f,p.orbAnimationUvY,p.bodyColor,p.bodyUvBase);
+        }
+        if(!railTitleScreenVisible_) for(const auto& burst:enemyBulletFrame.lifecycleBursts) {
+            if(!burst.fangImpact || !burst.surfaceImpact || !burst.spriteBacked) continue;
+            const float age=burst.normalizedAge;
+            const float opacity=TwinShieldDestructionSmooth(age,.04f,.19f)*(1-age)*.42f;
+            if(opacity<=0) continue;
+            const auto n=NormalizeOr(burst.impactNormal,{0,1,0});
+            const auto center=Add(burst.worldPosition,Scale(n,.28f+age*.62f));
+            const float radius=burst.radius*(.60f+age*.8f);
+            billboards.push_back({center,Scale(right,radius*1.55f),Scale(up,radius*.65f),
+                {.28f,.20f,.17f,opacity},float(2*(burst.projectileId%13))});
         }
         const auto shotRadius=[&](const RailTitleShot& shot) {
             return railTitleScreenVisible_ ? (shot.railStrike?RailTitleScene::DepartureShotRadius:0.90f) : 0.42f;
@@ -5031,6 +5126,25 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 (actor.entranceExitState.initialized?actor.entranceExitState.presentationAlpha:1.0f);
             EnemyEnergyShield::DrawBacking(actor.weaponMount.dronePose,actor.energyShield,actor.desc.energyShield,alpha,dustVertex);
         }
+        if(showPursuitShadows) {
+            constexpr std::array<float,2> startTimes{.36f,1.06f};
+            for(size_t i=0;i<startTimes.size();++i) {
+                const float t=(railPostBossSequence_.PhaseAge()-startTimes[i])/.94f;
+                if(t<=0 || t>=1)continue;
+                const float opacity=.73f*(std::min)({1.0f,t*5.0f,(1-t)*4.0f});
+                const float side=i==0?-1.0f:1.0f;
+                const float centerDistance=railShooterDistance_+std::lerp(1.0f,55.0f,t);
+                const float centerLateral=side*std::lerp(2.4f,1.95f,t);
+                const Vector4 color{.045f,.055f,.07f,opacity};
+                const auto vertex=[&](float u,float v) {
+                    const auto point=RailLocalPoint(railPath_,centerDistance,centerLateral+(u-.5f)*3.1f,
+                        -.22f,(v-.5f)*14.0f);
+                    dustVertex(point,{3100.0f+u,v},color);
+                };
+                vertex(0,0);vertex(1,0);vertex(0,1);
+                vertex(0,1);vertex(1,0);vertex(1,1);
+            }
+        }
         const uint32_t dustCount=railTitleDustVertexCount_;
         if(hasEnergyShields)for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
             if(!actor.desc.energyShield.enabled || actor.desc.hitPoints<=0 || !actor.weaponMount.ready ||
@@ -5108,6 +5222,48 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     {0.95f,0.68f,0.34f,chip.opacity});
             }
         }
+        // Fang's plasma uses the committed projectile, with no visual lead on
+        // the hitbox. The launch filament ages on the same clock as the shot.
+        if(!railTitleScreenVisible_ && !railGameOverScene_.Active()) {
+            for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
+                if(actor.desc.actorAssetId!="rear_fang" || actor.desc.hitPoints<=0 || !actor.weaponMount.ready ||
+                    !actor.attackState.telegraphPresented || !actor.attackState.tokenReserved ||
+                    (actor.attackState.phase!=EnemyAttackRuntimePhase::Telegraphing &&
+                     actor.attackState.phase!=EnemyAttackRuntimePhase::Ready)) continue;
+                const float charge=1.0f-(std::clamp)(actor.behaviorState.attackTimeRemaining/
+                    (std::max)(.15f,actor.behaviorDefinition.attackLeadSeconds),0.0f,1.0f);
+                const float intensity=.14f+.86f*charge*charge;
+                const unsigned barrels=actor.fangCannonHitPoints>0?2u:1u;
+                for(unsigned barrel=0;barrel<barrels;++barrel) {
+                    const auto muzzle=actor.weaponMount.muzzleRail[barrel];
+                    const auto center=RailLocalPoint(railPath_,muzzle.z,muzzle.x,muzzle.y,0);
+                    const float radius=.20f+.57f*charge;
+                    glowQuad(center,Scale(right,radius*1.8f),Scale(up,radius*1.8f),16,{3.1f,.065f,.12f,intensity*.65f});
+                    glowQuad(center,Scale(right,radius*.70f),Scale(up,radius*.70f),16,{4.4f,.85f,.62f,intensity});
+                }
+            }
+            for(const auto& round:railShooterSpawnRuntime_.Bullets()) {
+                constexpr float separation=.15f;
+                if(round.definitionId!="enemy_fang_chase" || !round.active || round.hitConsumed ||
+                    round.launchDelayRemaining>0 || round.age>=separation) continue;
+                const float age=round.age,phase=(std::clamp)(age/separation,0.0f,1.0f);
+                const float distance=round.spawnDistance+round.distanceOffset;
+                const auto head=RailLocalPoint(railPath_,distance,round.lateralOffset,round.verticalOffset,0);
+                const auto mouth=RailLocalPoint(railPath_,distance-round.forwardSpeed*age,
+                    round.lateralOffset-round.lateralSpeed*age,round.verticalOffset-round.verticalSpeed*age,0);
+                const auto delta=Add(head,Scale(mouth,-1)),middle=Scale(Add(head,mouth),.5f);
+                const float flash=1.0f-TwinShieldDestructionSmooth(age,0.0f,.10f);
+                glowQuad(mouth,Scale(right,.91f),Scale(up,.91f),16,{4.1f,.12f,.20f,flash*.72f});
+                glowQuad(mouth,Scale(right,.43f),Scale(up,.43f),16,{4.8f,1.1f,.76f,flash});
+                if(Dot(delta,delta)<.0025f) continue;
+                const auto side=NormalizeOr(Cross(delta,Add(eye,Scale(middle,-1))),right);
+                const float stretch=1-TwinShieldDestructionSmooth(age,.035f,.095f);
+                glowQuad(middle,Scale(delta,.5f),Scale(side,.61f),38,{3.8f,.11f,.20f,stretch*.90f});
+                const float uvClock=float(2*(uint32_t(phase*31)+32*(round.projectileId%11)));
+                glowQuad(middle,Scale(delta,.5f),Scale(side,.58f),54,
+                    {4.1f,.12f,.19f,1-TwinShieldDestructionSmooth(phase,.62f,1.0f)},uvClock);
+            }
+        }
         const auto orbTail=[&](Vector3 center,Vector3 tail,Vector3 direction,float radius,float opacity,float animationUvY,float haloRadius=0.0f,
                 const RailEnemyEnergy::Palette& palette=RailEnemyEnergy::Ordinary,float pulse=1.0f,
                 RailEnemyEnergy::BatteryKind kind=RailEnemyEnergy::BatteryKind::None,float shellIntegrity=1.0f) {
@@ -5127,12 +5283,47 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 animationUvY,RailEnemyEnergy::Alpha(palette.surface,opacity*.80f*pulse));
         };
         if(hasEnemyOrbs) for(const auto& p:enemyBulletFrame.proxies) {
+            if(p.spriteBacked && p.bodyUvBase==2400.0f) {
+                orbSurface(p.worldPosition,p.haloRadius,p.coreRadius,16,0,{2.3f,.035f,.080f,.27f});
+                const float radius=(std::max)(p.coreRadius*1.95f,p.haloRadius);
+                const auto clock=uint32_t(std::fmod(railEnemyProjectilePresentationTime_*1.65f,1.0f)*64);
+                const float phase=float(2*(clock+64*(p.projectileId%16)));
+                orbSurface(p.worldPosition,radius,p.coreRadius,56,phase,{2.8f,.025f,.065f,.93f});
+                continue;
+            }
             if(p.spriteBacked) orbTail(p.worldPosition,p.trailStart,p.motionDirection,p.coreRadius,1.0f,p.orbAnimationUvY,p.haloRadius,
                 RailEnemyEnergy::For(p.batteryKind),p.energyPulse,p.batteryKind,p.shellIntegrity);
         }
         if(!railTitleScreenVisible_)for(const auto& burst:enemyBulletFrame.lifecycleBursts) {
             if(!burst.spriteBacked)continue;
             const float age=burst.normalizedAge,fade=1-age,r=burst.radius;
+            if(burst.fangImpact) {
+                const auto n=NormalizeOr(burst.impactNormal,Scale(burst.motionDirection,-1));
+                const auto axis=NormalizeOr(Cross(n,std::abs(n.y)>.90f?right:Vector3{0,1,0}),right);
+                const auto across=NormalizeOr(Cross(n,axis),up);
+                const auto center=Add(burst.worldPosition,Scale(n,burst.surfaceImpact?.075f:.12f));
+                const float flash=1-TwinShieldDestructionSmooth(age,0,.19f);
+                const float spread=(burst.surfaceImpact?3.7f:2.4f)*r;
+                glowQuad(center,Scale(right,r*1.4f),Scale(up,r*1.1f),16,{4.9f,.78f,.56f,flash*.92f});
+                glowQuad(center,Scale(right,r*.44f),Scale(up,r*.44f),16,{4.8f,3.6f,3.2f,flash});
+                glowQuad(center,Scale(axis,spread*(.28f+age)),Scale(across,spread*(.28f+age)),36,
+                    {3.2f,.055f,.12f,fade*.63f},float(2*uint32_t(age*31)));
+                for(unsigned ray=0;ray<6;++ray) {
+                    const float angle=float(ray)*1.04719755f+float(burst.projectileId%19)*.37f;
+                    const auto direction=Add(Scale(axis,std::cos(angle)),Scale(across,std::sin(angle)));
+                    const float length=spread*(.48f+.52f*std::sqrt(age))*(.72f+.28f*std::sin(angle*7+1));
+                    const auto mid=Add(center,Scale(direction,length*.50f));
+                    const auto side=NormalizeOr(Cross(direction,Add(eye,Scale(mid,-1))),across);
+                    const float flicker=.76f+.24f*std::sin(age*31+float(ray)*2);
+                    const float clock=float(2*(uint32_t(age*9)+32*((burst.projectileId+ray)%11)));
+                    glowQuad(mid,Scale(direction,length*.50f),Scale(side,r*.24f),54,
+                        {3.6f,.068f,.12f,fade*fade*flicker},clock);
+                    const auto spark=Add(Add(center,Scale(direction,length*.92f)),Scale(n,r*age*.75f));
+                    glowQuad(spark,Scale(direction,r*.16f),Scale(side,r*.052f),32,
+                        {3.2f,.43f,.19f,fade*fade});
+                }
+                continue;
+            }
             const bool shell=burst.kind==EnemyProjectileLifecycleVisualKind::ShellCracked;
             const bool launch=burst.kind==EnemyProjectileLifecycleVisualKind::Launch;
             const bool heavy=burst.batteryKind==RailEnemyEnergy::BatteryKind::Heavy;
@@ -7835,7 +8026,7 @@ void AppRunLoop::BeginRailGameplayEntry() {
     railReadyDroneActorIds_ = {};
     railReadyDroneSalvo_.Reset();
     railMothershipReveal_.Reset();
-    railMothershipBattle_.Reset();
+    railMothershipBattle_.Reset();railPostBossSequence_.Reset();
     railMinibossCombat_.Reset();
     for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
         if(!railShooterSpawnRuntime_.SpawnEnemyActor(BuildRailReadyDrone(railShooterDistance_,i))) continue;
@@ -7937,7 +8128,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     // during gameplay. Update never waits for a worker; unavailable generations
     // keep the authoritative reference raycast until their BVHs are resident.
     terrainCollisionWorld_.Update(railPath_, runtimeState_.terrain.settings,
-        &railShooterCourse_.terrainEditLayer, &runtimeState_.terrain.previewEditLayer,
+        &railShooterCourse_.terrainEditLayer, &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer),
         railShooterDistance_);
     bool titleHandoffThisFrame=false;
     if (railTitleScreenVisible_ && railTitleScene_.ReadyForGameplay()) {
@@ -8351,8 +8542,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     envelopeInput.ride = &rideFrame;
     envelopeInput.railPath = &railPath_;
     envelopeInput.normalSpeedScale = railShooterSpeedDirector_.Settings().normalSpeedScale;
-    envelopeInput.manualBoostMultiplier = railShooterSpeedDirector_.BoostMultiplier();
-    envelopeInput.rewardBoostAttack = railShooterSpeedDirector_.KillBoost().Accelerating()?1.0f:0.0f;
+    railPostBossSequence_.AdvancePanelBoost(railTravelDeltaTime);
+    const float panelBoostMultiplier=railPostBossSequence_.PanelBoostMultiplier();
+    envelopeInput.manualBoostMultiplier=(std::max)(railShooterSpeedDirector_.BoostMultiplier(),panelBoostMultiplier);
+    envelopeInput.rewardBoostAttack=panelBoostMultiplier>1 || railShooterSpeedDirector_.KillBoost().Accelerating()?1.0f:0.0f;
     const RailRideMotionEnvelopeFrame& motionEnvelope =
         railShooterRideMotionEnvelope_.Evaluate(envelopeInput);
     RailVehicleMovementInput vehicleInput{};
@@ -8418,7 +8611,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 terrain.railPath=&railPath_;
                 terrain.terrainSettings=&runtimeState_.terrain.settings;
                 terrain.terrainEdits=&railShooterCourse_.terrainEditLayer;
-                terrain.terrainPreview=&runtimeState_.terrain.previewEditLayer;
+                terrain.terrainPreview=&railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
                 terrain.terrainCollision=&terrainCollisionWorld_;
                 return RailReadyDroneSalvo::TraceVehicleNearMiss(terrain,origin,launchDistance,index,contact,normal);
             });
@@ -8450,7 +8643,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     mountedEvasionInput.occupantMounted = true;
     mountedEvasionInput.inputEnabled = playerInputEnabled;
     mountedEvasionInput.evadePressed = evasionPressed;
-    mountedEvasionInput.directionX = dodgeInput.directionX;
+    mountedEvasionInput.directionX = dodgeInput.directionX*(railPostBossSequence_.CameraWeight()>.999f?-1.0f:1.0f);
     mountedEvasionInput.directionY = dodgeInput.directionY;
     float clearanceDirectionX = mountedEvasionInput.directionX;
     float clearanceDirectionY = mountedEvasionInput.directionY;
@@ -8484,7 +8677,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     clearanceInput.railPath = &railPath_;
     clearanceInput.terrainSettings = &runtimeState_.terrain.settings;
     clearanceInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
-    clearanceInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    clearanceInput.terrainPreview = &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     clearanceInput.startDistance = activeVehicleState.distance;
     clearanceInput.startLateralOffset = activeVehicleDefinition.mounts.player.x;
     clearanceInput.startVerticalOffset =
@@ -8677,7 +8870,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     ridgeVisibility.railPath=&railPath_;ridgeVisibility.course=&railShooterCourse_;
     ridgeVisibility.terrainSettings=&runtimeState_.terrain.settings;
     ridgeVisibility.terrainEdits=&railShooterCourse_.terrainEditLayer;
-    ridgeVisibility.terrainPreview=&runtimeState_.terrain.previewEditLayer;
+    ridgeVisibility.terrainPreview=&railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     ridgeVisibility.terrainCollision=&terrainCollisionWorld_;
     ridgeVisibility.playerDistance=railShooterDistance_;
     ridgeVisibility.includeVisualColumns=true;
@@ -8742,7 +8935,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     encounterAvailabilityQuery.course = &railShooterCourse_;
     encounterAvailabilityQuery.terrainSettings = &runtimeState_.terrain.settings;
     encounterAvailabilityQuery.terrainEdits = &railShooterCourse_.terrainEditLayer;
-    encounterAvailabilityQuery.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    encounterAvailabilityQuery.terrainPreview = &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     encounterAvailabilityQuery.terrainCollision = &terrainCollisionWorld_;
     encounterAvailabilityQuery.playerDistance = railShooterDistance_;
     encounterInput.visibilityQuery = &encounterAvailabilityQuery;
@@ -8786,6 +8979,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
             railRidgeCombatFlow_.ArrivalThisFrame()>=0)
         encounterOutput.dispatchEvents.push_back(RailRidgeCombatFlow::Arrival(
             railRidgeCombatFlow_.ArrivalThisFrame(),railShooterDistance_));
+    // Opt-in metadata is not a live setpiece: no camera kick or speed hold.
+    std::erase_if(encounterOutput.dispatchEvents,[](const auto& e){return e.id==RailPostBossSequence::Marker;});
     LogCourseEvents(encounterOutput.dispatchEvents);
     railShooterCameraDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
     railShooterSpeedDirector_.NotifyCourseEvents(encounterOutput.dispatchEvents);
@@ -8798,6 +8993,25 @@ void AppRunLoop::UpdateRailShooterFrame() {
         encounterOutput.dispatchEvents,
         railShooterSpawnRuntime_,
         railShooterDistance_);
+
+    const bool postBossEnabled=IsRailShortCourse(railShooterCoursePath_) &&
+        RailPostBossSequence::Enabled(railShooterCourse_);
+    const auto previousPursuitPhase=railPostBossSequence_.CurrentPhase();
+    const float previousPursuitAge=railPostBossSequence_.PhaseAge();
+    if(postBossEnabled && !coursePreviewOwnsRail && !titleEntryBlocked)
+        railPostBossSequence_.Update(gameplayDeltaTime,railShooterDistance_,
+            railMothershipBattle_.Current().battleDefeated,railShooterSpawnRuntime_,railShooterEventDispatcher_,
+            &runtimeState_.terrain.previewEditLayer);
+    const auto pursuitPhase=railPostBossSequence_.CurrentPhase();
+    const bool rearCameraTurning=pursuitPhase==RailPostBossSequence::Phase::Turning;
+    if(gameplayDeltaTime>0 && pursuitPhase==RailPostBossSequence::Phase::Notice) {
+        if(previousPursuitPhase!=pursuitPhase)
+            (void)audio_.PlaySpatial(railDroneFlybySound_,.29f,-.55f,1.55f);
+        constexpr float wingmanCueTime=.68f;
+        if(previousPursuitPhase==pursuitPhase && previousPursuitAge<wingmanCueTime &&
+            railPostBossSequence_.PhaseAge()>=wingmanCueTime)
+            (void)audio_.PlaySpatial(railDroneWingmanFlybySound_,.27f,.55f,1.55f);
+    }
 
     if(IsRailShortCourse(railShooterCoursePath_) && gameplayDeltaTime>0.0f &&
         railShooterDistance_>=carrierOutdoorEnd+20.0f && !coursePreviewOwnsRail)
@@ -8819,6 +9033,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const EnemyEncounterPacingFrame& encounterPacingFrame =
         railEnemyEncounterPacingDirector_.Update(pacingInput);
     if(gateBridgeEnabled)railRidgeCombatFlow_.ApplyAttackGates(railShooterSpawnRuntime_,railShooterDistance_);
+    if(postBossEnabled)railPostBossSequence_.ApplyAttackGates(railShooterSpawnRuntime_);
     railMinibossCombat_.Update(railShooterSpawnRuntime_,gameplayDeltaTime,
         IsRailShortCourse(railShooterCoursePath_) &&
             railShooterGameplayWaveBridge_.Phase(RailMothership::BossWaveId)==CourseGameplayWavePhase::Active,
@@ -8853,7 +9068,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     vehicleBodyCollisionInput.terrainEdits =
         &railShooterCourse_.terrainEditLayer;
     vehicleBodyCollisionInput.terrainPreview =
-        &runtimeState_.terrain.previewEditLayer;
+        &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     vehicleBodyCollisionInput.gameplayActive =
         mountedMovementActive && !coursePreviewOwnsRail &&
         gameplayDeltaTime > 0.0f;
@@ -8871,6 +9086,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     travelPredictionInput.course = &railShooterCourse_;
     travelPredictionInput.railPath = &railPath_;
     travelPredictionInput.simulationStepSeconds = gameplayDeltaTime;
+    travelPredictionInput.panelBoostRemaining=railPostBossSequence_.PanelBoostRemaining();
+    travelPredictionInput.panelBoostMultiplier=panelBoostMultiplier;
     if (!coursePreviewOwnsRail && mountedMovementActive && gameplayDeltaTime > 0.0f)
         fireSafetyInput.travelPredictionInput = &travelPredictionInput;
     fireSafetyInput.presentationSettings = &railEnemyCombatPresentationSettings_;
@@ -8892,11 +9109,31 @@ void AppRunLoop::UpdateRailShooterFrame() {
     fireSafetyInput.course = &railShooterCourse_;
     fireSafetyInput.terrainSettings = &runtimeState_.terrain.settings;
     fireSafetyInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
-    fireSafetyInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    fireSafetyInput.terrainPreview = &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     fireSafetyInput.terrainCollision = &terrainCollisionWorld_;
     fireSafetyInput.groundSupportQuery=[this](const RailPathSample& anchor,float footprint,float& height) {
         return terrainChunkManager_.QueryGroundSupport(anchor,footprint,height);
     };
+    // Capture fixture aims one test round down at the bridge deck.
+    static const bool fangSurfaceAudit=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 &&
+        ReadEnvironmentUInt("GE3_POST_BOSS_CAPTURE_STAGE",0)==19 &&
+        ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_FRAMES",0)!=0;
+    static bool fangSurfaceAuditSpawned=false;
+    if(fangSurfaceAudit && !fangSurfaceAuditSpawned && gameplayDeltaTime>0 &&
+        railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Combat &&
+        railPostBossSequence_.PhaseAge()>2.0f) {
+        CourseBulletActor testRound;
+        testRound.initialized=true;
+        testRound.definitionId="enemy_fang_chase";
+        testRound.ownerActorId=railPostBossSequence_.ActorIds()[0];
+        testRound.spawnDistance=railShooterDistance_-33;
+        testRound.lateralOffset=testRound.previousLateralOffset=-2.5f;
+        testRound.verticalOffset=testRound.previousVerticalOffset=2.3f;
+        testRound.forwardSpeed=42;
+        testRound.verticalSpeed=-16;
+        testRound.radius=.45f;
+        fangSurfaceAuditSpawned=railShooterSpawnRuntime_.SpawnProjectile(std::move(testRound));
+    }
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput);
     railMinibossCombat_.ObserveFire(railShooterSpawnRuntime_,railShooterDistance_,vehicleFrame.state.speed);
     if(IsRailShortCourse(railShooterCoursePath_)) {
@@ -9018,6 +9255,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     cameraSectionPreviewWasActive_ = cameraSectionPreview;
     cameraSectionPreviewLastDistance_ = railShooterDistance_;
     RailCameraDirectorFrameInput cameraInput{};
+    if(postBossEnabled && !cameraSectionPreview) {
+        cameraInput.sequenceView=railPostBossSequence_.View();
+        cameraInput.sequenceViewWeight=railPostBossSequence_.ViewWeight();
+    }
     cameraInput.course = &railShooterCourse_;
     cameraInput.railPath = &railPath_;
     cameraInput.section = railShooterCourseRuntime_.CurrentSection();
@@ -9191,7 +9432,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     telegraphInput.course = &railShooterCourse_;
     telegraphInput.terrainSettings = &runtimeState_.terrain.settings;
     telegraphInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
-    telegraphInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    telegraphInput.terrainPreview = &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     telegraphInput.cameraPosition = cameraPosition;
     telegraphInput.playerDistance = railShooterDistance_;
     telegraphInput.deltaTime = gameplayDeltaTime;
@@ -9357,7 +9598,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     lockOnInput.course = &railShooterCourse_;
     lockOnInput.terrainSettings = &runtimeState_.terrain.settings;
     lockOnInput.terrainEdits = &railShooterCourse_.terrainEditLayer;
-    lockOnInput.terrainPreview = &runtimeState_.terrain.previewEditLayer;
+    lockOnInput.terrainPreview = &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     lockOnInput.gameplayCameraPosition = directedCamera.gameplayPosition;
     lockOnInput.viewRelativeTargeting = directedCamera.viewRelativeTargeting;
     lockOnInput.viewForward = directedCamera.gameplayForward;
@@ -9438,9 +9679,62 @@ void AppRunLoop::UpdateRailShooterFrame() {
             lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=proxy->screenPosition;
             lockOnInput.gamepadConnected=false;killBoostAuditTarget=true;auditNearestForward=forward;
         }
+    static const bool postBossAudit=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 &&
+        ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_FRAMES",0)!=0;
+    bool postBossAuditAiming=false,postBossAuditPrimary=false;
+    static bool postBossAuditVeilReleased=false,postBossAuditPanelReleased=false;
+    if(postBossAudit && !titleEntryBlocked && gameplayDeltaTime>0) {
+        lockOnInput.hasLockHeldOverride=true;lockOnInput.lockHeldOverride=false;
+        for(const auto& enemy:railShooterSpawnRuntime_.Enemies()) {
+            const bool boss=RailMothership::PartIndex(enemy.desc.actorAssetId)>=0;
+            const bool rear=IsRailRearPursuer(enemy.desc.actorAssetId);
+            if((!boss && !rear) || enemy.desc.hitPoints<=0 || !enemy.combatState.canReceiveDamage)continue;
+            if(rear && (railPostBossSequence_.CurrentPhase()!=RailPostBossSequence::Phase::Combat ||
+                railPostBossSequence_.PhaseAge()<3.0f))continue;
+            const unsigned auditStage=ReadEnvironmentUInt("GE3_POST_BOSS_CAPTURE_STAGE",0);
+            const bool chooseSensor=auditStage==14 && enemy.veilSensorExposed && enemy.veilSensorHitPoints>0;
+            const bool choosePanel=rear && auditStage==15 && !postBossAuditPanelReleased &&
+                enemy.desc.actorAssetId=="rear_fang" && enemy.fireSequence>0 && enemy.rearArmor.HasPanel(1);
+            if(rear && auditStage>=8) {
+                const auto& ids=railPostBossSequence_.ActorIds();
+                const bool chooseFang=(auditStage==11 || (auditStage==13 && enemy.fangCannonHitPoints>0)) &&
+                    enemy.actorId==railPostBossSequence_.FangFollowupTarget();
+                const bool chooseVeil=auditStage==12 && !postBossAuditVeilReleased &&
+                    enemy.actorId==ids[1] && railPostBossSequence_.VeilCanBeInterrupted();
+                if(railPostBossSequence_.CompletedCycles()>0 || (!chooseFang && !chooseVeil && !chooseSensor && !choosePanel))continue;
+            }
+            const auto* proxy=railEnemyEncounterReadabilityDirector_.FindActor(enemy.actorId);
+            if(!proxy || !proxy->onScreen || !proxy->targetable)continue;
+            lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=proxy->screenPosition;
+            if(rear && (auditStage==13 || chooseSensor || choosePanel)) {
+                if(!enemy.weaponMount.ready) continue;
+                const auto& pose=enemy.weaponMount.dronePose;
+                const Vector3 subsystem=choosePanel?RearSubsystemWorldCenter(pose,kRearPanelAnchors[1]):
+                    (chooseSensor?VeilSensorWorldCenter(pose):FangCannonWorldCenter(pose));
+                const auto marker=ProjectRailOverlayPoint(subsystem,
+                    frameState_.viewProjectionMatrix,metrics.width,metrics.height);
+                if(!marker.onscreen) continue;
+                lockOnInput.cursorPosition=marker.screen;
+            }
+            lockOnInput.gamepadConnected=false;postBossAuditAiming=true;
+            // Exercise both normal fire and travelling locks in the real scene.
+            if(choosePanel) {
+                const auto tokens=railShooterLockOnSystem_.Tokens();
+                postBossAuditPanelReleased=std::any_of(tokens.begin(),tokens.end(),[](const auto& token){
+                    return token.target.kind==RailLockTargetKind::RearPanel && token.target.panelIndex==1;
+                });
+                lockOnInput.lockHeldOverride=!postBossAuditPanelReleased;
+            } else if(boss || chooseSensor || enemy.actorId==railPostBossSequence_.ActorIds()[0])postBossAuditPrimary=true;
+            else {
+                lockOnInput.lockHeldOverride=railShooterLockOnSystem_.Tokens().empty();
+                if(auditStage==12 && !lockOnInput.lockHeldOverride)postBossAuditVeilReleased=true;
+            }
+            break;
+        }
+    }
     static Vector2 auditPointer{};
     static bool auditPointerInitialized=false;
-    if(killBoostAuditTarget || shieldAuditAiming) {
+    if(killBoostAuditTarget || shieldAuditAiming || postBossAuditAiming) {
         if(!auditPointerInitialized) {
             POINT pointer{};GetCursorPos(&pointer);ScreenToClient(hwnd_,&pointer);
             auditPointer={float(pointer.x),float(pointer.y)};auditPointerInitialized=true;
@@ -9453,7 +9747,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         auditPointer.y=(std::clamp)(auditPointer.y+(lockOnInput.cursorPosition.y-current.y)/friction,0.0f,float(metrics.height-1));
         lockOnInput.cursorPosition=auditPointer;
     } else auditPointerInitialized=false;
-    if (titleEntryBlocked) {
+    if(rearCameraTurning) {
+        if(previousPursuitPhase!=pursuitPhase)railShooterLockOnSystem_.Reset();
+        railShooterLockOnSystem_.PrepareReticleForGameplay(lockOnInput);
+    } else if (titleEntryBlocked) {
         lockOnInput.deltaTime = entryFrame.travelDeltaTime;
         railShooterLockOnSystem_.PrepareReticleForGameplay(lockOnInput,entryFrame.reticleProgress>0.0f && entryFocused);
     }
@@ -9477,8 +9774,17 @@ void AppRunLoop::UpdateRailShooterFrame() {
             collisionInput.player.verticalOffset,
             railShooterLockOnSystem_.Settings().lockVfxMuzzleForwardOffset);
     railLockVolley_.Update(gameplayDeltaTime,railLockMuzzle,railPath_,railShooterSpawnRuntime_,
-        railShooterCollisionSystem_,&railShooterCourse_,&runtimeState_.terrain.settings,&runtimeState_.terrain.previewEditLayer);
-    const int lockScheduledShots=ProcessRailLockOnRelease(railLockMuzzle,gameplayDeltaTime);
+        railShooterCollisionSystem_,&railShooterCourse_,&runtimeState_.terrain.settings,&railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer));
+    const bool panelBoostIgnited=railPostBossSequence_.OnPanelBreaks(railLockVolley_.Hits());
+    if(panelBoostIgnited) {
+        (void)audio_.PlaySpatial(railBoostIgnitionSound_,.32f,0.0f,1.15f);
+        railShooterCameraDirector_.AddFeedbackImpulse(.22f,-.0022f,0.0f);
+    }
+    if(railPostBossSequence_.OnVeilLockContact(railLockVolley_.Hits(),railShooterSpawnRuntime_))
+        (void)audio_.PlaySpatial(railDefenseInterruptSound_,.25f,0.0f,1.0f);
+    if(pursuitPhase==RailPostBossSequence::Phase::Combat && previousPursuitPhase!=pursuitPhase)
+        (void)audio_.PlaySpatial(railGoSound_,.24f,0.0f,1.12f);
+    const int lockScheduledShots=rearCameraTurning?0:ProcessRailLockOnRelease(railLockMuzzle,gameplayDeltaTime);
     const uint32_t lockReleaseTokenCount=static_cast<uint32_t>(railShooterLockOnSystem_.LastRelease().tokens.size());
     railInputRouteDebug_.releaseFireTriggered=lockScheduledShots>0;
     railInputRouteDebug_.releaseTokenCount=lockReleaseTokenCount;
@@ -9508,14 +9814,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
         (railTransitionDemoHover_ || railTransitionDemoPressed_);
     const bool normalShotPressed = (leftMouseDown && !wasLeftMouseDown) || inputEdges_.Pressed(VK_LBUTTON);
     const bool normalShotReleased = !leftMouseDown && wasLeftMouseDown;
-    const bool normalShotTriggerHeld = !titleEntryBlocked && (leftMouseDown || normalShotPressed || killBoostAuditTarget || shieldAuditPrimary) &&
+    const bool normalShotTriggerHeld = !titleEntryBlocked && (leftMouseDown || normalShotPressed || killBoostAuditTarget || shieldAuditPrimary || postBossAuditPrimary) &&
         !normalShotBlockedByUi && !lockModeActive;
     const bool normalShotTriggerPressed = !titleEntryBlocked && normalShotPressed && !normalShotBlockedByUi && !lockModeActive;
 
     railInputRouteDebug_.lockHeld = lockModeActive;
     railInputRouteDebug_.lockPressed = railShooterLockOnSystem_.Reticle().lockPressed;
     railInputRouteDebug_.lockReleased = railShooterLockOnSystem_.Reticle().lockReleased;
-    baseWeapon.enabled = !lockModeActive;
+    baseWeapon.enabled = !lockModeActive && !rearCameraTurning;
     baseWeapon.triggerHeld = normalShotTriggerHeld;
     baseWeapon.triggerPressed = normalShotTriggerPressed;
     baseWeapon.triggerReleased = normalShotReleased;
@@ -9565,13 +9871,22 @@ void AppRunLoop::UpdateRailShooterFrame() {
     collisionInput.worldAim = &worldAim;
     collisionInput.convergePrimaryOnGatling=railMinibossCombat_.GatlingInFlight();
     collisionInput.primaryTerrainSettings=&runtimeState_.terrain.settings;
-    collisionInput.primaryTerrainPreview=&runtimeState_.terrain.previewEditLayer;
+    if(railPostBossSequence_.Started()) {
+        collisionInput.rearBridgeStart=railPostBossSequence_.Anchor()+RailPostBossSequence::BridgeStart-10;
+        collisionInput.rearBridgeEnd=collisionInput.rearBridgeStart+RailPostBossSequence::BridgeLength+20;
+    }
+    collisionInput.primaryTerrainPreview=&railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     collisionInput.bonusTargetActorId=railMinibossCombat_.CounterOwner();
     collisionInput.bonusDamageMultiplier=railMinibossCombat_.DamageMultiplier(collisionInput.bonusTargetActorId,false);
+    const uint32_t fangFollowup=railPostBossSequence_.FangFollowupTarget();
+    if(fangFollowup) {
+        collisionInput.bonusTargetActorId=fangFollowup;
+        collisionInput.bonusDamageMultiplier=1.5f;
+    }
     const auto collisionStart = RailPerfClock::now();
     CourseCollisionFrameStats collisionStats =
         railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
-    if(collisionInput.bonusDamageMultiplier>1)for(const auto& shot:railShooterCollisionSystem_.LastWeaponFireResult().shots)
+    if(!fangFollowup && collisionInput.bonusDamageMultiplier>1)for(const auto& shot:railShooterCollisionSystem_.LastWeaponFireResult().shots)
         railMinibossCombat_.CreditShot(shot.shotId,collisionInput.bonusTargetActorId,false);
     for(const auto& hit:railShooterCollisionSystem_.WeaponFeedback().RecentEvents()) {
         if(!railMinibossCombat_.NotifyCounterDamage(hit))continue;
@@ -9782,8 +10097,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     const float rewardPresentationStrength=railShooterSpeedDirector_.BoostPresentationStrength(
         feedbackVehicle.speed,motionEnvelope.normalRequestedSpeed);
-    const float currentBoostStrength=railShooterSpeedDirector_.TravelPresentationStrength(
-        feedbackVehicle.speed,motionEnvelope.normalRequestedSpeed);
+    const float panelSpeedStrength=panelBoostMultiplier>1
+        ? (std::clamp)((feedbackVehicle.speed-motionEnvelope.normalRequestedSpeed)/
+            (std::max)(1.0f,motionEnvelope.normalRequestedSpeed*.85f),0.0f,1.0f) : 0.0f;
+    const float currentBoostStrength=(std::max)(panelSpeedStrength,
+        railShooterSpeedDirector_.TravelPresentationStrength(feedbackVehicle.speed,motionEnvelope.normalRequestedSpeed));
     const auto rewardFeedback=BuildRailKillBoostFeedback(currentReward,rewardPresentationStrength,
         rewardAgeBefore,rewardCanAccelerate,gameplayDeltaTime);
     const float currentBoostIgnition=(std::max)(rewardFeedback.ignition,
@@ -9805,7 +10123,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     boostVfxInput.speed=railShooterVehicleMovement_.State().speed;
     boostVfxInput.strength=currentBoostStrength;
     boostVfxInput.nearFlow=currentBoostStrength;
-    boostVfxInput.ignition=(std::max)(currentBoostIgnition,currentReward.ExtensionPulse()*.18f*currentBoostStrength);
+    boostVfxInput.ignition=(std::max)({currentBoostIgnition,currentReward.ExtensionPulse()*.18f*currentBoostStrength,
+        panelBoostIgnited?1.0f:0.0f});
     boostVfxInput.thrust=rewardCanAccelerate?currentReward.ThrustPulse():0;
     boostVfxInput.bodyWorld=railShooterVehicleRenderer_.Frame().worldMatrix;
     if(railShooterSpeedDirector_.KillBoost().Spinning()) {
@@ -9841,8 +10160,59 @@ void AppRunLoop::UpdateRailShooterFrame() {
             <<railShooterCameraDirector_.LastFrame().vehicleScreenTop<<','<<railShooterCameraDirector_.LastFrame().vehicleScreenBottom<<','
             <<railShooterCameraDirector_.LastFrame().vehicleFramingSafe<<'\n';
     }
+    if(postBossAudit) {
+        static std::ofstream log("logs/post_boss_audit.csv");
+        static bool header=false;
+        if(!header){log<<"time,distance,phase,age,phase_age,anchor,camera_weight,alive,rear_min,rear_max,rear_primary,rear_lock,player_hp,fang_rounds,veil_rounds,cycles,fang_bonus_damage,veil_interrupted,fang_hull_hp,fang_cannon_hp,veil_hull_hp,veil_sensor_hp,veil_descent_lane,veil_shot_lane,player_speed,panel_boost,fang_panels,fang_gap\n";header=true;}
+        float fangHullHp=0,fangCannonHp=0,veilHullHp=0,veilSensorHp=0,veilDescentLane=0;
+        static float veilShotLane=0;
+        float fangGap=1000;
+        unsigned fangPanels=0;
+        unsigned alive=0;float lo=0,hi=-10000;static unsigned primary=0,locks=0;static uint64_t last=0;
+        static float fangBonusDamage=0;
+        static std::array<std::unordered_set<uint64_t>,2> firedRounds;
+        for(const auto& round:railShooterSpawnRuntime_.Bullets()) {
+            if(round.launchDelayRemaining>0 || !round.active)continue;
+            if(round.ownerActorId==railPostBossSequence_.ActorIds()[1]) veilShotLane=round.lockedTargetLateralOffset;
+            if(round.ownerActorId==railPostBossSequence_.ActorIds()[0])
+                fangGap=(std::min)(fangGap,railShooterDistance_-round.spawnDistance-round.distanceOffset);
+            for(size_t i=0;i<firedRounds.size();++i)
+                if(round.ownerActorId==railPostBossSequence_.ActorIds()[i])firedRounds[i].insert(round.projectileId);
+        }
+        for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(IsRailRearPursuer(actor.desc.actorAssetId) && actor.desc.hitPoints>0) {
+            ++alive;const float forward=actor.desc.spawnDistance+actor.desc.distanceOffset-railShooterDistance_;
+            lo=(std::min)(lo,forward);hi=(std::max)(hi,forward);
+            if(actor.desc.actorAssetId=="rear_fang") {
+                fangHullHp=actor.desc.hitPoints;
+                fangCannonHp=actor.fangCannonHitPoints;
+                fangPanels=actor.rearArmor.intact;
+            } else if(actor.desc.actorAssetId=="rear_veil") {
+                veilHullHp=actor.desc.hitPoints;
+                veilSensorHp=actor.veilSensorHitPoints;
+                veilDescentLane=actor.veilDescentAim.x;
+            }
+        }
+        const auto& hit=railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
+        if(hit.sequence!=last && hit.appliedDamage>0) {
+            last=hit.sequence;
+            if(fangFollowup && hit.targetActorId==fangFollowup && !hit.lockOnContact)
+                fangBonusDamage=hit.requestedDamage;
+            for(auto id:railPostBossSequence_.ActorIds())if(id!=0 && id==hit.targetActorId) {
+                if(hit.lockOnContact)++locks;else ++primary;
+            }
+        }
+        log<<railEnemyProjectilePresentationTime_<<','<<railShooterDistance_<<','<<int(railPostBossSequence_.CurrentPhase())
+            <<','<<railPostBossSequence_.Age()<<','<<railPostBossSequence_.PhaseAge()<<','<<railPostBossSequence_.Anchor()
+            <<','<<railPostBossSequence_.CameraWeight()<<','<<alive<<','<<lo<<','<<hi<<','<<primary<<','<<locks
+            <<','<<railShooterGameSession_.State().playerHealth<<','<<firedRounds[0].size()
+            <<','<<firedRounds[1].size()<<','<<railPostBossSequence_.CompletedCycles()
+            <<','<<fangBonusDamage<<','<<railPostBossSequence_.VeilInterrupted()<<','<<fangHullHp<<','<<fangCannonHp
+            <<','<<veilHullHp<<','<<veilSensorHp<<','<<veilDescentLane<<','<<veilShotLane
+            <<','<<vehicleFrame.state.speed<<','<<railPostBossSequence_.PanelBoostRemaining()<<','<<fangPanels<<','<<fangGap<<'\n';log.flush();
+    }
     if(IsRailShortCourse(railShooterCoursePath_)) railGateBridgeFlow_.Notify(enemyCombatEvents);
     if(IsRailShortCourse(railShooterCoursePath_)) railRidgeCombatFlow_.Notify(enemyCombatEvents);
+    if(postBossEnabled)railPostBossSequence_.Notify(enemyCombatEvents);
     for (const EnemyCombatEvent& event : enemyCombatEvents) {
         if (event.kind == EnemyCombatEventKind::Defeated &&
             !event.placementGuid.empty() &&
@@ -10032,6 +10402,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         if(IsRailShortCourse(railShooterCoursePath_) &&
             railMothershipBattle_.Current().battleDefeated && railMothershipBattle_.Current().visible)
             sessionInput.combatClearConfirmed=false;
+        if(postBossEnabled && !railPostBossSequence_.Complete()) sessionInput.combatClearConfirmed=false;
         if (railShooterGameplayWaveBridge_.IsBound()) {
             sessionInput.completedMandatoryWaves =
                 railShooterGameplayWaveBridge_.Stats().completedWaves;
@@ -10296,6 +10667,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         (void)CaptureRailCheckpoint(railFirstPlayableCheckpointPending_?"gameplay_start":checkpointStats.currentSectionName);
     }
 
+    if(postBossEnabled && !coursePreviewOwnsRail && gameplayDeltaTime>0 && railPostBossSequence_.CheckpointPending()) {
+        railPostBossSequence_.MarkCheckpointCaptured(true);
+        if(!CaptureRailCheckpoint("WHITE BRIDGE"))railPostBossSequence_.MarkCheckpointCaptured(false);
+    }
     const auto vfxUpdateStart = RailPerfClock::now();
     vfxEngine_.Update(runtimeState_.vfx, gameplayDeltaTime);
     gRailPerfFrame.vfxUpdateMs = ElapsedMs(vfxUpdateStart, RailPerfClock::now());
@@ -10980,13 +11355,18 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
         }
     }
 
+    auto streamedTerrainSettings=terrain.settings;
+    // The chase rig normally needs only two chunks behind. Prepare the rear
+    // horizon throughout the breather, before the 180-degree camera turn.
+    if(IsRailShortCourse(railShooterCoursePath_) && railPostBossSequence_.Started())
+        streamedTerrainSettings.visibleBehindChunks=(std::max)(streamedTerrainSettings.visibleBehindChunks,24u);
     terrainChunkManager_.Update(
         dev_.GetDevice(),
         &heaps_.srv,
         railPath_,
-        terrain.settings,
+        streamedTerrainSettings,
         &railShooterCourse_.terrainEditLayer,
-        &terrain.previewEditLayer,
+        &railPostBossSequence_.TerrainPreview(terrain.previewEditLayer),
         terrain.previewDistance,
         frameState_.viewProjectionMatrix);
     // Resolve fixed foundations as soon as their terrain streams in, before
@@ -11648,7 +12028,7 @@ void AppRunLoop::DispatchEnemyCombatPresentation(
         terrain.aim=&aim; terrain.railPath=&railPath_;
         terrain.terrainSettings=&runtimeState_.terrain.settings;
         terrain.terrainEdits=&railShooterCourse_.terrainEditLayer;
-        terrain.terrainPreview=&runtimeState_.terrain.previewEditLayer;
+        terrain.terrainPreview=&railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
         terrain.terrainCollision=&terrainCollisionWorld_;
         terrain.playerDistance=railDistance;
         const auto hit=RailWorldRaycast::Query(terrain);
@@ -11735,6 +12115,7 @@ void AppRunLoop::DispatchEnemyProjectilePresentation(
     presentationInput.runtime = &presentationRuntime;
     presentationInput.railPath = &railPath_;
     if (!previewActive) {
+        presentationInput.surfaceContacts=railShooterCollisionSystem_.ProjectileSurfaceContacts();
         presentationInput.playerDamageResults =
             railShooterCollisionSystem_.PlayerDamageResults();
         presentationInput.shootDownResults =
@@ -12079,7 +12460,7 @@ void AppRunLoop::StopGameSessionPresentation() {
     railReadyDroneActorIds_ = {};
     railReadyDroneSalvo_.Reset();
     railMothershipReveal_.Reset();
-    railMothershipBattle_.Reset();
+    railMothershipBattle_.Reset();railPostBossSequence_.Reset();
     railMinibossCombat_.Reset();
     audio_.Stop(railReadySound_); audio_.Stop(railGoSound_);
     audio_.Stop(railDroneFlybySound_);
@@ -14301,7 +14682,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         enemyEncounterReadability, nullptr,
         UsesCanyonPresentation(railShooterCoursePath_) &&
             railShooterCourseRuntime_.Distance() < 180.0f,
-        IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr);
+        IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr,
+        IsRailShortCourse(railShooterCoursePath_)?railPostBossSequence_.Scenery():std::span<const CourseTerrainPlacement>{});
     gRailPerfFrame.syncCourseMeshMs = ElapsedMs(syncCourseMeshStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSyncCourseMeshes");
 
@@ -14497,7 +14879,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         enemyEncounterReadability, nullptr,
         UsesCanyonPresentation(railShooterCoursePath_) &&
             railShooterCourseRuntime_.Distance() < 180.0f,
-        IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr);
+        IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr,
+        IsRailShortCourse(railShooterCoursePath_)?railPostBossSequence_.Scenery():std::span<const CourseTerrainPlacement>{});
 
     ProcessCourseObjectViewportEditing();
     ProcessIceProjectileMouseLaunch();
@@ -14574,7 +14957,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             scene_.mappedCamera->caveRailOrigin = {sample.position.x, sample.position.y, sample.position.z, railShooterDistance_};
             scene_.mappedCamera->caveRailForward = {sample.tangent.x, sample.tangent.y, sample.tangent.z, 0};
             scene_.mappedCamera->caveOpenings = caveOpeningLighting_.Update(railPath_, atmosphereTerrain,
-                railShooterDistance_, &railShooterCourse_.terrainEditLayer, &runtimeState_.terrain.previewEditLayer,
+                railShooterDistance_, &railShooterCourse_.terrainEditLayer, &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer),
                 UsesCanyonPresentation(railShooterCoursePath_));
         }
     }
@@ -14881,11 +15264,38 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         const auto& impact=railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
         shieldCaptureReady|=impact.destroyed && impact.lockOnContact;
     }
+    const bool postBossCapture=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0;
+    const auto postPhase=railPostBossSequence_.CurrentPhase();
+    const unsigned postStage=ReadEnvironmentUInt("GE3_POST_BOSS_CAPTURE_STAGE",0);
+    const bool postBossCaptureReady=!postBossCapture ||
+        (postStage==0 && postPhase==RailPostBossSequence::Phase::Vista && railPostBossSequence_.Age()>=6) ||
+        (postStage==1 && postPhase==RailPostBossSequence::Phase::Bridge) ||
+        (postStage==2 && postPhase==RailPostBossSequence::Phase::Combat && railPostBossSequence_.PhaseAge()>=2) ||
+        (postStage==3 && railPostBossSequence_.Complete()) ||
+        (postStage==4 && postPhase==RailPostBossSequence::Phase::Notice && railPostBossSequence_.PhaseAge()>=.82f) ||
+        (postStage==5 && postPhase==RailPostBossSequence::Phase::Notice && railPostBossSequence_.PhaseAge()>=1.52f) ||
+        (postStage==6 && postPhase==RailPostBossSequence::Phase::Turning && railPostBossSequence_.PhaseAge()>=1.16f) ||
+        (postStage==7 && postPhase==RailPostBossSequence::Phase::Combat && railPostBossSequence_.PhaseAge()>=.18f) ||
+        (postStage==8 && postPhase==RailPostBossSequence::Phase::Combat && railPostBossSequence_.PhaseAge()>=3.35f) ||
+        (postStage==9 && railPostBossSequence_.CompletedCycles()>0) ||
+        (postStage==10 && railPostBossSequence_.InPursuitHandoff()) ||
+        ((postStage==11 || postStage==12) && railPostBossSequence_.CompletedCycles()>0) ||
+        (postStage==13 && railPostBossSequence_.CompletedCycles()>=2) ||
+        ((postStage==14 || postStage==15) && railPostBossSequence_.CompletedCycles()>0) ||
+        (postStage==16 && std::any_of(railShooterSpawnRuntime_.Bullets().begin(),railShooterSpawnRuntime_.Bullets().end(),
+            [](const auto& round){return round.definitionId=="enemy_fang_chase" && round.active &&
+                round.age>=.045f && round.age<=.11f;})) ||
+        (postStage==17 && std::any_of(railShooterSpawnRuntime_.Bullets().begin(),railShooterSpawnRuntime_.Bullets().end(),
+            [](const auto& round){return round.definitionId=="enemy_fang_chase" && round.active &&
+                round.age>=.36f && round.age<=.45f;})) ||
+        ((postStage==18 || postStage==19) && std::any_of(railEnemyProjectileVfxRenderer_.Frame().lifecycleBursts.begin(),
+            railEnemyProjectileVfxRenderer_.Frame().lifecycleBursts.end(),[&](const auto& burst){
+                return burst.fangImpact && burst.surfaceImpact==(postStage==19) && burst.normalizedAge>=.10f && burst.normalizedAge<.36f;}));
     const bool killBoostCaptureReady=ReadEnvironmentUInt("GE3_NORMAL_TRAVEL_AUDIT",0)!=0 || !waitForKillBoost || (capturedBoost.Serial()>0 &&
         (killBoostCaptureMs>=unsigned(RailKillBoost::TotalSeconds*1000)?!capturedBoost.Active():
             capturedBoost.Active() && capturedBoost.Age()*1000>=float(killBoostCaptureMs)));
     if(!frameExportPath.empty() && !frameExportDone && ++frameExportWait>=frameExportMinimum &&
-        killBoostCaptureReady && shieldCaptureReady && railShooterDistance_>=float(speedFeelCaptureDistance) &&
+        killBoostCaptureReady && shieldCaptureReady && postBossCaptureReady && railShooterDistance_>=float(speedFeelCaptureDistance) &&
         terrainChunkManager_.RenderChunks().size()==terrainChunkManager_.Chunks().size()) {
         frameExportDone=true;
         DirectX::ScratchImage image;

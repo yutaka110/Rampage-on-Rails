@@ -565,7 +565,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const float distance=input.resultSession->courseDistance;
         const int stage=distance<380?0:distance<680?1:distance<950?2:distance<1120?3:4;
         const char* stages[]={"FIRST CONTACT / LMB","LOCK BURST / HOLD RMB","INTERCEPT / SHOOT ORBS","BOOST RUN / HOLD E","FINAL PURSUIT"};
-        const int remaining=int((std::max)(0.0f,ShortRunSessionDefinition().timeLimitSeconds-input.resultSession->attemptElapsedSeconds));
+        const int remaining=int((std::max)(0.0f,input.attemptTimeLimitSeconds-input.resultSession->attemptElapsedSeconds));
         const std::string stageText=input.courseVisualCount>0 ?
             std::to_string(input.courseVisualIndex+1)+" / "+std::to_string(input.courseVisualCount)+
                 "   "+input.courseVisualLabel : std::to_string(stage+1)+" / 5   "+stages[stage];

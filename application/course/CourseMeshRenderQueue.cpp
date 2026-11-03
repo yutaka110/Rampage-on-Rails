@@ -1,4 +1,5 @@
 #include "RailGroundBatteryAttack.h"
+#include "RailRearPursuitRules.h"
 #include "RailTurretGeometry.h"
 #include "CourseMeshRenderQueue.h"
 
@@ -347,7 +348,23 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         AddStartupRearScenery(railPath,models,viewProjection);
 
     if (course != nullptr) {
-        for (const CourseTerrainPlacement& placement : course->terrainPlacements) {
+        AppendTerrain(course->terrainPlacements,currentDistance,railPath,models,viewMatrix,projMatrix);
+        AddCourseDebrisInstances(
+            *course,
+            currentDistance,
+            railPath,
+            models,
+            viewProjection);
+    }
+
+}
+
+void CourseMeshRenderQueue::AppendTerrain(std::span<const CourseTerrainPlacement> placements,
+    float currentDistance,const RailPath& railPath,std::span<const CourseMeshModelBinding> models,
+    const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix) {
+    if(models.empty() || railPath.Length()<=0)return;
+    const auto viewProjection=Multiply(viewMatrix,projMatrix);
+        for (const CourseTerrainPlacement& placement : placements) {
             if (!ShouldDrawTerrainPlacement(placement, currentDistance)) {
                 continue;
             }
@@ -432,14 +449,6 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
                 center,
                 viewProjection);
         }
-        AddCourseDebrisInstances(
-            *course,
-            currentDistance,
-            railPath,
-            models,
-            viewProjection);
-    }
-
 }
 
 void CourseMeshRenderQueue::AddStartupRearScenery(const RailPath& path,
@@ -674,6 +683,70 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             pose.flash = presentation ? presentation->flashStrength : 0.0f;
             pose.death = presentation && presentation->animation == EnemyCombatAnimationState::Death
                 ? presentation->animationNormalizedTime : 0.0f;
+            if(IsRailElitePursuer(enemy.desc.actorAssetId)) {
+                const bool fang=enemy.desc.actorAssetId=="rear_fang";
+                const bool weakPointExposed=fang
+                    ? enemy.fangCannonExposed && enemy.fangCannonHitPoints>0
+                    : enemy.veilSensorExposed && enemy.veilSensorHitPoints>0;
+                std::string eliteMesh=enemy.desc.actorAssetId;
+                if(fang) {
+                    if(enemy.fangCannonHitPoints<=0) eliteMesh="rear_fang_damaged";
+                    else if(enemy.fangCannonExposed) eliteMesh="rear_fang_exposed";
+                } else {
+                    if(enemy.veilSensorHitPoints<=0) eliteMesh="rear_veil_damaged";
+                    else if(enemy.veilSensorExposed) eliteMesh="rear_veil_exposed";
+                }
+                const uint32_t eliteIndex=ResolveModelIndex(models,eliteMesh,nullptr);
+                if(models[eliteIndex].loaded && models[eliteIndex].name==eliteMesh) {
+                    item->modelIndex=eliteIndex;
+                    item->meshId=models[eliteIndex].name;
+                    if(!enemy.weaponMount.ready) {
+                        const float scale=kElitePursuerModelScale*presentationScale;
+                        pose.scale={scale,scale,scale};
+                    }
+                    WriteItemTransform(*item,models[eliteIndex].rootLocal,pose.scale,pose.rotation,pose.position,viewProjection);
+                    if(item->materialData) {
+                        *item->materialData={};
+                        item->materialData->color={1,1,1,alpha};
+                        item->materialData->uvTransform=MakeIdentity4x4();
+                        item->materialData->enableLighting=true;
+                        item->materialData->specularMode=weakPointExposed?17:2;
+                        if(weakPointExposed)
+                            item->materialData->padding2[0]=.94f+.06f*std::sin(enemy.age*12.0f);
+                        item->materialData->shininess=12;
+                        item->materialData->environmentCoefficient=.04f;
+                        item->useMaterialOverride=true;
+                    }
+                    if(enemy.rearArmor.enabled && enemy.desc.hitPoints>0 && enemy.weaponMount.ready) {
+                        const auto panelIndex=ResolveModelIndex(models,"rear_boost_panel",nullptr);
+                        if(models[panelIndex].loaded && models[panelIndex].name=="rear_boost_panel") {
+                            for(size_t index=0;index<kRearPanelAnchors.size();++index) {
+                                if(!enemy.rearArmor.HasPanel(index)) continue;
+                                auto* panel=AllocateItem();
+                                if(!panel) break;
+                                panel->kind=CourseMeshRenderKind::Enemy;
+                                panel->name="rear_boost_panel";
+                                panel->meshId="rear_boost_panel";
+                                panel->sourceActorId=enemy.actorId;
+                                panel->sortDistance=item->sortDistance;
+                                panel->modelIndex=panelIndex;
+                                panel->visible=panel->transformData && panel->materialData;
+                                if(!panel->visible) continue;
+                                *panel->materialData={};
+                                panel->materialData->color={1,1,1,alpha};
+                                panel->materialData->uvTransform=MakeIdentity4x4();
+                                panel->materialData->specularMode=11;
+                                panel->materialData->padding2[0]=1.6f;
+                                panel->useMaterialOverride=true;
+                                const auto center=RearSubsystemWorldCenter(pose,kRearPanelAnchors[index]);
+                                WriteItemTransform(*panel,models[panelIndex].rootLocal,pose.scale,
+                                    pose.rotation,center,viewProjection);
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             WriteTwinShieldDrone(*item,pose,models,viewProjection,enemy.desc.energyShield.enabled);
             continue;
         }

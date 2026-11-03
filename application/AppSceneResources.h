@@ -317,7 +317,8 @@ public:
         const EnemyEncounterReadabilityDirector* enemyReadability = nullptr,
         const TwinShieldDronePose* titlePursuer = nullptr,
         bool includeStartupRearScenery = false,
-        const RailMothership::Frame* mothership = nullptr);
+        const RailMothership::Frame* mothership = nullptr,
+        std::span<const CourseTerrainPlacement> sequenceScenery = {});
     void SyncRailVehicleRenderFrame(
         const RailVehicleRenderFrame& frame,
         const Matrix4x4& viewMatrix,
