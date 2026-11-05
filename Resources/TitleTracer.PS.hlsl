@@ -42,6 +42,43 @@ float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
 }
 
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>57.5f && input.texcoord.x<59.5f) {
+        // White-hot coherent core surrounded by a turbulent crimson sheath.
+        float u=saturate(input.texcoord.x-58);
+        float v=frac(input.texcoord.y*.5f)*4-1;
+        float phase=fmod(floor(input.texcoord.y*.5f),32)/31;
+        float noise=ImpactNoise(float2(u*43-phase*9,v*8+phase*3));
+        float core=exp(-v*v*100);
+        float sheath=exp(-v*v*5.5f)*(.55f+.45f*noise);
+        float filaments=exp(-pow(abs(v)-.26f-.06f*sin(u*57-phase*17),2)*180)*noise;
+        float ends=smoothstep(0,.012f,u)*(1-smoothstep(.94f,1,u));
+        float3 color=lerp(input.color.rgb,float3(7.0f,6.8f,6.2f),smoothstep(.06f,.70f,core));
+        return float4(color,saturate(core+sheath*.64f+filaments*.28f)*ends*input.color.a);
+    }
+    if(input.texcoord.x>=60.0f && input.texcoord.x<=61.0f) {
+        float2 p;float phase,seed;
+        ImpactCoordinates(input.texcoord,60,p,phase,seed);
+        float radius=length(p);
+        float noise=ImpactNoise(p*7+phase*3);
+        float halo=exp(-radius*radius*5)*(.65f+.35f*noise);
+        float core=exp(-radius*radius*75);
+        float rays=(exp(-p.y*p.y*420)*exp(-p.x*p.x*5)+
+            exp(-p.x*p.x*500)*exp(-p.y*p.y*8))*.24f;
+        float edge=1-smoothstep(.72f,1,radius);
+        return float4(lerp(input.color.rgb,float3(7.2f,7.0f,6.5f),core),
+            saturate(halo*.6f+core+rays)*edge*input.color.a);
+    }
+    if(input.texcoord.x>=62.0f && input.texcoord.x<=63.0f) {
+        float2 p;float phase,seed;
+        ImpactCoordinates(input.texcoord,62,p,phase,seed);
+        float r=length(p),angle=atan2(p.y,p.x);
+        float front=.15f+.68f*sqrt(phase);
+        float width=max(.018f+.055f*(1-phase),fwidth(r));
+        float ring=exp(-pow((r-front)/width,2));
+        float fragments=.35f+.65f*ImpactNoise(p*11+seed);
+        float spokes=pow(saturate(sin(angle*13+seed)),18)*exp(-pow((r-front)/.19f,2))*.35f;
+        return float4(input.color.rgb,(ring*fragments+spokes)*(1-smoothstep(.90f,1,r))*input.color.a);
+    }
     if(input.texcoord.x>63.5f)return RenderRailEnergyShield(input.texcoord,input.color);
     if(input.texcoord.x>=56.0f && input.texcoord.x<=57.0f) {
         float2 p=float2((input.texcoord.x-56.5f)*2,frac(input.texcoord.y*.5f)*4-1);

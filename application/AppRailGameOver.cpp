@@ -285,7 +285,9 @@ bool AppRunLoop::RetryRailCheckpoint() {
         railEnemyEncounterCameraCompositionBridge_.Reset();
         railShooterCameraDirector_.Reset();
         railMothershipBattle_.Reset();railMothershipReveal_.Reset();
-        railMinibossCombat_.Reset();railPostBossSequence_.Reset();
+        railMinibossCombat_.Reset();railPostBossSequence_.Reset();railVeilModel_.Reset();
+        railHeavyIntercept_.ResetAttempt();
+        railBasicTutorial_.ResetAttempt();
         railShooterLockOnSystem_.Reset(); railLockVolley_.Reset();
         railShooterSpeedDirector_.Reset();
         railShooterRideDirector_.Reset();

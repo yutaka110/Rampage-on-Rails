@@ -1,0 +1,59 @@
+newmtl coal
+Kd 0.1050 0.1200 0.1400
+Ks .18 .18 .18
+Ns 35
+
+newmtl plate
+Kd 0.2600 0.2900 0.3300
+Ks .18 .18 .18
+Ns 35
+
+newmtl steel
+Kd 0.3800 0.4200 0.4700
+Ks .18 .18 .18
+Ns 35
+
+newmtl joint
+Kd 0.0250 0.0300 0.0380
+Ks .18 .18 .18
+Ns 35
+
+newmtl panel
+Kd 0.1000 0.1250 0.1500
+Ks .18 .18 .18
+Ns 35
+
+newmtl machinery
+Kd 0.2300 0.2600 0.2900
+Ks .18 .18 .18
+Ns 35
+
+newmtl ceramic
+Kd 0.0550 0.0600 0.0700
+Ks .18 .18 .18
+Ns 35
+
+newmtl heat
+Kd 0.2800 0.2000 0.1700
+Ks .18 .18 .18
+Ns 35
+
+newmtl edge
+Kd 0.4800 0.5100 0.5500
+Ks .18 .18 .18
+Ns 35
+
+newmtl red
+Kd 0.5000 0.0120 0.0240
+Ks .18 .18 .18
+Ns 35
+
+newmtl glass
+Kd 0.0120 0.0240 0.0380
+Ks .18 .18 .18
+Ns 35
+
+newmtl trim
+Kd 0.1500 0.1700 0.1900
+Ks .18 .18 .18
+Ns 35

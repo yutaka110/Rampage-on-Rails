@@ -6,6 +6,8 @@
 
 #include "RailShooterHudDefinitionAsset.h"
 #include "RailBatteryThermalTypes.h"
+#include "RailHeavyInterceptPresentation.h"
+#include "RailBasicTutorial.h"
 #include "GameSessionSystem.h"
 #include "RailShooterHudPresentationBridge.h"
 
@@ -78,6 +80,8 @@ struct RailShooterHudRenderInput final {
     std::array<float,2> miniBossPartCharge{},miniBossCooldownRemaining{},miniBossCooldownDuration{1,1};
     std::array<RailBatteryThermalFrame,2> miniBossThermal{};
     bool miniBossHeavyFiring=false;
+    const RailLockIntroPresentation* lockIntro=nullptr;
+    const RailBasicTutorial* basicTutorial=nullptr;
     const RailGameOverFrame* gameOver=nullptr;
     bool checkpointRetryAvailable=false;
     bool unlimitedCheckpointRetries=false;

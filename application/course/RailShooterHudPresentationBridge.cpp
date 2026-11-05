@@ -2,6 +2,7 @@
 
 #include "GameSessionPresentationBridge.h"
 #include "PlayerDamagePresentationBridge.h"
+#include "RailRearPursuitRules.h"
 #include "RailVehicleCollisionFeedbackBridge.h"
 
 #include <algorithm>
@@ -223,7 +224,10 @@ void RailShooterHudPresentationBridge::Update(
         case PlayerHitKind::EnemyProjectile: cause = Utf8(u8"敵弾"); break;
         case PlayerHitKind::ObstacleContact: cause = Utf8(u8"障害物との衝突"); break;
         case PlayerHitKind::TerrainContact: cause = Utf8(u8"地形との衝突"); break;
-        case PlayerHitKind::ScriptedHazard: cause = Utf8(u8"危険地帯"); break;
+        case PlayerHitKind::ScriptedHazard:
+            cause = damage.request.sourceId == kVeilBeamSource
+                ? Utf8(u8"ヴェイル収束ビーム") : Utf8(u8"危険地帯");
+            break;
         }
         next.showDamageNotice = true;
         next.damageNoticeLethal = damage.lethal;

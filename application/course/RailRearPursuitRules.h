@@ -13,6 +13,7 @@ inline constexpr float kFangCannonHitPoints = 36.0f;
 inline constexpr uint32_t kFangCannonHitSource = UINT32_MAX - 1;
 inline constexpr float kVeilSensorHitPoints = 24.0f;
 inline constexpr uint32_t kVeilSensorHitSource = UINT32_MAX - 2;
+inline constexpr const char* kVeilBeamSource = "rear_veil_beam";
 inline Vector3 RearSubsystemWorldCenter(const TwinShieldDronePose& pose, Vector3 local) {
     const auto world=BuildTwinShieldDroneWorldMatrix(pose);
     return {local.x*world.m[0][0]+local.y*world.m[1][0]+local.z*world.m[2][0]+world.m[3][0],

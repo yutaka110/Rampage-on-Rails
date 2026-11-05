@@ -1,6 +1,7 @@
 #include "RailRearPursuitRules.h"
 #include "CourseCollisionSystem.h"
 #include "../AppLogFile.h"
+#include "RailVehicleBodyCollisionSystem.h"
 #include "RailVehicleCombatMountBridge.h"
 #include "RailWorldRaycast.h"
 #include "RailGatlingAttack.h"
@@ -121,7 +122,7 @@ void CourseCollisionSystem::Reset() {
     lastWeaponFeedbackResult_ = {};
     lastWeaponFireResult_ = {};
     playerShotTraces_.clear();
-    projectileSurfaceContacts_.clear();
+    projectileContacts_.clear();
     weaponFireSystem_.Reset();
     weaponDefinitionRegistry_.SynchronizeFireSystem(weaponFireSystem_);
     weaponFeedbackSystem_.Reset();
@@ -223,7 +224,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     projectileLockFramePrepared_=false;
     lastFrameStats_.enemyProjectilesShotDown=projectileShootDownSystem_.Frame().projectilesDestroyed;
     playerShotTraces_.clear();
-    projectileSurfaceContacts_.clear();
+    projectileContacts_.clear();
     attackInterruptSystem_.BeginFrame();
     lastShotVisible_ = false;
 
@@ -312,8 +313,11 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         }
         const PlayerProjectileContact contact =
             playerHitboxSystem_.EvaluateProjectile(bullet);
-        if(bullet.definitionId=="enemy_fang_chase" && input.railPath &&
-            contact.kind!=PlayerProjectileContactKind::Hit) {
+        std::optional<RailVehicleProjectileContact> armour;
+        if (bullet.definitionId == "enemy_fang_chase" && input.railPath) {
+            if (input.vehicleBody) {
+                armour = SweepRailVehicleProjectileContact(*input.vehicleBody, bullet);
+            }
             const float previous=bullet.spawnDistance+bullet.previousDistanceOffset;
             const float current=bullet.spawnDistance+bullet.distanceOffset;
             const auto point=[&](float distance,float lateral,float vertical) {
@@ -324,7 +328,23 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
             const auto end=point(current,bullet.lateralOffset,bullet.verticalOffset);
             const auto travel=Add(end,Scale(start,-1));
             const float length=std::sqrt(LengthSquared(travel));
-            if(length>.001f) {
+            const auto recordImpact = [&](Vector3 position, Vector3 normal, bool surface) {
+                EnemyProjectilePresentationEvent event{};
+                event.kind = EnemyProjectilePresentationEventKind::Impacted;
+                event.projectileId = bullet.projectileId;
+                event.ownerActorId = bullet.ownerActorId;
+                event.definitionId = bullet.definitionId;
+                event.trajectory = bullet.trajectory;
+                event.worldPosition = position;
+                event.motionDirection = NormalizeOr(travel, Scale(normal, -1.0f));
+                event.impactNormal = normal;
+                event.color = bullet.color;
+                event.effectId = bullet.impactEffectId;
+                event.surfaceImpact = surface;
+                event.bodyRadius = bullet.radius;
+                projectileContacts_.push_back(std::move(event));
+            };
+            if (length > .001f && (armour || contact.kind != PlayerProjectileContactKind::Hit)) {
                 RailAimState aim;
                 aim.valid=true;
                 aim.worldRayOrigin=start;
@@ -348,31 +368,29 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
                     if(distance>=input.rearBridgeStart && distance<input.rearBridgeEnd &&
                         std::abs(lane)<=4 && (!hit.hit || t*length<hit.distance)) {
                         hit.hit=true;
+                        hit.distance=t*length;
                         hit.position=point(distance,lane,deck);
                         hit.normal=input.railPath->Evaluate(distance).up;
                     }
                 }
-                if(hit.hit && runtime.ConsumeProjectile(bullet.projectileId)) {
-                    EnemyProjectilePresentationEvent event;
-                    event.kind=EnemyProjectilePresentationEventKind::Impacted;
-                    event.projectileId=bullet.projectileId;
-                    event.ownerActorId=bullet.ownerActorId;
-                    event.definitionId=bullet.definitionId;
-                    event.trajectory=bullet.trajectory;
-                    event.worldPosition=hit.position;
-                    event.motionDirection=aim.worldRayDirection;
-                    event.impactNormal=hit.normal;
-                    event.surfaceImpact=true;
-                    event.bodyRadius=bullet.radius;
-                    projectileSurfaceContacts_.push_back(std::move(event));
+                if (hit.hit && (!armour || hit.distance < armour->fraction * length) &&
+                    runtime.ConsumeProjectile(bullet.projectileId)) {
+                    recordImpact(hit.position, hit.normal, true);
                     continue;
                 }
             }
+            if (armour) {
+                if (!runtime.ConsumeProjectile(bullet.projectileId)) continue;
+                recordImpact(armour->worldPosition, armour->worldNormal, false);
+                projectileContacts_.back().vehicleImpactProbe = armour->currentVehicleProbe;
+            }
         }
-        if (contact.kind == PlayerProjectileContactKind::None) {
+        // A successful lean can still leave the hull in the projectile path.
+        const bool armourCanDamage = armour && !input.player.dodgeActive;
+        if (!armourCanDamage && contact.kind == PlayerProjectileContactKind::None) {
             continue;
         }
-        if (contact.kind == PlayerProjectileContactKind::NearMiss) {
+        if (!armourCanDamage && contact.kind == PlayerProjectileContactKind::NearMiss) {
             PlayerNearMissRequest nearMiss{};
             nearMiss.projectileId = bullet.projectileId;
             nearMiss.sourceActorId = bullet.ownerActorId;
@@ -410,7 +428,14 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         request.railDistance = hitbox.distance;
         request.lateralOffset = hitbox.lateralOffset;
         request.verticalOffset = hitbox.verticalOffset;
-        if (input.railPath != nullptr) {
+        if (armour) {
+            request.railDistance = armour->railPosition.z;
+            request.lateralOffset = armour->railPosition.x;
+            request.verticalOffset = armour->railPosition.y;
+            request.impactWorldPosition = armour->worldPosition;
+            request.impactNormalWorld = armour->worldNormal;
+            request.hasWorldImpact = true;
+        } else if (input.railPath != nullptr) {
             // Entry into the swept hurt sphere, not the closest point (which
             // can be the center or already on the far side of a fast shot).
             const Vector3 start{bullet.previousLateralOffset - hitbox.previousLateralOffset,
@@ -441,7 +466,9 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
             request.hasWorldImpact = Finite(request.impactWorldPosition);
         }
         const PlayerDamageResult result = SubmitPlayerHit(request);
-        if (result.projectileConsumed) {
+        if (armour) {
+            projectileContacts_.back().lethal = result.lethal;
+        } else if (result.projectileConsumed) {
             runtime.ConsumeProjectile(bullet.projectileId);
         }
         if (!result.accepted) {
@@ -546,7 +573,7 @@ PlayerDamageResult CourseCollisionSystem::ApplyPlayerHit(
     const PlayerHitRequest& request) {
     const PlayerDamageResult result = SubmitPlayerHit(request);
     if (result.accepted) {
-        ++lastFrameStats_.obstacleHits;
+        if(request.kind!=PlayerHitKind::ScriptedHazard)++lastFrameStats_.obstacleHits;
         lastFrameStats_.playerDamage += result.appliedDamage;
     } else {
         ++lastFrameStats_.playerHitsRejected;

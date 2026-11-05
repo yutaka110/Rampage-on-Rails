@@ -179,9 +179,9 @@ void EnemyProjectilePresentationBridge::Update(
     }
 
     std::unordered_set<uint64_t> impactedIds;
-    impactedIds.reserve(input.playerDamageResults.size());
+    impactedIds.reserve(input.projectileContacts.size() + input.playerDamageResults.size());
     if (input.gameplayActive) {
-        for(const auto& event:input.surfaceContacts) {
+        for(const auto& event:input.projectileContacts) {
             impactedIds.insert(event.projectileId);
             PushEvent(event,input.settings.maximumEventsPerFrame);
         }
@@ -191,7 +191,9 @@ void EnemyProjectilePresentationBridge::Update(
                 result.request.sourceProjectileId == 0) {
                 continue;
             }
-            impactedIds.insert(result.request.sourceProjectileId);
+            if (!impactedIds.insert(result.request.sourceProjectileId).second) {
+                continue;
+            }
             EnemyProjectilePresentationEvent event{};
             event.kind = EnemyProjectilePresentationEventKind::Impacted;
             event.projectileId = result.request.sourceProjectileId;

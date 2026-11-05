@@ -1,0 +1,174 @@
+{
+  "parts": [
+    {
+      "name": "VeilHull",
+      "file": "VeilHull.obj",
+      "source_pivot": [
+        0,
+        0,
+        0
+      ],
+      "runtime_pivot": [
+        0,
+        0,
+        0
+      ],
+      "triangles": 1580
+    },
+    {
+      "name": "VeilWingLeft",
+      "file": "VeilWingLeft.obj",
+      "source_pivot": [
+        -1.02,
+        0,
+        -0.08
+      ],
+      "runtime_pivot": [
+        -1.02,
+        0,
+        0.08
+      ],
+      "triangles": 488
+    },
+    {
+      "name": "VeilWingRight",
+      "file": "VeilWingRight.obj",
+      "source_pivot": [
+        1.02,
+        0,
+        -0.08
+      ],
+      "runtime_pivot": [
+        1.02,
+        0,
+        0.08
+      ],
+      "triangles": 488
+    },
+    {
+      "name": "VeilCannon",
+      "file": "VeilCannon.obj",
+      "source_pivot": [
+        0,
+        0.1,
+        0.72
+      ],
+      "runtime_pivot": [
+        0,
+        0.1,
+        -0.72
+      ],
+      "triangles": 1488
+    },
+    {
+      "name": "VeilArmourTop",
+      "file": "VeilArmourTop.obj",
+      "source_pivot": [
+        0,
+        0.64,
+        0.7
+      ],
+      "runtime_pivot": [
+        0,
+        0.64,
+        -0.7
+      ],
+      "triangles": 224
+    },
+    {
+      "name": "VeilArmourBottom",
+      "file": "VeilArmourBottom.obj",
+      "source_pivot": [
+        0,
+        -0.44,
+        0.7
+      ],
+      "runtime_pivot": [
+        0,
+        -0.44,
+        -0.7
+      ],
+      "triangles": 224
+    },
+    {
+      "name": "VeilSensor",
+      "file": "VeilSensor.obj",
+      "source_pivot": [
+        -1.1,
+        0.38,
+        0.68
+      ],
+      "runtime_pivot": [
+        -1.1,
+        0.38,
+        -0.68
+      ],
+      "triangles": 28
+    },
+    {
+      "name": "VeilSensorCover",
+      "file": "VeilSensorCover.obj",
+      "source_pivot": [
+        -1.1,
+        0.65,
+        0.57
+      ],
+      "runtime_pivot": [
+        -1.1,
+        0.65,
+        -0.57
+      ],
+      "triangles": 84
+    },
+    {
+      "name": "VeilCannonGlow",
+      "file": "VeilCannonGlow.obj",
+      "source_pivot": [
+        0,
+        0.1,
+        0.72
+      ],
+      "runtime_pivot": [
+        0,
+        0.1,
+        -0.72
+      ],
+      "triangles": 508
+    },
+    {
+      "name": "VeilEngineGlow",
+      "file": "VeilEngineGlow.obj",
+      "source_pivot": [
+        0,
+        0,
+        0
+      ],
+      "runtime_pivot": [
+        0,
+        0,
+        0
+      ],
+      "triangles": 56
+    }
+  ],
+  "muzzle_runtime": [
+    0,
+    0.1,
+    -1.64
+  ],
+  "sensor_runtime": [
+    -1.1,
+    0.38,
+    -0.68
+  ],
+  "source_forward": "+Z",
+  "runtime_forward": "-Z",
+  "material": "existing mode 16 PBR bands",
+  "extra_meshes": [
+    "VeilBoostPanel.obj"
+  ],
+  "design": "armoured floating heavy cannon; long swept upper blades and shorter lower stabilisers",
+  "shroud_open_radians": 0.64,
+  "shroud_retraction": 0.42,
+  "triangles": 5168
+}

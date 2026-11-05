@@ -78,6 +78,8 @@ public:
             (speed - normalSpeed) / (std::max)(1.0f, extraSpeed), 0.0f, 1.0f));
     }
 
+    bool Held() const { return held_ && enabled_; }
+
 private:
     float blend_ = 0.0f;
     float heldMaximumMultiplier_ = HeldMaximumMultiplier;

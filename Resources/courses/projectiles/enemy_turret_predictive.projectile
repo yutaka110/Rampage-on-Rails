@@ -1,2 +1,2 @@
 # Straight flight after launch; the fixed muzzle leads mandatory rail travel.
-projectile|enemy_turret_predictive|Predictive Ground Shot|direct|66|0|66|0|0|0|0|0.42|5.0|7|1.0|0.22|0.16|1.0|enemy_projectile_trail|ice_impact|shootdown,interrupt,duck|1|1.80
+projectile|enemy_turret_predictive|Predictive Ground Shot|direct|52|0|52|0|0|0|0|0.42|5.0|7|1.0|0.22|0.16|1.0|enemy_projectile_trail|ice_impact|shootdown,interrupt,duck|1|1.80

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 #include "CourseAsset.h"
@@ -56,6 +57,18 @@ struct RailVehicleBodyCollisionFrame final {
     uint64_t sourceVehicleRevision = 0;
     uint64_t revision = 0;
 };
+
+struct RailVehicleProjectileContact final {
+    float fraction = 0.0f;
+    Vector3 railPosition{}; // lateral, vertical, distance
+    Vector3 worldPosition{};
+    Vector3 worldNormal{};
+    Vector3 currentVehicleProbe{};
+};
+
+std::optional<RailVehicleProjectileContact> SweepRailVehicleProjectileContact(
+    const RailVehicleBodyCollisionInput& input,
+    const CourseBulletActor& projectile);
 
 // Sweeps the authoritative rail-local vehicle box from previousDistance to
 // distance. It queries gameplay collision proxies only; render meshes and LOD

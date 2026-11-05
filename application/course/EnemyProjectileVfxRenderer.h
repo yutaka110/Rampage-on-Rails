@@ -13,6 +13,8 @@
 #include "RailEnemyEnergyPalette.h"
 
 class EffectRuntime;
+struct Matrix4x4;
+struct ModelData;
 namespace ge3::debug { class DebugDrawSystem; }
 
 struct EnemyProjectileVfxRendererSettings final {
@@ -102,6 +104,7 @@ struct EnemyProjectileLifecycleVfxProxy final {
     bool spriteBacked=false;
     bool fangImpact=false;
     bool surfaceImpact=false;
+    bool vehicleArmourImpact = false;
     Vector3 impactNormal{};
 };
 
@@ -128,6 +131,8 @@ struct EnemyProjectileVfxRenderFrame final {
 struct EnemyProjectileVfxRenderInput final {
     const EnemyProjectilePresentationFrame* presentation = nullptr;
     EffectRuntime* effectRuntime = nullptr;
+    const Matrix4x4* vehicleWorld = nullptr;
+    const ModelData* vehicleModel = nullptr;
     Vector3 cameraWorldPosition{};
     Vector3 cameraRight{1.0f, 0.0f, 0.0f};
     Vector3 cameraUp{0.0f, 1.0f, 0.0f};
@@ -198,6 +203,11 @@ private:
         bool fangImpact=false;
         bool surfaceImpact=false;
         Vector3 impactNormal{};
+        struct ArmourAnchor {
+            Vector3 position{};
+            Vector3 normal{};
+        };
+        std::optional<ArmourAnchor> armourAnchor;
     };
 
     const EnemyProjectileVisualDefinitionAsset& ResolveVisual(

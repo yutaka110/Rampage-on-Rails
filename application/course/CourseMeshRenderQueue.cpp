@@ -1,5 +1,6 @@
 #include "RailGroundBatteryAttack.h"
 #include "RailRearPursuitRules.h"
+#include "RailVeilModel.h"
 #include "RailTurretGeometry.h"
 #include "CourseMeshRenderQueue.h"
 
@@ -318,7 +319,7 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
     const Matrix4x4& projMatrix,
     const EnemyCombatPresentationBridge* enemyPresentation,
     const EnemyEncounterReadabilityDirector* enemyReadability,
-    bool includeStartupRearScenery) {
+    bool includeStartupRearScenery,const RailVeilAttackFrame* veilAttack) {
     Reset();
     if (railPath.Length() <= 0.0f || models.empty()) {
         return;
@@ -338,7 +339,7 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         viewProjection,
         cameraPosition,
         enemyPresentation,
-        enemyReadability);
+        enemyReadability,veilAttack);
 
     // Collidable obstacles must not lose their draw slots to scenery.
     AddObstacleInstances(runtime, railPath, models, viewProjection);
@@ -542,6 +543,61 @@ void CourseMeshRenderQueue::AddObstacleInstances(
 
 }
 
+bool CourseMeshRenderQueue::WriteVeil(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
+    const RailVeilAttackFrame& attack,bool sensorExposed,bool sensorDamaged,uint8_t panelMask,
+    std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection) {
+    std::array<uint32_t,RailVeilModel::Parts.size()> indices{};
+    for(size_t i=0;i<indices.size();++i) {
+        indices[i]=ResolveModelIndex(models,RailVeilModel::Parts[i].id,nullptr);
+        if(!models[indices[i]].loaded || models[indices[i]].name!=RailVeilModel::Parts[i].id)return false;
+    }
+    const auto parent=BuildTwinShieldDroneWorldMatrix(pose);
+    const auto writeWorld=[&](CourseMeshRenderItem& item,Matrix4x4 world) {
+        item.transformData->World=world;
+        item.transformData->WVP=Multiply(world,viewProjection);
+        item.transformData->WorldInverseTranspose=Transpose(Inverse(world));
+    };
+    const uint32_t owner=hull.sourceActorId;
+    const float sort=hull.sortDistance;
+    for(size_t i=0;i<indices.size();++i) {
+        const auto frame=RailVeilModel::EvaluatePart(i,attack,sensorExposed,sensorDamaged);
+        if(!frame.visible)continue;
+        auto* item=i==0?&hull:AllocateItem();if(!item)break;
+        item->kind=CourseMeshRenderKind::Enemy;item->name=RailVeilModel::Parts[i].id;
+        item->meshId=item->name;item->sourceActorId=owner;item->sortDistance=sort;
+        item->modelIndex=indices[i];item->visible=item->transformData && item->materialData;
+        if(!item->visible)continue;
+        *item->materialData={};auto& material=*item->materialData;
+        material.color={1,1,1,pose.alpha};material.uvTransform=MakeIdentity4x4();
+        material.enableLighting=true;material.specularMode=16;material.shininess=.035f;
+        material.environmentCoefficient=1;material.padding2[0]=pose.flash*.4f;
+        if(i==8 || i==9 || (i==6 && sensorExposed)) {
+            material.enableLighting=false;material.specularMode=5;
+            if(i==8) {
+                const float charge=attack.charge;
+                material.color={.80f+charge*1.2f,.025f+charge*2.2f,.055f+charge*3.5f,pose.alpha};
+            } else material.color=i==6?Vector4{2.0f,.18f,.05f,pose.alpha}:Vector4{1.2f,.025f,.045f,pose.alpha};
+        }
+        item->useMaterialOverride=true;
+        writeWorld(*item,Multiply(models[indices[i]].rootLocal,Multiply(frame.local,parent)));
+    }
+    const auto panelIndex=ResolveModelIndex(models,"veil_boost_panel",nullptr);
+    if(models[panelIndex].loaded && models[panelIndex].name=="veil_boost_panel")
+        for(size_t i=0;i<kRearPanelAnchors.size();++i)if(panelMask&(1u<<i)) {
+            auto* panel=AllocateItem();if(!panel)break;
+            panel->kind=CourseMeshRenderKind::Enemy;panel->name="veil_boost_panel";panel->meshId=panel->name;
+            panel->sourceActorId=owner;panel->sortDistance=sort;panel->modelIndex=panelIndex;
+            panel->visible=panel->transformData && panel->materialData;if(!panel->visible)continue;
+            *panel->materialData={};panel->materialData->color={1,1,1,pose.alpha};
+            panel->materialData->uvTransform=MakeIdentity4x4();panel->materialData->specularMode=16;
+            panel->materialData->environmentCoefficient=1;panel->materialData->shininess=.02f;
+            panel->useMaterialOverride=true;
+            writeWorld(*panel,Multiply(models[panelIndex].rootLocal,
+                Multiply(MakeAffineMatrix(Vector3{1,1,1},Vector3{},kRearPanelAnchors[i]),parent)));
+        }
+    return true;
+}
+
 void CourseMeshRenderQueue::AddEnemyInstances(
     const CourseSpawnRuntime& runtime,
     const RailPath& railPath,
@@ -549,7 +605,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
     const Matrix4x4& viewProjection,
     const Vector3& cameraPosition,
     const EnemyCombatPresentationBridge* enemyPresentation,
-    const EnemyEncounterReadabilityDirector* enemyReadability) {
+    const EnemyEncounterReadabilityDirector* enemyReadability,const RailVeilAttackFrame* veilAttack) {
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
         if(RailGroundBattery::IsBattery(enemy.desc.actorAssetId) && !enemy.groundPlacementResolved) continue;
         // A frozen visual wreck owns all four parts after defeat. Do not also
@@ -683,6 +739,16 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             pose.flash = presentation ? presentation->flashStrength : 0.0f;
             pose.death = presentation && presentation->animation == EnemyCombatAnimationState::Death
                 ? presentation->animationNormalizedTime : 0.0f;
+            if(enemy.desc.actorAssetId=="rear_veil") {
+                if(!enemy.weaponMount.ready) {
+                    const float scale=kElitePursuerModelScale*presentationScale;
+                    pose.scale={scale,scale,scale};
+                }
+                const uint8_t panels=enemy.rearArmor.enabled && enemy.desc.hitPoints>0 && enemy.weaponMount.ready?
+                    enemy.rearArmor.intact:0;
+                if(WriteVeil(*item,pose,veilAttack?*veilAttack:RailVeilAttackFrame{},
+                    enemy.veilSensorExposed,enemy.veilSensorHitPoints<=0,panels,models,viewProjection))continue;
+            }
             if(IsRailElitePursuer(enemy.desc.actorAssetId)) {
                 const bool fang=enemy.desc.actorAssetId=="rear_fang";
                 const bool weakPointExposed=fang

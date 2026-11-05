@@ -167,8 +167,10 @@ struct CameraForGPU {
     Vector4 caveRailForward{};
     Vector4 caveRange{};
     std::array<Vector4,2> railBoostLights{};
+    std::array<Vector4,2> veilBeamLights{}; // muzzle/contact world position + intensity
+    Vector4 veilBeamLightColor{}; // linear RGB and finite influence radius
 };
-static_assert(sizeof(CameraForGPU) == 320);
+static_assert(sizeof(CameraForGPU) == 368);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};
@@ -318,7 +320,8 @@ public:
         const TwinShieldDronePose* titlePursuer = nullptr,
         bool includeStartupRearScenery = false,
         const RailMothership::Frame* mothership = nullptr,
-        std::span<const CourseTerrainPlacement> sequenceScenery = {});
+        std::span<const CourseTerrainPlacement> sequenceScenery = {},
+        const RailVeilAttackFrame* veilAttack = nullptr);
     void SyncRailVehicleRenderFrame(
         const RailVehicleRenderFrame& frame,
         const Matrix4x4& viewMatrix,

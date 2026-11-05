@@ -1062,7 +1062,8 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
     if (desc.firePattern == CourseEnemyFirePattern::Single) {
         desc.firePattern = PatternForRole(desc.role);
     }
-    if (desc.bulletCount <= 1) {
+    // Legacy role defaults must not turn an authored single projectile into a spread.
+    if (desc.bulletCount <= 1 && desc.projectileDefinition.id.empty()) {
         desc.bulletCount =
             desc.firePattern == CourseEnemyFirePattern::BossArc ? 5 :
             desc.firePattern == CourseEnemyFirePattern::Spread ? 3 :

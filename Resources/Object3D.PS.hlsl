@@ -208,12 +208,15 @@ static float3 CaveSubjectLighting(float3 base, float metal, float rough,
     return lit;
 }
 
-static float3 RailBoostSurfaceLighting(float3 base,float metal,float rough,float3 N,float3 V,float3 worldPosition)
+static float3 RailWorldEffectSurfaceLighting(float3 base,float metal,float rough,float3 N,float3 V,float3 worldPosition)
 {
     float3 lighting=0.0f;
     [unroll] for(int source=0;source<2;++source) {
         float3 L;
         float3 energy=RailBoostRadiance(worldPosition,source,L);
+        [branch] if(any(energy>0.0f))
+            lighting+=DroneDirect(base,metal,max(rough,0.30f),N,V,L,energy);
+        energy=VeilBeamRadiance(worldPosition,source,L);
         [branch] if(any(energy>0.0f))
             lighting+=DroneDirect(base,metal,max(rough,0.30f),N,V,L,energy);
     }
@@ -252,7 +255,7 @@ static float3 RailSurfaceLighting(float3 base, float metal, float rough,
             (0.18f * (1.0f - filteredRoughness * 0.5f)) * contactVisibility;
     }
     return lerp(outdoorLit, caveLit, caveWeight)+
-        RailBoostSurfaceLighting(base,metal,filteredRoughness,N,V,worldPosition);
+        RailWorldEffectSurfaceLighting(base,metal,filteredRoughness,N,V,worldPosition);
 }
 
 PixelShaderOutput main(VertexShaderOutput input)
@@ -332,7 +335,7 @@ PixelShaderOutput main(VertexShaderOutput input)
                 gMaterial.caveSurface.w, N, N, V, input.worldPosition, gMaterial.caveResponse.y);
             // Deep inside the cave, skip the legacy sun/point/spot rig entirely.
             [branch] if (caveSurfaceWeight >= 0.999f) {
-                output.color = float4(caveSurfaceLit+RailBoostSurfaceLighting(caveBase,gMaterial.caveResponse.x,
+                output.color = float4(caveSurfaceLit+RailWorldEffectSurfaceLighting(caveBase,gMaterial.caveResponse.x,
                     gMaterial.caveSurface.w,N,V,input.worldPosition),baseA);
                 return output;
             }
@@ -472,7 +475,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         reflected *= lerp(1.0f, 0.18f, caveAmount);
         paint += surfaceBase*sky*0.42f*(1.0f-metal) + f0*(sky*0.24f+reflected*0.16f);
         if(!wheel) paint *= max(gMaterial.pad_,0.0001f);
-        paint+=RailBoostSurfaceLighting(surfaceBase,metal,rough,N,V,input.worldPosition);
+        paint+=RailWorldEffectSurfaceLighting(surfaceBase,metal,rough,N,V,input.worldPosition);
         if (titleSubject.w > 0.5f) {
             paint *= TitleCaveExposure();
             paint += DroneDirect(surfaceBase,metal,rough,N,V,TitleImpactDirection(input.worldPosition),
@@ -666,7 +669,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         outRgb = gMaterial.color.rgb * 1.6f;
     if (gMaterial.specularMode == 15) {
         outRgb = lerp(outRgb, caveSurfaceLit, caveSurfaceWeight);
-        outRgb+=RailBoostSurfaceLighting(lerp(baseRgb,texColor.rgb*gMaterial.caveSurface.rgb,caveSurfaceWeight),
+        outRgb+=RailWorldEffectSurfaceLighting(lerp(baseRgb,texColor.rgb*gMaterial.caveSurface.rgb,caveSurfaceWeight),
             gMaterial.caveResponse.x,gMaterial.caveSurface.w,SafeNormalize(input.normal),
             SafeNormalize(cameraWorldPosition-input.worldPosition),input.worldPosition);
     }

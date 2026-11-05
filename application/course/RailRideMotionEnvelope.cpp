@@ -1,6 +1,7 @@
 #include "RailRideMotionEnvelope.h"
 #include "RailManualBoost.h"
 #include "RailKillBoost.h"
+#include "RailManualBrake.h"
 
 #include <algorithm>
 #include <cmath>
@@ -48,6 +49,8 @@ const RailRideMotionEnvelopeFrame& RailRideMotionEnvelope::Evaluate(
     const RailVehicleDefinition& definition = *input.vehicleDefinition;
     const RailRideDirectorFrame& ride = *input.ride;
     const float boost = RailManualBoost::ClampMultiplier(input.manualBoostMultiplier);
+    const float brake = std::isfinite(input.manualBrakeBlend)
+        ? (std::clamp)(input.manualBrakeBlend,0.0f,1.0f) : 0.0f;
     // The normal cap is unchanged; only an authorized boost opens headroom.
     const float speedCeiling = definition.maximumSpeed * boost;
     const float normalScale = std::isfinite(input.normalSpeedScale)
@@ -58,12 +61,15 @@ const RailRideMotionEnvelopeFrame& RailRideMotionEnvelope::Evaluate(
     next.sourceRideRevision = ride.revision;
     next.sourceRequestedSpeed = (std::clamp)(
         RailManualBoost::RequestedSpeed(next.normalRequestedSpeed, boost), 0.0f, speedCeiling);
+    if(brake>0) next.sourceRequestedSpeed=Lerp(
+        (std::min)(next.sourceRequestedSpeed,next.normalRequestedSpeed),
+        next.normalRequestedSpeed*RailManualBrake::MinimumMultiplier,brake);
     next.requestedSpeed = next.sourceRequestedSpeed;
     next.cornerSafeSpeed = speedCeiling;
     next.accelerationLimit = definition.acceleration;
     next.brakingLimit = definition.serviceBrakeDeceleration;
     next.jerkLimit = 10000.0f;
-    next.active = ride.active || boost > 1.00001f || std::abs(normalScale-1.0f) > 0.00001f;
+    next.active = ride.active || brake>0 || boost > 1.00001f || std::abs(normalScale-1.0f) > 0.00001f;
     if (!next.active) {
         frame_ = next;
         return frame_;
@@ -108,6 +114,12 @@ const RailRideMotionEnvelopeFrame& RailRideMotionEnvelope::Evaluate(
             next.cornerLimited =
                 next.requestedSpeed + 0.001f < next.sourceRequestedSpeed;
         }
+    }
+    if(brake>0) {
+        const float reduction=next.normalRequestedSpeed*(1.0f-RailManualBrake::MinimumMultiplier);
+        next.brakingLimit=(std::max)(next.brakingLimit,1.5f*reduction/RailManualBrake::AttackSeconds);
+        next.jerkLimit=(std::max)(next.jerkLimit,6.0f*reduction/
+            (RailManualBrake::AttackSeconds*RailManualBrake::AttackSeconds));
     }
     frame_ = next;
     return frame_;

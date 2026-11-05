@@ -5,6 +5,7 @@
 
 #include "CourseAsset.h"
 #include "RailManualBoost.h"
+#include "RailManualBrake.h"
 #include "RailKillBoost.h"
 #include "../terrain/RailPath.h"
 
@@ -74,6 +75,8 @@ public:
     void Reset();
     void SetManualBoostInput(bool held, bool enabled) { manualBoost_.SetInput(held, enabled); }
     const RailManualBoost& ManualBoost() const { return manualBoost_; }
+    void SetManualBrakeInput(bool held, bool enabled) { manualBrake_.SetInput(held, enabled); }
+    const RailManualBrake& ManualBrake() const { return manualBrake_; }
     void SetManualBoostMaximum(float value) { manualBoost_.SetHeldMaximumMultiplier(value); }
     RailKillBoost& KillBoost() { return killBoost_; }
     const RailKillBoost& KillBoost() const { return killBoost_; }
@@ -102,7 +105,8 @@ public:
         const float cruise=settings_.enabled && settings_.normalSpeedScale>=1.30f &&
             std::isfinite(speed) && std::isfinite(normalSpeed) && normalSpeed>=1?
             .40f*(std::clamp)(speed/normalSpeed,0.0f,1.0f):0;
-        return (std::max)({cruise,BoostPresentationStrength(speed,normalSpeed),ManualPresentationStrength(speed,normalSpeed)});
+        return (1.0f-manualBrake_.Blend())*
+            (std::max)({cruise,BoostPresentationStrength(speed,normalSpeed),ManualPresentationStrength(speed,normalSpeed)});
     }
     bool BoostStartedThisFrame()const{return manualBoost_.StartedThisFrame() || killBoost_.StartedThisFrame();}
     void NotifyCourseEvents(const std::vector<CourseEventMarker>& events);
@@ -119,6 +123,7 @@ private:
 
     RailSpeedDirectorSettings settings_{};
     RailManualBoost manualBoost_{};
+    RailManualBrake manualBrake_{};
     RailKillBoost killBoost_{};
     RailSpeedDirectorFrame lastFrame_{};
     float eventSlowTimer_ = 0.0f;

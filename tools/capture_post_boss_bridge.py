@@ -1,6 +1,6 @@
 """Native prototype review: fight the real miniboss, travel, then fight its pursuers.
 
-The host audit only drives ordinary reticle and fire inputs. The isolated
+The host audit drives ordinary reticle, fire and mounted evasion inputs. The isolated
 fixture authors each boss weapon at 60 HP so this review tests the transition
 without requiring an automated counter-attack strategy. Production boss HP
 and all rear-pursuit data remain unchanged. No runtime damage/defeat is injected.
@@ -21,7 +21,7 @@ def fixture_course(course):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--stages',type=int,nargs='+',choices=range(20),default=[0,1,2,3])
+    parser.add_argument('--stages',type=int,nargs='+',choices=range(24),default=[0,1,2,3])
     args=parser.parse_args()
     out=ROOT/'generated/post-boss-review';work=out/'native';work.mkdir(parents=True,exist_ok=True)
     shutil.copytree(ROOT/'Resources',work/'Resources',dirs_exist_ok=True)
@@ -43,7 +43,8 @@ def main():
     by_stage={item['stage']:item for item in existing if item.get('build_sha256')==build}
     labels=['valley-vista','bridge-entry','rear-combat','pursuit-clear','first-pursuit-shadow','second-pursuit-shadow',
             'first-pursuer-reveal','pair-reveal','fang-close-pass','elite-cycle','pursuit-handoff',
-            'fang-followup','veil-interrupt','fang-cannon-break','veil-sensor-break','fang-panel-evade','fang-lightning-release','fang-lightning-flight','fang-lightning-hit','fang-lightning-surface']
+            'fang-followup','veil-interrupt','fang-cannon-break','veil-sensor-break','fang-panel-evade','fang-lightning-release','fang-lightning-flight','fang-lightning-hit','fang-lightning-surface',
+            'veil-beam-tracking','veil-beam-locked','veil-beam-impact','veil-beam-lean']
     for stage in args.stages:
         label=labels[stage]
         env=os.environ.copy();env.update(GE3_SUNFALL_PREVIEW_DISTANCE='3290',GE3_SUNFALL_PREVIEW_FREEZE='0',
@@ -63,17 +64,17 @@ def main():
         if stage==6:assert last['phase']=='5' and last['alive']=='1',last
         if stage==7:assert last['phase']=='6' and last['alive']=='2' and float(last['camera_weight'])==1,last
         if stage==9:
-            assert last['fang_rounds']=='3' and last['veil_rounds']=='1' and last['cycles']=='1',last
-            assert next(i for i,r in enumerate(rows) if int(r['fang_rounds'])==3) < next(i for i,r in enumerate(rows) if int(r['veil_rounds'])==1)
+            assert last['fang_rounds']=='3' and last['veil_beams']=='1' and last['cycles']=='1',last
+            assert next(i for i,r in enumerate(rows) if int(r['fang_rounds'])==3) < next(i for i,r in enumerate(rows) if int(r['veil_beams'])==1)
         if stage==10:
-            assert last['alive']=='2' and last['fang_rounds']=='3' and last['veil_rounds']=='0',last
+            assert last['alive']=='2' and last['fang_rounds']=='3' and last['veil_beams']=='0',last
             with (out/f'{label}.enemies.csv').open() as enemies:
                 rows_by_asset={row['asset']:row for row in csv.DictReader(line for line in enemies if not line.startswith('#'))}
             assert all(rows_by_asset[asset]['targetable']=='1' for asset in ('rear_fang','rear_veil')),rows_by_asset
         if stage==11:
-            assert float(last['fang_bonus_damage'])==18 and last['veil_rounds']=='1',last
+            assert float(last['fang_bonus_damage'])==18 and last['veil_beams']=='1',last
         if stage==12:
-            assert last['veil_rounds']=='0' and last['rear_lock']=='1' and last['alive']=='2',last
+            assert last['veil_beams']=='0' and last['rear_lock']=='1' and last['alive']=='2',last
             assert any(row['veil_interrupted']=='1' for row in rows),last
         notice=next((r for r in rows if r['phase']=='4'),None)
         if stage==13:
@@ -81,10 +82,11 @@ def main():
             assert any(row['fang_rounds']=='3' and float(row['fang_cannon_hp'])==36 for row in rows),last
             assert any(row['fang_rounds']=='3' and float(row['fang_cannon_hp'])==0 for row in rows),last
         if stage==14:
-            assert int(last['rear_primary'])==2 and int(last['veil_rounds'])==1,last
+            assert int(last['rear_primary'])==2 and int(last['veil_beams'])==1,last
             assert float(last['veil_hull_hp'])==68 and float(last['veil_sensor_hp'])==0,last
             assert abs(float(last['veil_descent_lane'])-float(last['veil_shot_lane']))<.01,last
-            assert any(row['veil_sensor_hp']=='0' and row['veil_hull_hp']=='68' and row['veil_rounds']=='0' for row in rows),last
+            assert any(row['veil_sensor_hp']=='0' and row['veil_hull_hp']=='68' and row['veil_beams']=='0' for row in rows),last
+            assert any(row['veil_beam_early']=='1' and float(row['veil_beam_remaining'])>.70 for row in rows),last
         if stage==15:
             first_break=next(i for i,row in enumerate(rows) if row['fang_panels']=='5')
             before=rows[first_break-1]
@@ -92,7 +94,18 @@ def main():
             assert float(before['fang_gap'])<1000 and int(before['fang_rounds'])>=1,before
             assert any(float(row['player_speed'])>58 and float(row['panel_boost'])>0 for row in retreat),last
             assert any(float(before['fang_gap'])+2<float(row['fang_gap'])<1000 for row in retreat),last
-            assert all(row['player_hp']==before['player_hp'] for row in retreat if row['veil_rounds']=='0'),last
+            assert all(row['player_hp']==before['player_hp'] for row in retreat if row['veil_beams']=='0'),last
+        if 20<=stage<=23:
+            assert last['veil_projectiles']=='0',last
+            assert last['veil_beam_phase']==str(min(3,stage-19)),last
+        if stage in (22,23):
+            fire_index=next(i for i,row in enumerate(rows) if row['veil_beams']=='1')
+            fired=rows[fire_index]
+            assert fired['veil_beam_contact']==str(int(stage==22)),fired
+            assert (abs(float(fired['occupant_lateral']))>1.0)==(stage==23),fired
+            expected_hp=float(rows[fire_index-1]['player_hp'])-(6 if stage==22 else 0)
+            assert float(last['player_hp'])==expected_hp,last
+            assert any(row['veil_beam_phase']=='2' for row in rows),last
         if stage>=2:assert notice and float(notice['age'])>=12 and float(notice['distance'])-float(notice['anchor'])>=489,notice
         item=dict(stage=label,last=last,notice=notice,build_sha256=build,fixture_boss_hp=[60,60])
         by_stage[label]=item;print(json.dumps(item),flush=True)

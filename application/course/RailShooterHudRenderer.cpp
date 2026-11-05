@@ -265,7 +265,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
                 u8"右クリック長押し : ロックオン",
                 u8"右クリックを離す : 一斉発射",
                 u8"WASD : 移動    SHIFT / SPACE : 回避",
-                u8"E 長押し : 加速    P : 一時停止"};
+                u8"E : 加速    Q : ブレーキ    P : 一時停止"};
             for(int i=0;i<5;++i) text(Utf8(lines[i]),x,top+(546+i*46)*s,0.80f*s,white);
             text(Utf8(u8"ENTER / ESC / CLICK : 戻る"),x,top+809*s,0.77f*s,accent);
         }
@@ -286,6 +286,68 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         return;
     }
 
+    if(input.basicTutorial && input.basicTutorial->Visible() && !input.bossVisible && !input.startCueActive) {
+        const auto& guide=*input.basicTutorial;
+        using Lesson=RailBasicTutorial::Lesson;using LockStep=RailBasicTutorial::LockStep;
+        const auto lesson=guide.Current();const bool success=guide.Success();
+        const float w=760*scale,x=(width-w)*.5f,y=height*.19f;
+        const float fade=(std::min)(1.0f,guide.Age()*7+.25f)*opacity;
+        const Vector4 accent=WithOpacity(success?Vector4{.48f,1,.72f,1}:Vector4{.45f,.90f,1,1},fade);
+        const Vector4 white{.94f,.98f,1,fade},muted{.62f,.73f,.80f,fade};
+        rect(x,y,w,120*scale,{.008f,.018f,.028f,.92f*fade});
+        rect(x,y,3*scale,120*scale,accent);
+        const bool mouse=lesson==Lesson::Primary || lesson==Lesson::Lock;
+        const float iconX=x+24*scale,iconY=y+23*scale;
+        if(mouse) {
+            // A mouse silhouette with the actual left/right button highlighted.
+            rect(iconX,iconY,58*scale,73*scale,{.15f,.22f,.28f,fade});
+            rect(iconX+3*scale,iconY+3*scale,52*scale,67*scale,{.035f,.065f,.085f,fade});
+            rect(iconX+3*scale+(lesson==Lesson::Lock?27:0)*scale,iconY+3*scale,25*scale,30*scale,accent);
+            rect(iconX+27*scale,iconY+3*scale,3*scale,32*scale,{.008f,.018f,.028f,fade});
+        } else {
+            rect(iconX,iconY+6*scale,62*scale,62*scale,accent);
+            rect(iconX+2*scale,iconY+8*scale,58*scale,58*scale,{.025f,.055f,.075f,fade});
+            text(lesson==Lesson::Boost?"E":"Q",iconX+31*scale,iconY+53*scale,1.55f*scale,accent,RailShooterHudTextAlignment::Center);
+        }
+        const auto title=lesson==Lesson::Primary?u8"01 / 04   通常攻撃":lesson==Lesson::Lock?u8"02 / 04   ロックオン":
+            lesson==Lesson::Boost?u8"03 / 04   アクセル":u8"04 / 04   ブレーキ";
+        text(Utf8(title),x+111*scale,y+27*scale,.64f*scale,accent);
+        std::u8string_view instruction,detail;
+        if(lesson==Lesson::Primary) {
+            instruction=success?u8"通常攻撃を確認":u8"左クリック長押しで連射";
+            detail=u8"マウスで照準を合わせる";
+        } else if(lesson==Lesson::Lock) {
+            instruction=success?u8"ロックオン発射！":guide.LockPhase()==LockStep::Release?u8"右クリックを離して一斉発射":
+                guide.LockPhase()==LockStep::Sweep?u8"押したまま敵をなぞる":u8"右クリック長押しでロックオン";
+            detail=success?u8"複数の敵をまとめて攻撃できる":u8"押したまま敵をなぞると複数ロック";
+        } else if(lesson==Lesson::Boost) {
+            instruction=success?u8"加速を確認":u8"E 長押しで加速";
+            detail=u8"離すと通常速度に戻る";
+        } else {
+            instruction=success?u8"減速を確認":u8"Q 長押しでブレーキ";
+            detail=u8"離すと通常速度に戻る";
+        }
+        text(Utf8(instruction),x+111*scale,y+62*scale,1.10f*scale,white);
+        text(Utf8(detail),x+111*scale,y+90*scale,.64f*scale,muted);
+        if(lesson==Lesson::Lock && !success)
+            text("LOCK "+std::to_string(guide.Locks()),x+w-92*scale,y+27*scale,.62f*scale,accent);
+        const float pulse=.42f+.16f*std::sin(guide.Age()*4);
+        rect(x+111*scale,y+106*scale,w-135*scale,2*scale,{.13f,.21f,.27f,fade});
+        rect(x+111*scale,y+106*scale,(w-135*scale)*(std::max)(success?1.0f:.015f,guide.Progress()),3*scale,
+            WithOpacity(accent,success?1.0f:pulse+.35f));
+    }
+    else if(input.lockIntro && input.lockIntro->Visible() && !input.bossVisible && !input.startCueActive) {
+        const auto& intro=*input.lockIntro;
+        const float w=820*scale,x=(width-w)*.5f,y=height*.19f;
+        rect(x,y,w,86*scale,{.009f,.021f,.032f,.88f});
+        rect(x,y,w,2*scale,{.42f,.92f,1,1});
+        text(Utf8(intro.Completed()?u8"ロックオン発射！":u8"右クリック長押し → 敵をなぞる → 離して発射"),
+            width*.5f,y+35*scale,.94f*scale,{.85f,.97f,1,1},RailShooterHudTextAlignment::Center);
+        text(intro.Completed()?Utf8(u8"複数の敵をまとめて攻撃できる"):
+            Utf8(u8"複数ロックオン  ")+std::to_string(intro.Locks()),width*.5f,y+65*scale,.72f*scale,
+            {.42f,.92f,1,1},RailShooterHudTextAlignment::Center);
+    }
+
     if(input.bossVisible && input.miniBossParts && !input.startCueActive) {
         const float w=540*scale,x=(width-w)*0.5f,y=height-158*scale;
         const auto center=RailShooterHudTextAlignment::Center;
@@ -294,7 +356,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
             0.70f*scale,{1,0.88f,0.62f,opacity},center);
         const bool counter=input.miniBossCounterRemaining>0 && input.miniBossCounterDuration>0;
         const bool defending=!counter && (input.miniBossGatlingFiring || input.miniBossHeavyFiring);
-        if(counter || defending) {
+        if((counter && input.miniBossCounterPart!=1) || (defending && input.miniBossGatlingFiring)) {
             const float cardY=y-87*scale,cardX=width*.5f-270*scale;
             const Vector4 accent=counter?Vector4{1,.84f,.32f,opacity}:Vector4{.30f,.92f,1,opacity};
             rect(cardX,cardY,540*scale,76*scale,{.012f,.025f,.032f,.90f*opacity});
@@ -563,8 +625,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     if(input.shortRun && input.resultSession && !input.startCueActive &&
         input.resultSession->phase==GameSessionPhase::Playing) {
         const float distance=input.resultSession->courseDistance;
-        const int stage=distance<380?0:distance<680?1:distance<950?2:distance<1120?3:4;
-        const char* stages[]={"FIRST CONTACT / LMB","LOCK BURST / HOLD RMB","INTERCEPT / SHOOT ORBS","BOOST RUN / HOLD E","FINAL PURSUIT"};
+        const int stage=distance<380?0:distance<680?1:distance<1080?2:distance<1360?3:4;
+        const char* stages[]={"FIRST CONTACT","LOCK BURST","SPEED CONTROL","INTERCEPT","FINAL PURSUIT"};
         const int remaining=int((std::max)(0.0f,input.attemptTimeLimitSeconds-input.resultSession->attemptElapsedSeconds));
         const std::string stageText=input.courseVisualCount>0 ?
             std::to_string(input.courseVisualIndex+1)+" / "+std::to_string(input.courseVisualCount)+
@@ -578,8 +640,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         text("STONE GATE CLEAR",width*.5f,height*.20f,1.15f*responsive,
             {1.0f,.83f,.48f,(std::min)(1.0f,input.gateClearPulse*4)},center);
     // Keep compact reminders at the edge, not a permanent panel across combat.
-    if(width>=960) {
-        text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   E : 加速   P : 一時停止"),
+    if(width>=960 && !(input.basicTutorial && input.basicTutorial->Visible())) {
+        text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   E : 加速   Q : ブレーキ   P : 一時停止"),
             width*0.5f,height-10*responsive,0.50f*responsive,muted,center);
     }
     for(size_t index=0;index<next.commands.size();++index) {

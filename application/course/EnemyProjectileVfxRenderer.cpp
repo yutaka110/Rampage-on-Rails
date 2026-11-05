@@ -2,9 +2,11 @@
 
 #include "../EffectRuntime.h"
 #include "../diagnostics/DebugDrawSystem.h"
+#include "utils/math/MathUtils.h"
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <system_error>
 #include <unordered_set>
 
@@ -25,6 +27,57 @@ Vector3 NormalizeOr(Vector3 value, Vector3 fallback) noexcept {
     const float length = Length(value);
     return length > 0.00001f ? Scale(value, 1.0f / length) : fallback;
 }
+float Dot(Vector3 a, Vector3 b) noexcept {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+Vector3 Cross(Vector3 a, Vector3 b) noexcept {
+    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x};
+}
+Vector3 TransformDirection(Vector3 value, const Matrix4x4& matrix) noexcept {
+    return {
+        value.x * matrix.m[0][0] + value.y * matrix.m[1][0] + value.z * matrix.m[2][0],
+        value.x * matrix.m[0][1] + value.y * matrix.m[1][1] + value.z * matrix.m[2][1],
+        value.x * matrix.m[0][2] + value.y * matrix.m[1][2] + value.z * matrix.m[2][2]};
+}
+Vector3 TransformPosition(Vector3 value, const Matrix4x4& matrix) noexcept {
+    return Add(TransformDirection(value, matrix),
+        {matrix.m[3][0], matrix.m[3][1], matrix.m[3][2]});
+}
+
+bool FindVehicleSurface(const ModelData& model, Vector3 probe, Vector3& point, Vector3& normal) {
+    float nearest = std::numeric_limits<float>::infinity();
+    for (size_t i = 0; i + 2 < model.indices.size(); i += 3) {
+        Vector3 p[3];
+        for (size_t j = 0; j < 3; ++j) {
+            const auto& v = model.vertices[model.indices[i + j]].position;
+            p[j] = {v.x, v.y, v.z};
+        }
+        const auto faceNormal = NormalizeOr(Cross(Subtract(p[1], p[0]), Subtract(p[2], p[0])), {});
+        if (Dot(faceNormal, faceNormal) == 0.0f) continue;
+        const auto projected = Subtract(probe, Scale(faceNormal, Dot(Subtract(probe, p[0]), faceNormal)));
+        const auto consider = [&](Vector3 candidate) {
+            const auto delta = Subtract(candidate, probe);
+            const float distanceSquared = Dot(delta, delta);
+            if (distanceSquared >= nearest) return;
+            nearest = distanceSquared;
+            point = candidate;
+            normal = model.vertices[model.indices[i]].normal;
+        };
+        bool inside = true;
+        for (size_t j = 0; j < 3; ++j) {
+            const auto edge = Subtract(p[(j + 1) % 3], p[j]);
+            if (Dot(Cross(edge, Subtract(projected, p[j])), faceNormal) < 0.0f) {
+                inside = false;
+            }
+            const float t = (std::clamp)(Dot(Subtract(probe, p[j]), edge) / Dot(edge, edge), 0.0f, 1.0f);
+            consider(Add(p[j], Scale(edge, t)));
+        }
+        if (inside) consider(projected);
+    }
+    return std::isfinite(nearest);
+}
+
 Vector4 WithAlphaScale(Vector4 color, float scale) noexcept {
     color.w *= (std::clamp)(scale, 0.0f, 1.0f);
     return color;
@@ -644,6 +697,14 @@ void EnemyProjectileVfxRenderer::Update(
 
     const size_t lifecycleBudget = (std::max)(
         static_cast<size_t>(1), input.settings.maximumLifecycleBursts);
+    std::optional<Matrix4x4> worldToVehicle;
+    const auto vehicleInverse = [&]() -> const Matrix4x4& {
+        if (!worldToVehicle) {
+            auto world = *input.vehicleWorld;
+            worldToVehicle = Inverse(world);
+        }
+        return *worldToVehicle;
+    };
     for (const EnemyProjectilePresentationEvent& event :
          input.presentation->events) {
         if (event.kind == EnemyProjectilePresentationEventKind::Expired) {
@@ -666,6 +727,13 @@ void EnemyProjectileVfxRenderer::Update(
             event.definitionId=="enemy_fang_chase";
         burst.surfaceImpact=event.surfaceImpact;
         burst.impactNormal=event.impactNormal;
+        if (burst.fangImpact && event.vehicleImpactProbe && input.vehicleWorld && input.vehicleModel) {
+            const auto probe = TransformPosition(*event.vehicleImpactProbe, vehicleInverse());
+            LifecycleBurst::ArmourAnchor anchor;
+            if (FindVehicleSurface(*input.vehicleModel, probe, anchor.position, anchor.normal)) {
+                burst.armourAnchor = anchor;
+            }
+        }
         const auto source=std::find_if(frame_.proxies.begin(),frame_.proxies.end(),
             [&](const auto& p){return p.projectileId==event.projectileId;});
         if(source!=frame_.proxies.end() && source->style==EnemyProjectileVisualStyle::Orb)
@@ -695,7 +763,17 @@ void EnemyProjectileVfxRenderer::Update(
     }
 
     frame_.lifecycleBursts.reserve(lifecycleBursts_.size());
-    for (const LifecycleBurst& burst : lifecycleBursts_) {
+    for (LifecycleBurst& burst : lifecycleBursts_) {
+        // The initial flash rides the armour through suspension and recoil.
+        // The fading arcs and sparks are left behind in world space.
+        constexpr float flashAttachmentSeconds = 0.11f;
+        if (burst.armourAnchor && input.vehicleWorld &&
+            burst.ageSeconds - deltaTime < flashAttachmentSeconds) {
+            burst.worldPosition = TransformPosition(burst.armourAnchor->position, *input.vehicleWorld);
+            burst.impactNormal = NormalizeOr(
+                TransformDirection(burst.armourAnchor->normal, Transpose(vehicleInverse())),
+                burst.impactNormal);
+        }
         const float cameraDistance = Length(Subtract(
             burst.worldPosition, input.cameraWorldPosition));
         if (!std::isfinite(cameraDistance) ||
@@ -723,6 +801,7 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.batteryKind=burst.batteryKind;
         proxy.fangImpact=burst.fangImpact;
         proxy.surfaceImpact=burst.surfaceImpact;
+        proxy.vehicleArmourImpact = burst.armourAnchor.has_value();
         proxy.impactNormal=burst.impactNormal;
         proxy.spriteBacked=input.settings.orbSpritesEnabled &&
             (burst.fangImpact || burst.batteryKind!=RailEnemyEnergy::BatteryKind::None);

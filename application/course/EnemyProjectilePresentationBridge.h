@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -80,6 +82,7 @@ struct EnemyProjectilePresentationEvent final {
     float bodyRadius=0;
     Vector3 impactNormal{};
     bool surfaceImpact=false;
+    std::optional<Vector3> vehicleImpactProbe;
 };
 
 struct EnemyProjectilePresentationFrame final {
@@ -96,7 +99,7 @@ struct EnemyProjectilePresentationInput final {
     const CourseSpawnRuntime* runtime = nullptr;
     const RailPath* railPath = nullptr;
     std::span<const PlayerDamageResult> playerDamageResults{};
-    std::span<const EnemyProjectilePresentationEvent> surfaceContacts{};
+    std::span<const EnemyProjectilePresentationEvent> projectileContacts{};
     std::span<const EnemyProjectileShootDownResult> shootDownResults{};
     float playerDistance = 0.0f;
     float playerLateralOffset = 0.0f;

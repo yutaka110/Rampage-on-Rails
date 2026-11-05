@@ -20,6 +20,7 @@
 #include "RailPulseShotPresentation.h"
 
 struct RailVehicleCombatMountFrame;
+struct RailVehicleBodyCollisionInput;
 struct TerrainGenerationSettings;
 
 struct CourseCollisionPlayerState {
@@ -70,6 +71,7 @@ struct CourseCollisionFrameInput {
     uint32_t bonusTargetActorId = 0;
     float bonusDamageMultiplier = 1.0f;
     const RailVehicleCombatMountFrame* combatMount = nullptr;
+    const RailVehicleBodyCollisionInput* vehicleBody = nullptr;
     // Use a visible gatling round's depth for primary convergence, preserving
     // the player's camera ray and the actual mounted muzzle.
     bool convergePrimaryOnGatling = false;
@@ -117,7 +119,7 @@ public:
 
     const CourseCollisionPlayerState& Player() const { return player_; }
     const CourseCollisionWeaponState& Weapon() const { return weapon_; }
-    std::span<const EnemyProjectilePresentationEvent> ProjectileSurfaceContacts() const { return projectileSurfaceContacts_; }
+    std::span<const EnemyProjectilePresentationEvent> ProjectileContacts() const { return projectileContacts_; }
     const CourseCollisionFrameStats& LastFrameStats() const { return lastFrameStats_; }
     const PlayerDamageSystem& PlayerDamage() const noexcept {
         return playerDamageSystem_;
@@ -189,7 +191,7 @@ public:
     PlayerDamageResult ApplyPlayerHit(const PlayerHitRequest& request);
 
 private:
-    std::vector<EnemyProjectilePresentationEvent> projectileSurfaceContacts_;
+    std::vector<EnemyProjectilePresentationEvent> projectileContacts_;
     void FirePlayerShot(
         CourseSpawnRuntime& runtime,
         const CourseCollisionFrameInput& input,

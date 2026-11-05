@@ -1,5 +1,6 @@
 #include "course/RailVehicleBreakawayGeometry.h"
 #include "AppSceneResources.h"
+#include "course/RailVeilModel.h"
 
 #include <cassert>
 #include <algorithm>
@@ -2804,6 +2805,7 @@ bool AppSceneResources::Initialize(
         {"iceShard", "Resources/iceShard.png"},
         {"courseOrganicRock", "Resources/course_meshes/materials/organic_rock_albedo.bmp"},
         {"elitePursuerPalette", "Resources/enemies/ElitePursuers/ElitePursuers.bmp"},
+        {"veilInterceptorPalette", "Resources/enemies/VeilInterceptor/VeilPalette.bmp"},
         {"courseBlockoutSteel", "Resources/course_meshes/CourseBlockoutBridge/CourseBlockoutBridge.bmp"},
         {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
@@ -3231,7 +3233,10 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("rear_fang", "Resources/enemies/ElitePursuers", "Fang.obj", "elitePursuerPalette");
     registerCourseMesh("rear_fang_exposed", "Resources/enemies/ElitePursuers", "FangExposed.obj", "elitePursuerPalette");
     registerCourseMesh("rear_fang_damaged", "Resources/enemies/ElitePursuers", "FangDamaged.obj", "elitePursuerPalette");
-    registerCourseMesh("rear_veil", "Resources/enemies/ElitePursuers", "Veil.obj", "elitePursuerPalette");
+    registerCourseMesh("rear_veil", RailVeilModel::Directory, "VeilAssembled.obj", "veilInterceptorPalette");
+    for(const auto& part:RailVeilModel::Parts)
+        registerCourseMesh(part.id,RailVeilModel::Directory,part.file,"veilInterceptorPalette");
+    registerCourseMesh("veil_boost_panel",RailVeilModel::Directory,"VeilBoostPanel.obj","veilInterceptorPalette");
     registerCourseMesh("rear_veil_exposed", "Resources/enemies/ElitePursuers", "VeilExposed.obj", "elitePursuerPalette");
     registerCourseMesh("rear_veil_damaged", "Resources/enemies/ElitePursuers", "VeilDamaged.obj", "elitePursuerPalette");
     registerCourseMesh("rail_speed_marker", "Resources/course_meshes/RailSpeedMarker", "RailSpeedMarker.obj", "courseBlockoutSteel");
@@ -3874,6 +3879,8 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     mappedCamera->titleLightSweep = {};
     mappedCamera->titleRailImpact = {};
     mappedCamera->railBoostLights = {};
+    mappedCamera->veilBeamLights = {};
+    mappedCamera->veilBeamLightColor = {};
 }
 
 SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {
@@ -3932,7 +3939,8 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     const EnemyEncounterReadabilityDirector* enemyReadability,
     const TwinShieldDronePose* titlePursuer,
     bool includeStartupRearScenery,
-    const RailMothership::Frame* mothership,std::span<const CourseTerrainPlacement> sequenceScenery) {
+    const RailMothership::Frame* mothership,std::span<const CourseTerrainPlacement> sequenceScenery,
+    const RailVeilAttackFrame* veilAttack) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3956,7 +3964,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         projMatrix,
         enemyPresentation,
         enemyReadability,
-        includeStartupRearScenery);
+        includeStartupRearScenery,veilAttack);
     courseMeshRenderQueue.AppendTerrain(sequenceScenery,currentDistance,railPath,bindings,viewMatrix,projMatrix);
     if (mothership) courseMeshRenderQueue.AppendMothership(*mothership,bindings,viewMatrix,projMatrix);
     if (titlePursuer) courseMeshRenderQueue.AppendTwinShieldDrone(*titlePursuer,bindings,viewMatrix,projMatrix);

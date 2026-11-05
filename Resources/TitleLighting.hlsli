@@ -18,6 +18,22 @@ cbuffer Camera : register(b2)
     float4 caveRailForward;
     float4 caveRange; // outdoor start, transition length, outdoor strength, enabled
     float4 railBoostLights[2]; // world exhaust source + transient intensity
+    float4 veilBeamLights[2]; // muzzle/contact world position + intensity
+    float4 veilBeamLightColor; // linear RGB and finite influence radius
+}
+
+static float3 VeilBeamRadiance(float3 worldPosition,int source,out float3 direction)
+{
+    float4 light=veilBeamLights[source];
+    direction=float3(0,1,0);
+    [branch] if(light.w<=0.0f) return 0.0f;
+    float3 delta=light.xyz-worldPosition;
+    float distanceSquared=dot(delta,delta);
+    float radiusSquared=max(veilBeamLightColor.w*veilBeamLightColor.w,0.01f);
+    [branch] if(distanceSquared>=radiusSquared) return 0.0f;
+    direction=delta*rsqrt(max(distanceSquared,0.01f));
+    float cutoff=saturate(1.0f-distanceSquared/radiusSquared);
+    return veilBeamLightColor.rgb*light.w*cutoff*cutoff/(1.0f+distanceSquared*0.035f);
 }
 
 // Finite six-unit support avoids washing the cave in blue. Inactive sources

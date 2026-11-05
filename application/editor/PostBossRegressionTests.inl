@@ -28,6 +28,70 @@ void TestPostBossTiming(RegressionRunner& runner) {
     }
 }
 
+void TestVeilModularModel(RegressionRunner& runner) {
+    size_t triangles=0;
+    for(const auto& part:RailVeilModel::Parts) {
+        const auto model=LoadObjFile_Assimp(RailVeilModel::Directory,part.file);
+        runner.Expect(!model.vertices.empty() && model.indices.size()>0 && ValidateModelGeometryOrientation(model),
+            std::string("Veil rigid part imports with consistent normals: ")+part.id);
+        runner.Expect(AuditModelClosedSurface(model).IsValid(),std::string("Veil rigid part has a closed surface: ")+part.id);
+        triangles+=model.indices.size()/3;
+    }
+    runner.Expect(triangles<12000,"the complete ten-part Veil remains within a modest gameplay mesh budget");
+    for(size_t index:{size_t{4},size_t{5}}) {
+        const auto model=LoadObjFile_Assimp(RailVeilModel::Directory,RailVeilModel::Parts[index].file);
+        RailVeilAttackFrame deployed;deployed.opening=1;
+        const auto closed=RailVeilModel::EvaluatePart(index,{},false,false).local;
+        const auto open=RailVeilModel::EvaluatePart(index,deployed,false,false).local;
+        float closedFront=100,openFront=100;
+        for(const auto& vertex:model.vertices) {
+            const auto& p=vertex.position;
+            const auto depth=[&](const auto& m){return p.x*m.m[0][2]+p.y*m.m[1][2]+p.z*m.m[2][2]+m.m[3][2];};
+            closedFront=(std::min)(closedFront,depth(closed));openFront=(std::min)(openFront,depth(open));
+        }
+        runner.Expect(closedFront<RailVeilModel::Muzzle.z-.04f && openFront>RailVeilModel::Muzzle.z+.15f,
+            "closed jaw protects the nose; deployed armour retracts behind the beam's real muzzle");
+    }
+    const auto panel=LoadObjFile_Assimp(RailVeilModel::Directory,"VeilBoostPanel.obj");
+    runner.Expect(!panel.indices.empty() && ValidateModelGeometryOrientation(panel) && AuditModelClosedSurface(panel).IsValid(),
+        "Veil's breakable panel keeps a closed readable badge in the fighter's own material palette");
+    const auto sensorPart=RailVeilModel::Parts[6].pivot;
+    TwinShieldDronePose pose;pose.position={7,12,-25};pose.rotation={.2f,.7f,-.1f};pose.flightBank=.65f;pose.scale={3,3,3};
+    const auto sensorWorld=RearSubsystemWorldCenter(pose,sensorPart);
+    const auto hitWorld=VeilSensorWorldCenter(pose);
+    runner.Expect(std::abs(sensorWorld.x-hitWorld.x)+std::abs(sensorWorld.y-hitWorld.y)+std::abs(sensorWorld.z-hitWorld.z)<.001f,
+        "sensor geometry uses the actual banked gameplay hit anchor");
+    for(int fps:{30,60,120}) {
+        RailVeilModelPresentation visual;const float dt=1.0f/fps;
+        for(int i=0;i<fps;++i)visual.Update(dt,true,false,1.8f-float(i)*dt);
+        runner.Expect(visual.Frame().opening==1 && visual.Frame().charge>0,"the beam clock opens the armour and charges the optical core");
+        const auto before=visual.Frame();visual.Update(0,false,true,0);
+        runner.Expect(visual.Frame().opening==before.opening && visual.Frame().charge==before.charge,"pause freezes the model's charging pose");
+        const auto top=RailVeilModel::EvaluatePart(4,visual.Frame(),true,false);
+        const auto bottom=RailVeilModel::EvaluatePart(5,visual.Frame(),true,false);
+        runner.Expect(top.local.m[1][2]*bottom.local.m[1][2]<0,"armour petals rotate in opposite directions around separate hinges");
+        runner.Expect(std::abs(RailVeilModel::EvaluatePart(7,visual.Frame(),false,false).local.m[1][2])<.001f,
+            "the sensor cover stays closed outside its real damage window even while the main gun charges");
+        visual.Update(dt,true,true,0);visual.Update(dt,true,true,0);
+        runner.Expect(visual.Frame().recoil>.02f,"the real fire edge recoils the main cannon");
+        const auto cannon=RailVeilModel::EvaluatePart(3,visual.Frame(),false,false);
+        const auto parent=BuildTwinShieldDroneWorldMatrix(pose);
+        const auto cannonWorld=Multiply(cannon.local,parent);
+        const Vector3 lipLocal{0,0,-.92f}; // muzzle - cannon pivot
+        Vector3 lip{};for(int i=0;i<3;++i) {
+            const float value=lipLocal.x*cannonWorld.m[0][i]+lipLocal.y*cannonWorld.m[1][i]+lipLocal.z*cannonWorld.m[2][i]+cannonWorld.m[3][i];
+            if(i==0)lip.x=value;else if(i==1)lip.y=value;else lip.z=value;
+        }
+        const auto muzzle=RailVeilModel::MuzzleWorld(pose,visual.Frame());
+        runner.Expect(std::abs(lip.x-muzzle.x)+std::abs(lip.y-muzzle.y)+std::abs(lip.z-muzzle.z)<.001f,
+            "beam origin follows the actual moving gun lip under bank, heading and scale");
+        runner.Expect(!RailVeilModel::EvaluatePart(6,visual.Frame(),true,true).visible &&
+            !RailVeilModel::EvaluatePart(7,visual.Frame(),true,true).visible,"broken sensor removes only the independent lens and its cover");
+        for(int i=0;i<fps;++i)visual.Update(dt,false,false,0);
+        runner.Expect(visual.Frame().opening==0 && visual.Frame().recoil<.001f,"interruption or recovery closes the shroud and settles recoil without another fire event");
+    }
+}
+
 void TestVeilSensorAim(RegressionRunner& runner) {
     for(const bool damaged:{false,true}) {
         CourseSpawnRuntime runtime;
@@ -93,7 +157,82 @@ void TestVeilSensorAim(RegressionRunner& runner) {
     }
 }
 
+void TestFangArmourImpact(RegressionRunner& runner) {
+    CourseAsset course;
+    course.railPoints = {{{0,24,0},70,36.45f},{{0,24,200},70,36.45f}};
+    RailPath rail;
+    course.ApplyToRailPath(rail);
+    const auto vehicle = RailVehicleDefinition::MineCartDefaults();
+    RailVehicleRuntimeState state;
+    state.initialized = true;
+    state.previousDistance = 100.0f;
+    state.distance = 105.0f;
+    RailVehicleBodyCollisionInput body;
+    body.vehicleDefinition = &vehicle;
+    body.vehicleState = &state;
+    body.railPath = &rail;
+
+    CourseSpawnRuntime runtime;
+    auto spawn = [&](uint64_t id, const char* definition, float lateral, float travel) {
+        CourseBulletActor round;
+        round.initialized = true;
+        round.projectileId = id;
+        round.definitionId = definition;
+        round.spawnDistance = 91.0f;
+        round.distanceOffset = travel;
+        round.previousLateralOffset = round.lateralOffset = lateral;
+        round.previousVerticalOffset = round.verticalOffset = vehicle.bodyVerticalOffset;
+        round.radius = 0.45f;
+        round.damage = 6.0f;
+        runner.Expect(runtime.SpawnProjectile(round), "Fang impact fixture spawns each round");
+    };
+    for (uint64_t id : {1, 2, 3}) spawn(id, "enemy_fang_chase", 1.9f, 10.0f);
+    spawn(4, "enemy_fang_chase", 0.0f, 4.0f); // The cart pulls away.
+    spawn(5, "enemy_rear_pursuit", 1.9f, 10.0f);
+
+    CourseCollisionSystem collision;
+    CourseCollisionFrameInput input;
+    input.railPath = &rail;
+    input.player.distance = state.distance;
+    input.player.verticalOffset = vehicle.bodyVerticalOffset;
+    input.vehicleBody = &body;
+    const auto stats = collision.Update(runtime, input);
+    runner.Expect(stats.enemyBulletHits == 1 && stats.playerHitsRejected == 2 &&
+        std::abs(stats.playerDamage - 6.0f) < .01f,
+        "three Fang armour strikes still deal damage only once during invulnerability");
+
+    EnemyProjectilePresentationInput presentationInput;
+    presentationInput.runtime = &runtime;
+    presentationInput.railPath = &rail;
+    presentationInput.projectileContacts = collision.ProjectileContacts();
+    presentationInput.playerDamageResults = collision.PlayerDamageResults();
+    EnemyProjectilePresentationBridge presentation;
+    presentation.Update(presentationInput);
+    const auto& frame = presentation.Frame();
+    const float fraction = (9.0f - vehicle.collisionHalfExtents.z - 0.45f) / 5.0f;
+    const auto hull = rail.Evaluate(std::lerp(state.previousDistance, state.distance, fraction));
+    const Vector3 rearPlate = {
+        hull.position.x + 1.9f, hull.position.y + vehicle.bodyVerticalOffset,
+        hull.position.z - vehicle.collisionHalfExtents.z};
+    unsigned impacts = 0;
+    for (const auto& event : frame.events) {
+        if (event.kind != EnemyProjectilePresentationEventKind::Impacted) continue;
+        ++impacts;
+        runner.Expect(event.projectileId >= 1 && event.projectileId <= 3 &&
+            !event.surfaceImpact && event.impactNormal.z < -.99f &&
+            std::abs(event.worldPosition.x - rearPlate.x) < .01f &&
+            std::abs(event.worldPosition.y - rearPlate.y) < .01f &&
+            std::abs(event.worldPosition.z - rearPlate.z) < .01f,
+            "the burst is on the moving rear armour face, including invulnerable impacts");
+    }
+    runner.Expect(impacts == 3 && frame.projectiles.size() == 2 &&
+        std::all_of(frame.projectiles.begin(), frame.projectiles.end(),
+            [](const auto& projectile) { return projectile.projectileId == 4 || projectile.projectileId == 5; }),
+        "the impact frame shows one explosion per stopped Fang round, while the outrun and Veil rounds survive");
+}
+
 void TestRearPursuitCombat(RegressionRunner& runner) {
+    TestFangArmourImpact(runner);
     TestVeilSensorAim(runner);
     for(int fps:{30,60,120}) {
         CourseAsset course;course.railPoints={{{0,24,0},70,36.45f},{{0,24,12000},70,36.45f}};

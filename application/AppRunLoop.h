@@ -5,6 +5,7 @@
 #include "course/RailPulseShotPresentation.h"
 #include "course/RailPrimaryKillPresentation.h"
 #include "course/RailBoostPresentation.h"
+#include "course/RailBrakePresentation.h"
 #include "SunfallAtmosphere.h"
 #include "course/RailMothershipPresentation.h"
 #include "course/RailMothershipBattle.h"
@@ -107,6 +108,8 @@
 #include "course/RailAimAssistPresetRegistry.h"
 #include "course/RailCameraDirector.h"
 #include "course/RailLockOnSystem.h"
+#include "course/RailHeavyInterceptPresentation.h"
+#include "course/RailVeilModel.h"
 #include "course/RailSpeedDirector.h"
 #include "course/RailRideDirector.h"
 #include "course/RailRideMotionEnvelope.h"
@@ -546,6 +549,7 @@ private:
     RailPulseShotPresentation railPulseShots_;
     RailPrimaryKillPresentation railPrimaryKills_;
     RailBoostPresentation railBoostVfx_;
+    RailBrakePresentation railBrakeVfx_;
     audio::SoundHandle railPulseFireSound_{};
     audio::SoundHandle railPrimaryKillSound_{};
     audio::SoundHandle railBoostIgnitionSound_{};
@@ -882,6 +886,10 @@ private:
     RailMothership::Battle railMothershipBattle_{};
     RailPostBossSequence railPostBossSequence_{};
     RailMinibossCombatDirector railMinibossCombat_{};
+    RailHeavyInterceptPresentation railHeavyIntercept_{};
+    RailLockIntroPresentation railLockIntro_{};
+    RailBasicTutorial railBasicTutorial_{};
+    RailVeilModelPresentation railVeilModel_{};
     CaveOpeningLighting caveOpeningLighting_{};
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;

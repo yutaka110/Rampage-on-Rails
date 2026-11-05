@@ -69,6 +69,7 @@ std::shared_ptr<const RailTravelPrediction> BuildRailTravelPrediction(
         envelopeInput.ride = &ride;
         envelopeInput.railPath = input.railPath;
         envelopeInput.normalSpeedScale = speedDirector.Settings().normalSpeedScale;
+        envelopeInput.manualBrakeBlend = speedDirector.ManualBrake().Blend();
         const bool panelBoost=time<input.panelBoostRemaining;
         envelopeInput.manualBoostMultiplier=(std::max)(speedDirector.BoostMultiplier(),
             panelBoost?input.panelBoostMultiplier:1.0f);

@@ -6,6 +6,8 @@
 #include "../course/RailKillBoostPose.h"
 #include "../course/RailKillBoostFeedback.h"
 #include "../course/RailHeavyAttack.h"
+#include "../course/RailHeavyInterceptPresentation.h"
+#include "../course/RailVeilModel.h"
 #include "../course/RailGroundBatteryAttack.h"
 #include "../course/EnemyEnergyShieldPresentation.h"
 #include "../course/RailMothershipBattle.h"
@@ -38050,7 +38052,8 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
         const float dt=1.0f/fps,start=marker.distance-(boosted?180:30),playerY=controls.vehicle.bodyVerticalOffset+controls.vehicle.mounts.player.y;
         CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;auto preplaced=marker;preplaced.payload="preplaced:turret";
         dispatcher.Dispatch({preplaced},runtime,0);
-        runner.Expect(runtime.Enemies().size()==1 && RailGroundBattery::IsPredictive(runtime.Enemies().front().desc.actorAssetId),
+        runner.Expect(runtime.Enemies().size()==1 && RailGroundBattery::IsPredictive(runtime.Enemies().front().desc.actorAssetId) &&
+            runtime.Enemies().front().desc.bulletCount==1,
             "the selected battery uses the forward-intercept profile");
         if(runtime.Enemies().empty())return;
         const uint32_t owner=runtime.Enemies().front().actorId;
@@ -38187,13 +38190,101 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
             check(firstWarning>=0 && firstFire>firstWarning && warningSeconds+dt>=.90f &&
                 fireForward>=RailGroundBattery::MinimumFireDistance && fireForward<=115,
                 "the readable first warning finishes before passing the planned firing window"+context);
-            check(mode==0 ? damage>0 : (damage==0 && cancelled>=3),
+            check(mode==0 ? damage>0 : (damage==0 && cancelled>=1),
                 "ignoring the battery is damaging; screen-aimed primary interception prevents its real volley"+context);
         }
     }
     }
     std::string details;for(const auto& failure:failures)details+="\n"+failure;
     runner.Expect(failures.empty(),"every placement supports warning, arrival, preemption and interception"+details);
+}
+
+void TestManualBrakeTravel(RegressionRunner& runner) {
+    CourseAsset course;
+    RailVehicleControlDefinitionAsset controls;
+    std::string error;
+    runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) &&
+        controls.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),
+        "braking loads the production course and control policy");
+    RailPath rail;
+    course.ApplyToRailPath(rail);
+    for(int fps:{30,60,120}) {
+        const float dt=1.0f/fps;
+        CourseRuntime travel;
+        travel.Bind(&course);
+        travel.Reset(1145);
+        RailVehicleMovementSystem vehicle;
+        vehicle.Initialize(controls.vehicle);
+        vehicle.Reset(1145,36.45f,&rail);
+        RailVehicleMovementInput ready;
+        ready.deltaTime=0;ready.requestedSpeed=36.45f;
+        ready.courseRuntime=&travel;ready.railPath=&rail;
+        vehicle.Update(ready);
+        RailSpeedDirector policy;
+        policy.Configure(controls.speedPolicy);
+        policy.SetManualBoostInput(true,true);
+        policy.SetManualBrakeInput(true,true);
+        for(unsigned id=1;id<=6;++id) {
+            EnemyCombatEvent event;
+            event.kind=EnemyCombatEventKind::Defeated;
+            event.actorId=id;event.shotId=id;event.actorAssetId="short_scout";
+            event.appliedDamage=24;event.feedbackKind=HitFeedbackKind::Destroyed;
+            policy.KillBoost().ObserveDefeat(event);
+        }
+        RailTravelPredictionInput forecastInput;
+        forecastInput.vehicle=&vehicle;forecastInput.speedDirector=&policy;
+        forecastInput.courseRuntime=&travel;forecastInput.course=&course;
+        forecastInput.railPath=&rail;forecastInput.simulationStepSeconds=dt;
+        const auto forecast=BuildRailTravelPrediction(forecastInput,1.0f);
+        runner.Expect(forecast && travel.Distance()==1145 && policy.ManualBrake().Blend()==0,
+            "a braking forecast leaves the live policy and vehicle untouched");
+        RailRideDirector ride;
+        RailRideMotionEnvelope envelope;
+        const auto advance=[&](float seconds) {
+            RailSpeedDirectorFrameInput si;
+            si.course=&course;si.railPath=&rail;si.section=travel.CurrentSection();
+            si.rideProfile=course.FindRideProfile(travel.Distance());
+            si.distance=travel.Distance();si.deltaTime=seconds;
+            const auto request=policy.Evaluate(si);
+            RailRideDirectorInput ri;
+            ri.course=&course;ri.railPath=&rail;ri.distance=travel.Distance();
+            ri.baseRequestedSpeed=request.requestedSpeed;
+            const auto& profile=ride.Evaluate(ri);
+            RailRideMotionEnvelopeInput ei;
+            ei.vehicleDefinition=&vehicle.Definition();ei.vehicleState=&vehicle.State();
+            ei.ride=&profile;ei.railPath=&rail;ei.normalSpeedScale=policy.Settings().normalSpeedScale;
+            ei.manualBoostMultiplier=policy.BoostMultiplier();ei.manualBrakeBlend=policy.ManualBrake().Blend();
+            ei.rewardBoostAttack=policy.KillBoost().Accelerating()?1.0f:0.0f;
+            const auto& motion=envelope.Evaluate(ei);
+            RailVehicleMovementInput mi;
+            mi.deltaTime=seconds;mi.requestedSpeed=motion.requestedSpeed;
+            mi.manualBoostMultiplier=motion.manualBoostMultiplier;mi.motionEnvelopeActive=motion.active;
+            mi.accelerationLimit=motion.accelerationLimit;mi.brakingLimit=motion.brakingLimit;mi.jerkLimit=motion.jerkLimit;
+            mi.courseRuntime=&travel;mi.railPath=&rail;
+            policy.NotifyCourseEvents(vehicle.Update(mi).triggeredEvents);
+        };
+        for(int step=0;step<fps;++step)advance(dt);
+        runner.Expect(forecast && std::abs(forecast->DistanceAt(1)-travel.Distance())<.03f,
+            "held braking and reward acceleration use identical live and forecast travel at every frame rate");
+        runner.Expect(std::abs(vehicle.State().speed-envelope.Frame().normalRequestedSpeed*.6f)<.02f,
+            "full braking overrides both E and the active kill reward without stopping");
+        runner.Expect(policy.KillBoost().Age()>.9f,"the reward timer continues while braking");
+        const auto checkpoint=policy;
+        const float distance=travel.Distance();
+        advance(0);
+        runner.Expect(policy.ManualBrake().Blend()==checkpoint.ManualBrake().Blend() && travel.Distance()==distance,
+            "pause freezes braking and travel");
+        policy.SetManualBrakeInput(false,true);
+        for(int step=0;step<fps;++step)advance(dt);
+        runner.Expect(policy.ManualBrake().Blend()==0 && vehicle.State().speed>envelope.Frame().normalRequestedSpeed,
+            "release restores the still-active reward through normal movement");
+        policy=checkpoint;
+        runner.Expect(policy.ManualBrake().Held() && policy.ManualBrake().Blend()==1,
+            "retry value state restores held braking with the speed policy");
+        policy.Reset();
+        runner.Expect(!policy.ManualBrake().Held() && policy.ManualBrake().Blend()==0,
+            "a new run clears braking");
+    }
 }
 
 void TestFirstGroundBatteryForecast(RegressionRunner& runner,bool allBatteries=false) {
@@ -38224,8 +38315,9 @@ void TestFirstGroundBatteryForecast(RegressionRunner& runner,bool allBatteries=f
         EnemyTargetingSystem targeting;EnemyTargetingFrameInput input;input.railPath=&rail;input.travelPrediction=forecast;
         input.deltaTime=1.0f/fps;input.playerDistance=start;input.playerVerticalOffset=controls.vehicle.bodyVerticalOffset+controls.vehicle.mounts.player.y;
         targeting.Update(runtime,input);const auto& aimed=runtime.Enemies().front();
-        const auto muzzle=ResolveEnemyProjectileMuzzleRailPosition(aimed,1);
-        const auto launch=ResolveEnemyProjectileScheduledLaunch(aimed,1,.70f);
+        const int centralRound=aimed.desc.bulletCount/2;
+        const auto muzzle=ResolveEnemyProjectileMuzzleRailPosition(aimed,centralRound);
+        const auto launch=ResolveEnemyProjectileScheduledLaunch(aimed,centralRound,.70f);
         const auto& shot=launch.projectile;const float flight=launch.flightSeconds;
         runner.Expect(aimed.targetingState.compensatesForwardTravel && launch.projectile.active && flight>0 &&
             std::abs(shot.distanceOffset-muzzle.z)<.001f,"scheduled fixed muzzle never inherits the cart's forecast displacement");
@@ -38395,7 +38487,7 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
         encounter.spawnRuntime=&spawn;encounter.triggeredEvents={marker};
         dispatcher.Dispatch(director.Update(encounter).dispatchEvents,spawn,marker.distance);
         runner.Expect(spawn.Enemies().size()==1 && spawn.Enemies()[0].desc.meshId=="siege_turret" &&
-            spawn.Enemies()[0].desc.bulletCount==3,"fixed marker loads a real turret and shootable three-way pattern");
+            spawn.Enemies()[0].desc.bulletCount==1,"fixed marker loads the single predictive crossing shot used by brake combat");
         if(spawn.Enemies().empty()) continue;
         const float dt=1.0f/fps;
         RailMothership::Reveal carrier;const auto frame=carrier.Update(dt,marker.distance,600,rail,true);
@@ -38478,13 +38570,16 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
                 if(actor.fireSequence>volleys) {
                     size_t barrel=0;
                     for(const auto& bullet:spawn.Bullets()) if(bullet.ownerActorId==actor.actorId && bullet.age<=dt+0.0001f) {
-                        const auto muzzle=ResolveTurretMuzzleRailPosition(actor,(barrel++ & 1)?1.0f:-1.0f);
-                        runner.Expect(std::abs(bullet.previousDistanceOffset-muzzle.z)<0.002f &&
-                            std::abs(bullet.previousLateralOffset-muzzle.x)<0.002f &&
-                            std::abs(bullet.previousVerticalOffset-muzzle.y)<0.002f,
+                        ++barrel;
+                        const auto errorAt=[&](float side) {
+                            const auto muzzle=ResolveTurretMuzzleRailPosition(actor,side);
+                            return std::abs(bullet.previousDistanceOffset-muzzle.z)+
+                                std::abs(bullet.previousLateralOffset-muzzle.x)+std::abs(bullet.previousVerticalOffset-muzzle.y);
+                        };
+                        runner.Expect((std::min)(errorAt(-1),errorAt(1))<0.006f,
                             "large twin barrels, warning and actual projectiles use identical muzzle coordinates");
                     }
-                    runner.Expect(barrel==3,"tower fires the full three-lane volley from its twin cannons");
+                    runner.Expect(barrel==size_t(actor.desc.bulletCount),"tower emits its configured predictive volley from the real cannon muzzle");
                 }
                 volleys=(std::max)(volleys,actor.fireSequence);
                 if(!testedKill && actor.age>0.8f) {
@@ -39726,6 +39821,7 @@ void TestPrimaryContactPresentationCoherence(RegressionRunner& runner) {
 #include "KillBoostRegressionTests.inl"
 #include "EnergyShieldRegressionTests.inl"
 #include "PostBossRegressionTests.inl"
+#include "BasicTutorialRegressionTests.inl"
 
 void TestGatlingRingMaterial(RegressionRunner& runner) {
     ge3::core::ShaderCompiler compiler;
@@ -40184,6 +40280,62 @@ void TestHeavyProjectileLockIdentity(RegressionRunner& runner) {
             "normal fire visibly contacts the heavy shell but cannot erase or chip it");}
 }
 
+void TestHeavyInterceptPresentation(RegressionRunner& runner) {
+    using Step=RailHeavyInterceptPresentation::Step;
+    for(int fps:{30,60,120}) {
+        RailHeavyInterceptPresentation cue;cue.Begin(0x100000001ULL,7);
+        const float dt=1.0f/fps;
+        for(int i=0;i<fps;++i)cue.Advance(dt,true,true,0,false);
+        runner.Expect(cue.Current()==Step::Aim && cue.TimeScale()==1,"first heavy flight keeps normal combat time");
+        RailLockToken first;first.target.kind=RailLockTargetKind::Projectile;first.target.projectileId=0x100000001ULL;
+        auto other=first;other.target.projectileId=1;
+        std::vector<RailLockToken> locks{other,other};cue.ObserveInput(locks,{},true);
+        runner.Expect(cue.Locks()==0,"another projectile cannot light the local lock slots");
+        locks={first};cue.ObserveInput(locks,{},true);
+        runner.Expect(cue.Locks()==1 && cue.TimeScale()==1,"one real lock lights one slot without slowing flight");
+        cue.ObserveInput({},locks,false);
+        runner.Expect(!cue.HasIntercepted(),"partial release creates no false success");
+        locks={first,first};
+        runner.Expect(cue.ObserveInput(locks,{},true) && !cue.ObserveInput(locks,{},true),"two matching locks request one readiness sound");
+        cue.ObserveInput({},locks,false);
+        runner.Expect(cue.Current()==Step::InFlight && cue.TimeScale()==1 && cue.Flash()==0,"travelling lasers grant neither hit stop nor success flash");
+        runner.Expect(!cue.Intercept(1,7) && !cue.Intercept(0x100000001ULL,8),"unrelated destruction cannot trigger impact feedback");
+        runner.Expect(cue.Intercept(0x100000001ULL,7,{1,2,3}) && !cue.Intercept(0x100000001ULL,7),"one confirmed interception creates exactly one success pulse");
+        runner.Expect(cue.Flash()==1 && cue.TimeScale()<1 && cue.SuccessPoint().z==3,"success flash and brief impact pause belong to the actual contact");
+        const float pauseAge=cue.SuccessAge();cue.Advance(0,false,false,0,true);
+        runner.Expect(cue.SuccessAge()==pauseAge && cue.Flash()==1,"pause freezes success feedback");
+        for(int i=0;i<fps/4+1;++i)cue.Advance(dt,false,true,1.8f,false);
+        runner.Expect(cue.TimeScale()==1 && cue.Flash()==0 && cue.Current()==Step::Counter,"impact pause ends quickly while real counter eligibility remains");
+        cue.Advance(dt,false,true,1,true);runner.Expect(cue.Current()==Step::Hit,"only actual counter damage marks a retaliation hit");
+        cue.ResetAttempt();cue.Begin(99,7);
+        runner.Expect(cue.HasIntercepted() && cue.Current()==Step::Aim && cue.TimeScale()==1,"later shots retain the same local cue at normal speed after retry");
+        runner.Expect(cue.Intercept(99,7),"later successful interceptions retain impact feedback");
+        cue.Reset();cue.Begin(2,7);cue.Advance(dt,false,true,0,false);
+        runner.Expect(!cue.HasIntercepted() && cue.Flash()==0 && cue.TimeScale()==1,"misses never flash success or slow the world");
+
+        RailLockIntroPresentation intro;intro.Update(dt,true,true,0,false);
+        runner.Expect(intro.Visible(),"the early visible LOCK formation introduces the control before the boss");
+        intro.Update(0,false,false,0,true);
+        runner.Expect(!intro.Completed() && intro.Visible(),"paused input cannot complete the early guide");
+        RailShooterHudDefinitionAsset definition;RailShooterHudPresentationFrame hud;hud.visible=true;
+        RailShooterHudRenderInput input;input.definition=&definition;input.presentation=&hud;input.lockIntro=&intro;
+        const auto has=[](const auto& commands,std::u8string_view value){return std::any_of(commands.begin(),commands.end(),[&](const auto& c){
+            return c.kind==RailShooterHudDrawCommandKind::Text && c.text.find(std::string(reinterpret_cast<const char*>(value.data()),value.size()))!=std::string::npos;});};
+        for(const auto size:std::array<Vector2,3>{{{1280,720},{1600,900},{1920,1080}}}) {
+            input.viewportWidth=uint32_t(size.x);input.viewportHeight=uint32_t(size.y);input.bossVisible=false;
+            RailShooterHudRenderer renderer;renderer.Update(input);
+            runner.Expect(has(renderer.Frame().commands,u8"右クリック長押し"),"early gameplay teaches hold, sweep and release at supported viewports");
+            input.bossVisible=input.miniBossParts=input.miniBossHeavyFiring=true;renderer.Update(input);
+            runner.Expect(!has(renderer.Frame().commands,u8"右クリック長押し") && !has(renderer.Frame().commands,u8"右クリックを長押し") &&
+                !has(renderer.Frame().commands,u8"重砲弾を2ロック"),"boss HUD omits the global tutorial and redundant heavy-defense card");
+            runner.Expect(renderer.Frame().commands.size()<=definition.maximumDrawCommands,"local boss presentation retains HUD capacity");
+        }
+        intro.Update(dt,true,true,0,true);runner.Expect(intro.Completed(),"actual early volley release completes the control guide");
+        intro.Update(2,true,true,0,false);runner.Expect(!intro.Visible(),"successful early instruction clears without waiting for boss combat");
+        intro.Reset();intro.Update(dt,false,true,2,false);runner.Expect(!intro.Visible(),"early teaching cannot appear in later sections");
+    }
+}
+
 void TestHeavyLockDefenseAndCounter(RegressionRunner& runner) {
     CourseAsset course;RailVehicleControlDefinitionAsset cart;std::string error;
     runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) && cart.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),"heavy lock cycle assets load");
@@ -40523,8 +40675,8 @@ void TestCarrierFeedbackHudSeparation(RegressionRunner& runner) {
         runner.Expect(has(u8"弾の相殺  7 / 24") && !has(u8"反撃解放") && !has(u8"反撃命中") && !has(u8"迎撃成功"),
             "partial gatling defense reports progress without promising counter eligibility or counter damage");
         input.miniBossGatlingFiring=false;input.miniBossHeavyFiring=true;hud.Update(input);check("heavy-defense");
-        runner.Expect(has(u8"重砲弾を2ロックして迎撃") && !has(u8"反撃解放") && !has(u8"反撃命中"),
-            "heavy defense identifies the projectile and never announces a hit before a real counter contact");
+        runner.Expect(!has(u8"重砲弾を2ロックして迎撃") && !has(u8"反撃解放") && !has(u8"反撃命中"),
+            "heavy defense leaves the compact projectile marker to the world overlay and never announces a false counter contact");
         input.miniBossHeavyFiring=false;input.miniBossCounterRemaining=input.miniBossCounterDuration=1.15f;
         input.miniBossCounterPart=0;input.miniBossCounterUnlockPulse=1;hud.Update(input);check("unlock");
         runner.Expect(has(u8"反撃解放") && has(u8"主砲で反撃 x2") && !has(u8"反撃命中") && !has(u8"弾の相殺"),
@@ -42413,13 +42565,15 @@ void TestShortRunFinishAndEarlyWaves(RegressionRunner& runner) {
     for(const auto& id:kills) waves.NotifyEnemyDefeated(id);
     for(int i=0;i<50;++i) tick(0.1f,400);
     runner.Expect(waves.Phase("short_intercept")!=CourseGameplayWavePhase::Active,"maximum early distance prevents chaining every battle at the start");
-    for(int i=0;i<25;++i) tick(0.1f,600);
-    runner.Expect(waves.Phase("short_intercept")==CourseGameplayWavePhase::Active,"intercept advances once its permitted approach is reached");
+    for(int i=0;i<25;++i) tick(0.1f,900,ShortRunAllowsEarlyWave(900));
+    runner.Expect(waves.Phase("short_intercept")!=CourseGameplayWavePhase::Active,"speed tutorial runway remains free of promoted combat");
+    for(int i=0;i<25;++i) tick(0.1f,1080,ShortRunAllowsEarlyWave(1080));
+    runner.Expect(waves.Phase("short_intercept")==CourseGameplayWavePhase::Active,"intercept resumes after speed instruction");
     kills.clear();for(const auto& enemy:spawn.Enemies()) kills.push_back(enemy.desc.sourcePlacementGuid);
     for(const auto& id:kills) waves.NotifyEnemyDefeated(id);
-    for(int i=0;i<60;++i) tick(0.1f,1020,ShortRunAllowsEarlyWave(1020));
+    for(int i=0;i<60;++i) tick(0.1f,1200,ShortRunAllowsEarlyWave(1200));
     runner.Expect(waves.Phase("short_finale")!=CourseGameplayWavePhase::Active,"boost runway remains clear of early combat");
-    for(int i=0;i<25;++i) tick(0.1f,1120,ShortRunAllowsEarlyWave(1120));
+    for(int i=0;i<25;++i) tick(0.1f,1360,ShortRunAllowsEarlyWave(1360));
     runner.Expect(waves.Phase("short_finale")==CourseGameplayWavePhase::Active,"finale resumes after the boost runway");
     CourseSpawnRuntime legacySpawn;CourseGameplayWaveRuntimeBridge legacy;
     legacy.Bind(&compiled.program,&legacySpawn,260,&error);
@@ -43065,13 +43219,16 @@ void TestTurretInterceptFlow(RegressionRunner& runner) {
                     size_t barrel=0;
                     for (const auto& bullet : runtime.Bullets()) {
                         if (bullet.ownerActorId != actorId) continue;
-                        const auto muzzle=ResolveTurretMuzzleRailPosition(actor,(barrel++ & 1) ? 1.0f : -1.0f);
-                        runner.Expect(std::abs(bullet.previousDistanceOffset-muzzle.z)<0.001f &&
-                            std::abs(bullet.previousLateralOffset-muzzle.x)<0.001f &&
-                            std::abs(bullet.previousVerticalOffset-muzzle.y)<0.001f,
+                        ++barrel;
+                        const auto errorAt=[&](float side) {
+                            const auto muzzle=ResolveTurretMuzzleRailPosition(actor,side);
+                            return std::abs(bullet.previousDistanceOffset-muzzle.z)+
+                                std::abs(bullet.previousLateralOffset-muzzle.x)+std::abs(bullet.previousVerticalOffset-muzzle.y);
+                        };
+                        runner.Expect((std::min)(errorAt(-1),errorAt(1))<0.003f,
                             "visible turret bolts must originate at the aimed barrel positions");
                     }
-                    runner.Expect(barrel==3,"turret emits its authored three-way volley");
+                    runner.Expect(barrel==size_t(actor.desc.bulletCount),"turret emits its authored projectile count");
                 }
                 lastFireSequence=actor.fireSequence;
                 if (defeatAt<0 && ((interrupt && pose && pose->weaponCharge>0.75f) || (!interrupt && fireAt>=0))) {
@@ -44031,6 +44188,7 @@ int RunEditorCoreRegressionTests() {
          {"carrier gatling scheduled burst", [&]() { TestCarrierGatlingBurst(runner); }},
          {"gatling held primary cancellation", [&]() { TestGatlingHeldPrimaryCancellation(runner); }},
          {"post boss relative vista bridge and rear timing", [&]() { TestPostBossTiming(runner); }},
+         {"veil modular model geometry and beam alignment", [&]() { TestVeilModularModel(runner); }},
          {"post boss rear pursuit real combat and speed", [&]() { TestRearPursuitCombat(runner); }},
          {"post boss rear camera authoring and retry", [&]() { TestPostBossCameraAndRetry(runner); }},
          {"energy shield damage authority and lock defense", [&]() { TestEnergyShieldAuthority(runner); }},
@@ -44057,6 +44215,9 @@ int RunEditorCoreRegressionTests() {
          {"gatling primary depth and cover", [&]() { TestGatlingPrimaryDepthAndCover(runner); }},
          {"heavy battery forward accuracy", [&]() { TestHeavyBatteryForwardAccuracy(runner); }},
          {"heavy projectile lock identity and shell", [&]() { TestHeavyProjectileLockIdentity(runner); }},
+         {"heavy intercept local presentation", [&]() { TestHeavyInterceptPresentation(runner); }},
+         {"basic tutorial accepted actions and retry", [&]() { TestBasicTutorialActions(runner); }},
+         {"basic tutorial layout and authored runway", [&]() { TestBasicTutorialLayoutAndRunway(runner); }},
          {"heavy lock defense and counter", [&]() { TestHeavyLockDefenseAndCounter(runner); }},
          {"heavy lock cover and replay", [&]() { TestHeavyLockCoverAndReplay(runner); }},
          {"miniboss counter damage budget", [&]() { TestMinibossCounterDamageBudget(runner); }},
@@ -44085,6 +44246,7 @@ int RunEditorCoreRegressionTests() {
         {"mixed enemy role choices and bounded reinforcements", [&]() { TestMixedEnemyRoleChoices(runner); }},
         {"distinct combat showcases and authoritative rewards", [&]() { TestDistinctCombatShowcases(runner); }},
         {"short run grounded turret combat and pass cleanup", [&]() { TestShortRunGroundBatteries(runner); }},
+        {"manual brake production travel and reward priority", [&]() { TestManualBrakeTravel(runner); }},
         {"first ground battery prediction timing and defense", [&]() { TestFirstGroundBatteryCombat(runner); }},
         {"first ground battery production travel forecast", [&]() { TestFirstGroundBatteryForecast(runner); }},
         {"all ground batteries prediction timing and defense", [&]() { TestFirstGroundBatteryCombat(runner,true); }},

@@ -2,6 +2,7 @@
 #include "CourseAsset.h"
 #include "CourseEventDispatcher.h"
 #include "CourseSpawnRuntime.h"
+#include "PlayerHitboxSystem.h"
 #include "RailRearPursuitRules.h"
 #include <array>
 #include <algorithm>
@@ -19,6 +20,23 @@ public:
     static constexpr float NoticeSeconds=2.4f, TurnSeconds=1.8f;
     static constexpr float TimeBudgetSeconds=40;
     enum class Phase { Waiting, Aftermath, Vista, Bridge, Notice, Turning, Combat, Returning, Complete };
+    enum class BeamPhase { Inactive, Tracking, Locked, Flash };
+    static constexpr float VeilBeamLockSeconds = .70f;
+    static constexpr float VeilBeamFlashSeconds = .20f;
+    static constexpr float VeilBeamRadius = .42f;
+    struct BeamFrame {
+        BeamPhase phase = BeamPhase::Inactive;
+        Vector2 aim{};
+        float distance = 0.0f;
+        float secondsToFire = 0.0f;
+        float flashAge = 0.0f;
+        bool earlyLock = false;
+    };
+    struct BeamEvents {
+        bool locked = false;
+        bool fired = false;
+        bool hit = false;
+    };
     void Reset(){*this={};}
     static bool Enabled(const CourseAsset& course) {
         return std::any_of(course.events.begin(),course.events.end(),[](const auto& e){return e.id==Marker;}) &&
@@ -94,11 +112,9 @@ public:
     }
     float PanelBoostRemaining() const { return panelBoostRemaining_; }
     void ApplyAttackGates(CourseSpawnRuntime& runtime) const {
-        for(size_t i=0;i<ids_.size();++i) {
-            const bool allowed=phase_==Phase::Combat && pass_==(i==0?Pass::FangFire:Pass::VeilFire) &&
-                (i==0 || !veilInterrupted_);
-            if(ids_[i])runtime.SetEnemyEncounterPacing(ids_[i],true,allowed);
-        }
+        if(ids_[0])runtime.SetEnemyEncounterPacing(ids_[0],true,phase_==Phase::Combat && pass_==Pass::FangFire);
+        // Veil's encounter beam replaces its ordinary projectile attack.
+        if(ids_[1])runtime.SetEnemyEncounterPacing(ids_[1],true,false);
     }
     unsigned CompletedCycles() const { return completedCycles_; }
     uint32_t FangFollowupTarget() const {
@@ -111,24 +127,64 @@ public:
     }
     bool VeilInterrupted() const { return phase_==Phase::Combat && veilInterrupted_; }
     bool VeilCanBeInterrupted() const {
-        if(phase_!=Phase::Combat || veilInterrupted_ || defeated_[1] || !ids_[1])return false;
+        if(phase_!=Phase::Combat || veilInterrupted_ || defeated_[1] || !ids_[1] ||
+            veilBeam_.phase==BeamPhase::Flash)return false;
         return (pass_==Pass::FangExit && passAge_>=VeilDescentCue) ||
             pass_==Pass::VeilApproach || pass_==Pass::VeilFire;
     }
-    bool OnVeilLockContact(std::span<const DamageResult> hits, CourseSpawnRuntime& runtime) {
+    bool OnVeilLockContact(std::span<const DamageResult> hits) {
         if(!VeilCanBeInterrupted())return false;
-        for(const auto& actor:runtime.Enemies()) {
-            if(actor.actorId!=ids_[1])continue;
-            if(pass_==Pass::VeilFire && actor.fireSequence!=shotAtEntry_)return false;
-            for(const auto& hit:hits) {
-                if(hit.targetActorId!=ids_[1] || !hit.damageApplied || hit.rearPanelBroken)continue;
-                veilInterrupted_=true;
-                ApplyAttackGates(runtime);
-                return true;
-            }
-            break;
+        veilInterrupted_=std::any_of(hits.begin(),hits.end(),[&](const auto& hit) {
+            return hit.targetActorId==ids_[1] && hit.damageApplied;
+        });
+        if(veilInterrupted_)veilBeam_={};
+        return veilInterrupted_;
+    }
+    const BeamFrame& VeilBeam() const { return veilBeam_; }
+    unsigned VeilBeamShots() const { return veilBeamShots_; }
+    Vector2 VeilLastBeamAim() const { return veilLastBeamAim_; }
+    BeamEvents AdvanceVeilBeam(float dt, const CourseSpawnRuntime& runtime,
+        const PlayerHitboxRuntimeState& player) {
+        if(dt<=0)return {};
+        if(phase_==Phase::Combat && pass_==Pass::VeilFire && !defeated_[1] &&
+            veilBeam_.phase==BeamPhase::Flash) {
+            veilBeam_.flashAge+=dt;
+            veilBeam_.distance=player.distance;
+            return {};
         }
-        return false;
+        if(!VeilCanBeInterrupted()) {
+            veilBeam_={};
+            return {};
+        }
+        const auto actor=std::find_if(runtime.Enemies().begin(),runtime.Enemies().end(),
+            [&](const auto& enemy) { return enemy.actorId==ids_[1] && enemy.desc.hitPoints>0; });
+        if(actor==runtime.Enemies().end() || !actor->weaponMount.ready) {
+            veilBeam_={};
+            return {};
+        }
+        BeamEvents events{};
+        if(veilBeam_.phase!=BeamPhase::Locked) {
+            veilBeam_.aim={player.lateralOffset,player.verticalOffset};
+            veilBeam_.earlyLock=actor->veilSensorHitPoints<=0;
+            if(veilBeam_.earlyLock && actor->veilDescentAimCaptured)
+                veilBeam_.aim=actor->veilDescentAim;
+            events.locked=veilBeam_.earlyLock || pass_==Pass::VeilFire;
+            veilBeam_.phase=events.locked?BeamPhase::Locked:BeamPhase::Tracking;
+        }
+        veilBeam_.distance=player.distance;
+        const float descentAge=pass_==Pass::FangExit?passAge_-VeilDescentCue:passAge_;
+        veilBeam_.secondsToFire=pass_==Pass::VeilFire?
+            (std::max)(0.0f,VeilBeamLockSeconds-passAge_):
+            VeilBeamLockSeconds+(std::max)(0.0f,VeilDescentSeconds-descentAge);
+        if(pass_==Pass::VeilFire && passAge_>=VeilBeamLockSeconds) {
+            veilBeam_.phase=BeamPhase::Flash;
+            ++veilBeamShots_;
+            veilLastBeamAim_=veilBeam_.aim;
+            events.fired=true;
+            events.hit=std::hypot(player.lateralOffset-veilBeam_.aim.x,
+                player.verticalOffset-veilBeam_.aim.y)<=VeilBeamRadius+player.hurtRadius;
+        }
+        return events;
     }
     bool InPursuitHandoff() const {
         return phase_==Phase::Combat && pass_==Pass::FangExit &&
@@ -187,17 +243,15 @@ private:
     static constexpr float VeilDescentCue=.62f;
     static constexpr float VeilDescentSeconds=1.10f;
     void UpdatePass(float dt,CourseSpawnRuntime& runtime) {
-        std::array<uint64_t,2> shots{};
+        uint64_t fangShots=0;
         for(const auto& actor:runtime.Enemies())
-            for(size_t i=0;i<ids_.size();++i)
-                if(ids_[i] && ids_[i]==actor.actorId)shots[i]=actor.fireSequence;
+            if(ids_[0] && ids_[0]==actor.actorId)fangShots=actor.fireSequence;
 
         passAge_+=dt;
         const auto enter=[&](Pass pass) {
             pass_=pass;
             passAge_=0;
-            if(pass==Pass::FangFire)shotAtEntry_=shots[0];
-            if(pass==Pass::VeilFire)shotAtEntry_=shots[1];
+            if(pass==Pass::FangFire)shotAtEntry_=fangShots;
         };
         switch(pass_) {
         case Pass::Read:
@@ -207,7 +261,7 @@ private:
             if(defeated_[0] || passAge_>=1.15f)enter(defeated_[0]?Pass::VeilApproach:Pass::FangFire);
             break;
         case Pass::FangFire:
-            if(shots[0]!=shotAtEntry_ || defeated_[0] || passAge_>=6.0f)enter(Pass::FangExit);
+            if(fangShots!=shotAtEntry_ || defeated_[0] || passAge_>=6.0f)enter(Pass::FangExit);
             break;
         case Pass::FangExit:
             if(passAge_>=FangExitSeconds) {
@@ -223,7 +277,8 @@ private:
                 enter(defeated_[1] || veilInterrupted_?Pass::Reset:Pass::VeilFire);
             break;
         case Pass::VeilFire:
-            if(shots[1]!=shotAtEntry_ || defeated_[1] || veilInterrupted_ || passAge_>=6.0f)enter(Pass::Reset);
+            if(defeated_[1] || veilInterrupted_ || passAge_>=6.0f ||
+                (veilBeam_.phase==BeamPhase::Flash && veilBeam_.flashAge>=VeilBeamFlashSeconds))enter(Pass::Reset);
             break;
         case Pass::Reset:
             if(passAge_>=1.25f){++completedCycles_;veilInterrupted_=false;enter(Pass::Read);}
@@ -257,6 +312,9 @@ private:
     float panelBoostRemaining_=0;
     unsigned panelBoostStacks_=0;
     bool veilInterrupted_=false;
+    BeamFrame veilBeam_{};
+    unsigned veilBeamShots_=0;
+    Vector2 veilLastBeamAim_{};
     static float Smooth(float x){x=(std::clamp)(x,0.0f,1.0f);return x*x*(3-2*x);}
     void Enter(Phase phase){phase_=phase;phaseAge_=0;}
     void BuildValley(const TerrainEditLayer* preview) {

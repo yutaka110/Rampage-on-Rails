@@ -431,6 +431,60 @@ const RailVehicleBodyCollisionFrame& RailVehicleBodyCollisionSystem::Update(
     return frame_;
 }
 
+std::optional<RailVehicleProjectileContact> SweepRailVehicleProjectileContact(
+    const RailVehicleBodyCollisionInput& input,
+    const CourseBulletActor& projectile) {
+    if (!input.gameplayActive || !input.vehicleDefinition || !input.vehicleState ||
+        !input.vehicleState->initialized || !input.railPath) {
+        return std::nullopt;
+    }
+    const auto& vehicle = *input.vehicleDefinition;
+    const auto& state = *input.vehicleState;
+    const RailLocalPoint start{
+        projectile.spawnDistance + projectile.previousDistanceOffset - state.previousDistance,
+        projectile.previousLateralOffset,
+        projectile.previousVerticalOffset - vehicle.bodyVerticalOffset};
+    const RailLocalPoint end{
+        projectile.spawnDistance + projectile.distanceOffset - state.distance,
+        projectile.lateralOffset,
+        projectile.verticalOffset - vehicle.bodyVerticalOffset};
+    const auto half = vehicle.collisionHalfExtents;
+    const Vector3 padding{projectile.radius, projectile.radius, projectile.radius};
+    RailVehicleProjectileContact contact{};
+    bool startedInside = false;
+    Vector3 normal{};
+    if (!SweepPointAgainstExpandedAabb(start, end, {}, padding, half,
+            contact.fraction, startedInside, normal)) {
+        return std::nullopt;
+    }
+
+    // The sweep stops the projectile centre at the expanded box. Place the
+    // burst on the underlying armour face, including for a spawn in overlap.
+    const auto faceCoordinate = [t = contact.fraction](
+        float from, float to, float extent, float normalComponent) {
+        return normalComponent != 0.0f
+            ? normalComponent * extent
+            : (std::clamp)(Lerp(from, to, t), -extent, extent);
+    };
+    const float distance = Lerp(state.previousDistance, state.distance, contact.fraction);
+    const auto sample = input.railPath->Evaluate(distance);
+    const float lateral = faceCoordinate(start.lateral, end.lateral, half.x, normal.x);
+    const float vertical = vehicle.bodyVerticalOffset +
+        faceCoordinate(start.vertical, end.vertical, half.y, normal.y);
+    const float longitudinal = faceCoordinate(start.distance, end.distance, half.z, normal.z);
+    contact.railPosition = {lateral, vertical, distance + longitudinal};
+    contact.worldPosition = Add(sample.position, Add(Scale(sample.right, lateral),
+        Add(Scale(sample.up, vertical), Scale(sample.tangent, longitudinal))));
+    contact.worldNormal = Add(Scale(sample.right, normal.x),
+        Add(Scale(sample.up, normal.y), Scale(sample.tangent, normal.z)));
+    // Carry the swept point into the current vehicle pose for the VFX query.
+    // Damage and collision feedback continue to use the original world point.
+    contact.currentVehicleProbe = Add(state.position, Add(Scale(state.right, lateral),
+        Add(Scale(state.up, vertical - vehicle.bodyVerticalOffset),
+            Scale(state.forward, longitudinal))));
+    return contact;
+}
+
 const char* ToString(RailVehicleBodyContactKind kind) noexcept {
     switch (kind) {
     case RailVehicleBodyContactKind::None: return "None";

@@ -311,8 +311,16 @@ Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,i
     if(actor.desc.meshId=="carrier_heavy_turret")return ResolveTurretMuzzleRailPosition(actor,0);
     if(RailTurret::IsMesh(actor.desc.meshId) && actor.targetingState.solutionLocked &&
         actor.targetingState.attackIntentSequence==actor.attackState.intentSequence &&
-        actor.targetingState.attackTokenId==actor.attackState.tokenId)
+        actor.targetingState.attackTokenId==actor.attackState.tokenId) {
+        if(RailGroundBattery::IsPredictive(actor.desc.actorAssetId)) {
+            // One coherent crossing volley uses the rail-outer barrel. The inner
+            // barrel's shallow crossing angle covered the post-launch brake escape.
+            const auto left=ResolveTurretMuzzleRailPosition(actor,-1.0f);
+            const auto right=ResolveTurretMuzzleRailPosition(actor,1.0f);
+            return std::abs(left.x)>std::abs(right.x)?left:right;
+        }
         return ResolveTurretMuzzleRailPosition(actor,(index & 1)?1.0f:-1.0f);
+    }
     const float lane=static_cast<float>(index)-static_cast<float>((std::max)(1,actor.desc.bulletCount)-1)*0.5f;
     return {actor.desc.lateralOffset+lane*actor.desc.radius*0.7f,actor.desc.verticalOffset,
         actor.desc.spawnDistance+actor.desc.distanceOffset-actor.desc.radius*1.5f};

@@ -37,8 +37,9 @@ def main():
             continue
         if (target/'GE3.exe').resolve() != exe.resolve():
             shutil.copy2(exe, target/'GE3.exe')
-        for relative in ['Object3D.PS.hlsl','RailHudAtlas.PS.hlsl','TitleDust.PS.hlsl','TitleTracer.PS.hlsl','RailGatlingRing.hlsli','RailKillBoostOverlay.hlsli','RailEnergyShield.hlsli',
+        for relative in ['Object3D.PS.hlsl','Terrain.PS.hlsl','TitleLighting.hlsli','RailHudAtlas.PS.hlsl','TitleDust.PS.hlsl','TitleTracer.PS.hlsl','RailGatlingRing.hlsli','RailKillBoostOverlay.hlsli','RailEnergyShield.hlsli',
                          'audio/rail_kill_boost_release.wav',
+                         'audio/rail_brake_scrape.wav',
                          'audio/rail_energy_shield_hit.wav','audio/rail_energy_shield_break.wav',
                          'courses/actors/short_shield_scout.actor',
                          'courses/actors/short_rear_pursuer.actor',
@@ -70,6 +71,8 @@ def main():
             shutil.copy2(source,target/'Resources/courses/projectiles'/source.name)
         shutil.copytree(ROOT/'Resources/enemies/ElitePursuers',
                         target/'Resources/enemies/ElitePursuers', dirs_exist_ok=True)
+        shutil.copytree(ROOT/'Resources/enemies/VeilInterceptor',
+                        target/'Resources/enemies/VeilInterceptor', dirs_exist_ok=True)
         shutil.copytree(ROOT/'Resources/course_meshes/CourseBlockoutBridge',
                         target/'Resources/course_meshes/CourseBlockoutBridge', dirs_exist_ok=True)
         shutil.copytree(ROOT/'Resources/course_meshes/RailSpeedMarker',
@@ -186,6 +189,12 @@ def main():
         '@echo off\nsetlocal\ncd /d "%~dp0CarrierShot"\n'
         'set "GE3_SUNFALL_PREVIEW_DISTANCE=3290"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
         'set "GE3_COURSE_FRAME_EXPORT="\nset "GE3_POST_BOSS_AUDIT="\nstart "" "%~dp0GE3.exe"\n',encoding='utf-8')
+    (PREVIEW/'PlayHeavyInterceptTutorial.cmd').write_text(
+        '@echo off\nsetlocal\ncd /d "%~dp0CarrierShot"\n'
+        'set "GE3_SUNFALL_PREVIEW_DISTANCE=3290"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
+        'set "GE3_COURSE_FRAME_EXPORT="\nset "GE3_POST_BOSS_AUDIT="\n'
+        'set "GE3_HEAVY_TUTORIAL_AUDIT="\nstart "" "%~dp0GE3.exe"\n',encoding='utf-8')
+    shutil.copy2(PREVIEW/'PlayHeavyInterceptTutorial.cmd', PREVIEW/'PlayHeavyIntercept.cmd')
     print('Course blockout preview and five existing packages refreshed.')
 
 
