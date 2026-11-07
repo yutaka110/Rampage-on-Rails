@@ -169,8 +169,9 @@ struct CameraForGPU {
     std::array<Vector4,2> railBoostLights{};
     std::array<Vector4,2> veilBeamLights{}; // muzzle/contact world position + intensity
     Vector4 veilBeamLightColor{}; // linear RGB and finite influence radius
+    std::array<Vector4, 2> railFrictionLights{};
 };
-static_assert(sizeof(CameraForGPU) == 368);
+static_assert(sizeof(CameraForGPU) == 400);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};
@@ -321,7 +322,8 @@ public:
         bool includeStartupRearScenery = false,
         const RailMothership::Frame* mothership = nullptr,
         std::span<const CourseTerrainPlacement> sequenceScenery = {},
-        const RailVeilAttackFrame* veilAttack = nullptr);
+        const RailVeilAttackFrame* veilAttack = nullptr,
+        const RailEliteFirePresentation* eliteFire = nullptr);
     void SyncRailVehicleRenderFrame(
         const RailVehicleRenderFrame& frame,
         const Matrix4x4& viewMatrix,
@@ -333,7 +335,8 @@ public:
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix,
         const RailVehicleRenderFrame* detachedPanel=nullptr,
-        std::span<const RailVehicleRenderFrame> fractures={});
+        std::span<const RailVehicleRenderFrame> fractures={},
+        const RailVehicleRideArc* gap=nullptr);
     void SyncRailVehicleOccupantActorFrame(
         const RailVehicleOccupantActorFrame& frame,
         const Matrix4x4& viewMatrix,

@@ -54,7 +54,7 @@ void CourseRailTrackRenderer::Sync(
     std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewMatrix,
     const Matrix4x4& projMatrix,const RailVehicleRenderFrame* detachedPanel,
-    std::span<const RailVehicleRenderFrame> fractures) {
+    std::span<const RailVehicleRenderFrame> fractures,const RailVehicleRideArc* gap) {
     Reset();
     stats_.revision = ++revision_;
     stats_.sourceValid = baked.valid;
@@ -76,6 +76,7 @@ void CourseRailTrackRenderer::Sync(
         const size_t staticBudget=items_.size()-(std::min)(reserved,items_.size());
         for (; found != baked.instances.end() &&
                found->startDistance <= maximumDistance; ++found) {
+            if(gap && found->endDistance>gap->start && found->startDistance<gap->Landing())continue;
             const float delta = std::abs(found->startDistance-currentDistance);
             const bool detailedPart =
                 found->part == CourseRailTrackMeshPart::Sleeper ||

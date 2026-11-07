@@ -105,6 +105,9 @@ struct AppFrameGraphBuildContext {
     editor::EditorProductionLightingPipeline* productionLightingPipeline = nullptr;
     editor::EditorProductionGpuDrivenPipeline* productionGpuDrivenPipeline = nullptr;
     editor::EditorWorldPartitionPipeline* worldPartitionPipeline = nullptr;
+    // xy screen centre, z ring radius, w strength. Zero allocates no lens pass.
+    Vector4 railEliteLens{};
+    float railEliteLensAge=0;
 };
 
 class AppFrameGraphBuilder {

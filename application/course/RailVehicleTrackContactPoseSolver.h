@@ -29,6 +29,7 @@ struct RailVehicleTrackContactPoseInput final {
     const RailVehicleRuntimeState* state = nullptr;
     const RailPath* railPath = nullptr;
     RailVehicleTrackContactPoseSettings settings{};
+    const RailVehicleRideArc* rideArc = nullptr;
 };
 
 struct RailVehicleTrackContactPoseFrame final {

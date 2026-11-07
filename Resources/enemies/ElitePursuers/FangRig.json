@@ -1,0 +1,77 @@
+{
+  "coordinate_system": "runtime nose -Z; pivots in imported model space",
+  "parts": [
+    {
+      "id": "fang_body",
+      "file": "FangBody.obj",
+      "pivot": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "fang_wing_left",
+      "file": "FangWingLeft.obj",
+      "pivot": [
+        -0.58,
+        -0.04,
+        0.185
+      ]
+    },
+    {
+      "id": "fang_wing_right",
+      "file": "FangWingRight.obj",
+      "pivot": [
+        0.58,
+        -0.04,
+        0.185
+      ]
+    },
+    {
+      "id": "fang_barrel_left",
+      "file": "FangBarrelLeft.obj",
+      "pivot": [
+        -0.73,
+        -0.18,
+        -0.3
+      ]
+    },
+    {
+      "id": "fang_barrel_right",
+      "file": "FangBarrelRight.obj",
+      "pivot": [
+        0.73,
+        -0.18,
+        -0.3
+      ]
+    },
+    {
+      "id": "fang_engine_left",
+      "file": "FangEngineLeft.obj",
+      "pivot": [
+        -0.54,
+        -0.36,
+        1.19
+      ]
+    },
+    {
+      "id": "fang_engine_right",
+      "file": "FangEngineRight.obj",
+      "pivot": [
+        0.54,
+        -0.36,
+        1.19
+      ]
+    },
+    {
+      "id": "fang_sensor",
+      "file": "FangSensor.obj",
+      "pivot": [
+        0,
+        0.015,
+        -2.18
+      ]
+    }
+  ]
+}

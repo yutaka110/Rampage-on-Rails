@@ -41,7 +41,8 @@ public:
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix,
         const RailVehicleRenderFrame* detachedPanel=nullptr,
-        std::span<const RailVehicleRenderFrame> fractures={});
+        std::span<const RailVehicleRenderFrame> fractures={},
+        const RailVehicleRideArc* gap=nullptr);
 
     const std::vector<CourseMeshRenderItem>& Items() const noexcept { return items_; }
     const CourseRailTrackRenderStats& Stats() const noexcept { return stats_; }

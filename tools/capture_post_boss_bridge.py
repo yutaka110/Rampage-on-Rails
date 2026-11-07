@@ -21,7 +21,7 @@ def fixture_course(course):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--stages',type=int,nargs='+',choices=range(24),default=[0,1,2,3])
+    parser.add_argument('--stages',type=int,nargs='+',choices=range(41),default=[0,1,2,3])
     args=parser.parse_args()
     out=ROOT/'generated/post-boss-review';work=out/'native';work.mkdir(parents=True,exist_ok=True)
     shutil.copytree(ROOT/'Resources',work/'Resources',dirs_exist_ok=True)
@@ -44,7 +44,10 @@ def main():
     labels=['valley-vista','bridge-entry','rear-combat','pursuit-clear','first-pursuit-shadow','second-pursuit-shadow',
             'first-pursuer-reveal','pair-reveal','fang-close-pass','elite-cycle','pursuit-handoff',
             'fang-followup','veil-interrupt','fang-cannon-break','veil-sensor-break','fang-panel-evade','fang-lightning-release','fang-lightning-flight','fang-lightning-hit','fang-lightning-surface',
-            'veil-beam-tracking','veil-beam-locked','veil-beam-impact','veil-beam-lean']
+            'veil-beam-tracking','veil-beam-locked','veil-beam-impact','veil-beam-lean','fang-fire-punch','veil-pressure-shock',
+            'bridge-cut','bridge-release-aim','bridge-release-hit','bridge-jump','bridge-landing','bridge-escape-clear','bridge-escape-retry','bridge-damage-escape','bridge-retry-then-clear',
+            'bridge-structure-sequence','bridge-structure-retry',
+            'coordination-cruise','coordination-accelerate','coordination-brake','coordination-occluded']
     for stage in args.stages:
         label=labels[stage]
         env=os.environ.copy();env.update(GE3_SUNFALL_PREVIEW_DISTANCE='3290',GE3_SUNFALL_PREVIEW_FREEZE='0',
@@ -81,6 +84,14 @@ def main():
             assert int(last['fang_rounds'])==5 and float(last['fang_hull_hp'])==120 and float(last['fang_cannon_hp'])==0,last
             assert any(row['fang_rounds']=='3' and float(row['fang_cannon_hp'])==36 for row in rows),last
             assert any(row['fang_rounds']=='3' and float(row['fang_cannon_hp'])==0 for row in rows),last
+        if stage in (8,13,24):
+            with (out/f'{label}.parts.csv').open() as parts_file:parts=list(csv.DictReader(parts_file))
+            names={p['node'] for p in parts}
+            expected={'fang_body','fang_wing_left','fang_wing_right','fang_barrel_left','fang_engine_left','fang_engine_right','fang_sensor'}
+            if stage!=13:expected.add('fang_barrel_right')
+            assert names==expected,parts
+            assert all(p['actor']!='0' for p in parts),parts
+            if stage==13:assert next(p for p in parts if p['node']=='fang_body')['mesh']=='fang_body_damaged',parts
         if stage==14:
             assert int(last['rear_primary'])==2 and int(last['veil_beams'])==1,last
             assert float(last['veil_hull_hp'])==68 and float(last['veil_sensor_hp'])==0,last
@@ -106,6 +117,89 @@ def main():
             expected_hp=float(rows[fire_index-1]['player_hp'])-(6 if stage==22 else 0)
             assert float(last['player_hp'])==expected_hp,last
             assert any(row['veil_beam_phase']=='2' for row in rows),last
+        if stage==24:
+            assert last['elite_fang_fire']=='1' and float(last['fang_recoil'])>=.10 and last['fang_rounds']=='1',last
+            assert float(last['elite_shake'])<=.0181,last
+        if stage==25:
+            assert last['elite_lens']=='1' and float(last['veil_recoil'])>.05 and abs(float(last['wing_kick']))>.01,last
+            assert any(r['elite_veil_fire']=='1' for r in rows),last
+            assert any(r['elite_charge_loop']=='1' and r['veil_beam_phase']=='2' for r in rows),last
+            assert any(float(r['elite_shake'])>.035 for r in rows if r['veil_beam_phase']=='3'),last
+        if stage>=37:
+            log=work/'logs/pursuer_coordination.csv';shutil.copy2(log,out/f'{label}-coordination.csv')
+            coordination=list(csv.DictReader(log.open()))
+            assert coordination and float(coordination[-1]['age'])>=20,coordination[-1]
+            assert all(not (int(r['fang_threats'])>0 and int(r['beam_phase'])>0) for r in coordination),[r for r in coordination if int(r['fang_threats'])>0 and int(r['beam_phase'])>0]
+            assert not any(r['beam_hit']=='1' for r in coordination),[r for r in coordination if r['beam_hit']=='1']
+            assert any(int(r['fang_shots'])>0 for r in coordination) and any(int(r['veil_shots'])>0 for r in coordination),coordination[-1]
+            fang_owned=[float(r['veil_x']) for r in coordination if r['owner']=='1']
+            veil_owned=[float(r['fang_x']) for r in coordination if r['owner']=='2']
+            assert max(fang_owned)-min(fang_owned)>1 and max(veil_owned)-min(veil_owned)>1,coordination[-1]
+            grants=[];previous_grant='0'
+            for row in coordination:
+                if row['grants']!=previous_grant:
+                    grants.append(row);previous_grant=row['grants']
+            assert grants[0]['owner']==('2' if stage in (38,39) else '1'),grants[0]
+            if stage==38:assert max(float(r['speed']) for r in coordination)>40,coordination[-1]
+            if stage==39:assert min(float(r['speed']) for r in coordination)<28,coordination[-1]
+            if stage==40:
+                blocked=[r for r in coordination if r['veil_los']=='0' and float(r['age'])<13.5]
+                assert len(blocked)>15 and all(r['beam_fired']=='0' for r in blocked),blocked[-1] if blocked else coordination[-1]
+                # A sight line may briefly clear, reserve a warning, then close
+                # again. Count actual shots, not cancelled attack intentions.
+                fired=[];previous_shots=[0,0]
+                for row in coordination:
+                    shots=[int(row['fang_shots']),int(row['veil_shots'])]
+                    for i in range(2):
+                        if shots[i]>previous_shots[i]:fired.append(str(i+1))
+                    previous_shots=shots
+                assert fired[:2]==['1','1'] and '2' in fired[2:],fired
+        if 26<=stage<=36:
+            bridge_log=work/'logs/bridge_escape_audit.csv'
+            shutil.copy2(bridge_log,out/f'{label}-bridge.csv')
+            bridge=list(csv.DictReader(bridge_log.open()));b=bridge[-1]
+            assert float(b['speed'])>0 and float(last['player_hp'])>0,b
+            if stage==27:assert b['phase']=='3' and b['target_hp']=='30' and b['locks']=='0',b
+            if stage in (28,29,30,31,33,34,35,36):
+                assert any(r['lock_hit']=='1' for r in bridge),bridge[-5:]
+                assert any(r['in_flight']=='1' for r in bridge),bridge[-5:]
+            if stage==29:assert b['phase']=='6' and float(b['lift'])>6 and b['supported']=='0' and float(b['speed'])>60,b
+            if stage==30:assert b['phase']=='7' and float(b['lift'])==0 and b['supported']=='1',b
+            if stage in (31,33,34):assert b['phase']=='8' and b['clear']=='1' and last['alive']=='0',b
+            if stage==32:
+                assert int(b['attempt'])>int(bridge[0]['attempt']) and b['target_hp']=='30' and b['phase']=='3',b
+                assert abs(float(b['distance'])-float(b['checkpoint']))<8,b
+                assert float(b['checkpoint'])>=float(bridge[0]['distance']),b
+            if stage==33:assert float(b['damage'])>=64 and float(b['combat_seconds'])<26,b
+            if stage==34:assert int(b['attempt'])>int(bridge[0]['attempt']),b
+            if stage in (35,36):
+                assert all((out/f'{label}-{i}.png').exists() for i in range(13)),label
+                assert 'victory=1' in (out/f'{label}.csv').read_text(),b
+                assert any(r['attached']=='1' and float(r['span_y'])<-2 for r in bridge),b
+                assert any(r['attached']=='0' and float(r['span_y'])<-20 for r in bridge),b
+                aiming=[r for r in bridge if r['phase']=='3']
+                assert aiming and max(float(r['shake']) for r in aiming)==0,aiming[-1]
+                assert all(abs(float(r['ramp_tip'])+2.4)<.01 for r in aiming),aiming[-1]
+                assert any(float(r['deploy'])>.45 and float(r['ramp_tip'])>0 for r in bridge if r['phase']=='4'),b
+                assert any(float(r['brace'])>.4 for r in bridge if r['phase']=='1'),b
+                launch=[r for r in bridge if r['phase']=='5']
+                assert max(float(r['spin']) for r in launch)>=359,launch[-1]
+                assert max(float(r['ignition_shock']) for r in launch)>.30,launch[0]
+                assert any(float(r['spin'])>90 and float(r['blur'])>.05 for r in launch),launch[0]
+                assert any(float(r['thrust'])>.60 for r in launch),launch[0]
+                assert min(float(r['blur']) for r in launch if .20<=float(r['phase_age'])<=.80)>.05,launch[0]
+                births=[r for r in bridge if int(r['spark_births'])>0]
+                assert len(births)==1 and births[0]['phase']=='7' and births[0]['supported']=='1',births
+                assert int(births[0]['spark_births'])>=26 and float(births[0]['flash'])>1.0,births
+                assert 1<=max(int(r['bounces']) for r in bridge)<=5,births
+                assert all(r['sparks']=='0' for r in bridge if r['phase']=='6'),births
+                for a,c in zip(bridge,bridge[1:]):
+                    if a['phase'] in ('4','5','6') and c['phase'] in ('4','5','6','7'):
+                        assert abs(float(c['time_scale'])-float(a['time_scale']))<.35,(a,c)
+                        assert abs(float(c['view_fov'])-float(a['view_fov']))<.10,(a,c)
+                    if a['phase']=='7' and c['phase']=='8':
+                        assert abs(float(c['blur'])-float(a['blur']))<.10,(a,c)
+                if stage==36:assert int(b['attempt'])>int(bridge[0]['attempt']),b
         if stage>=2:assert notice and float(notice['age'])>=12 and float(notice['distance'])-float(notice['anchor'])>=489,notice
         item=dict(stage=label,last=last,notice=notice,build_sha256=build,fixture_boss_hp=[60,60])
         by_stage[label]=item;print(json.dumps(item),flush=True)

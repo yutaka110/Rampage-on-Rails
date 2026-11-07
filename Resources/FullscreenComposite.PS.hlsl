@@ -444,6 +444,19 @@ float4 PresentSandTransition(float2 uv) {
 float4 main(PSInput input) : SV_TARGET
 {
     float2 uv = saturate(input.uv);
+    if(gAux5 < -2.5f) {
+        // A short refractive annulus around the actual muzzle. Centre, HUD,
+        // telegraph timing and the rest of the image retain their clarity.
+        uint width,height;gSceneColor.GetDimensions(width,height);
+        float aspect=max(gImpactScreen.y,.1f);
+        float2 d=(uv-gTunnelFocus)*float2(aspect,1);
+        float radius=length(d),ring=gImpactScreen.x;
+        float envelope=saturate(gLensLeak)*(1-smoothstep(.09f,.12f,gLensAge));
+        float annulus=exp(-pow((radius-ring)/.012f,2))*smoothstep(.020f,.035f,radius);
+        float2 direction=d/max(radius,.0001f)/float2(aspect,1);
+        float2 offset=direction*annulus*envelope*(1.7f/max(float(height),1.0f));
+        return float4(gSceneColor.Sample(gSampler,saturate(uv+offset)).rgb,1);
+    }
     // Boost uses this same shader in both the Release and editor viewport.
     // Mode -2 is a pure copy; -1 blurs display colour before HUD/VFX overlays.
     if (gAux5 < -1.5f) return gSceneColor.Sample(gSampler,uv);

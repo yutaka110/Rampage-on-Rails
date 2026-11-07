@@ -37,7 +37,12 @@ def main():
             continue
         if (target/'GE3.exe').resolve() != exe.resolve():
             shutil.copy2(exe, target/'GE3.exe')
-        for relative in ['Object3D.PS.hlsl','Terrain.PS.hlsl','TitleLighting.hlsli','RailHudAtlas.PS.hlsl','TitleDust.PS.hlsl','TitleTracer.PS.hlsl','RailGatlingRing.hlsli','RailKillBoostOverlay.hlsli','RailEnergyShield.hlsli',
+        for relative in ['Object3D.PS.hlsl','Terrain.PS.hlsl','TitleLighting.hlsli','RailHudAtlas.PS.hlsl','TitleDust.PS.hlsl','TitleTracer.PS.hlsl','RailGatlingRing.hlsli','RailKillBoostOverlay.hlsli','RailEnergyShield.hlsli','FullscreenComposite.PS.hlsl',
+                         'audio/elite_fang_fire.wav','audio/elite_veil_fire.wav','audio/elite_veil_shock.wav','audio/elite_veil_charge.wav',
+                         'audio/bridge_escape_break.wav','audio/bridge_escape_release.wav','audio/bridge_escape_land.wav',
+                         'audio/bridge_escape_charge.wav','audio/bridge_escape_cannon.wav','audio/bridge_escape_tear.wav',
+                         'enemies/ElitePursuers/BridgeEscapeRamp.obj','enemies/ElitePursuers/BridgeEscapeClamp.obj','enemies/ElitePursuers/BridgeEscapeDebris.obj',
+                         'enemies/ElitePursuers/BridgeEscapeSpan.obj','enemies/ElitePursuers/BridgeEscapeLeaf.obj','enemies/ElitePursuers/BridgeEscapeLink.obj','enemies/ElitePursuers/BridgeEscapePylon.obj',
                          'audio/rail_kill_boost_release.wav',
                          'audio/rail_brake_scrape.wav',
                          'audio/rail_energy_shield_hit.wav','audio/rail_energy_shield_break.wav',

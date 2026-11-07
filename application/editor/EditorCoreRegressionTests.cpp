@@ -8,6 +8,9 @@
 #include "../course/RailHeavyAttack.h"
 #include "../course/RailHeavyInterceptPresentation.h"
 #include "../course/RailVeilModel.h"
+#include "../course/RailFangModel.h"
+#include "../course/RailPursuerVisibility.h"
+#include "../course/RailEliteFirePresentation.h"
 #include "../course/RailGroundBatteryAttack.h"
 #include "../course/EnemyEnergyShieldPresentation.h"
 #include "../course/RailMothershipBattle.h"
@@ -39821,7 +39824,9 @@ void TestPrimaryContactPresentationCoherence(RegressionRunner& runner) {
 #include "KillBoostRegressionTests.inl"
 #include "EnergyShieldRegressionTests.inl"
 #include "PostBossRegressionTests.inl"
+#include "PursuerCoordinationRegressionTests.inl"
 #include "BasicTutorialRegressionTests.inl"
+#include "EliteFireRegressionTests.inl"
 
 void TestGatlingRingMaterial(RegressionRunner& runner) {
     ge3::core::ShaderCompiler compiler;
@@ -44188,7 +44193,13 @@ int RunEditorCoreRegressionTests() {
          {"carrier gatling scheduled burst", [&]() { TestCarrierGatlingBurst(runner); }},
          {"gatling held primary cancellation", [&]() { TestGatlingHeldPrimaryCancellation(runner); }},
          {"post boss relative vista bridge and rear timing", [&]() { TestPostBossTiming(runner); }},
+         {"independent pursuer movement reservation and sight", [&]() { TestPursuerCoordination(runner); }},
+         {"bridge escape interaction and authoritative ride", [&]() { TestBridgeEscapeInteraction(runner); }},
          {"veil modular model geometry and beam alignment", [&]() { TestVeilModularModel(runner); }},
+         {"elite fire emission pause and bounded camera", [&]() { TestEliteFirePresentation(runner); }},
+         {"elite fire modular geometry and recoil", [&]() { TestEliteFireAssets(runner); }},
+         {"fang eight rigid parts geometry pivots and damage", [&]() { TestFangRigidParts(runner); }},
+         {"elite fire local refraction and sharp HUD graph", [&]() { TestEliteFirePostGraph(runner); }},
          {"post boss rear pursuit real combat and speed", [&]() { TestRearPursuitCombat(runner); }},
          {"post boss rear camera authoring and retry", [&]() { TestPostBossCameraAndRetry(runner); }},
          {"energy shield damage authority and lock defense", [&]() { TestEnergyShieldAuthority(runner); }},

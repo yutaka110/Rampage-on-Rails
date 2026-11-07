@@ -132,6 +132,20 @@ float4 main(PixelInput input) : SV_TARGET0 {
         float a=(arc*gaps+crack*.65f)*(1-smoothstep(.9f,1,r))*input.color.a;
         return float4(input.color.rgb+float3(.20f,.12f,.20f)*(arc+crack),a);
     }
+    if(input.texcoord.x>=44.0f && input.texcoord.x<=45.0f) {
+        // Contact spark. R and G carry energy and heat; alpha carries age fade.
+        float along = input.texcoord.x - 44.0f;
+        float across = input.texcoord.y * 2.0f - 1.0f;
+        float width = lerp(0.07f, 0.9f, sqrt(along)) * (1.0f - 0.55f * smoothstep(0.87f, 1.0f, along));
+        float transverse = across / width;
+        float core = exp(-transverse * transverse * 11.0f);
+        float halo = exp(-transverse * transverse * 2.8f) * 0.24f;
+        float tip = core * smoothstep(0.5f, 0.92f, along) * input.color.g;
+        float3 amber = lerp(float3(1.8f, 0.23f, 0.024f), float3(3.3f, 1.28f, 0.18f), input.color.g);
+        float3 color = lerp(amber, float3(5.2f, 4.45f, 2.55f), tip) * input.color.r;
+        float ends = smoothstep(0.0f, 0.52f, along) * (1.0f - smoothstep(0.91f, 1.0f, along));
+        return float4(color, (core + halo) * ends * input.color.a);
+    }
     if(input.texcoord.x>41.5f) {
         // Thin world-space near-ground streak, with no round projectile head.
         float u=saturate(input.texcoord.x-42),v=input.texcoord.y*2-1;

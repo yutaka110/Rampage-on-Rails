@@ -1259,6 +1259,9 @@ PixelShaderOutput main(VertexShaderOutput input)
         float3 beamDirection;
         float3 beamEnergy=VeilBeamRadiance(input.worldPosition,source,beamDirection);
         lit+=rockColor*beamEnergy*saturate(dot(normal,beamDirection))*0.35f;
+        float3 frictionDirection;
+        float3 frictionEnergy=RailFrictionRadiance(input.worldPosition,source,frictionDirection);
+        lit+=rockColor*frictionEnergy*saturate(dot(normal,frictionDirection))*0.26f;
     }
 
     // READY contact light shares the actual wall position used by sparks and dust.

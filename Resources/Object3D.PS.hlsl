@@ -219,6 +219,9 @@ static float3 RailWorldEffectSurfaceLighting(float3 base,float metal,float rough
         energy=VeilBeamRadiance(worldPosition,source,L);
         [branch] if(any(energy>0.0f))
             lighting+=DroneDirect(base,metal,max(rough,0.30f),N,V,L,energy);
+        energy=RailFrictionRadiance(worldPosition,source,L);
+        [branch] if(any(energy>0.0f))
+            lighting+=DroneDirect(base,metal,max(rough,0.30f),N,V,L,energy);
     }
     return lighting;
 }

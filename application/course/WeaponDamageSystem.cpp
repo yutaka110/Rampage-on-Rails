@@ -215,7 +215,8 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
             result.targetResolved = true;
             result.hitPointsBefore = (std::max)(obstacle.desc.hitPoints, 0.0f);
             result.remainingHitPoints = result.hitPointsBefore;
-            if (!obstacle.desc.breakable) {
+            if (!obstacle.desc.breakable ||
+                (obstacle.desc.payload=="bridge_escape_release" && !request.lockOnContact)) {
                 result.blocked = true;
                 result.rejectReason = DamageRejectReason::Indestructible;
                 return result;

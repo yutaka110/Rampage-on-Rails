@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "CourseAsset.h"
+#include "RailVehicleRideArc.h"
 #include "../terrain/RailPath.h"
 
 // Defines who owns the player's rail-local position while occupying a vehicle.
@@ -97,6 +98,7 @@ struct RailVehicleMovementInput final {
     float jerkLimit = 0.0f;
     CourseRuntime* courseRuntime = nullptr;
     const RailPath* railPath = nullptr;
+    const RailVehicleRideArc* rideArc = nullptr;
 };
 
 struct RailVehicleMovementFrame final {

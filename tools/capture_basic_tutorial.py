@@ -16,12 +16,12 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 LABELS = ['primary-prompt', 'primary-confirmed', 'lock-hold', 'lock-sweep',
           'lock-release', 'lock-confirmed', 'accelerator-prompt',
-          'accelerator-confirmed', 'brake-prompt', 'brake-confirmed']
+          'accelerator-confirmed', 'brake-prompt', 'brake-confirmed', 'brake-contact-sparks']
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--stages', nargs='+', type=int, choices=range(10), default=list(range(10)))
+    parser.add_argument('--stages', nargs='+', type=int, choices=range(len(LABELS)), default=list(range(10)))
     args = parser.parse_args()
     out = ROOT / 'generated/basic-tutorial-review'
     work = out / 'native'
@@ -56,6 +56,11 @@ def main():
             assert int(last['learned']) == 30 and float(last['speed']) < float(last['normal']) * .92
             assert any(int(r['shots']) > 0 for r in rows)
             assert any(int(r['volley']) >= 2 for r in rows)
+            braking=[r for r in rows if r['brake']=='1']
+            assert braking and max(float(r['flash']) for r in braking)>.35, last
+            assert all(r['spark_births']=='0' for r in rows if r['brake']=='0'),last
+        if stage == 10:
+            assert last['brake']=='1' and int(last['sparks'])>=4,last
         evidence[label] = dict(stage=label, build_sha256=build, last=last,
                                actual_primary_shots=sum(int(r['shots']) for r in rows),
                                actual_lock_shots=sum(int(r['volley']) for r in rows))

@@ -84,8 +84,12 @@ const RailVehicleTrackContactPoseFrame& RailVehicleTrackContactPoseSolver::Solve
             : distance;
         return input.railPath->Evaluate(sampleDistance);
     };
-    const RailPathSample rear = evaluateOpenRail(next.rearDistance);
-    const RailPathSample front = evaluateOpenRail(next.frontDistance);
+    RailPathSample rear = evaluateOpenRail(next.rearDistance);
+    RailPathSample front = evaluateOpenRail(next.frontDistance);
+    if(input.rideArc) {
+        rear.position=Add(rear.position,Scale(rear.up,input.rideArc->Height(next.rearDistance)));
+        front.position=Add(front.position,Scale(front.up,input.rideArc->Height(next.frontDistance)));
+    }
     const Vector3 rearRight = NormalizeOr(rear.right, input.state->right);
     const Vector3 frontRight = NormalizeOr(front.right, input.state->right);
     const Vector3 rearUp = NormalizeOr(rear.up, input.state->up);
@@ -138,6 +142,9 @@ const RailVehicleTrackContactPoseFrame& RailVehicleTrackContactPoseSolver::Solve
     next.allWheelsSupported = next.maximumContactPlaneError <=
         input.settings.maximumSuspensionTravel;
     next.contactCount = 4;
+    if(input.rideArc && input.rideArc->Airborne(input.state->distance)) {
+        next.allWheelsSupported=false;next.contactCount=0;
+    }
     next.visualPosition = Add(
         next.contactCentroid,
         Scale(next.up,

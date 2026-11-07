@@ -404,6 +404,14 @@ void GameSessionSystem::SetCombo(uint32_t combo, std::string_view sourceId) {
         state_.statusMessage);
 }
 
+bool GameSessionSystem::SetCourseLength(float courseLength) {
+    if(!IsInitialized() || !std::isfinite(courseLength) || courseLength<=0 ||
+        courseLength<state_.courseDistance || courseLength<state_.checkpointDistance)return false;
+    state_.courseLength=courseLength;
+    state_.courseEndReached=state_.courseDistance>=courseLength-definition_.courseEndTolerance;
+    ++state_.revision;return true;
+}
+
 bool GameSessionSystem::RegisterCheckpoint(float courseDistance, std::string checkpointId) {
     BeginOperation();
     if (!IsInitialized() || !std::isfinite(courseDistance)) return false;

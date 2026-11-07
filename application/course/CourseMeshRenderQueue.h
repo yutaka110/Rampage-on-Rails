@@ -21,6 +21,7 @@ class CourseSpawnRuntime;
 class EnemyCombatPresentationBridge;
 class EnemyEncounterReadabilityDirector;
 struct RailVeilAttackFrame;
+class RailEliteFirePresentation;
 
 struct CourseMeshModelBinding {
     std::string name;
@@ -106,13 +107,17 @@ public:
         const EnemyCombatPresentationBridge* enemyPresentation = nullptr,
         const EnemyEncounterReadabilityDirector* enemyReadability = nullptr,
         bool includeStartupRearScenery = false,
-        const RailVeilAttackFrame* veilAttack = nullptr);
+        const RailVeilAttackFrame* veilAttack = nullptr,
+        const RailEliteFirePresentation* eliteFire = nullptr);
 
     const std::vector<CourseMeshRenderItem>& Items() const { return items_; }
     size_t Capacity() const { return items_.size(); }
     size_t VisibleCount() const { return visibleCount_; }
 
 private:
+    bool WriteFang(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
+        float recoil,bool exposed,bool damaged,uint8_t panelMask,
+        std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection);
     bool WriteVeil(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
         const RailVeilAttackFrame& attack,bool sensorExposed,bool sensorDamaged,uint8_t panelMask,
         std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection);
@@ -134,7 +139,7 @@ private:
         const Vector3& cameraPosition,
         const EnemyCombatPresentationBridge* enemyPresentation,
         const EnemyEncounterReadabilityDirector* enemyReadability,
-        const RailVeilAttackFrame* veilAttack);
+        const RailVeilAttackFrame* veilAttack,const RailEliteFirePresentation* eliteFire);
     void AddCourseDebrisInstances(
         const CourseAsset& course,
         float currentDistance,

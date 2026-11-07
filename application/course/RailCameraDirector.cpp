@@ -695,6 +695,7 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     }
 
     directorTime_ += (std::max)(0.0f, input.deltaTime);
+    if(input.stableAimPresentation) {shakeTime_=0;shakeAmplitude_=0;fovKick_=0;rollKick_=0;}
     BeginSegmentTransitionIfNeeded(input);
     CourseCameraKey targetRig = input.course->EvaluateCamera(input.distance);
     frame.mode = "Default";
@@ -929,12 +930,12 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
         frame.gameplayForward,
         frame.rig.roll);
 
-    if (input.cameraInertiaActive) {
+    if (input.cameraInertiaActive && !input.stableAimPresentation) {
         frame.position = Add(frame.position, input.cameraInertiaPresentationPositionOffset);
         frame.target = Add(frame.target, input.cameraInertiaPresentationTargetOffset);
     }
 
-    const float cameraShakeScale = (1.0f - aimFocusBlend_ * aimFocusSettings_.shakeSuppression)*
+    const float cameraShakeScale = (input.stableAimPresentation?0.0f:1.0f)*(1.0f - aimFocusBlend_ * aimFocusSettings_.shakeSuppression)*
         (1.0f-0.9f*carrierWeight);
     if (shakeTime_ > 0.0f && shakeAmplitude_ > 0.0f) {
         const float envelope = (std::clamp)(shakeTime_, 0.0f, 1.0f);

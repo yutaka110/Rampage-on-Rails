@@ -110,6 +110,7 @@
 #include "course/RailLockOnSystem.h"
 #include "course/RailHeavyInterceptPresentation.h"
 #include "course/RailVeilModel.h"
+#include "course/RailEliteFirePresentation.h"
 #include "course/RailSpeedDirector.h"
 #include "course/RailRideDirector.h"
 #include "course/RailRideMotionEnvelope.h"
@@ -890,6 +891,10 @@ private:
     RailLockIntroPresentation railLockIntro_{};
     RailBasicTutorial railBasicTutorial_{};
     RailVeilModelPresentation railVeilModel_{};
+    RailEliteFirePresentation railEliteFire_{};
+    std::array<audio::SoundHandle,4> railEliteSounds_{};
+    std::array<audio::SoundHandle,6> railEscapeSounds_{};
+    bool railEliteChargePlaying_=false;
     CaveOpeningLighting caveOpeningLighting_{};
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;

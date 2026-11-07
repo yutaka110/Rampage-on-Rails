@@ -306,6 +306,16 @@ const RailVehicleMovementFrame& RailVehicleMovementSystem::Update(
         state_.impactSpeedMultiplier = 1.0f;
     }
     EvaluatePose(railPath);
+    if(input.rideArc && input.rideArc->enabled) {
+        const auto sample=railPath.Evaluate(state_.distance);
+        state_.position=Add(state_.position,Scale(sample.up,input.rideArc->Height(state_.distance)));
+        const Vector3 tangent=Add(sample.tangent,Scale(sample.up,input.rideArc->Slope(state_.distance)));
+        const float length=std::sqrt(Dot(tangent,tangent));
+        state_.forward=Scale(tangent,1.0f/(std::max)(length,.001f));
+        state_.up=Cross(state_.forward,state_.right);
+        state_.grade=state_.forward.y;
+        UpdateMounts();
+    }
     ++state_.frameIndex;
     ++state_.revision;
 

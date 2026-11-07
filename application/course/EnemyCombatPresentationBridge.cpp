@@ -661,11 +661,13 @@ void EnemyCombatPresentationBridge::Update(
                 frame_.cameraRollImpulseRadians += rollSign * 0.003f;
                 break;
             case EnemyCombatEventKind::TelegraphStarted:
+                if(IsRailElitePursuer(actor->desc.actorAssetId))break;
                 frame_.cameraShakeImpulse = (std::max)(
                     frame_.cameraShakeImpulse, 0.06f);
                 frame_.cameraFovImpulseRadians -= 0.004f;
                 break;
             case EnemyCombatEventKind::AttackCommitted:
+                if(IsRailElitePursuer(actor->desc.actorAssetId))break;
                 frame_.cameraShakeImpulse = (std::max)(
                     frame_.cameraShakeImpulse, 0.22f);
                 frame_.cameraFovImpulseRadians += 0.008f;

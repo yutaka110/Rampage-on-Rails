@@ -20,6 +20,20 @@ cbuffer Camera : register(b2)
     float4 railBoostLights[2]; // world exhaust source + transient intensity
     float4 veilBeamLights[2]; // muzzle/contact world position + intensity
     float4 veilBeamLightColor; // linear RGB and finite influence radius
+    float4 railFrictionLights[2]; // short warm flashes at the wheel contacts
+}
+
+static float3 RailFrictionRadiance(float3 worldPosition, int source, out float3 direction)
+{
+    float4 light = railFrictionLights[source];
+    direction = float3(0,1,0);
+    [branch] if (light.w <= 0.0f) return 0.0f;
+    float3 delta = light.xyz - worldPosition;
+    float distanceSquared = dot(delta, delta);
+    [branch] if (distanceSquared >= 5.76f) return 0.0f;
+    direction = delta * rsqrt(max(distanceSquared, 0.01f));
+    float falloff = 1.0f - distanceSquared / 5.76f;
+    return float3(3.40f, 1.55f, 0.44f) * light.w * falloff * falloff / (1.0f + distanceSquared * 1.7f);
 }
 
 static float3 VeilBeamRadiance(float3 worldPosition,int source,out float3 direction)

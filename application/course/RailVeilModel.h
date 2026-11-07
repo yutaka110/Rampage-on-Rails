@@ -3,7 +3,7 @@
 #include <array>
 
 struct RailVeilAttackFrame final {
-    float opening=0,charge=0,recoil=0;
+    float opening=0,charge=0,recoil=0,wingKick=0,bodyKick=0,flash=0,brace=0;
 };
 
 // A visual follower of the existing beam clock. It cannot delay a shot, change
@@ -12,15 +12,22 @@ class RailVeilModelPresentation final {
 public:
     void Reset(){*this={};}
     const RailVeilAttackFrame& Frame()const{return frame_;}
-    void Update(float dt,bool active,bool firing,float secondsToFire) {
+    void Update(float dt,bool active,bool firing,float secondsToFire,bool maximumOutput=false) {
         if(!std::isfinite(dt) || dt<=0)return;
         dt=(std::min)(dt,.1f);
         const float target=active?1.0f:0.0f;
         frame_.opening+=(std::clamp)(target-frame_.opening,-dt*2.5f,dt*5);
         frame_.charge=active?(std::clamp)(1-secondsToFire/1.8f,0.0f,1.0f):0;
+        const float brace=maximumOutput && !firing?std::sqrt(frame_.charge):0;
+        frame_.brace+=(brace-frame_.brace)*(1-std::exp(-dt*12));
         if(firing && !wasFiring_)recoilAge_=0;
         else recoilAge_+=dt;
-        frame_.recoil=.23f*(1-std::exp(-recoilAge_*100))*std::exp(-recoilAge_*10);
+        const float t=recoilAge_;
+        frame_.recoil=t<.025f?.10f+.13f*t/.025f:.23f*std::pow(1-(std::clamp)((t-.025f)/.30f,0.0f,1.0f),2.0f);
+        frame_.flash=t<.075f?std::exp(-t*34):0;
+        const float lag=(std::max)(0.0f,t-.035f);
+        frame_.wingKick=t>.035f && lag<.34f?std::sin(lag*37)*std::exp(-lag*13):0;
+        frame_.bodyKick=t>.015f && t<.30f?std::sin((t-.015f)*24)*std::exp(-(t-.015f)*15):0;
         wasFiring_=firing;
     }
 private:
@@ -54,8 +61,12 @@ struct PartPose {Matrix4x4 local=MakeIdentity4x4();bool visible=true;};
 inline PartPose EvaluatePart(size_t index,const RailVeilAttackFrame& attack,bool sensorExposed,bool sensorDamaged) {
     PartPose result;if(index>=Parts.size()){result.visible=false;return result;}
     Vector3 rotate{},offset=Parts[index].pivot;
-    if(index==1 || index==2)rotate.y=(index==1?1.0f:-1.0f)*attack.opening*.12f;
-    if(index==3 || index==8)offset.z+=attack.recoil;
+    if(index==0){rotate.x=attack.bodyKick*.008f-attack.brace*.025f;offset.z+=attack.bodyKick*.025f;}
+    if(index==1 || index==2) {
+        rotate.y=(index==1?1.0f:-1.0f)*(attack.opening*.12f+attack.brace*.10f);
+        rotate.z=(index==1?1.0f:-1.0f)*(attack.wingKick*.030f+attack.brace*.08f);
+    }
+    if(index==3 || index==8)offset.z+=attack.recoil+attack.brace*.13f;
     if(index==4 || index==5) {
         rotate.x=(index==4?1.0f:-1.0f)*attack.opening*ShroudAngle;
         offset.z+=attack.opening*ShroudRetraction;
@@ -69,6 +80,6 @@ inline PartPose EvaluatePart(size_t index,const RailVeilAttackFrame& attack,bool
     return result;
 }
 inline Vector3 MuzzleWorld(const TwinShieldDronePose& pose,const RailVeilAttackFrame& attack) {
-    auto local=Muzzle;local.z+=attack.recoil;return RearSubsystemWorldCenter(pose,local);
+    auto local=Muzzle;local.z+=attack.recoil+attack.brace*.13f;return RearSubsystemWorldCenter(pose,local);
 }
 }

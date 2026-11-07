@@ -1,5 +1,6 @@
 #include "course/RailVehicleBreakawayGeometry.h"
 #include "AppSceneResources.h"
+#include "course/RailFangModel.h"
 #include "course/RailVeilModel.h"
 
 #include <cassert>
@@ -3229,10 +3230,26 @@ bool AppSceneResources::Initialize(
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("course_blockout_bridge", "Resources/course_meshes/CourseBlockoutBridge", "CourseBlockoutBridge.obj", "courseBlockoutSteel");
+    registerCourseMesh("bridge_escape_clamp", "Resources/enemies/ElitePursuers", "BridgeEscapeClamp.obj", "elitePursuerPalette");
+    registerCourseMesh("bridge_escape_ramp", "Resources/enemies/ElitePursuers", "BridgeEscapeRamp.obj", "elitePursuerPalette");
+    registerCourseMesh("bridge_escape_debris", "Resources/enemies/ElitePursuers", "BridgeEscapeDebris.obj", "elitePursuerPalette");
+    registerCourseMesh("bridge_escape_span", "Resources/enemies/ElitePursuers", "BridgeEscapeSpan.obj", "elitePursuerPalette");
+    registerCourseMesh("bridge_escape_leaf", "Resources/enemies/ElitePursuers", "BridgeEscapeLeaf.obj", "elitePursuerPalette");
+    registerCourseMesh("bridge_escape_link", "Resources/enemies/ElitePursuers", "BridgeEscapeLink.obj", "elitePursuerPalette");
+    registerCourseMesh("bridge_escape_pylon", "Resources/enemies/ElitePursuers", "BridgeEscapePylon.obj", "elitePursuerPalette");
     registerCourseMesh("rear_boost_panel", "Resources/enemies/ElitePursuers", "RearBoostPanel.obj", "elitePursuerPalette");
     registerCourseMesh("rear_fang", "Resources/enemies/ElitePursuers", "Fang.obj", "elitePursuerPalette");
     registerCourseMesh("rear_fang_exposed", "Resources/enemies/ElitePursuers", "FangExposed.obj", "elitePursuerPalette");
     registerCourseMesh("rear_fang_damaged", "Resources/enemies/ElitePursuers", "FangDamaged.obj", "elitePursuerPalette");
+    for(const auto& part:RailFangModel::Parts)
+        registerCourseMesh(part.id,RailFangModel::Directory,part.file,"elitePursuerPalette");
+    registerCourseMesh("fang_body_exposed",RailFangModel::Directory,"FangBodyExposed.obj","elitePursuerPalette");
+    registerCourseMesh("fang_body_damaged",RailFangModel::Directory,"FangBodyDamaged.obj","elitePursuerPalette");
+    for(const auto& variant:std::array<std::pair<const char*,const char*>,6>{{
+        {"fang_fire_hull","FangFireHull.obj"},{"fang_fire_hull_exposed","FangFireHullExposed.obj"},
+        {"fang_fire_hull_damaged","FangFireHullDamaged.obj"},{"fang_fire_barrels","FangFireBarrels.obj"},
+        {"fang_fire_barrels_exposed","FangFireBarrelsExposed.obj"},{"fang_fire_barrels_damaged","FangFireBarrelsDamaged.obj"}}})
+        registerCourseMesh(variant.first,"Resources/enemies/ElitePursuers",variant.second,"elitePursuerPalette");
     registerCourseMesh("rear_veil", RailVeilModel::Directory, "VeilAssembled.obj", "veilInterceptorPalette");
     for(const auto& part:RailVeilModel::Parts)
         registerCourseMesh(part.id,RailVeilModel::Directory,part.file,"veilInterceptorPalette");
@@ -3881,6 +3898,7 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     mappedCamera->railBoostLights = {};
     mappedCamera->veilBeamLights = {};
     mappedCamera->veilBeamLightColor = {};
+    mappedCamera->railFrictionLights = {};
 }
 
 SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {
@@ -3940,7 +3958,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     const TwinShieldDronePose* titlePursuer,
     bool includeStartupRearScenery,
     const RailMothership::Frame* mothership,std::span<const CourseTerrainPlacement> sequenceScenery,
-    const RailVeilAttackFrame* veilAttack) {
+    const RailVeilAttackFrame* veilAttack,const RailEliteFirePresentation* eliteFire) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -3964,7 +3982,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         projMatrix,
         enemyPresentation,
         enemyReadability,
-        includeStartupRearScenery,veilAttack);
+        includeStartupRearScenery,veilAttack,eliteFire);
     courseMeshRenderQueue.AppendTerrain(sequenceScenery,currentDistance,railPath,bindings,viewMatrix,projMatrix);
     if (mothership) courseMeshRenderQueue.AppendMothership(*mothership,bindings,viewMatrix,projMatrix);
     if (titlePursuer) courseMeshRenderQueue.AppendTwinShieldDrone(*titlePursuer,bindings,viewMatrix,projMatrix);
@@ -4013,7 +4031,7 @@ void AppSceneResources::SyncCourseRailTrackRenderer(
     const RailVehicleWheelContactPresentationFrame* wheels,
     const Matrix4x4& viewMatrix,
     const Matrix4x4& projMatrix,const RailVehicleRenderFrame* detachedPanel,
-    std::span<const RailVehicleRenderFrame> fractures) {
+    std::span<const RailVehicleRenderFrame> fractures,const RailVehicleRideArc* gap) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -4023,7 +4041,7 @@ void AppSceneResources::SyncCourseRailTrackRenderer(
             model.loaded && model.mesh.indexCount > 0 && model.textureGpu.ptr != 0});
     }
     courseRailTrackRenderer.Sync(
-        baked, currentDistance, wheels, bindings, viewMatrix, projMatrix,detachedPanel,fractures);
+        baked, currentDistance, wheels, bindings, viewMatrix, projMatrix,detachedPanel,fractures,gap);
     if(mappedCamera!=nullptr && mappedCamera->titleSubject.w>0.5f) {
         for(const auto& item:courseRailTrackRenderer.Items()) {
             if(!item.visible || item.materialData==nullptr) continue;

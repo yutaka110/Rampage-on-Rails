@@ -1,4 +1,97 @@
 // Integration checks for the boss-relative bridge and actual rear weapons.
+void TestBridgeEscapeInteraction(RegressionRunner& runner) {
+    GameSessionSystem session;session.Initialize(GameSessionDefinition::RailShooterDefaults(),10000);session.Start(5000);
+    runner.Expect(session.SetCourseLength(5400) && session.RegisterCheckpoint(5138,"BRIDGE ESCAPE") && session.State().checkpointDistance==5138,
+        "runtime-authored escape checkpoints retain their actual distance beyond the former short-run finish");
+    runner.Expect(!session.SetCourseLength(3800),"resolving a new finish cannot invalidate an existing checkpoint");
+    for(int fps:{30,60,120}) {
+        const float dt=1.0f/fps;
+        CourseSpawnRuntime runtime;RailBridgeEscape escape;escape.Begin(1000,{});
+        for(int i=0;i<fps*6 && !escape.Aiming();++i)escape.Tick(dt,1048,runtime);
+        runner.Expect(escape.Aiming() && escape.Target()!=0 && runtime.Obstacles().size()==1,"escape presents one real release clamp after the camera turn");
+        runner.Expect(escape.TimeScale()==.22f && !escape.OwnsControls(),"slow world time leaves aiming under player control");
+        const auto frozen=escape;escape.Tick(0,1100,runtime);
+        runner.Expect(std::abs(RailBridgeStructure::RampHeight(escape,1)+2.4f)<.001f,"the held deck visibly sags before the clamp is destroyed");
+        const auto attached=RailBridgeStructure::Span(escape,0);
+        runner.Expect(!attached.attached && attached.height<-15,"the main span sinks, tears, and falls before aiming begins");
+        runner.Expect(escape.Age()==frozen.Age(),"paused escape freezes its authored clock");
+        CourseActorDamageReceiver damage;WeaponHitRequest request;
+        request.shotId=1;request.targetActorId=escape.Target();request.hitKind=RailAimHitKind::Obstacle;
+        request.rayOrigin={0,0,0};request.rayDirection={0,0,1};request.hitPoint={0,0,10};
+        request.hitNormal={0,0,-1};request.hitDistance=10;request.baseDamage=34;
+        runner.Expect(!damage.Apply(runtime,nullptr,request).damageApplied,"primary fire cannot accidentally open the lock-only clamp");
+        escape.ObserveRelease(escape.Target());
+        runner.Expect(escape.Aiming() && !escape.Arc().enabled,"release alone never starts a jump or claims a clear");
+        request.shotId=2;request.lockOnContact=true;const auto hit=damage.Apply(runtime,nullptr,request);
+        runner.Expect(hit.destroyed && escape.AcceptLockHit(hit.targetActorId,hit.destroyed),"a real confirmed lock impact opens the route");
+        runner.Expect(escape.TimeScale()==.55f,"clamp impact starts from the current time scale");
+        auto beforeLaunch=escape.View();
+        while(escape.Current()==RailBridgeEscape::Phase::Release) {
+            beforeLaunch=escape.View();
+            escape.Tick(dt,1050,runtime);
+        }
+        const auto launchView=escape.View();
+        runner.Expect(std::abs(launchView.fovY-beforeLaunch.fovY)<.001f &&
+            std::abs(launchView.positionOffset.y-beforeLaunch.positionOffset.y)<.001f && escape.TimeScale()==1,
+            "ramp deployment hands off to the launch without a camera cut or time scale step");
+        runner.Expect(escape.LaunchPresentation().IgnitionPulse()==1 && escape.RequestedSpeed()<20,
+            "ignition starts at ramp handoff as the requested speed begins to ramp");
+        float furthestTurn=0;
+        for(int i=0;i<fps;++i) {
+            escape.Tick(dt,1050,runtime);
+            furthestTurn=(std::max)(furthestTurn,escape.LaunchPresentation().SpinDegrees());
+        }
+        runner.Expect(furthestTurn>=359 && !escape.LaunchPresentation().Spinning(),
+            "the shared boost spin completes a single turn before the cart leaves the ramp");
+        runner.Expect(std::abs(RailBridgeStructure::RampHeight(escape,1)-escape.Arc().rise)<.001f,"releasing the real pin lifts the sagging deck into the authoritative launch curve");
+        runner.Expect(escape.Arc().enabled && escape.RequestedSpeed()>68 && !escape.Complete(),"the opened ramp enables actual acceleration without an early clear");
+        escape.Tick(dt,escape.Arc().Launch()+1,runtime);
+        runner.Expect(escape.Current()==RailBridgeEscape::Phase::Flight && !escape.Complete(),"takeoff waits for real traveled distance");
+        escape.Tick(dt,escape.Arc().Landing()+1,runtime);
+        for(int i=0;i<fps*2;++i)escape.Tick(dt,escape.Arc().Landing()+1,runtime);
+        runner.Expect(escape.Complete(),"only landing and settling confirm the escape");
+        auto missed=frozen;for(int i=0;i<fps*6;++i)missed.Tick(dt,1050,runtime);
+        runner.Expect(missed.TakeRetry() && !missed.Complete(),"missed release requests a short checkpoint retry");
+        missed=frozen;missed.ObserveRelease(missed.Target());for(int i=0;i<fps*5;++i)missed.Tick(dt,1050,runtime);
+        runner.Expect(missed.TakeRetry(),"a failed laser flight cannot stall the cinematic forever");
+    }
+    RailPath rail;rail.SetControlPoints({{{0,0,0},18,32},{{0,0,1000},18,32}});
+    CourseAsset course;CourseRuntime runtime;runtime.Bind(&course);
+    RailVehicleMovementSystem vehicle;vehicle.Initialize(RailVehicleDefinition::MineCartDefaults());
+    RailVehicleRideArc arc;arc.enabled=true;arc.start=100;
+    RailVehicleTrackContactPoseSolver solver;
+    for(float d:{110.0f,145.0f,180.0f,230.0f,245.0f}) {
+        vehicle.Reset(d,60,&rail);runtime.Reset(d);RailVehicleMovementInput input;
+        input.deltaTime=1.0f/60;input.requestedSpeed=60;input.railPath=&rail;input.courseRuntime=&runtime;input.rideArc=&arc;
+        const auto& state=vehicle.Update(input).state;
+        runner.Expect(std::abs(state.position.y-1.4f-arc.Height(state.distance))<.001f,"authoritative vehicle and weapon mounts follow the same jump path");
+        RailVehicleTrackContactPoseInput contact;contact.definition=&vehicle.Definition();contact.state=&state;contact.railPath=&rail;contact.rideArc=&arc;
+        const auto& frame=solver.Solve(contact);
+        runner.Expect(frame.valid && frame.allWheelsSupported!=arc.Airborne(state.distance),"contact solver preserves lifted wheel geometry and reports unsupported flight");
+    }
+    for(const char* name:{"BridgeEscapeRamp.obj","BridgeEscapeClamp.obj","BridgeEscapeDebris.obj","BridgeEscapeSpan.obj","BridgeEscapeLeaf.obj","BridgeEscapeLink.obj","BridgeEscapePylon.obj"}) {
+        const auto mesh=LoadObjFile_Assimp("Resources/enemies/ElitePursuers",name);
+        runner.Expect(!mesh.indices.empty() && ValidateModelGeometryOrientation(mesh) && AuditModelClosedSurface(mesh).IsValid(),std::string("escape mesh imports closed and consistently wound: ")+name);
+    }
+    for(int fps:{30,60,120})for(float entry:{0.0f,36.0f,78.0f}) {
+        RailBridgeEscape escape;CourseSpawnRuntime actors;escape.Begin(400,{},350,entry);
+        auto definition=RailVehicleDefinition::MineCartDefaults();definition.maximumSpeed=100;
+        RailVehicleMovementSystem cart;cart.Initialize(definition);cart.Reset(400,entry,&rail);runtime.Reset(400);
+        float highest=0;bool safe=true,reachable=true,hit=false;
+        for(int i=0;i<fps*18 && !escape.Complete();++i) {
+            RailVehicleMovementInput input;input.deltaTime=escape.TimeScale()/fps;input.requestedSpeed=escape.RequestedSpeed();
+            input.manualBoostMultiplier=2;input.motionEnvelopeActive=true;input.accelerationLimit=50;input.brakingLimit=42;input.jerkLimit=240;
+            input.courseRuntime=&runtime;input.railPath=&rail;input.rideArc=&escape.Arc();
+            const auto& frame=cart.Update(input);escape.Tick(1.0f/fps,frame.state.distance,actors);
+            if(!escape.Arc().enabled)safe&=frame.state.distance<escape.Arc().start;
+            if(escape.Aiming() && escape.PhaseAge()<.05f)reachable&=escape.TargetRail().z-frame.state.distance+22<=120;
+            if(escape.Aiming() && escape.PhaseAge()>=4.8f && !hit) {hit=true;escape.AcceptLockHit(escape.Target(),true);}
+            highest=(std::max)(highest,escape.Arc().Height(frame.state.distance));
+        }
+        runner.Expect(safe && reachable && highest>14 && escape.Complete(),"braked, normal and boosted entries reserve stopping room, keep the pin in lock range, and complete a late-input jump at every frame rate");
+    }
+}
+
 void TestPostBossTiming(RegressionRunner& runner) {
     for(int fps:{30,60,120})for(float speed:{36.45f,43.74f,51.03f})for(float clear:{3500.0f,6200.0f}) {
         RailPostBossSequence sequence;CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;
@@ -364,7 +457,7 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
         }
         sequence.Notify(runtime.EnemyCombat().ConsumeEvents());
         for(int i=0;i<fps*4;++i)sequence.Update(dt,distance,true,runtime,dispatcher);
-        runner.Expect(sequence.Complete() && sequence.CameraWeight()==0,"actual primary and lock defeats return the camera and release the clear gate");
+        runner.Expect(sequence.EscapeActive() && !sequence.Complete(),"actual primary and lock defeats qualify escape without claiming a clear before the bridge jump");
     }
 }
 
@@ -384,6 +477,8 @@ void TestPostBossCameraAndRetry(RegressionRunner& runner) {
         if(i==120)runner.Expect(frame.gameplayForward.z<-.98f && frame.viewRelativeTargeting && !frame.hideVehicle,
             "rear combat uses the real stable rear camera and keeps the cart visible");
     }
+    input.stableAimPresentation=true;director.AddFeedbackImpulse(3,.04f,.05f);
+    runner.Expect(director.Evaluate(input).shakeAmount==0,"precision escape aiming suppresses residual impact and authored camera shake");
     RailRetryFollowState live;CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;
     live.postBoss.Update(.1f,4400,true,runtime,dispatcher);
     for(int i=0;i<40;++i)live.postBoss.Update(.1f,4770,true,runtime,dispatcher);

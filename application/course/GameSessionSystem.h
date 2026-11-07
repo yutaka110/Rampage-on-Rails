@@ -164,6 +164,8 @@ public:
     void AddScore(uint64_t amount, std::string_view sourceId = {});
     void SetCombo(uint32_t combo, std::string_view sourceId = {});
     bool RegisterCheckpoint(float courseDistance, std::string checkpointId = {});
+    // Resolve a runtime-authored extension before reaching its actual finish.
+    bool SetCourseLength(float courseLength);
     bool MarkObjectiveFailed(std::string_view objectiveId = {});
     bool Abort(std::string_view reason = {});
 
