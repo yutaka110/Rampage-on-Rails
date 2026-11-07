@@ -13,6 +13,7 @@ public:
     enum class Phase { Dormant, Warning, Turn, Aim, Release, Boost, Flight, Landing, Clear };
     static constexpr const char* TargetId="bridge_escape_release";
     static constexpr float FireSeconds=1.70f, CollapseSeconds=2.55f, ReleaseSeconds=1.05f;
+    static constexpr float ImpactSeconds=FireSeconds+.14f;
     static constexpr float LandingSeconds=1.2f;
     static constexpr float LaunchSpeed=78.0f;
     void Begin(float distance,Vector3 source,float bridgeOrigin=0,float entrySpeed=36) {
@@ -23,8 +24,8 @@ public:
     void Tick(float dt,float distance,CourseSpawnRuntime& runtime) {
         if(!Active() || !std::isfinite(dt) || dt<=0)return;
         dt=(std::min)(dt,.1f);age_+=dt;phaseAge_+=dt;distance_=distance;
-        if(phase_==Phase::Warning && age_>=FireSeconds+.30f)Enter(Phase::Turn);
-        if(phase_==Phase::Turn && age_>=FireSeconds+CollapseSeconds) {
+        if(phase_==Phase::Warning && age_>=ImpactSeconds)Enter(Phase::Turn);
+        if(phase_==Phase::Turn && age_>=ImpactSeconds+CollapseSeconds) {
             Enter(Phase::Aim);
             CourseObstacleActorDesc target;target.id=TargetId;target.meshId="bridge_escape_clamp";
             target.spawnDistance=TargetRail().z;target.lateralOffset=TargetRail().x;target.verticalOffset=TargetRail().y;
@@ -57,7 +58,7 @@ public:
     bool InFlight()const{return inFlight_;}
     bool OwnsControls()const{return Active() && !Aiming() && phase_!=Phase::Clear;}
     bool Complete()const{return phase_==Phase::Clear;}
-    bool GapOpen()const{return Active() && age_>=FireSeconds;}
+    bool GapOpen()const{return Active() && age_>=ImpactSeconds;}
     bool CheckpointPending()const{return Aiming() && !checkpoint_;}
     void MarkCheckpoint(bool value){checkpoint_=value;}
     Phase Current()const{return phase_;}
@@ -94,14 +95,29 @@ public:
         return phase_==Phase::Landing?Smooth(phaseAge_/LandingSeconds):0.0f;
     }
     float RearWeight()const {
-        // Give the articulated charge time to read, then frame the impact.
-        return phase_==Phase::Warning?1-Smooth((phaseAge_-.65f)/.80f):0;
+        return phase_==Phase::Warning?1.0f:0.0f;
     }
-    CourseCameraViewDefinition View()const {
+    float ImpactCutFlash()const {
+        if(!Active())return 0.0f;
+        const float t=age_-ImpactSeconds;
+        return .85f*(1.0f-Smooth(std::abs(t)/(t<0?.045f:.09f)));
+    }
+    CourseCameraViewDefinition View(bool shooterAvailable=true)const {
         auto v=CourseCameraViewDefinition::Preset(CourseCameraViewMode::Custom);v.hideVehicle=false;
-        const float rear=RearWeight();
+        const float rear=RearWeight()*(shooterAvailable?1.0f:1.0f-Smooth(age_/.72f));
         v.positionOffset={0,std::lerp(10.2f,7.8f,rear),std::lerp(-22.0f,17.0f,rear)};
         v.yaw=rear*3.14159265f;v.pitch=-.08f;v.fovY=std::lerp(.88f,.94f,rear);
+        if(phase_==Phase::Turn) {
+            const float sinceImpact=age_-ImpactSeconds;
+            const float bridgeShot=1.0f-Smooth((sinceImpact-.94f)/1.31f);
+            // See the joint from above and off the beam axis, then return to the cart.
+            const float joint=arc_.Launch()+50;
+            v.positionOffset={15.0f*bridgeShot,std::lerp(10.2f,14.0f,bridgeShot),
+                std::lerp(-22.0f,joint-distance_-39.0f,bridgeShot)};
+            v.yaw=std::atan2(-15.0f,39.0f)*bridgeShot;
+            v.pitch=std::lerp(-.08f,-.39f,bridgeShot);
+            v.fovY=std::lerp(.88f,.76f,bridgeShot);
+        }
         if(phase_==Phase::Boost || phase_==Phase::Flight || phase_==Phase::Landing) {
             const float side=Smooth(LaunchAge()/.75f)*Smooth((distance_-arc_.start+28)/65);
             v.positionOffset={-14*side,10.2f-2.4f*side+arc_.Height(distance_),-22+4*side};

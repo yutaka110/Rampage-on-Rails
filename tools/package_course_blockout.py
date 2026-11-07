@@ -5,7 +5,7 @@ import shutil
 
 ROOT = Path(__file__).resolve().parents[1]
 PREVIEW = ROOT/'generated/course-blockout-preview'
-SHARED_COURSE_KINDS = {'camera', 'camera_shot', 'cinematic_shot_set', 'terrain', 'terrain_brush', 'lighting', 'ride_profile'}
+SHARED_COURSE_KINDS = {'rail', 'camera', 'camera_shot', 'cinematic_shot_set', 'terrain', 'terrain_brush', 'lighting', 'ride_profile'}
 
 
 def main():
@@ -16,6 +16,10 @@ def main():
         source = exe if name == 'GE3.exe' else exe.parent/name
         shutil.copy2(source, PREVIEW/name)
     course = (ROOT/'Resources/courses/ShortCompleteRun.course').read_text(encoding='utf-8-sig')
+    battery_events = {parts[3]: int(float(parts[1])) for line in course.splitlines()
+                      if (parts := line.split('|'))[0] == 'event' and parts[4] == 'route:turret'}
+    first_battery = battery_events['short_turret_left']
+    second_battery = battery_events['short_turret_right']
     # The sixth shot enters after earlier encounters have been cleared. Keep a
     # separate fixture, so jumping to it cannot queue every earlier wave first.
     carrier_resources=PREVIEW/'CarrierShot/Resources'
@@ -132,7 +136,7 @@ def main():
     (gate_resources/'courses/ShortCompleteRun.course').write_text('\n'.join(gate)+'\n',encoding='utf-8')
     (PREVIEW/'PlayGateBridge.cmd').write_text(
         '@echo off\nsetlocal\ncd /d "%~dp0GateBridge"\n'
-        'set "GE3_SUNFALL_PREVIEW_DISTANCE=1050"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
+        f'set "GE3_SUNFALL_PREVIEW_DISTANCE={first_battery-90}"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
         'set "GE3_COURSE_FRAME_EXPORT="\nstart "" "%~dp0GE3.exe"\n',encoding='utf-8')
     ridge_resources=PREVIEW/'RidgeCombat/Resources'
     shutil.copytree(ROOT/'Resources',ridge_resources,dirs_exist_ok=True)
@@ -159,7 +163,7 @@ def main():
     (first_resources/'courses/ShortCompleteRun.course').write_text('\n'.join(first)+'\n',encoding='utf-8')
     (PREVIEW/'PlayFirstGroundBattery.cmd').write_text(
         '@echo off\nsetlocal\ncd /d "%~dp0FirstGroundBattery"\n'
-        'set "GE3_SUNFALL_PREVIEW_DISTANCE=1110"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
+        f'set "GE3_SUNFALL_PREVIEW_DISTANCE={first_battery-30}"\nset "GE3_SUNFALL_PREVIEW_FREEZE=0"\n'
         'set "GE3_COURSE_FRAME_EXPORT="\nstart "" "%~dp0GE3.exe"\n',encoding='utf-8')
     battery_resources=PREVIEW/'GroundBatteries/Resources'
     shutil.copytree(ROOT/'Resources',battery_resources,dirs_exist_ok=True)
@@ -171,7 +175,7 @@ def main():
         if p[0]=='event' and p[2]=='enemy_wave' and p[4]!='route:turret':continue
         batteries.append(line)
     (battery_resources/'courses/ShortCompleteRun.course').write_text('\n'.join(batteries)+'\n',encoding='utf-8')
-    for name,distance in [('PlayGroundBatteries',1110),('PlaySecondGroundBattery',1360),
+    for name,distance in [('PlayGroundBatteries',first_battery-30),('PlaySecondGroundBattery',second_battery-30),
                           ('PlayClimbGroundBattery',2030),('PlayFinalGroundBattery',2810)]:
         (PREVIEW/(name+'.cmd')).write_text(
             '@echo off\nsetlocal\ncd /d "%~dp0GroundBatteries"\n'

@@ -223,6 +223,10 @@ static float3 RailWorldEffectSurfaceLighting(float3 base,float metal,float rough
         [branch] if(any(energy>0.0f))
             lighting+=DroneDirect(base,metal,max(rough,0.30f),N,V,L,energy);
     }
+    float3 beamDirection;
+    float3 bridgeLight=BridgeBeamRadiance(worldPosition,beamDirection);
+    [branch] if(any(bridgeLight>0.0f))
+        lighting+=DroneDirect(base,metal,max(rough,.30f),N,V,beamDirection,bridgeLight);
     return lighting;
 }
 

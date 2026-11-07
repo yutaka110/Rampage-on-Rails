@@ -2,6 +2,7 @@
 #include "RailLockOnTypes.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <span>
 
 // Presentation observes accepted gameplay actions. It never grants a lock,
@@ -11,6 +12,7 @@ struct RailBasicTutorialInput {
     bool active=false, boss=false, targetVisible=false, lockFormation=false;
     bool primaryHeld=false, lockHeld=false, boostHeld=false, brakeHeld=false, rewardBoost=false;
     bool threat=false, volleyAccepted=false;
+    bool brakePractice=false, practiceRound=false, practiceCrossed=false, practicePassed=false;
     unsigned primaryShots=0;
     std::span<const RailLockToken> locks{}, release{};
 };
@@ -19,7 +21,9 @@ class RailBasicTutorial final {
 public:
     enum class Lesson { None, Primary, Lock, Boost, Brake };
     enum class LockStep { Hold, Sweep, Release };
-    static constexpr float SpeedStart=680, SpeedEnd=1080;
+    enum class BrakeCue : uint8_t { Plain, Watch, Now, Retry };
+    static constexpr float SpeedStart=680, SpeedEnd=1200;
+    static constexpr const char* BrakeBatteryId="tutorial-brake-battery";
     void Reset(){*this={};}
     // Checkpoint retries preserve knowledge, but discard transient input and
     // success feedback. Returning to the title / starting a new run resets it.
@@ -32,6 +36,7 @@ public:
     unsigned Locks()const{return locks_;}
     float Age()const{return age_;}
     float Progress()const{return progress_;}
+    BrakeCue BrakePrompt()const{return brakeCue_;}
     LockStep LockPhase()const{return locks_>0?LockStep::Release:held_?LockStep::Sweep:LockStep::Hold;}
     void Update(const RailBasicTutorialInput& in) {
         if(!std::isfinite(in.dt) || in.dt<=0)return;
@@ -55,7 +60,7 @@ public:
         learn(Lesson::Primary,shots_>=3 && primaryHold_>=.35f);
         learn(Lesson::Lock,in.volleyAccepted && enemyLocks(in.release)>0);
         learn(Lesson::Boost,boostHold_>=.6f);
-        learn(Lesson::Brake,brakeHold_>=.6f);
+        learn(Lesson::Brake,in.brakePractice?in.practicePassed:brakeHold_>=.6f);
         if(success_) {
             visible_=true;age_+=dt;progress_=1;
             if(age_<1.25f)return;
@@ -64,11 +69,19 @@ public:
         Lesson desired=Lesson::None;
         if(in.targetVisible && !Learned(Lesson::Primary))desired=Lesson::Primary;
         else if(in.targetVisible && !Learned(Lesson::Lock) && (in.lockFormation || in.distance>=SpeedEnd))desired=Lesson::Lock;
+        else if(in.brakePractice && Learned(Lesson::Boost) && !Learned(Lesson::Brake))desired=Lesson::Brake;
         else if(!in.threat && !in.rewardBoost && in.distance>=SpeedStart && in.distance<3270) {
             if(!Learned(Lesson::Boost))desired=Lesson::Boost;
-            else if(!Learned(Lesson::Brake))desired=Lesson::Brake;
+            else if(!in.brakePractice && !Learned(Lesson::Brake))desired=Lesson::Brake;
         }
         if(desired!=lesson_){lesson_=desired;age_=0;}
+        BrakeCue cue=BrakeCue::Plain;
+        if(in.brakePractice && lesson_==Lesson::Brake) {
+            cue=BrakeCue::Watch;
+            if(in.practiceRound)cue=BrakeCue::Now;
+            else if(in.practiceCrossed || brakeCue_==BrakeCue::Retry)cue=BrakeCue::Retry;
+        }
+        if(cue!=brakeCue_){brakeCue_=cue;age_=0;}
         visible_=lesson_!=Lesson::None;
         if(visible_)age_+=dt;
         progress_=lesson_==Lesson::Primary?(std::min)(1.0f,primaryHold_/.35f):
@@ -81,5 +94,6 @@ private:
     Lesson lesson_=Lesson::None;
     unsigned learned_=0,locks_=0,shots_=0;
     bool visible_=false,success_=false,held_=false;
+    BrakeCue brakeCue_=BrakeCue::Plain;
     float age_=0,progress_=0,primaryHold_=0,boostHold_=0,brakeHold_=0;
 };

@@ -391,6 +391,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
             continue;
         }
         if (!armourCanDamage && contact.kind == PlayerProjectileContactKind::NearMiss) {
+            if (bullet.damage<=0.0f) continue;
             PlayerNearMissRequest nearMiss{};
             nearMiss.projectileId = bullet.projectileId;
             nearMiss.sourceActorId = bullet.ownerActorId;

@@ -173,7 +173,7 @@ def main():
             if stage==33:assert float(b['damage'])>=64 and float(b['combat_seconds'])<26,b
             if stage==34:assert int(b['attempt'])>int(bridge[0]['attempt']),b
             if stage in (35,36):
-                assert all((out/f'{label}-{i}.png').exists() for i in range(13)),label
+                assert all((out/f'{label}-{i}.png').exists() for i in range(21)),label
                 assert 'victory=1' in (out/f'{label}.csv').read_text(),b
                 assert any(r['attached']=='1' and float(r['span_y'])<-2 for r in bridge),b
                 assert any(r['attached']=='0' and float(r['span_y'])<-20 for r in bridge),b
@@ -182,6 +182,33 @@ def main():
                 assert all(abs(float(r['ramp_tip'])+2.4)<.01 for r in aiming),aiming[-1]
                 assert any(float(r['deploy'])>.45 and float(r['ramp_tip'])>0 for r in bridge if r['phase']=='4'),b
                 assert any(float(r['brace'])>.4 for r in bridge if r['phase']=='1'),b
+                veil_shot=[r for r in bridge if r['veil_shot']=='1']
+                assert any(float(r['opening'])>.85 and float(r['extension'])<.4 for r in veil_shot),veil_shot[-1:]
+                assert any(float(r['extension'])>.79 and float(r['charge'])>.95 for r in veil_shot),veil_shot[-1:]
+                assert any(float(r['recoil'])>.55 for r in veil_shot),veil_shot[-1:]
+                impact=next(r for r in bridge if r['phase']=='2')
+                assert impact['veil_shot']=='0' and float(impact['cut_flash'])>.45,impact
+                flow=next(i for i,r in enumerate(bridge) if r['feeds']=='4')
+                assert bridge[flow]['red_tips']=='0' and float(bridge[flow]['red_mouth'])==0,bridge[flow]
+                mixed=next(i for i,r in enumerate(bridge) if r['red_tips']=='4' and float(r['red_mouth'])<.1)
+                red=next(i for i,r in enumerate(bridge) if r['feeds']=='4' and float(r['red_mouth'])>.95)
+                compression=next(i for i,r in enumerate(bridge) if i>flow and float(r['compression'])>.90)
+                fire=next(i for i,r in enumerate(bridge) if float(r['beam_power'])>.9)
+                assert flow<mixed<red<compression<fire and bridge[compression]['feeds']=='0',bridge[compression]
+                assert 0<float(bridge[fire]['beam_travel'])<1 and float(impact['beam_travel'])==1,impact
+                assert float(impact['shake'])>float(bridge[fire]['shake']),impact
+                collapse=[r for r in bridge if r['phase']=='2']
+                since_impact=lambda r:float(r['age'])-1.84
+                settled=[r for r in collapse if since_impact(r)>=.14]
+                assert settled and all(float(r[k])==0 for r in settled for k in ('cut_flash','impact_pulse','shake')),settled[:1]
+                bending=next(r for r in collapse if .33<=since_impact(r)<.45)
+                assert bending['attached']=='1' and float(bending['span_y'])<-2 and float(bending['beam_power'])>.6,bending
+                falling=next(r for r in collapse if .65<=since_impact(r)<.75)
+                assert falling['attached']=='0' and float(falling['span_y'])<float(bending['span_y']),falling
+                assert 0<float(falling['beam_width'])<float(bending['beam_width']) and float(falling['beam_power'])>0,falling
+                beam_end=next(r for r in collapse if float(r['beam_power'])==0)
+                assert .79<=since_impact(beam_end)<.90,beam_end
+                assert 2.54<=since_impact(aiming[0])<2.65 and abs(float(aiming[0]['view_yaw']))<.01,aiming[0]
                 launch=[r for r in bridge if r['phase']=='5']
                 assert max(float(r['spin']) for r in launch)>=359,launch[-1]
                 assert max(float(r['ignition_shock']) for r in launch)>.30,launch[0]

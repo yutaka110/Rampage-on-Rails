@@ -5,9 +5,14 @@
 // Deterministic structural choreography, derived entirely from checkpointed
 // escape state. Rigid deck pieces keep their thickness during sag and release.
 namespace RailBridgeStructure {
-inline constexpr float TearSeconds=1.02f;
+inline constexpr float TearSeconds=.56f;
 inline float Smooth(float t){t=(std::clamp)(t,0.0f,1.0f);return t*t*(3-2*t);}
-inline float CollapseAge(const RailBridgeEscape& e){return e.Age()-RailBridgeEscape::FireSeconds;}
+inline float CollapseAge(const RailBridgeEscape& e){return e.Age()-RailBridgeEscape::ImpactSeconds;}
+inline float BendAngle(float age) {
+    const float impactFlex=.035f*Smooth(age/.055f)*(1.0f-Smooth((age-.055f)/.12f));
+    return .24f*Smooth(age/TearSeconds)+impactFlex;
+}
+inline float JointHeight(float age){return -50*std::sin(BendAngle(age));}
 inline float Sag(const RailBridgeEscape& e){return -2.4f*Smooth((CollapseAge(e)-.12f)/.70f);}
 inline float RampHeight(const RailBridgeEscape& e,float u) {
     return std::lerp(Sag(e),e.Arc().rise,e.Deploy())*u*u;
@@ -15,7 +20,7 @@ inline float RampHeight(const RailBridgeEscape& e,float u) {
 struct SpanPose {float distance=0,height=0,pitch=0,lateral=0;bool attached=true;};
 inline SpanPose Span(const RailBridgeEscape& e,int index) {
     const float t=(std::max)(0.0f,CollapseAge(e));
-    const float angle=.24f*Smooth(t/TearSeconds);
+    const float angle=BendAngle(t);
     const float free=(std::max)(0.0f,t-TearSeconds);
     SpanPose p;
     p.distance=index==0?e.Arc().Launch()+25*std::cos(angle):e.Arc().Landing()-25*std::cos(angle);
@@ -53,7 +58,7 @@ inline void Append(const RailBridgeEscape& e,std::vector<CourseTerrainPlacement>
     }
     if(t<TearSeconds)for(int side:{-1,1}) {
         const auto s=Span(e,0);const float gap=(std::max)(.05f,50*(1-std::cos(s.pitch)));
-        auto p=Piece(side<0?"escape-stretch-rail-l":"escape-stretch-rail-r","bridge_escape_link",e.Arc().Launch()+50,float(side)*1.9f,-50*std::sin(s.pitch));
+        auto p=Piece(side<0?"escape-stretch-rail-l":"escape-stretch-rail-r","bridge_escape_link",e.Arc().Launch()+50,float(side)*1.9f,JointHeight(t));
         p.scale={.15f,.13f,gap+1};out.push_back(p);
     }
     const auto pin=e.TargetRail();
@@ -71,7 +76,7 @@ inline void Append(const RailBridgeEscape& e,std::vector<CourseTerrainPlacement>
     for(int i=0;i<16;++i) {
         const float f=t-TearSeconds-float(i%4)*.045f;if(f<0 || f>2.6f)continue;
         auto p=Piece("escape-connection-debris","bridge_escape_debris",e.Arc().Launch()+50+float(i%3-1)*f*3,
-            float(i%2?1:-1)*(2+f*5),-9-7*f-12*f*f);
+            float(i%2?1:-1)*(2+f*5),JointHeight(TearSeconds)-7*f-12*f*f);
         p.id+="-"+std::to_string(i);p.scale={.30f+float(i%3)*.14f,.45f,.5f};
         p.rotation={f*.8f,float(i),f*.5f};out.push_back(p);
     }

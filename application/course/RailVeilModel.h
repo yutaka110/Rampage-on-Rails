@@ -4,6 +4,8 @@
 
 struct RailVeilAttackFrame final {
     float opening=0,charge=0,recoil=0,wingKick=0,bodyKick=0,flash=0,brace=0;
+    float cannonExtension=0;
+    TwinShieldDronePose bridgePose{};
 };
 
 // A visual follower of the existing beam clock. It cannot delay a shot, change
@@ -12,8 +14,40 @@ class RailVeilModelPresentation final {
 public:
     void Reset(){*this={};}
     const RailVeilAttackFrame& Frame()const{return frame_;}
+    void UpdateBridge(TwinShieldDronePose pose,Vector3 impact,float age,float fireSeconds) {
+        if(!bridgeActive_)entryOpening_=frame_.opening;
+        bridgeActive_=true;
+        frame_={};
+        if(!pose.visible)return;
+
+        const float t=age-fireSeconds;
+        const float close=1.0f-TwinShieldDestructionSmooth(age,.0f,.14f);
+        const float recover=1.0f-TwinShieldDestructionSmooth(t,.24f,.56f);
+        frame_.opening=(entryOpening_*close+TwinShieldDestructionSmooth(age,.13f,.51f))*recover;
+        frame_.cannonExtension=.80f*TwinShieldDestructionSmooth(age,.43f,.92f)*recover;
+        frame_.charge=TwinShieldDestructionSmooth(age,.49f,fireSeconds-.16f)*(1.0f-TwinShieldDestructionSmooth(t,.0f,.15f));
+        frame_.brace=TwinShieldDestructionSmooth(age,.50f,fireSeconds-.18f)*recover;
+        if(t>=0) {
+            frame_.recoil=.67f*TwinShieldDestructionSmooth(t,.0f,.042f)*(1.0f-TwinShieldDestructionSmooth(t,.065f,.36f));
+            frame_.flash=std::exp(-t*21.0f);
+            frame_.wingKick=std::sin(t*36.0f)*std::exp(-t*12.0f);
+        }
+
+        pose.position.y-=.65f*frame_.brace;
+        const auto aim=Normalize(Vector3{impact.x-pose.position.x,impact.y-pose.position.y,impact.z-pose.position.z});
+        // The gun's local -Z is its forward axis. Recoil moves back along the same line.
+        pose.position.x-=aim.x*frame_.recoil*1.15f;
+        pose.position.y-=aim.y*frame_.recoil*1.15f;
+        pose.position.z-=aim.z*frame_.recoil*1.15f;
+        pose.rotation={std::asin((std::clamp)(aim.y,-1.0f,1.0f)),std::atan2(-aim.x,-aim.z),0.0f};
+        pose.flightBank=0.0f;
+        frame_.bridgePose=pose;
+    }
     void Update(float dt,bool active,bool firing,float secondsToFire,bool maximumOutput=false) {
         if(!std::isfinite(dt) || dt<=0)return;
+        bridgeActive_=false;
+        frame_.bridgePose={};
+        frame_.cannonExtension=0;
         dt=(std::min)(dt,.1f);
         const float target=active?1.0f:0.0f;
         frame_.opening+=(std::clamp)(target-frame_.opening,-dt*2.5f,dt*5);
@@ -33,6 +67,8 @@ public:
 private:
     RailVeilAttackFrame frame_{};
     bool wasFiring_=false;
+    bool bridgeActive_=false;
+    float entryOpening_=0;
     float recoilAge_=10;
 };
 
@@ -63,10 +99,10 @@ inline PartPose EvaluatePart(size_t index,const RailVeilAttackFrame& attack,bool
     Vector3 rotate{},offset=Parts[index].pivot;
     if(index==0){rotate.x=attack.bodyKick*.008f-attack.brace*.025f;offset.z+=attack.bodyKick*.025f;}
     if(index==1 || index==2) {
-        rotate.y=(index==1?1.0f:-1.0f)*(attack.opening*.12f+attack.brace*.10f);
-        rotate.z=(index==1?1.0f:-1.0f)*(attack.wingKick*.030f+attack.brace*.08f);
+        rotate.y=(index==1?1.0f:-1.0f)*(attack.opening*(attack.bridgePose.visible?.34f:.12f)+attack.brace*.10f);
+        rotate.z=(index==1?1.0f:-1.0f)*(attack.wingKick*(attack.bridgePose.visible?.13f:.030f)+attack.brace*.08f);
     }
-    if(index==3 || index==8)offset.z+=attack.recoil+attack.brace*.13f;
+    if(index==3 || index==8)offset.z+=attack.recoil+attack.brace*.13f-attack.cannonExtension;
     if(index==4 || index==5) {
         rotate.x=(index==4?1.0f:-1.0f)*attack.opening*ShroudAngle;
         offset.z+=attack.opening*ShroudRetraction;
@@ -80,6 +116,6 @@ inline PartPose EvaluatePart(size_t index,const RailVeilAttackFrame& attack,bool
     return result;
 }
 inline Vector3 MuzzleWorld(const TwinShieldDronePose& pose,const RailVeilAttackFrame& attack) {
-    auto local=Muzzle;local.z+=attack.recoil+attack.brace*.13f;return RearSubsystemWorldCenter(pose,local);
+    auto local=Muzzle;local.z+=attack.recoil+attack.brace*.13f-attack.cannonExtension;return RearSubsystemWorldCenter(pose,local);
 }
 }

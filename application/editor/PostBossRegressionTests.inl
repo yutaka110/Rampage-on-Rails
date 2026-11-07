@@ -7,6 +7,19 @@ void TestBridgeEscapeInteraction(RegressionRunner& runner) {
     for(int fps:{30,60,120}) {
         const float dt=1.0f/fps;
         CourseSpawnRuntime runtime;RailBridgeEscape escape;escape.Begin(1000,{});
+        bool sawRecoilBeforeImpact=false;
+        bool sawImpactAfterRecoil=false;
+        RailVeilModelPresentation gun;
+        TwinShieldDronePose pose;pose.visible=true;pose.position={-10,10,990};pose.scale={3,3,3};
+        const Vector3 impact{0,0,1160};
+        for(int i=0;i<fps*3 && !escape.GapOpen();++i) {
+            escape.Tick(dt,1048,runtime);
+            gun.UpdateBridge(pose,impact,escape.Age(),RailBridgeEscape::FireSeconds);
+            if(gun.Frame().recoil>.30f && !escape.GapOpen() && escape.RearWeight()>0)
+                sawRecoilBeforeImpact=true;
+            if(escape.GapOpen())sawImpactAfterRecoil=sawRecoilBeforeImpact && escape.RearWeight()==0 && escape.ImpactCutFlash()>.3f;
+        }
+        runner.Expect(sawImpactAfterRecoil,"bridge shot holds on the visible recoil before the flash cut opens the gap");
         for(int i=0;i<fps*6 && !escape.Aiming();++i)escape.Tick(dt,1048,runtime);
         runner.Expect(escape.Aiming() && escape.Target()!=0 && runtime.Obstacles().size()==1,"escape presents one real release clamp after the camera turn");
         runner.Expect(escape.TimeScale()==.22f && !escape.OwnsControls(),"slow world time leaves aiming under player control");

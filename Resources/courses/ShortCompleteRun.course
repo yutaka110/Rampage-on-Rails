@@ -38,11 +38,12 @@ rail|-6.000|28.000|320.000|21.000|15.000|canyon-rail-p05|0|0.000|0.000|0.000|0.0
 rail|40.000|18.000|430.000|18.000|16.000|canyon-rail-p06|0|0.000|0.000|0.000|0.000|0.000|0.000
 rail|18.000|8.000|540.000|16.000|16.000|canyon-rail-p07|0|0.000|0.000|0.000|0.000|0.000|0.000
 rail|-22.000|14.000|650.000|19.000|17.000|canyon-rail-p08|0|0.000|0.000|0.000|0.000|0.000|0.000
-rail|0.000|18.000|760.000|22.000|18.000|canyon-rail-p09|0|0.000|0.000|0.000|0.000|0.000|0.000
-rail|36.000|26.000|910.000|20.000|18.000|canyon-rail-p10|0|0.000|0.000|0.000|0.000|0.000|0.000
-rail|-18.000|10.000|1060.000|14.000|19.000|canyon-rail-p11|0|0.000|0.000|0.000|0.000|0.000|0.000
-rail|-54.000|8.000|1210.000|15.000|18.000|canyon-rail-p12|0|0.000|0.000|0.000|0.000|0.000|0.000
-rail|-54.000|8.000|1760.000|18.000|18.000|short-rail-exit|0|0.000|0.000|0.000|0.000|0.000|0.000
+# Extend the speed lesson through the bend and rejoin the original bridge alignment.
+rail|0.000|18.000|880.000|22.000|18.000|canyon-rail-p09|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|38.093|26.000|1030.000|20.000|18.000|canyon-rail-p10|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-18.000|10.000|1180.000|14.000|19.000|canyon-rail-p11|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-54.000|8.000|1330.000|15.000|18.000|canyon-rail-p12|0|0.000|0.000|0.000|0.000|0.000|0.000
+rail|-54.000|8.000|1760.000|18.000|18.000|short-rail-exit|1|0.000|0.000|-141.667|0.000|0.000|141.667
 rail|-54.000|8.000|2060.000|18.000|18.000|short-rail-scenery-tail|0|0.000|0.000|0.000|0.000|0.000|0.000
 rail|70.000|140.000|2240.000|32.000|23.000|short-rail-ridge-crest|0|0.000|0.000|0.000|0.000|0.000|0.000
 rail|185.000|12.000|2440.000|38.000|28.000|short-rail-ridge-drop|0|0.000|0.000|0.000|0.000|0.000|0.000
@@ -76,12 +77,12 @@ rail|0.000|24.000|11000.000|70.000|20.000|short-rail-pursuit-20|0|0.000|0.000|0.
 
 # Camera keys define the cinematic rail rig.
 
-# Speed-control teaching runway: 680..1080. Combat resumes at 1080; terrain and boss timing retain their coordinates.
+# Speed-control practice: 680..1200. Combat resumes at 1200.
 section|0.000|380.000|FIRST CONTACT|Tutorial Combat
 section|380.000|680.000|LOCK BURST|Combat
-section|680.000|1080.000|SPEED CONTROL|High Speed
-section|1080.000|1360.000|INTERCEPT|Combat
-section|1360.000|1950.000|FINAL PURSUIT|Combat
+section|680.000|1200.000|SPEED CONTROL|High Speed
+section|1200.000|1450.000|INTERCEPT|Combat
+section|1450.000|1950.000|FINAL PURSUIT|Combat
 section|1950.000|2520.000|RIDGE CLIMB|High Speed
 section|2520.000|3350.000|CANYON DIVE|High Speed
 section|3350.000|11300.000|CARRIER ASSAULT|Combat
@@ -89,9 +90,9 @@ section|3350.000|11300.000|CARRIER ASSAULT|Combat
 # Authored ride intent: speed policy, turn anticipation, banking, and camera shot.
 ride_profile|short-ride-0|0.000|380.000|FIRST CONTACT|Combat|1.000|21.814815|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
 ride_profile|short-ride-1|380.000|680.000|LOCK BURST|Combat|1.000|21.814815|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
-ride_profile|short-ride-2|680.000|1080.000|SPEED CONTROL|HighSpeed|1.000|24.000000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
-ride_profile|short-ride-3|1080.000|1360.000|INTERCEPT|Combat|1.000|21.814815|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
-ride_profile|short-ride-4|1360.000|1480.000|FINAL PURSUIT|Combat|1.000|24.000000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
+ride_profile|short-ride-2|680.000|1200.000|SPEED CONTROL|HighSpeed|1.000|24.000000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
+ride_profile|short-ride-3|1200.000|1450.000|INTERCEPT|Combat|1.000|21.814815|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
+ride_profile|short-ride-4|1450.000|1480.000|FINAL PURSUIT|Combat|1.000|24.000000|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
 ride_profile|short-ride-climb|1950.000|2520.000|RIDGE CLIMB|HighSpeed|1.000|34.500000|0.850|1.000|105.000|42.000|1.000|40.000|0.850|14.000|0.000|0.000|-|1|1|0
 ride_profile|short-ride-dive|2520.000|3350.000|CANYON DIVE|HighSpeed|1.000|40.500000|1.000|1.100|120.000|48.000|1.000|42.000|0.850|14.000|0.000|0.000|-|1|1|0
 ride_profile|short-ride-boss|3350.000|11300.000|CARRIER ASSAULT|Combat|1.000|27.000000|0.850|1.100|100.000|42.000|1.000|35.000|0.900|14.000|0.000|0.000|-|1|1|0
@@ -132,8 +133,8 @@ terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|
 # Cinematic shot sets bind landmarks, camera, lighting, fog, and material into authored distance shots.
 
 event|390.000|enemy_wave|route_patrol_left|route:single|short-route-0390|1|0
-event|1140.000|enemy_wave|short_turret_left|route:turret|short-ground-battery-left|1|0
-event|1390.000|enemy_wave|short_turret_right|route:turret|short-ground-battery-right|1|0
+event|1260.000|enemy_wave|short_turret_left|route:turret|short-ground-battery-left|1|0
+event|1455.000|enemy_wave|short_turret_right|route:turret|short-ground-battery-right|1|0
 event|2060.000|enemy_wave|route_turret_left|route:turret|short-route-2060|1|0
 event|2840.000|enemy_wave|route_turret_left|route:turret|short-route-2840|1|0
 event|3100.000|enemy_wave|route_scout_sniper_pair|route:pair|short-route-3100|1|0
@@ -141,16 +142,16 @@ event|3100.000|enemy_wave|route_scout_sniper_pair|route:pair|short-route-3100|1|
 # First-class encounter waves referenced by persistent enemy placements.
 wave|short_fire|FIRE|260.000000|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
 wave|short_lock|LOCK|445.000000|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
-wave|short_intercept|INTERCEPT|1080.0|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
-wave|short_finale|STONE GATE ESCORT|1360.0|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+wave|short_intercept|INTERCEPT|1200.0|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+wave|short_finale|STONE GATE ESCORT|1450.0|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
 wave|short-exit-guard|BRIDGE AMBUSH|1900.000000|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
 wave|short-mothership|CARRIER WEAPON PARTS|3350.000000|30.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
 
 # Authored encounter rhythm layered over stable Wave membership.
 encounter_beat|short-beat-fire|short-fire|FIRE|short_fire|260.000000|365.000000|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|1|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 encounter_beat|short-beat-lock|short-lock|LOCK|short_lock|445.000000|645.000000|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
-encounter_beat|short-beat-intercept|short-intercept|INTERCEPT|short_intercept|1080.0|1255.0|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|1|1.200000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
-encounter_beat|short-beat-finale|short-finale|STONE GATE|short_finale|1360.0|1760.0|60.000000|0.600000|1.200000|0.950000|1.450000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+encounter_beat|short-beat-intercept|short-intercept|INTERCEPT|short_intercept|1200.0|1375.0|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|1|1.200000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+encounter_beat|short-beat-finale|short-finale|STONE GATE|short_finale|1450.0|1760.0|60.000000|0.600000|1.200000|0.950000|1.450000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 encounter_beat|short-beat-exit|short-exit|BRIDGE AMBUSH|short-exit-guard|1900.000000|2440.000000|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 encounter_beat|short-beat-boss|short-carrier|CARRIER ASSAULT|short-mothership|3350.000000|3800.000000|30.000000|0.750000|1.200000|1.000000|1.800000|2.000000|10.000000|1.000000|4.000000|0.650000|1|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 
@@ -216,9 +217,9 @@ terrain|680|hero_landmark|blockout-spire-left|root_spire_column|-30|17|0|12|35|1
 terrain|790|hero_landmark|blockout-spire-right|root_spire_column|32|25|0|14|43|14|0|0|0|none|14|120|400|blockout-terrain-spire-right|1|0
 terrain|900|hero_landmark|blockout-spire-far-left|root_spire_column|-38|31|0|15|49|15|0|0|0|none|14|120|400|blockout-terrain-spire-far-left|1|0
 terrain|960|hero_landmark|blockout-spire-far-right|root_spire_column|42|36|0|16|54|16|0|0|0|none|14|120|400|blockout-terrain-spire-far-right|1|0
-terrain|1340|hero_landmark|blockout-stone-gate|organic_arch_large|0|23|0|32|24|8|0|0|0|none|14|120|360|blockout-terrain-stone-gate|1|0
-terrain|1390|hero_landmark|blockout-gate-shoulder-left|root_spire_column|-44|20|0|18|40|16|0|0|0|none|14|120|400|blockout-terrain-gate-shoulder-left|1|0
-terrain|1405|hero_landmark|blockout-gate-shoulder-right|root_spire_column|45|23|0|19|43|17|0|0|0|none|14|120|400|blockout-terrain-gate-shoulder-right|1|0
+terrain|1450|hero_landmark|blockout-stone-gate|organic_arch_large|0|23|0|32|24|8|0|0|0|none|14|120|360|blockout-terrain-stone-gate|1|0
+terrain|1490|hero_landmark|blockout-gate-shoulder-left|root_spire_column|-44|20|0|18|40|16|0|0|0|none|14|120|400|blockout-terrain-gate-shoulder-left|1|0
+terrain|1505|hero_landmark|blockout-gate-shoulder-right|root_spire_column|45|23|0|19|43|17|0|0|0|none|14|120|400|blockout-terrain-gate-shoulder-right|1|0
 terrain|1650|hero_landmark|blockout-bridge-1650|course_blockout_bridge|0|0|0|1|1|1|0|0|0|none|14|180|420|blockout-terrain-bridge-1650|1|0
 terrain|1670|hero_landmark|blockout-bridge-1670|course_blockout_bridge|0|0|0|1|1|1|0|0|0|none|14|180|420|blockout-terrain-bridge-1670|1|0
 terrain|1690|hero_landmark|blockout-bridge-1690|course_blockout_bridge|0|0|0|1|1|1|0|0|0|none|14|180|420|blockout-terrain-bridge-1690|1|0

@@ -401,7 +401,8 @@ void CourseEventDispatcher::SpawnEnemyWave(
     CourseSpawnRuntime& spawnRuntime) {
     for (const EnemyWaveUnit& unit : wave.units) {
         CourseEnemyActorDesc desc{};
-        desc.waveId = event.payload == "route:adaptive" || event.payload == "route:support" ? event.editorGuid : event.id;
+        const bool brakePractice=event.payload=="preplaced:brake_practice";
+        desc.waveId = event.payload == "route:adaptive" || event.payload == "route:support" || brakePractice ? event.editorGuid : event.id;
         if (wave.formationDefinition.has_value()) {
             desc.formationDefinition = *wave.formationDefinition;
             // Adaptive instances retain a distinct occurrence identity even
@@ -426,6 +427,11 @@ void CourseEventDispatcher::SpawnEnemyWave(
         desc.distanceOffset = unit.distanceOffset;
         desc.lateralOffset = unit.lateralOffset;
         desc.verticalOffset = unit.verticalOffset;
+        if(brakePractice) {
+            desc.stationaryActivationDistance=desc.spawnDistance+desc.distanceOffset+36.0f;
+            desc.lateralOffset=-23.0f;
+            desc.suppressFire=true;
+        }
         if (unit.forwardSpeed != 0.0f) {
             desc.forwardSpeed = unit.forwardSpeed;
         }

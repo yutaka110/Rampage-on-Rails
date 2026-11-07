@@ -170,8 +170,10 @@ struct CameraForGPU {
     std::array<Vector4,2> veilBeamLights{}; // muzzle/contact world position + intensity
     Vector4 veilBeamLightColor{}; // linear RGB and finite influence radius
     std::array<Vector4, 2> railFrictionLights{};
+    Vector4 bridgeBeamStart{}; // world source and radiant strength
+    Vector4 bridgeBeamEnd{};   // live beam head and influence radius
 };
-static_assert(sizeof(CameraForGPU) == 400);
+static_assert(sizeof(CameraForGPU) == 432);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};

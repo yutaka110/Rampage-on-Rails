@@ -52,6 +52,10 @@ def main():
     box(m,'pin_crown',0,6.45,0,.80,.17,.60,'ivory')
     for side in (-1,1):box(m,'anchor_bolt',side*.72,-.15,.60,.11,.10,.12,'copper')
     m.write(DEST/'BridgeEscapePylon.obj')
+    write_audio()
+
+
+def write_audio():
     audio=DEST.parents[1]/'audio';audio.mkdir(exist_ok=True)
     rng=random.Random(63051)
     for name,duration in [('bridge_escape_break',1.55),('bridge_escape_release',.72),('bridge_escape_land',.8),
@@ -60,12 +64,21 @@ def main():
         for i in range(int(44100*duration)):
             t=i/44100;noise=rng.uniform(-1,1);lo=lo*.96+noise*.04
             if name.endswith('charge'):
-                q=min(1,t/1.7);env=min(1,t/.12)*(.12+.65*q*q)
-                value=env*(.23*sin(2*pi*(70*t+90*t*t))+.11*sin(2*pi*(390*t+300*t*t))+.14*lo)
-                if t>1.56:value*=max(0,(1.7-t)/.14)
+                q=min(1,t/1.57)
+                value=min(1,t/.18)*(.12+.38*q*q)*sin(2*pi*(56*t+27*t*t))
+                for wing in range(4):
+                    start=.36+.045*wing
+                    u=max(0,t-start)
+                    envelope=min(1,u/.19)*(.05+.085*q*q)
+                    pulse=.71+.29*sin(2*pi*(3.8*u+2.3*u*u)+wing*.76)
+                    value+=envelope*pulse*sin(2*pi*((181+24*wing)*u+101*u*u))
+                value+=.22*lo*q*q
+                value*=max(0,min(1,(1.61-t)/.13))
             elif name.endswith('cannon'):
-                value=.38*noise*exp(-t*38)+.48*sin(2*pi*(58*t-8*t*t))*exp(-t*5)+.7*lo*exp(-t*3)
-                value+=.12*sin(2*pi*1750*t)*exp(-t*27)
+                snap=(.28*noise+.17*sin(2*pi*(2200*t-6200*t*t)))*exp(-t*48)
+                pressure=.54*sin(2*pi*(62*t-11*t*t))*exp(-t*4.4)
+                plasma=(.19*sin(2*pi*(168*t-51*t*t))+.55*lo)*exp(-t*3.4)
+                value=min(1,t/.0025)*(snap+pressure+plasma)
             elif name.endswith('tear'):
                 value=.6*lo*exp(-t*2.8)+.13*sin(2*pi*(170*t-18*t*t))*exp(-t*4)
                 for hit in (0,.16,.34,.58):

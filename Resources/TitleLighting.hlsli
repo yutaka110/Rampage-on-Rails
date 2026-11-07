@@ -21,6 +21,25 @@ cbuffer Camera : register(b2)
     float4 veilBeamLights[2]; // muzzle/contact world position + intensity
     float4 veilBeamLightColor; // linear RGB and finite influence radius
     float4 railFrictionLights[2]; // short warm flashes at the wheel contacts
+    float4 bridgeBeamStart;
+    float4 bridgeBeamEnd;
+}
+
+static float3 BridgeBeamRadiance(float3 worldPosition, out float3 direction)
+{
+    direction=float3(0,1,0);
+    [branch] if(bridgeBeamStart.w<=0.0f)return 0.0f;
+    float3 span=bridgeBeamEnd.xyz-bridgeBeamStart.xyz;
+    float3 fromMuzzle=worldPosition-bridgeBeamStart.xyz;
+    float along=saturate(dot(fromMuzzle,span)/max(dot(span,span),0.01f));
+    float3 delta=span*along-fromMuzzle;
+    float distanceSquared=dot(delta,delta);
+    float radiusSquared=bridgeBeamEnd.w*bridgeBeamEnd.w;
+    [branch] if(distanceSquared>=radiusSquared)return 0.0f;
+    direction=delta*rsqrt(max(distanceSquared,0.05f));
+    float edge=1.0f-distanceSquared/radiusSquared;
+    float head=lerp(.78f,1.32f,smoothstep(.80f,1.0f,along));
+    return float3(6.3f,1.24f,.38f)*bridgeBeamStart.w*head*edge*edge/(1.0f+distanceSquared*.012f);
 }
 
 static float3 RailFrictionRadiance(float3 worldPosition, int source, out float3 direction)

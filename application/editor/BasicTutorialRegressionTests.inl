@@ -87,6 +87,6 @@ void TestBasicTutorialLayoutAndRunway(RegressionRunner& runner) {
             runner.Expect(ahead>=45 && ahead<=120,"retimed aircraft remain ahead of their real trigger");
         }
     }
-    for(float d=680;d<1080;d+=20)
+    for(float d=RailBasicTutorial::SpeedStart;d<RailBasicTutorial::SpeedEnd;d+=20)
         runner.Expect(!ShortRunAllowsEarlyWave(d) && !ShortRunAllowsAdaptivePatrol(d),"runway excludes promoted formations and random patrols");
 }

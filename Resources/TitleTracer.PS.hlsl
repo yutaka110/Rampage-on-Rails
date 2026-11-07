@@ -79,7 +79,60 @@ float4 main(PixelInput input) : SV_TARGET0 {
         float spokes=pow(saturate(sin(angle*13+seed)),18)*exp(-pow((r-front)/.19f,2))*.35f;
         return float4(input.color.rgb,(ring*fragments+spokes)*(1-smoothstep(.90f,1,r))*input.color.a);
     }
+    if(input.texcoord.x>=70.0f && input.texcoord.x<=71.0f) {
+        // The red front advances in the same direction as the charge packets.
+        float u=input.texcoord.x-70.0f;
+        float y=frac(input.texcoord.y*.5f)*4.0f-1.0f;
+        float tick=fmod(floor(input.texcoord.y*.5f),64.0f);
+        float clock=tick/64.0f;
+        float seed=input.color.g;
+        float heat=smoothstep(u+.01f,u+.14f,input.color.r);
+        float leading=1.0f-smoothstep(.035f,.15f,abs(input.color.r-u-.064f));
+        float packet=pow(.5f+.5f*cos(6.2831853f*(3.0f*u-clock)),5.0f);
+        float jitter=ImpactNoise(float2(u*26.0f,floor(tick*.52f))+seed*7.11f)-.5f;
+        float seam=y-.13f*sin(u*28.0f-clock*6.2831853f)-jitter*(.62f*heat+.30f*leading);
+        float hot=exp(-seam*seam*22.0f);
+        float glow=exp(-y*y*4.6f);
+        float ends=smoothstep(0.0f,.045f,u)*(1.0f-smoothstep(.94f,1.0f,u));
+        float3 plasma=lerp(float3(.24f,2.2f,4.8f),float3(6.6f,.34f,.073f),heat);
+        float3 white=lerp(float3(5.5f,5.8f,6.2f),float3(7.8f,3.6f,2.55f),heat);
+        float3 color=lerp(plasma,white,hot*saturate(packet*.64f+leading*.48f));
+        float density=glow*lerp(.30f,.39f,input.color.b)+hot*(.28f+.66f*packet+.32f*leading);
+        return float4(color,density*ends*input.color.a);
+    }
+    if(input.texcoord.x>=68.0f && input.texcoord.x<=69.0f) {
+        float u=input.texcoord.x-68.0f;
+        float v=input.texcoord.y*2.0f-1.0f;
+        float profile=exp(-v*v*8.0f)*(1.0f-smoothstep(.80f,1.0f,abs(v)));
+        return float4(input.color.rgb,profile*(1.0f-smoothstep(.97f,1.0f,u))*input.color.a);
+    }
+    if(input.texcoord.x>=66.0f && input.texcoord.x<=67.0f) {
+        float u=input.texcoord.x-66.0f;
+        float y=frac(input.texcoord.y*.5f)*4.0f-1.0f;
+        float clock=fmod(floor(input.texcoord.y*.5f),64.0f)/64.0f;
+        float packet=pow(.5f+.5f*cos(6.2831853f*(3.0f*u-clock)),5.0f);
+        float seam=y-.15f*sin(31.0f*u-6.2831853f*clock);
+        float hot=exp(-seam*seam*18.0f);
+        float glow=exp(-y*y*4.6f);
+        float ends=smoothstep(.0f,.05f,u)*(1.0f-smoothstep(.94f,1.0f,u));
+        return float4(lerp(input.color.rgb,float3(5.5f,5.8f,6.2f),hot*packet*.76f),
+            (glow*.33f+hot*(.25f+.68f*packet))*ends*input.color.a);
+    }
     if(input.texcoord.x>63.5f)return RenderRailEnergyShield(input.texcoord,input.color);
+    if(input.texcoord.x>=50.0f && input.texcoord.x<=51.0f) {
+        float u=input.texcoord.x-50.0f;
+        float v=frac(input.texcoord.y*.5f)*4.0f-1.0f;
+        float clock=fmod(floor(input.texcoord.y*.5f),64.0f)/64.0f*6.2831853f;
+        float turbulence=.08f*sin(62.0f*u-clock)+.046f*sin(131.0f*u-clock*2.0f);
+        float radius=abs(v-turbulence);
+        float cloud=ImpactNoise(float2(110.0f*u,9.0f*v)+float2(cos(clock),sin(clock))*2.5f);
+        float flare=exp(-radius*radius*8.8f);
+        float shell=exp(-radius*radius*3.3f)*(.28f+.72f*cloud);
+        float fibres=pow(.5f+.5f*sin(v*27.0f+u*89.0f-clock*2.0f),6.0f);
+        float edge=(1.0f-smoothstep(.68f,1.0f,abs(v)))*(1.0f-smoothstep(.93f,1.0f,u));
+        float3 hot=input.color.rgb+float3(1.6f,.46f,.18f)*flare*fibres;
+        return float4(hot,(flare*.60f+shell*.58f)*edge*input.color.a);
+    }
     if(input.texcoord.x>=56.0f && input.texcoord.x<=57.0f) {
         float2 p=float2((input.texcoord.x-56.5f)*2,frac(input.texcoord.y*.5f)*4-1);
         float packed=floor(input.texcoord.y*.5f);

@@ -37227,9 +37227,10 @@ void TestGateBridgeMovingHandoff(RegressionRunner& runner) {
     // Resume with the three opening battles already cleared, while retaining
     // the production gate/ambush actors, rail, camera and entry trajectories.
     CourseAsset course=authored;
-    std::erase_if(course.waveDefinitions,[](const auto& w){return w.triggerRailDistance<1000;});
-    std::erase_if(course.enemyPlacements,[](const auto& p){return p.waveGroupGuid=="short_fire" || p.waveGroupGuid=="short_lock" || p.waveGroupGuid=="short_intercept";});
-    std::erase_if(course.encounterBeats,[](const auto& b){return b.triggerRailDistance<1000;});
+    const auto openingWave=[](std::string_view id){return id=="short_fire" || id=="short_lock" || id=="short_intercept";};
+    std::erase_if(course.waveDefinitions,[&](const auto& w){return openingWave(w.editorGuid);});
+    std::erase_if(course.enemyPlacements,[&](const auto& p){return openingWave(p.waveGroupGuid);});
+    std::erase_if(course.encounterBeats,[&](const auto& b){return openingWave(b.waveGuid);});
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});
     runner.Expect(cooked.succeeded,"moving gate fixture cooks real actors");
     RailPath rail;course.ApplyToRailPath(rail);
@@ -37386,6 +37387,11 @@ void TestFirstTurretCameraStability(RegressionRunner& runner) {
     runner.Expect(course.LoadFromFile(RailShortCoursePath,&error) &&
         controls.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),
         "first battery camera uses production course and vehicle tuning: "+error);
+    const auto battery=std::find_if(course.events.begin(),course.events.end(),[](const auto& event){
+        return event.id=="short_turret_left";
+    });
+    runner.Expect(battery!=course.events.end(),"first battery has an authored event");
+    const float start=battery->distance-60.0f;
     RailPath rail;course.ApplyToRailPath(rail);
     std::ofstream report("logs/first_turret_camera_stability.csv");
     std::ofstream trace("logs/first_turret_camera_trace.csv");
@@ -37405,7 +37411,7 @@ void TestFirstTurretCameraStability(RegressionRunner& runner) {
         Vector3 previousOffset{};float previousWidth=0,previousFov=0;
         float maxStep=0,maxWidth=0,maxWidthStep=0,maxFovStep=0;
         for(int step=0;step<=int(180.0f/16.0f*fps);++step) {
-            const float at=1080.0f+float(step)*16.0f/fps;
+            const float at=start+float(step)*16.0f/fps;
             vehicle.Reset(at,16,&rail);
             RailVehiclePresentationInput pi;pi.definition=&controls.vehicle;pi.state=&vehicle.State();
             pi.deltaTime=dt;pi.settings=controls.vehiclePresentation;presentation.Update(pi);
@@ -42572,13 +42578,15 @@ void TestShortRunFinishAndEarlyWaves(RegressionRunner& runner) {
     runner.Expect(waves.Phase("short_intercept")!=CourseGameplayWavePhase::Active,"maximum early distance prevents chaining every battle at the start");
     for(int i=0;i<25;++i) tick(0.1f,900,ShortRunAllowsEarlyWave(900));
     runner.Expect(waves.Phase("short_intercept")!=CourseGameplayWavePhase::Active,"speed tutorial runway remains free of promoted combat");
-    for(int i=0;i<25;++i) tick(0.1f,1080,ShortRunAllowsEarlyWave(1080));
+    const float speedEnd=RailBasicTutorial::SpeedEnd;
+    for(int i=0;i<25;++i) tick(0.1f,speedEnd,ShortRunAllowsEarlyWave(speedEnd));
     runner.Expect(waves.Phase("short_intercept")==CourseGameplayWavePhase::Active,"intercept resumes after speed instruction");
     kills.clear();for(const auto& enemy:spawn.Enemies()) kills.push_back(enemy.desc.sourcePlacementGuid);
     for(const auto& id:kills) waves.NotifyEnemyDefeated(id);
-    for(int i=0;i<60;++i) tick(0.1f,1200,ShortRunAllowsEarlyWave(1200));
+    const float finaleStart=compiled.program.FindWave("short_finale")->triggerRailDistance;
+    for(int i=0;i<60;++i) tick(0.1f,finaleStart-40,ShortRunAllowsEarlyWave(finaleStart-40));
     runner.Expect(waves.Phase("short_finale")!=CourseGameplayWavePhase::Active,"boost runway remains clear of early combat");
-    for(int i=0;i<25;++i) tick(0.1f,1360,ShortRunAllowsEarlyWave(1360));
+    for(int i=0;i<25;++i) tick(0.1f,finaleStart,ShortRunAllowsEarlyWave(finaleStart));
     runner.Expect(waves.Phase("short_finale")==CourseGameplayWavePhase::Active,"finale resumes after the boost runway");
     CourseSpawnRuntime legacySpawn;CourseGameplayWaveRuntimeBridge legacy;
     legacy.Bind(&compiled.program,&legacySpawn,260,&error);

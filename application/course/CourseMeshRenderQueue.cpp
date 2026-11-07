@@ -791,6 +791,11 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             pose.death = presentation && presentation->animation == EnemyCombatAnimationState::Death
                 ? presentation->animationNormalizedTime : 0.0f;
             if(enemy.desc.actorAssetId=="rear_veil") {
+                if(veilAttack && veilAttack->bridgePose.visible && enemy.desc.hitPoints>0) {
+                    const float alpha=pose.alpha;
+                    pose=veilAttack->bridgePose;
+                    pose.alpha=alpha;
+                }
                 if(!enemy.weaponMount.ready) {
                     const float scale=kElitePursuerModelScale*presentationScale;
                     pose.scale={scale,scale,scale};

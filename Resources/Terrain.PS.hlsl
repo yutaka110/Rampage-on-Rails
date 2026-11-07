@@ -1263,6 +1263,9 @@ PixelShaderOutput main(VertexShaderOutput input)
         float3 frictionEnergy=RailFrictionRadiance(input.worldPosition,source,frictionDirection);
         lit+=rockColor*frictionEnergy*saturate(dot(normal,frictionDirection))*0.26f;
     }
+    float3 bridgeDirection;
+    float3 bridgeEnergy=BridgeBeamRadiance(input.worldPosition,bridgeDirection);
+    lit+=rockColor*bridgeEnergy*saturate(dot(normal,bridgeDirection))*.56f;
 
     // READY contact light shares the actual wall position used by sparks and dust.
     if (!titleLandscape && titleRailImpact.w > 0.0f) {

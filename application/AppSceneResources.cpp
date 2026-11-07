@@ -3899,6 +3899,8 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     mappedCamera->veilBeamLights = {};
     mappedCamera->veilBeamLightColor = {};
     mappedCamera->railFrictionLights = {};
+    mappedCamera->bridgeBeamStart = {};
+    mappedCamera->bridgeBeamEnd = {};
 }
 
 SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {
