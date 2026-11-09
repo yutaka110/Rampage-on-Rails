@@ -2,10 +2,16 @@
 #include "RailRearPursuitRules.h"
 #include <array>
 
+namespace RailVeilModel {
+inline constexpr Vector3 Muzzle{0,.10f,-1.64f};
+inline constexpr float BridgeExtension=.80f, BridgeBraceSetback=.13f, BridgeBraceDip=.65f;
+}
+
 struct RailVeilAttackFrame final {
     float opening=0,charge=0,recoil=0,wingKick=0,bodyKick=0,flash=0,brace=0;
     float cannonExtension=0;
     TwinShieldDronePose bridgePose{};
+    bool bridgeWreck=false;
 };
 
 // A visual follower of the existing beam clock. It cannot delay a shot, change
@@ -14,7 +20,7 @@ class RailVeilModelPresentation final {
 public:
     void Reset(){*this={};}
     const RailVeilAttackFrame& Frame()const{return frame_;}
-    void UpdateBridge(TwinShieldDronePose pose,Vector3 impact,float age,float fireSeconds) {
+    void UpdateBridge(TwinShieldDronePose pose,Vector3 impact,float age,float fireSeconds,const Vector3* storedMuzzle=nullptr) {
         if(!bridgeActive_)entryOpening_=frame_.opening;
         bridgeActive_=true;
         frame_={};
@@ -24,7 +30,7 @@ public:
         const float close=1.0f-TwinShieldDestructionSmooth(age,.0f,.14f);
         const float recover=1.0f-TwinShieldDestructionSmooth(t,.24f,.56f);
         frame_.opening=(entryOpening_*close+TwinShieldDestructionSmooth(age,.13f,.51f))*recover;
-        frame_.cannonExtension=.80f*TwinShieldDestructionSmooth(age,.43f,.92f)*recover;
+        frame_.cannonExtension=RailVeilModel::BridgeExtension*TwinShieldDestructionSmooth(age,.43f,.92f)*recover;
         frame_.charge=TwinShieldDestructionSmooth(age,.49f,fireSeconds-.16f)*(1.0f-TwinShieldDestructionSmooth(t,.0f,.15f));
         frame_.brace=TwinShieldDestructionSmooth(age,.50f,fireSeconds-.18f)*recover;
         if(t>=0) {
@@ -33,20 +39,36 @@ public:
             frame_.wingKick=std::sin(t*36.0f)*std::exp(-t*12.0f);
         }
 
-        pose.position.y-=.65f*frame_.brace;
-        const auto aim=Normalize(Vector3{impact.x-pose.position.x,impact.y-pose.position.y,impact.z-pose.position.z});
+        pose.position.y-=RailVeilModel::BridgeBraceDip*frame_.brace;
+        const auto source=storedMuzzle?*storedMuzzle:pose.position;
+        const auto aim=Normalize(Vector3{impact.x-source.x,impact.y-source.y,impact.z-source.z});
+        pose.rotation={std::asin((std::clamp)(aim.y,-1.0f,1.0f)),std::atan2(-aim.x,-aim.z),0.0f};
+        pose.flightBank=0.0f;
+        if(storedMuzzle) {
+            const float instability=1.0f-TwinShieldDestructionSmooth(age,.70f,fireSeconds-.09f);
+            pose.rotation.x-=instability*(.075f+.043f*std::sin(age*8.6f));
+            pose.rotation.y+=instability*.074f*std::sin(age*7.4f+.65f);
+            pose.flightBank=-.065f-instability*(.11f+.065f*std::sin(age*9.7f+.30f))-.12f*frame_.recoil;
+            // Place the wreck around the stored launch socket at full extension.
+            pose.position={};
+            auto rim=RailVeilModel::Muzzle;
+            rim.z+=RailVeilModel::BridgeBraceSetback-RailVeilModel::BridgeExtension;
+            const auto offset=RearSubsystemWorldCenter(pose,rim);
+            pose.position={source.x-offset.x,source.y-offset.y+RailVeilModel::BridgeBraceDip*(1-frame_.brace),source.z-offset.z};
+            pose.position.y-=instability*(.45f+.30f*std::sin(age*6.4f));
+            frame_.bridgeWreck=true;
+        }
         // The gun's local -Z is its forward axis. Recoil moves back along the same line.
         pose.position.x-=aim.x*frame_.recoil*1.15f;
         pose.position.y-=aim.y*frame_.recoil*1.15f;
         pose.position.z-=aim.z*frame_.recoil*1.15f;
-        pose.rotation={std::asin((std::clamp)(aim.y,-1.0f,1.0f)),std::atan2(-aim.x,-aim.z),0.0f};
-        pose.flightBank=0.0f;
         frame_.bridgePose=pose;
     }
     void Update(float dt,bool active,bool firing,float secondsToFire,bool maximumOutput=false) {
         if(!std::isfinite(dt) || dt<=0)return;
         bridgeActive_=false;
         frame_.bridgePose={};
+        frame_.bridgeWreck=false;
         frame_.cannonExtension=0;
         dt=(std::min)(dt,.1f);
         const float target=active?1.0f:0.0f;
@@ -74,7 +96,6 @@ private:
 
 namespace RailVeilModel {
 inline constexpr const char* Directory="Resources/enemies/VeilInterceptor";
-inline constexpr Vector3 Muzzle{0,.10f,-1.64f};
 inline constexpr float ShroudAngle=.64f,ShroudRetraction=.42f;
 struct Part {
     const char* id;
@@ -102,7 +123,7 @@ inline PartPose EvaluatePart(size_t index,const RailVeilAttackFrame& attack,bool
         rotate.y=(index==1?1.0f:-1.0f)*(attack.opening*(attack.bridgePose.visible?.34f:.12f)+attack.brace*.10f);
         rotate.z=(index==1?1.0f:-1.0f)*(attack.wingKick*(attack.bridgePose.visible?.13f:.030f)+attack.brace*.08f);
     }
-    if(index==3 || index==8)offset.z+=attack.recoil+attack.brace*.13f-attack.cannonExtension;
+    if(index==3 || index==8)offset.z+=attack.recoil+attack.brace*BridgeBraceSetback-attack.cannonExtension;
     if(index==4 || index==5) {
         rotate.x=(index==4?1.0f:-1.0f)*attack.opening*ShroudAngle;
         offset.z+=attack.opening*ShroudRetraction;
@@ -116,6 +137,6 @@ inline PartPose EvaluatePart(size_t index,const RailVeilAttackFrame& attack,bool
     return result;
 }
 inline Vector3 MuzzleWorld(const TwinShieldDronePose& pose,const RailVeilAttackFrame& attack) {
-    auto local=Muzzle;local.z+=attack.recoil+attack.brace*.13f-attack.cannonExtension;return RearSubsystemWorldCenter(pose,local);
+    auto local=Muzzle;local.z+=attack.recoil+attack.brace*BridgeBraceSetback-attack.cannonExtension;return RearSubsystemWorldCenter(pose,local);
 }
 }

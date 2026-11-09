@@ -37,6 +37,13 @@ RailLockImpactFrame RailLockContact::Presentation() const {
     frame.pierceExtent=size*(destroyed?2.65f:1.85f)*(0.82f+0.18f*smooth(age,0,0.018f));
     frame.pierceOpacity=(1-smooth(age,destroyed?0.040f:0.018f,destroyed?0.145f:0.090f))*(destroyed?1.0f:0.72f);
     frame.jetOpacity=smooth(age,0.008f,0.022f)*(1-smooth(age,destroyed?0.065f:0.035f,destroyed?0.16f:0.095f));
+    if(enemyHull) {
+        // A brief penetrating strike, then a separate expanding fracture front.
+        frame.pierceExtent*=1.16f;
+        frame.pierceOpacity=1-smooth(age,destroyed?.041f:.028f,destroyed?.137f:.106f);
+        frame.shockExtent*=1.14f;
+        frame.fragments=9;
+    }
     if(destroyed) {
         // Arrival light yields to the orange internal rupture; the remaining
         // contact lifetime is reserved for emitted metal, not a long flash.
@@ -216,7 +223,22 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
         if(laser.resolved) continue;
         Vector3 target;
         const bool valid=TargetPosition(laser.target,rail,runtime,target);
-        if(valid) laser.end=ResolveEnemyShieldLockEndpoint(laser.target,muzzle,target,runtime);
+        if(valid) {
+            laser.end=ResolveEnemyShieldLockEndpoint(laser.target,muzzle,target,runtime);
+            if(laser.target.kind==RailLockTargetKind::Enemy && Length(Add(laser.end,Scale(target,-1)))<.001f) {
+                const auto towardMuzzle=Add(muzzle,Scale(target,-1));
+                const float distance=Length(towardMuzzle);
+                if(distance>.001f)for(const auto& enemy:runtime.Enemies()) {
+                    if(enemy.actorId!=laser.target.actorId)continue;
+                    // The generic lock point is the center of the same
+                    // sphere used by primary rays. Stop the ribbon at its
+                    // near face so large meshes don't swallow the contact.
+                    if(enemy.desc.meshId!="twin_shield_hull")
+                        laser.end=Add(target,Scale(towardMuzzle,(std::min)(enemy.desc.radius,distance*.60f)/distance));
+                    break;
+                }
+            }
+        }
         if(laser.age<laser.delay && valid) continue;
         if(!laser.launched && valid) {laser.start=laser.position=muzzle;laser.launched=true;}
         if(laser.launched) laser.position=laser.Curve(laser.Progress());
@@ -254,6 +276,8 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 request.counterTargetActorId=laser.weapon.counterTargetActorId;
                 RailLockContact contact;contact.shotId=request.shotId;contact.actorId=request.targetActorId;
                 contact.position=request.hitPoint;contact.normal=request.hitNormal;
+                contact.enemyHull=laser.target.kind==RailLockTargetKind::Enemy;
+                contact.incoming=Add(laser.end,Scale(laser.Curve(.94f),-1));
                 // Capture before lethal damage clears the live weapon mount.
                 for(const auto& actor:runtime.Enemies()) if(actor.actorId==contact.actorId &&
                         actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready) {

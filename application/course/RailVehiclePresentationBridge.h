@@ -54,6 +54,8 @@ struct RailVehiclePresentationInput final {
     float rideMaximumVisualBankDegrees = 18.0f;
     const RailVehicleRideDynamicsFrame* rideDynamics = nullptr;
     const RailVehicleTrackContactPoseFrame* trackContactPose = nullptr;
+    float brakePitchDegrees = 0.0f;
+    float brakeCompression = 0.0f;
 };
 
 class RailVehiclePresentationBridge final {

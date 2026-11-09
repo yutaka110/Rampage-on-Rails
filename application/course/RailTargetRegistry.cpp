@@ -1,4 +1,5 @@
 #include "RailTargetRegistry.h"
+#include "RailRouteHazards.h"
 
 #include "CourseSpawnRuntime.h"
 #include "../terrain/RailPath.h"
@@ -221,7 +222,7 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
         anchors_.push_back(std::move(anchor));
     }
     for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-        if (!obstacle.desc.breakable) {
+        if (!obstacle.desc.breakable || RailRouteHazards::IsBarricade(obstacle)) {
             continue;
         }
         const float distance = ObstacleDistance(obstacle);

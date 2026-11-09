@@ -1,7 +1,9 @@
 #pragma once
 
 #include "EnemyAttackLaneTelegraphRenderer.h"
+#include "PlayerHitboxSystem.h"
 #include "RailEnemyEnergyPalette.h"
+#include "RailGroundBatteryAttack.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -18,11 +20,13 @@ struct RailWarningSource {
     uint32_t actorId=0;
     uint64_t intent=0;
     RailWarningWeapon weapon=RailWarningWeapon::Ordinary;
+    bool groundBattery=false;
     std::array<Vector3,2> muzzles{};
     size_t muzzleCount=0;
     float charge=0,radius=0.6f,flash=0;
     float visibleAge=0,onset=0;
     bool primary=false,fired=false,imminent=false;
+    bool firstHeavyCharge=false;
 };
 struct RailWarningSprite {
     Vector3 center{},horizontal{},vertical{};
@@ -79,6 +83,11 @@ public:
             if(!fired && !admitted)continue;
             RailWarningSource source;source.actorId=cue.actorId;source.intent=cue.attackIntentSequence;
             source.weapon=RailWarningWeaponFor(*actor);source.fired=fired;
+            source.groundBattery=RailGroundBattery::IsPredictive(actor->desc.actorAssetId);
+            // The committed shell drives the gun's white flash at its actual
+            // launch position. Avoid drawing a second flash at the warning socket.
+            if(fired && source.groundBattery)continue;
+            source.firstHeavyCharge=source.weapon==RailWarningWeapon::Heavy && !fired && actor->fireSequence==0;
             source.imminent=cue.phase==EnemyAttackTelegraphPhase::Imminent;
             source.charge=(std::clamp)(cue.urgency,0.0f,1.0f);
             if(!fired) {
@@ -90,7 +99,7 @@ public:
                 source.onset=(std::clamp)(1-source.visibleAge/.24f,0.0f,1.0f);
             }
             source.radius=source.weapon==RailWarningWeapon::Heavy?1.15f:source.weapon==RailWarningWeapon::Rapid?0.72f:0.55f;
-            if(source.weapon!=RailWarningWeapon::Ordinary) {
+            if(source.weapon!=RailWarningWeapon::Ordinary || source.groundBattery) {
                 // Turret meshes do not populate the drone weaponMount cache.
                 // Use the execution resolver: rapid lights two launch barrels,
                 // while the single heavy round lights its actual barrel only.
@@ -127,6 +136,9 @@ public:
     static RailOrdinaryWarningStyle OrdinaryStyle(const RailWarningSource& source) {
         const float c=(std::clamp)(source.charge,0.0f,1.0f);
         const float smooth=c*c*(3-2*c);
+        if(source.groundBattery)
+            return {22-9*smooth+7*source.onset,source.imminent?7.0f:11.0f,
+                source.imminent?6.0f:3.6f,source.primary?1.0f:.85f};
         // One inward motion follows the authoritative countdown. The compact
         // diamond is reserved for Imminent, so a looping sparkle cannot imply
         // that an enemy has fired or restarted its preparation.
@@ -198,7 +210,7 @@ public:
         std::vector<RailWarningSprite> sprites;sprites.reserve(160);
         const auto emit=[&](Vector3 p,Vector3 h,Vector3 v,Vector4 c,float atlas=16.0f){sprites.push_back({p,h,v,c,atlas});};
         constexpr float pi=3.14159265358979323846f;
-        for(const auto& source:sources_)for(size_t barrel=0;barrel<source.muzzleCount;++barrel) {
+        for(const auto& source:sources_)for(size_t barrel=0;barrel<(std::min)(source.muzzleCount,source.muzzles.size());++barrel) {
             const Vector3 forward{right.y*up.z-right.z*up.y,right.z*up.x-right.x*up.z,right.x*up.y-right.y*up.x};
             const auto& palette=RailEnemyEnergy::For(source.weapon==RailWarningWeapon::Heavy?RailEnemyEnergy::BatteryKind::Heavy:
                 source.weapon==RailWarningWeapon::Rapid?RailEnemyEnergy::BatteryKind::Gatling:RailEnemyEnergy::BatteryKind::None);
@@ -210,6 +222,12 @@ public:
             // Lift only the soft sprite surface off the physical barrel. The
             // muzzle/aim anchor itself is unchanged, and terrain still occludes.
             const auto muzzle=Add(anchor,Mul(forward,-.12f));
+            if(source.groundBattery) {
+                const float intensity=.52f+.48f*source.charge;
+                emit(muzzle,Mul(right,r*.95f),Mul(up,r*.95f),{2.0f,.62f,.08f,intensity*.72f});
+                emit(muzzle,Mul(right,r*.40f),Mul(up,r*.40f),{2.8f,1.5f,.27f,intensity});
+                continue;
+            }
             if(source.fired) {
                 const float a=source.flash;
                 emit(muzzle,Mul(right,r*(1+1.8f*(1-a))),Mul(up,r*(1+1.8f*(1-a))),RailEnemyEnergy::Alpha(palette.halo,a*.65f));
@@ -275,7 +293,8 @@ public:
     }
 
     static RailIncomingWarning Incoming(const CourseSpawnRuntime& runtime,const RailPath& rail,
-            float playerDistance,float lateral,float vertical,float playerSpeed,float playerRadius=1.6f) {
+            float playerDistance,float lateral,float vertical,float playerSpeed,float playerRadius=1.6f,
+            uint64_t separatelyMarked=0) {
         RailIncomingWarning best;float bestTime=2;
         const auto player=ResolveEnemyProjectileWorldPosition(rail,{lateral,vertical,playerDistance});
         constexpr float step=.01f;
@@ -284,7 +303,7 @@ public:
         const auto playerNext=ResolveEnemyProjectileWorldPosition(rail,{lateral,vertical,playerDistance+playerSpeed*step});
         const auto playerVelocity=Mul(Sub(playerNext,player),1/step);
         for(const auto& shot:runtime.Bullets()) {
-            if(!shot.active || shot.hitConsumed)continue;
+            if(!shot.active || shot.hitConsumed || (separatelyMarked && shot.projectileId==separatelyMarked))continue;
             const float distance=shot.spawnDistance+shot.distanceOffset;
             const auto position=ResolveEnemyProjectileWorldPosition(rail,{shot.lateralOffset,shot.verticalOffset,distance});
             const auto next=ResolveEnemyProjectileWorldPosition(rail,{shot.lateralOffset+shot.lateralSpeed*step,
@@ -299,6 +318,35 @@ public:
             if(miss>playerRadius+shot.radius+.6f)continue;
             bestTime=time;best={shot.projectileId,position,time,miss,shot.radius,true,time<=.40f,
                 shot.shootDownEnabled && HasDefenseResponse(shot.defenseResponses,EnemyAttackDefenseResponse::ShootDown)};
+        }
+        return best;
+    }
+
+    static RailIncomingWarning BrakeIncoming(const CourseSpawnRuntime& runtime,const RailPath& rail,
+            const PlayerHitboxRuntimeState& cart,float cartSpeed,bool braking) {
+        RailIncomingWarning best;
+        float earliest=1.35f;
+        for(const auto& shot:runtime.Bullets()) {
+            if(!shot.active || shot.hitConsumed || shot.launchDelayRemaining>0 ||
+                !RailGroundBattery::IsProjectile(shot.definitionId) ||
+                !HasDefenseResponse(shot.defenseResponses,EnemyAttackDefenseResponse::Duck) ||
+                std::abs(shot.lateralSpeed)<.01f || shot.forwardSpeed>=0)continue;
+            // The Q dodge makes the shell cross the cart's lateral lane ahead
+            // of the cart. Select by that crossing, rather than by projectile proximity.
+            const float crossing=(cart.lateralOffset-shot.lateralOffset)/shot.lateralSpeed;
+            if(crossing<=0 || crossing>=earliest)continue;
+            const float height=shot.verticalOffset+shot.verticalSpeed*crossing-cart.verticalOffset;
+            const float distance=shot.spawnDistance+shot.distanceOffset;
+            const float gap=distance-cart.distance+(shot.forwardSpeed-cartSpeed)*crossing;
+            const float radius=cart.hurtRadius+shot.radius;
+            // Give the cue a small buffer for grades and speed changes. Once Q
+            // is held, keep tracking an approaching shell as the gap opens.
+            const float margin=(std::max)(4.0f,radius+.8f);
+            if(std::abs(height)>radius+.6f || gap < -margin || gap > (braking?24.0f:margin))continue;
+            earliest=crossing;
+            best={shot.projectileId,ResolveEnemyProjectileWorldPosition(rail,
+                {shot.lateralOffset,shot.verticalOffset,distance}),crossing,std::hypot(gap,height),shot.radius,
+                true,crossing<=.40f,false};
         }
         return best;
     }

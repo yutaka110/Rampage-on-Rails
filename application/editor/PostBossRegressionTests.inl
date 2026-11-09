@@ -82,7 +82,7 @@ void TestBridgeEscapeInteraction(RegressionRunner& runner) {
         const auto& frame=solver.Solve(contact);
         runner.Expect(frame.valid && frame.allWheelsSupported!=arc.Airborne(state.distance),"contact solver preserves lifted wheel geometry and reports unsupported flight");
     }
-    for(const char* name:{"BridgeEscapeRamp.obj","BridgeEscapeClamp.obj","BridgeEscapeDebris.obj","BridgeEscapeSpan.obj","BridgeEscapeLeaf.obj","BridgeEscapeLink.obj","BridgeEscapePylon.obj"}) {
+    for(const char* name:{"BridgeEscapeRamp.obj","BridgeEscapeClamp.obj","BridgeEscapeDebris.obj","BridgeEscapeSpan.obj","BridgeEscapeLeaf.obj","BridgeEscapeLink.obj","BridgeEscapePylon.obj","BridgeEscapeTornJoint.obj"}) {
         const auto mesh=LoadObjFile_Assimp("Resources/enemies/ElitePursuers",name);
         runner.Expect(!mesh.indices.empty() && ValidateModelGeometryOrientation(mesh) && AuditModelClosedSurface(mesh).IsValid(),std::string("escape mesh imports closed and consistently wound: ")+name);
     }
@@ -167,6 +167,14 @@ void TestVeilModularModel(RegressionRunner& runner) {
     const auto hitWorld=VeilSensorWorldCenter(pose);
     runner.Expect(std::abs(sensorWorld.x-hitWorld.x)+std::abs(sensorWorld.y-hitWorld.y)+std::abs(sensorWorld.z-hitWorld.z)<.001f,
         "sensor geometry uses the actual banked gameplay hit anchor");
+    RailVeilModelPresentation lastShot;
+    pose.visible=true;
+    const Vector3 storedMuzzle{-22,12,990};
+    lastShot.UpdateBridge(pose,{0,0,1160},RailBridgeEscape::FireSeconds,RailBridgeEscape::FireSeconds,&storedMuzzle);
+    const auto& wreck=lastShot.Frame();
+    const auto wreckMuzzle=RailVeilModel::MuzzleWorld(wreck.bridgePose,wreck);
+    runner.Expect(wreck.bridgeWreck && std::abs(wreckMuzzle.x-storedMuzzle.x)+std::abs(wreckMuzzle.y-storedMuzzle.y)+
+        std::abs(wreckMuzzle.z-storedMuzzle.z)<.001f,"the wreck reaches the stored muzzle at the first instant of fire");
     for(int fps:{30,60,120}) {
         RailVeilModelPresentation visual;const float dt=1.0f/fps;
         for(int i=0;i<fps;++i)visual.Update(dt,true,false,1.8f-float(i)*dt);

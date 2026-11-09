@@ -335,9 +335,12 @@ void RailAimAssistSystem::Update(const RailAimAssistFrameInput& input) {
     const float intentScale = 1.0f - intent *
         (1.0f - Clamp01(settings.minimumHighIntentStrength));
     const float proximity = 1.0f - Clamp01(best->angularErrorDegrees / baseAcquireAngle);
+    const float distanceFade = input.inputDevice==RailAimAssistInputDevice::Gamepad
+        ? 1.0f-Clamp01((best->distance-0.55f*settings.maximumDistance)/(0.45f*settings.maximumDistance))
+        : 1.0f;
     const float strength = Clamp01(
         MagnetismStrength(input.inputDevice, settings) *
-        (0.35f + proximity * 0.65f) * intentScale);
+        (0.35f + proximity * 0.65f) * intentScale * distanceFade);
     frame_.inputFrictionScale =
         1.0f - Clamp01(proximity * strength) * 0.48f;
     frame_.frictionActive = frame_.inputFrictionScale < 0.9999f;

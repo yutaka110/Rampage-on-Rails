@@ -1,0 +1,29 @@
+# Soft, bounded contact smoke. The combat event supplies the delayed origin.
+name = combat_impact_smoke
+lifetime = 0.56
+blend = alpha
+layer = additive
+renderQueue = 3360
+color = 1,1,1,1
+size = 1,1,1
+
+component = particle
+name = combat_impact_soft_smoke
+technique = ParticleAdditive
+blend = alpha
+texture = circle2
+duration = 0.42
+color = 0.62,0.59,0.55,0.40
+size = 0.90,0.78,0.90
+particle.lifetime = 0.45
+particle.emissive = 0.56
+particle.spawnCount = 6
+particle.spawnFrequency = 0
+particle.spawnRadius = 0.43
+particle.randomRotation = 1
+particle.noiseStrength = 0.15
+particle.pulseSpeed = 0
+particle.scaleYMin = 0.76
+particle.scaleYMax = 1.26
+particle.depthFadeSoftness = 0.00027
+particle.edgeSoftness = 0.81

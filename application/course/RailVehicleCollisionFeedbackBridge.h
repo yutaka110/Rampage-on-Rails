@@ -85,6 +85,7 @@ struct RailVehicleCollisionFeedbackFrame final {
     RailVehicleImpactSlowdownCommand slowdown{};
     Vector3 bodyTranslationWorld{};
     Vector3 impactWorldPosition{};
+    Vector3 impactOffsetLocal{};
     Vector3 impactNormalWorld{0.0f, 1.0f, 0.0f};
     float bodyBankDegrees = 0.0f;
     float bodyPitchDegrees = 0.0f;
@@ -120,6 +121,7 @@ private:
     Vector3 responseNormalWorld_{0.0f, 1.0f, 0.0f};
     Vector3 responseNormalRailLocal_{0.0f, 1.0f, 0.0f};
     Vector3 responseWorldPosition_{};
+    Vector3 responseOffsetLocal_{};
     float responseIntensity_ = 0.0f;
     uint64_t lastConsumedResultSequence_ = 0;
     uint64_t revision_ = 0;
@@ -128,6 +130,7 @@ private:
         float elapsed = 0.0f;
         float duration = 0.44f;
         float intensity = 0.0f;
+        bool projectile = false;
     };
     std::array<ImpactResponse, 8> responses_{};
     std::vector<RailVehicleImpactParticle> particles_;

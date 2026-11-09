@@ -29,10 +29,14 @@ def tower(m):
      z=-(1.10+(b+2.53)*(-.32/2.13))-.016
      return [(a,b,z),(-z,b,a),(-a,b,-z),(z,b,-a)][side]
     ps=[p(c-extent*.255,y-.17),p(c+extent*.255,y-.17),p(c+extent*.255,y+.17),p(c-extent*.255,y+.17)]
-    m.face(list(reversed(ps)),1+(row+col)%2)
- box(m,(0,-.18,0),(1.76,.18,1.65),6)
+   m.face(list(reversed(ps)),6 if row==0 else 1+(row+col)%2)
+ box(m,(0,-.25,0),(1.76,.16,1.65),6)
+ box(m,(0,-.125,0),(1.37,.13,1.26),3)
+ for side in (-1,1):
+  box(m,(side*.76,-.83,.61),(.15,.88,.14),0)
+  box(m,(side*.73,-.53,.66),(.16,.10,.14),4)
 
-def tube(m,x,y,levels,col,n=12,cap=False,inside=False):
+def tube(m,x,y,levels,col,n=20,cap=False,inside=False):
  rings=[[(x+r*math.cos(i*math.tau/n),y+r*math.sin(i*math.tau/n),z) for i in range(n)] for z,r in levels]
  for a,b in zip(rings,rings[1:]):
   for i in range(n):
@@ -42,8 +46,9 @@ def tube(m,x,y,levels,col,n=12,cap=False,inside=False):
 def main():
  base=Mesh('SiegeTurretBase',PALETTE);tower(base)
  head=Mesh('SiegeTurretHead',PALETTE)
+ barrels=Mesh('SiegeTurretBarrel',PALETTE)
  box(head,(0,.23,-.03),(1.58,.78,1.02),0)
- box(head,(0,.66,-.18),(1.25,.18,.80),1)
+ box(head,(0,.66,-.18),(1.25,.18,.80),2)
  box(head,(0,.24,-.59),(1.45,.70,.16),6)
  for side in (-1,1):
   box(head,(side*.73,.47,-.05),(.20,1.02,1.22),1)
@@ -51,13 +56,19 @@ def main():
   box(head,(side*.73,.03,-.05),(.26,.14,1.31),6)
   for i in range(7):box(head,(side*.86,.40,-.45+i*.13),(.07,.48,.045),6)
   x=side*.44
-  tube(head,x,.32,[(-.50,.25),(.25,.25),(.50,.18),(.90,.18),(1.12,.23),(1.22,.23),(1.65,.16),(1.80,.22),(1.95,.22)],0)
-  for z in (.55,.65,.75):tube(head,x,.32,[(z,.205),(z+.045,.205)],1)
+  tube(head,x,.32,[(-.44,.30),(.43,.30),(.59,.24),(.64,.24)],3)
+  tube(barrels,x,.32,[(-.50,.25),(.25,.25),(.50,.18),(.90,.18),(1.12,.23),(1.22,.23),(1.65,.16),(1.80,.22),(1.95,.22)],0)
+  for z in (.67,.76,.85):tube(barrels,x,.32,[(z,.205),(z+.045,.205)],1)
   # Open bore: muzzle ring at the exact shared runtime socket, dark recessed cap.
-  tube(head,x,.32,[(1.95,.22),(1.95,.12)],2)
-  tube(head,x,.32,[(1.74,.12),(1.95,.12)],3,inside=True)
-  tube(head,x,.32,[(1.735,.117),(1.74,.117)],3,cap=True)
+  tube(barrels,x,.32,[(1.95,.22),(1.95,.12)],2)
+  tube(barrels,x,.32,[(1.53,.096),(1.84,.12),(1.95,.12)],3,inside=True)
+  tube(barrels,x,.32,[(1.525,.096),(1.53,.096)],3,cap=True)
+  tube(barrels,x,.32,[(1.79,.222),(1.84,.235),(1.90,.235),(1.95,.221)],2)
   box(head,(side*.68,.57,.45),(.07,.09,.24),4)
- combined=Mesh('SiegeTurret',PALETTE);combined.faces=base.faces+head.faces
- for mesh in (base,head,combined):mesh.save(ROOT/'Resources/enemies'/mesh.name)
+ single=Mesh('SiegeTurretSingleBarrel',PALETTE)
+ # Reuse the authored left tube, centered on its own recoil axis.
+ for points,colour,_ in barrels.faces[:len(barrels.faces)//2]:
+  single.face([(x+.44,y,z) for x,y,z in points],colour)
+ combined=Mesh('SiegeTurret',PALETTE);combined.faces=base.faces+head.faces+barrels.faces
+ for mesh in (base,head,barrels,single,combined):mesh.save(ROOT/'Resources/enemies'/mesh.name)
 if __name__=='__main__':main()

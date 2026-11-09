@@ -2,6 +2,7 @@
 #include "RailGroundBatteryAttack.h"
 #include "RailTurretGeometry.h"
 #include "CourseSpawnRuntime.h"
+#include "RailRouteHazards.h"
 #include "../diagnostics/DronePerformanceProfile.h"
 #include "RailWorldRaycast.h"
 #include "EnemyAttackInterruptSystem.h"
@@ -624,6 +625,8 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     enemyProjectileSystem_.Update(bullets_, projectileInput,enemies_);
 
     for (CourseObstacleActor& obstacle : obstacles_) {
+        if(RailRouteHazards::IsSlab(obstacle) && safetyInput.playerDistance<RailRouteHazards::SlabTrigger)
+            continue;
         obstacle.age += dt;
         obstacle.desc.distanceOffset += obstacle.desc.forwardSpeed * dt;
     }
@@ -1024,7 +1027,7 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             obstacles_.end(),
             [](const CourseObstacleActor& obstacle) {
                 return obstacle.age >= obstacle.desc.lifetime ||
-                    (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f);
+                    (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f && !RailRouteHazards::IsBarricade(obstacle));
             }),
         obstacles_.end());
     vfxCues_.erase(
@@ -1415,6 +1418,15 @@ bool CourseSpawnRuntime::SpawnObstacle(CourseObstacleActorDesc desc, std::string
     obstacles_.push_back(std::move(actor));
     if (errorMessage != nullptr) errorMessage->clear();
     return true;
+}
+
+void CourseSpawnRuntime::BreakRouteBarricade(uint32_t actorId) {
+    for(auto& obstacle:obstacles_) {
+        if(obstacle.actorId==actorId && RailRouteHazards::IsBarricade(obstacle) && obstacle.desc.hitPoints>0) {
+            RailRouteHazards::OpenBarricade(obstacle);
+            return;
+        }
+    }
 }
 
 void CourseSpawnRuntime::SpawnVfxCue(CourseVfxCueDesc desc) {

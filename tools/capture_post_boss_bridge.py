@@ -22,8 +22,9 @@ def fixture_course(course):
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--stages',type=int,nargs='+',choices=range(41),default=[0,1,2,3])
+    parser.add_argument('--output',type=Path,default=ROOT/'generated/post-boss-review')
     args=parser.parse_args()
-    out=ROOT/'generated/post-boss-review';work=out/'native';work.mkdir(parents=True,exist_ok=True)
+    out=args.output.resolve();work=out/'native';work.mkdir(parents=True,exist_ok=True)
     shutil.copytree(ROOT/'Resources',work/'Resources',dirs_exist_ok=True)
     for name in ['GE3.exe','dxcompiler.dll','dxil.dll']:
         shutil.copy2(ROOT/'generated/attack-warning/Release'/name,work/name)
@@ -62,7 +63,10 @@ def main():
         assert float(last['anchor'])>=3290 and float(last['player_hp'])>0,last
         if stage<2:assert last['alive']=='0' and float(last['camera_weight'])==0,last
         if stage==2:assert last['alive']=='2' and float(last['rear_max'])<-35 and float(last['camera_weight'])==1,last
-        if stage==3:assert last['alive']=='0' and int(last['rear_primary'])>=6 and int(last['rear_lock'])>=2,last
+        if stage==3:
+            assert last['alive']=='0' and int(last['rear_primary'])>=6 and int(last['rear_lock'])>=2,last
+            escape_start=next(r for r in rows if r['phase']=='9')
+            assert float(escape_start['veil_hull_hp'])==0,escape_start
         if stage in (4,5):assert last['phase']=='4' and last['alive']=='0' and float(last['camera_weight'])==0,last
         if stage==6:assert last['phase']=='5' and last['alive']=='1',last
         if stage==7:assert last['phase']=='6' and last['alive']=='2' and float(last['camera_weight'])==1,last
@@ -154,11 +158,33 @@ def main():
                         if shots[i]>previous_shots[i]:fired.append(str(i+1))
                     previous_shots=shots
                 assert fired[:2]==['1','1'] and '2' in fired[2:],fired
-        if 26<=stage<=36:
+        if stage==3 or 26<=stage<=36:
             bridge_log=work/'logs/bridge_escape_audit.csv'
             shutil.copy2(bridge_log,out/f'{label}-bridge.csv')
             bridge=list(csv.DictReader(bridge_log.open()));b=bridge[-1]
             assert float(b['speed'])>0 and float(last['player_hp'])>0,b
+            if stage==3:
+                charge=[r for r in bridge if r['veil_shot']=='1']
+                assert any(r['feeds']=='4' and r['red_tips']=='0' for r in charge),b
+                assert any(r['feeds']=='4' and float(r['red_mouth'])>.95 for r in charge),b
+                assert any(float(r['opening'])>.85 and float(r['extension'])>.79 and float(r['charge'])>.95 for r in charge),b
+                assert any(float(r['recoil'])>.55 for r in charge),b
+                wreck_frames={}
+                for name in ('damage','charge'):
+                    assert (out/f'{label}-{name}.png').exists(),(label,name)
+                    state=(out/f'{label}-{name}.csv').read_text().splitlines()
+                    wreck=next(line for line in state if line.startswith('# veil_wreck '))
+                    wreck_frames[name]=dict(item.split('=') for item in wreck.split()[2:])
+                    assert int(wreck_frames[name]['smoke'])>=5 and int(wreck_frames[name]['sparks'])>=3,wreck
+                assert abs(float(wreck_frames['damage']['bank']))>.10 and abs(float(wreck_frames['charge']['bank']))<.10,wreck_frames
+                with (out/f'{label}-charge.parts.csv').open() as parts_file:
+                    wreck_parts={r['node'] for r in csv.DictReader(parts_file) if r['actor']=='0'}
+                assert {'veil_hull','veil_wing_left','veil_wing_right','veil_cannon','veil_armour_top','veil_armour_bottom'} <= wreck_parts,wreck_parts
+                assert 'veil_sensor' not in wreck_parts,wreck_parts
+                assert any(r['phase']=='1' and 0<float(r['beam_travel'])<1 and float(r['beam_power'])>.9 for r in bridge),b
+                assert any(r['phase']=='2' and float(r['beam_travel'])==1 and float(r['beam_power'])>.5 for r in bridge),b
+                assert all(float(r['beam_power'])==0 for r in bridge if int(r['phase'])>=3),b
+                assert b['phase']=='8' and b['clear']=='1' and any(r['lock_hit']=='1' for r in bridge),b
             if stage==27:assert b['phase']=='3' and b['target_hp']=='30' and b['locks']=='0',b
             if stage in (28,29,30,31,33,34,35,36):
                 assert any(r['lock_hit']=='1' for r in bridge),bridge[-5:]

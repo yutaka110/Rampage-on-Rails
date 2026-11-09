@@ -1,4 +1,5 @@
 #include "RailVehicleCollisionFeedbackBridge.h"
+#include "RailHeavyAttack.h"
 #include "../diagnostics/DebugDrawSystem.h"
 
 #include <algorithm>
@@ -84,6 +85,7 @@ void RailVehicleCollisionFeedbackBridge::Reset() {
     responseNormalWorld_ = {0.0f, 1.0f, 0.0f};
     responseNormalRailLocal_ = {0.0f, 1.0f, 0.0f};
     responseWorldPosition_ = {};
+    responseOffsetLocal_ = {};
     responseIntensity_ = 0.0f;
     lastConsumedResultSequence_ = 0;
     responses_ = {};
@@ -121,6 +123,7 @@ void RailVehicleCollisionFeedbackBridge::Update(
         for (const PlayerDamageResult& result : input.damageResults) {
             const bool contact = IsVehicleContact(result);
             const bool projectile = result.request.kind == PlayerHitKind::EnemyProjectile;
+            const bool heavy = projectile && RailHeavy::IsProjectile(result.request.sourceId);
             if (!result.accepted || result.appliedDamage <= 0.0f ||
                 (!contact && !projectile) || result.sequence <= lastConsumedResultSequence_) {
                 continue;
@@ -137,6 +140,9 @@ void RailVehicleCollisionFeedbackBridge::Update(
             responseWorldPosition_ = result.request.hasWorldImpact
                 ? result.request.impactWorldPosition
                 : vehicle->damageVfxMountPosition;
+            const Vector3 impactOffset{responseWorldPosition_.x-vehicle->position.x,
+                responseWorldPosition_.y-vehicle->position.y,responseWorldPosition_.z-vehicle->position.z};
+            responseOffsetLocal_={Dot(impactOffset,vehicle->right),Dot(impactOffset,vehicle->up),Dot(impactOffset,vehicle->forward)};
             responseIntensity_ = (std::clamp)(
                 0.55f + result.appliedDamage / 100.0f,
                 0.55f, result.lethal ? 1.35f : 1.0f);
@@ -162,8 +168,11 @@ void RailVehicleCollisionFeedbackBridge::Update(
             // Add a smooth impulse instead of restarting an active reaction.
             const auto slot=std::find_if(responses_.begin(),responses_.end(),
                 [](const auto& r){return r.intensity<=0.0f;});
-            if(slot!=responses_.end()) *slot={direction,0.0f,input.settings.responseDurationSeconds,
-                (std::clamp)(0.38f+result.appliedDamage/60.0f,0.38f,1.0f)};
+            if(slot!=responses_.end()) {
+                const float strength=projectile?(heavy?.98f:(std::clamp)(.55f+result.appliedDamage/85.0f,.55f,.78f)):
+                    (std::clamp)(.38f+result.appliedDamage/60.0f,.38f,1.0f);
+                *slot={direction,0.0f,input.settings.responseDurationSeconds*(projectile?(heavy?.89f:.65f):1.0f),strength,projectile};
+            }
 
             // One dedicated vehicle impact owns sound and particles for both
             // bullets and contacts. Generic damage keeps only screen/haptic feedback.
@@ -174,7 +183,7 @@ void RailVehicleCollisionFeedbackBridge::Update(
                 cue.resultSequence = result.sequence;
                 cue.volume = (std::clamp)(
                     input.settings.impactVolume * responseIntensity_ * (projectile ? 0.72f : 1.0f), 0.0f, 1.0f);
-                cue.pitch = result.lethal ? 0.72f : (projectile ? 1.18f : 0.86f) +
+                cue.pitch = result.lethal ? (projectile?0.85f:0.72f) : (projectile ? 1.0f : 0.86f) +
                     HashSigned(result.sequence,31)*0.035f;
                 cue.pan = (std::clamp)(
                     frame_.impactDirectionScreen.x * 0.78f, -1.0f, 1.0f);
@@ -183,7 +192,7 @@ void RailVehicleCollisionFeedbackBridge::Update(
 
             if (input.settings.vfxEnabled) {
                 const uint32_t bursts=(std::clamp)(input.settings.sparkBurstCount,1u,8u);
-                const uint32_t count=projectile ? bursts*3u+2u : bursts*6u;
+                const uint32_t count=projectile ? bursts*3u+(heavy?6u:2u) : bursts*6u;
                 for(uint32_t index=0; index<count && particles_.size()<128; ++index) {
                     RailVehicleImpactParticle particle;
                     particle.metal=index>=count-4;
@@ -191,9 +200,9 @@ void RailVehicleCollisionFeedbackBridge::Update(
                         Scale(vehicle->up,0.25f+std::abs(HashSigned(result.sequence,index*3+1)))),
                         Scale(vehicle->forward,HashSigned(result.sequence,index*3+2)));
                     const Vector3 directionOut=NormalizeOr(Add(Scale(spread,input.settings.sparkSpread/0.75f),
-                        Scale(worldDirection,0.65f)),vehicle->up);
+                        projectile?Scale(normalWorld,1.05f):Scale(worldDirection,.65f)),vehicle->up);
                     particle.origin=particle.position=particle.previousPosition=responseWorldPosition_;
-                    particle.velocity=Add(Scale(directionOut,(particle.metal ? 2.5f : 5.5f)*(contact?1.25f:1.0f)),
+                    particle.velocity=Add(Scale(directionOut,(particle.metal ? 2.5f : projectile?8.0f:5.5f)*(heavy?1.28f:contact?1.25f:1.0f)),
                         Scale(vehicle->forward,vehicle->speed*0.65f));
                     particle.lifetime=(particle.metal ? 0.48f : 0.18f+0.12f*std::abs(HashSigned(result.sequence,index+70)))
                         *input.settings.sparkLifetimeSeconds/0.38f;
@@ -225,7 +234,15 @@ void RailVehicleCollisionFeedbackBridge::Update(
         const float cycles=(std::clamp)(input.settings.oscillationFrequencyHz*response.duration,0.8f,1.2f);
         const float onset=(std::min)(1.0f,t/0.12f);
         const float easedOnset=onset*onset*(3.0f-2.0f*onset);
-        const float pulse=2.2f*std::sin(kTau*cycles*t)*std::exp(-2.0f*t)*(1-t)*(1-t)*easedOnset*response.intensity;
+        float pulse=2.2f*std::sin(kTau*cycles*t)*std::exp(-2.0f*t)*(1-t)*(1-t)*easedOnset;
+        if(response.projectile) {
+            // Fast suspension compression, one smaller rebound, and a clean settle.
+            const auto ease=[](float u){return u*u*(3-2*u);};
+            if(t<.16f)pulse=ease(t/.16f);
+            else if(t<.59f)pulse=std::lerp(1.0f,-.23f,ease((t-.16f)/.43f));
+            else pulse=std::lerp(-.23f,0.0f,ease((t-.59f)/.41f));
+        }
+        pulse*=response.intensity;
         heave+=pulse;
         bank+=response.directionLocal.x*pulse;
         pitch+=response.directionLocal.z*pulse;
@@ -249,6 +266,7 @@ void RailVehicleCollisionFeedbackBridge::Update(
 
     frame_.particles = particles_;
     frame_.impactWorldPosition = responseWorldPosition_;
+    frame_.impactOffsetLocal = responseOffsetLocal_;
     frame_.impactNormalWorld = responseNormalWorld_;
     frame_.lastConsumedResultSequence = lastConsumedResultSequence_;
     frame_.revision = ++revision_;

@@ -1,6 +1,8 @@
 #include "WeaponFeedbackSystem.h"
+#include "RailRouteHazards.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailGroundBatteryAttack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -274,6 +276,32 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
     event.destroyed = damageResult.destroyed;
     event.lockOnContact = request.lockOnContact && damageResult.damageApplied;
     ConfigurePresentation(event);
+    if(event.hitKind==RailAimHitKind::Obstacle && event.appliedDamage>0 &&
+        std::any_of(runtime.Obstacles().begin(),runtime.Obstacles().end(),[&](const auto& o) {
+            return o.actorId==event.targetActorId && RailRouteHazards::IsBarricade(o);
+        })) {
+        event.impactEffectName="hit_plane_burst";
+        event.impactColor={1,.72f,.38f,.68f};
+        event.impactRadius=event.destroyed?1.6f:.55f;
+        event.impactLifetime=event.destroyed?.30f:.14f;
+    }
+    if(!request.lockOnContact && event.damageType==WeaponDamageType::Energy && event.hitKind==RailAimHitKind::Enemy &&
+        (feedbackKind==HitFeedbackKind::NormalHit || feedbackKind==HitFeedbackKind::ArmorHit)) {
+        // The route battery's steel casing has its own contact material. This
+        // leaves the damage result, hit stop and shake of the accepted hit intact.
+        const bool plated=feedbackKind==HitFeedbackKind::ArmorHit ||
+            std::any_of(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& actor){
+                return actor.actorId==event.targetActorId && RailGroundBattery::IsBattery(actor.desc.actorAssetId);
+            });
+        if(plated) {
+            event.impactCueId="weapon_feedback_armor";
+            event.audioCueId="weapon_impact_armor";
+            event.impactEffectName="hit_plane_burst";
+        }
+        event.impactColor=plated?Vector4{1.0f,.73f,.39f,.45f}:Vector4{.54f,.92f,1.0f,.48f};
+        event.impactRadius=plated?.44f:.42f;
+        event.impactLifetime=plated?.15f:.12f;
+    }
     event.shieldHit=damageResult.shieldHit;event.shieldBroken=damageResult.shieldBroken;
     if(event.shieldHit) {
         // The shield owns its localized ripple/fracture; never report a hull

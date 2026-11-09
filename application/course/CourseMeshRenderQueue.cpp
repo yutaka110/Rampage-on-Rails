@@ -1,10 +1,12 @@
 #include "RailGroundBatteryAttack.h"
+#include "RailRouteHazards.h"
 #include "RailRearPursuitRules.h"
 #include "RailVeilModel.h"
 #include "RailFangModel.h"
 #include "RailEliteFirePresentation.h"
 #include "RailTurretGeometry.h"
 #include "CourseMeshRenderQueue.h"
+#include "../CaveSubjectMaterial.h"
 
 #include "CourseSpawnRuntime.h"
 #include "DebrisCompositionSystem.h"
@@ -25,6 +27,12 @@ Vector3 Add(const Vector3& a, const Vector3& b) {
 
 Vector3 Scale(const Vector3& value, float scale) {
     return {value.x * scale, value.y * scale, value.z * scale};
+}
+
+Vector3 TransformTurretPoint(Vector3 point,const Matrix4x4& world) {
+    return {point.x*world.m[0][0]+point.y*world.m[1][0]+point.z*world.m[2][0]+world.m[3][0],
+        point.x*world.m[0][1]+point.y*world.m[1][1]+point.z*world.m[2][1]+world.m[3][1],
+        point.x*world.m[0][2]+point.y*world.m[1][2]+point.z*world.m[2][2]+world.m[3][2]};
 }
 
 Vector3 ResolveRailLocal(
@@ -110,7 +118,8 @@ bool IsCourseMeshRenderEligible(
 bool IsCarrierBatterySurfaceMesh(std::string_view meshId) {
     return meshId=="gatling_turret_head" || meshId=="gatling_turret_base" || meshId=="gatling_turret_rotor" ||
         meshId=="carrier_heavy_turret_head" || meshId=="carrier_heavy_turret_base" ||
-        meshId=="carrier_heavy_turret_barrel" || meshId=="carrier_heavy_turret_vent";
+        meshId=="carrier_heavy_turret_barrel" || meshId=="carrier_heavy_turret_vent" ||
+        meshId=="carrier_heavy_turret_shutter";
 }
 
 Material BuildCarrierBatterySurfaceMaterial(std::string_view meshId,Vector4 tint,float hitFlash,float counter) {
@@ -343,6 +352,11 @@ void CourseMeshRenderQueue::SyncFromCourseRuntime(
         enemyPresentation,
         enemyReadability,veilAttack,eliteFire);
 
+    if(veilAttack && veilAttack->bridgeWreck && veilAttack->bridgePose.visible) {
+        if(auto* wreck=AllocateItem())
+            WriteVeil(*wreck,veilAttack->bridgePose,*veilAttack,false,true,0,models,viewProjection);
+    }
+
     // Collidable obstacles must not lose their draw slots to scenery.
     AddObstacleInstances(runtime, railPath, models, viewProjection);
 
@@ -438,6 +452,16 @@ void CourseMeshRenderQueue::AppendTerrain(std::span<const CourseTerrainPlacement
                 *item->materialData=steel;
                 item->useMaterialOverride=true;
             }
+            if ((placement.meshId=="course_blockout_bridge" ||
+                 std::string_view(placement.meshId).starts_with("bridge_escape_")) && item->materialData) {
+                Material steel{};
+                steel.color={1,1,1,1};
+                steel.enableLighting=true;
+                steel.uvTransform=MakeIdentity4x4();
+                *item->materialData=WithCourseSurfaceProfile(WithCaveSurfaceLighting(steel,
+                    {.74f,.78f,.82f},.66f,.36f,.84f),CourseSurfaceProfile::Structure);
+                item->useMaterialOverride=true;
+            }
             const Vector3 center = ResolveRailLocal(
                 railPath,
                 placement.distance,
@@ -482,8 +506,126 @@ void CourseMeshRenderQueue::AddObstacleInstances(
     std::span<const CourseMeshModelBinding> models,
     const Matrix4x4& viewProjection) {
     for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
-        if (obstacle.age >= obstacle.desc.lifetime ||
-            (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f)) continue;
+        if(obstacle.age>=obstacle.desc.lifetime)continue;
+        if(RailRouteHazards::IsBarricade(obstacle) || RailRouteHazards::IsSlab(obstacle)) {
+            using namespace RailRouteHazards;
+            const float distance=obstacle.desc.spawnDistance+obstacle.desc.distanceOffset;
+            const auto track=railPath.Evaluate(distance);
+            const auto facing=RotationFromRailTangent(track.tangent);
+            const auto draw=[&](const char* mesh,Vector3 rail,Vector3 size,Vector3 tilt,Vector4 ink,bool unlit=false) {
+                const uint32_t index=ResolveModelIndex(models,mesh,nullptr);
+                if(models[index].name!=mesh || !models[index].loaded)return;
+                auto* part=AllocateItem();
+                if(!part)return;
+                part->kind=CourseMeshRenderKind::Obstacle;part->sourceActorId=obstacle.actorId;
+                part->name=obstacle.desc.id;part->meshId=mesh;part->modelIndex=index;
+                part->sortDistance=rail.z;part->visible=part->transformData!=nullptr;
+                if(part->materialData) {
+                    part->materialData->color=ink;part->materialData->enableLighting=!unlit;
+                    part->materialData->shininess=5;
+                    part->materialData->specularMode=unlit?5:2;part->useMaterialOverride=true;
+                }
+                WriteItemTransform(*part,models[index].rootLocal,size,Add(facing,tilt),
+                    ResolveRailLocal(railPath,rail.z,0,rail.x,rail.y),viewProjection);
+                const std::string_view meshId=mesh;
+                const bool naturalArch=meshId.starts_with("route_arch_");
+                if(!unlit && part->materialData && (naturalArch || meshId=="rail_hazard_solid" ||
+                    meshId=="rail_hazard_block")) {
+                    const auto hit=Strike(obstacle);
+                    const auto impact=ResolveRailLocal(railPath,hit.z,0,hit.x,hit.y);
+                    const float since=obstacle.age-BoltImpact;
+                    const float flash=since<0?0:1-Ease(since,0,.19f);
+                    const auto& world=part->transformData->World;
+                    const auto axis=[&](int row) {
+                        const Vector3 v{world.m[row][0],world.m[row][1],world.m[row][2]};
+                        return Scale(v,1/(std::max)(.0001f,std::hypot(v.x,v.y,v.z)));
+                    };
+                    const auto x=axis(0),y=axis(1);
+                    auto& material=*part->materialData;
+                    material.specularMode=18;
+                    material.padding2[1]=x.x;material.padding2[2]=x.y;material.padding2[3]=x.z;
+                    material.padding2[4]=meshId=="route_arch_shoulder"?2.0f:(meshId=="rail_hazard_block"?1.0f:0.0f);
+                    material.padding2[5]=y.x;material.padding2[6]=y.y;material.padding2[7]=y.z;
+                    material.padding2[8]=naturalArch ? 1+Ramp(obstacle.age,FractureStart,FractureEnd)*
+                        (1-Ease(obstacle.age,SupportBreak,1.49f)) : 0.0f;
+                    material.padding2[9]=world.m[3][0];material.padding2[10]=world.m[3][1];material.padding2[11]=world.m[3][2];
+                    material.padding2[12]=flash;
+                    material.padding2[13]=impact.x;material.padding2[14]=impact.y;material.padding2[15]=impact.z;
+                }
+            };
+            const float age=obstacle.age;
+            if(IsBarricade(obstacle)) {
+                const auto extents=obstacle.desc.halfExtents;
+                const bool open=obstacle.desc.hitPoints<=0;
+                const float u=open?Ramp(age,0,BarricadeDebrisSeconds):0;
+                const float damage=1-(std::clamp)(obstacle.desc.hitPoints/BarricadeHealth,0.0f,1.0f);
+                for(float side:{-1.0f,1.0f}) {
+                    const float spread=open?2.58f+2.45f*u:0;
+                    draw("route_barricade_panel",{side*(extents.x*.5f+spread),
+                        obstacle.desc.verticalOffset+(open?1.8f*u-4.2f*u*u:0),distance+(open?u*1.45f:0)},
+                        {extents.x*.5f,extents.y,extents.z},
+                        {open?u*.48f:0,side*(open?.32f+1.4f*u:damage*.055f),side*(open?.17f+1.6f*u:damage*.045f)},
+                        {.61f-.12f*damage,.62f-.14f*damage,.56f-.14f*damage,1});
+                }
+                if(!open && damage<.55f)
+                    draw("route_barricade_panel",{0,obstacle.desc.verticalOffset+.43f,distance-.66f},
+                        {.37f,.24f,.12f},{0,0,.16f*damage},{1.0f,.64f,.20f,1});
+            } else {
+                const Vector4 bedrock{.58f,.47f,.35f,1};
+                draw("route_arch_roots",{0,0,distance},{1,1,1},{},bedrock);
+                const auto slab=VisibleStone(obstacle,age);
+                draw("route_arch_shoulder",slab.rail,{1,1,1},{0,0,slab.roll},bedrock);
+                if(age>=SupportBreak && age<2.50f)for(unsigned i=0;i<5;++i) {
+                    const float t=age-SupportBreak-.031f*i;
+                    if(t<0)continue;
+                    const auto strike=Strike(obstacle);
+                    const auto fragment=Add(strike,{-t*(.65f+.51f*i),.18f*i-6.1f*t*t,
+                        -.15f-t*(.49f+.31f*i)});
+                    if(fragment.y<-5.0f)continue;
+                    const float size=.19f+.054f*(i%4);
+                    draw("rail_hazard_block",fragment,{size,size*.65f,size*.73f},
+                        {t*2.6f,t*1.2f,t*(2.1f+.64f*i)},{.75f,.63f,.49f,1});
+                }
+                const auto landing=LandingContact(obstacle);
+                if(age>=GroundImpact)for(unsigned i=0;i<11;++i) {
+                    const float t=age-GroundImpact-.009f*(i%5);
+                    if(t<0)continue;
+                    const float size=.076f+.023f*(i%5);
+                    const float angle=.48f+2.39996f*i;
+                    const float firstHop=.19f+.024f*(i%5),secondHop=.10f+.014f*(i%4);
+                    const float first=Ramp(t,0,firstHop),second=Ramp(t,firstHop,firstHop+secondHop);
+                    const float height=(.36f+.11f*(i%5))*4*first*(1-first)+
+                        (.09f+.033f*(i%4))*4*second*(1-second);
+                    // Lose speed at each impact, then let the chip roll to rest.
+                    const float rollOut=Ease(t,firstHop+secondHop,firstHop+secondHop+.21f);
+                    const float travel=(.78f+.14f*(i%6))*(first+.36f*second+.14f*rollOut);
+                    const float x=landing.x+.52f+std::cos(angle)*travel;
+                    const float z=landing.z-1.10f-.10f*(i%4)+(std::sin(angle)-.20f)*travel*.58f;
+                    const float spin=first+.66f*second+.35f*rollOut;
+                    draw("rail_hazard_block",{x,landing.y+size+height,z},{size,size*.78f,size*.88f},
+                        {spin*(1.85f+.51f*(i%4)),angle+spin*1.57f,spin*(i%2?2.4f:-2.85f)},
+                        {.79f,.68f,.53f,1});
+                }
+                for(unsigned i=0;i<3;++i) {
+                    const float t=age-ChipRelease(i);
+                    if(t<=0 || t>=ChipFlight)continue;
+                    const float size=.23f+.06f*i;
+                    draw("rail_hazard_block",CrossingChip(obstacle,i,age),{size,size*.68f,size*.72f},
+                        {t*2.8f,t*1.7f,-t*3.7f},{.85f,.74f,.57f,1});
+                }
+                if(age>BoltImpact && age<2.49f)for(int i=0;i<5;++i) {
+                    const float t=(std::max)(0.0f,age-BoltImpact-.053f*i);
+                    if(t==0)continue;
+                    auto chip=Strike(obstacle);
+                    chip.x-=t*(1.1f+.66f*i);chip.y+=.25f*i+t*(1.3f-.26f*i)-4.7f*t*t;
+                    chip.z+=(i-2)*.44f+t*(i%2?.92f:-.7f);
+                    const float size=.15f+.09f*i;
+                    draw("rail_hazard_solid",chip,{size*.9f,size,size*.64f},{t*2.3f,t*1.4f,t*3.6f},{.71f,.61f,.49f,1});
+                }
+            }
+            continue;
+        }
+        if (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f) continue;
         if (!IsCourseMeshRenderEligible(
                 CourseMeshRenderKind::Obstacle,
                 obstacle.desc.meshId)) {
@@ -621,13 +763,16 @@ bool CourseMeshRenderQueue::WriteVeil(CourseMeshRenderItem& hull,const TwinShiel
         material.color={1,1,1,pose.alpha};material.uvTransform=MakeIdentity4x4();
         material.enableLighting=true;material.specularMode=16;material.shininess=.035f;
         material.environmentCoefficient=1;material.padding2[0]=pose.flash*.4f;
+        if(attack.bridgeWreck && (i==0 || i==1 || i==4))
+            material.color={.69f,.66f,.62f,pose.alpha};
         if(i==8 || i==9 || (i==6 && sensorExposed)) {
             material.enableLighting=false;material.specularMode=5;
             if(i==8) {
                 const float charge=attack.charge;
                 material.color={.80f+charge*1.2f,.025f+charge*2.2f,.055f+charge*3.5f,pose.alpha};
                 material.color.x+=attack.flash*2.5f;material.color.y+=attack.flash*2.2f;material.color.z+=attack.flash*1.5f;
-            } else material.color=i==6?Vector4{2.0f,.18f,.05f,pose.alpha}:Vector4{1.2f,.025f,.045f,pose.alpha};
+            } else material.color=i==6?Vector4{2.0f,.18f,.05f,pose.alpha}:
+                attack.bridgeWreck?Vector4{.13f,.013f,.008f,pose.alpha}:Vector4{1.2f,.025f,.045f,pose.alpha};
         }
         item->useMaterialOverride=true;
         writeWorld(*item,Multiply(models[indices[i]].rootLocal,Multiply(frame.local,parent)));
@@ -658,6 +803,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
     const EnemyCombatPresentationBridge* enemyPresentation,
     const EnemyEncounterReadabilityDirector* enemyReadability,const RailVeilAttackFrame* veilAttack,const RailEliteFirePresentation* eliteFire) {
     for (const CourseEnemyActor& enemy : runtime.Enemies()) {
+        if(veilAttack && veilAttack->bridgeWreck && enemy.desc.actorAssetId=="rear_veil" && enemy.desc.hitPoints<=0)continue;
         if(RailGroundBattery::IsBattery(enemy.desc.actorAssetId) && !enemy.groundPlacementResolved) continue;
         // A frozen visual wreck owns all four parts after defeat. Do not also
         // draw the shrinking, camera-facing live actor during its retirement.
@@ -740,6 +886,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             center = Add(center, Scale(sample.tangent, presentation->forwardOffset));
             center = Add(center, Scale(sample.right, presentation->lateralOffset));
             center = Add(center, Scale(sample.up, presentation->verticalOffset));
+            if(!presentation->turret && enemy.desc.meshId!="twin_shield_hull")
+                center=Add(center,presentation->primaryImpactOffset);
         }
         const float presentationScale = (enemy.desc.meshId=="siege_turret" || RailTurret::ForMesh(enemy.desc.meshId).movingMesh) ? 1.0f : enemy.combatState.initialized
             ? (std::max)(0.0f, enemy.combatState.presentationScale)
@@ -761,6 +909,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         if (presentation != nullptr) {
             rotation = Add(rotation, presentation->rotationOffset);
             if (presentation->turret) rotation = Add(presentation->turretWorldRotation,presentation->rotationOffset);
+            else if(enemy.desc.meshId!="twin_shield_hull")
+                rotation=Add(rotation,presentation->primaryImpactRotation);
         }
         if (enemy.desc.meshId == "twin_shield_hull" && model.name == "twin_shield_hull") {
             rotation=ResolveTwinShieldDroneFacing(sample.tangent,center,cameraPosition,
@@ -784,6 +934,10 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 // Charge colour/shields remain procedural; banking and barrel
                 // anchors are exactly those used by the real projectile.
                 pose=enemy.weaponMount.dronePose;
+            }
+            if(presentation) {
+                pose.position=Add(pose.position,presentation->primaryImpactOffset);
+                pose.rotation=Add(pose.rotation,presentation->primaryImpactRotation);
             }
             pose.alpha = alpha;
             pose.charge = presentation ? presentation->weaponCharge : 0.0f;
@@ -945,6 +1099,10 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 item->materialData->environmentCoefficient = 0.025f;
                 // Enemy rim/fill mode also keeps painted armour matte.
             }
+            if(enemy.desc.meshId=="siege_turret") {
+                *item->materialData=WithCourseSurfaceProfile(WithCaveSurfaceLighting(*item->materialData,
+                    {.74f,.78f,.82f},.67f,.16f,.87f),CourseSurfaceProfile::Turret);
+            }
             if(IsCarrierBatterySurfaceMesh(model.name))
                 *item->materialData=BuildCarrierBatterySurfaceMaterial(model.name,materialColor,
                     presentation?presentation->flashStrength:0,
@@ -1055,6 +1213,78 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         if (RailTurret::IsMesh(enemy.desc.meshId)) {
             // Keep the pedestal planted while the separate head aims in yaw/pitch.
             const auto geometry=RailTurret::ForMesh(enemy.desc.meshId);
+            const bool siege=enemy.desc.meshId=="siege_turret";
+            const bool singleSiege=siege && RailGroundBattery::IsPredictive(enemy.desc.actorAssetId) && enemy.desc.bulletCount==1;
+            const bool practice=siege && enemy.desc.suppressFire && enemy.stationaryDormant;
+            const CourseBulletActor* siegeRound=nullptr;
+            float shotAge=RailTurret::ShotAge(enemy.turretMotion,enemy.age);
+            if(singleSiege) {
+                const auto& rounds=runtime.Bullets();
+                const auto shot=std::find_if(rounds.rbegin(),rounds.rend(),[&](const auto& round) {
+                    return round.ownerActorId==enemy.actorId && round.active && !round.hitConsumed && round.age<.49f;
+                });
+                if(shot!=rounds.rend())siegeRound=&*shot;
+                if(siegeRound)shotAge=siegeRound->age;
+            }
+            const float recoil=singleSiege?RailTurret::SiegeVisualRecoil(shotAge):RailTurret::RecoilAtAge(enemy.desc.meshId,shotAge);
+            constexpr float siegeFlashSeconds=.094f;
+            const bool siegeFlash=siegeRound && siegeRound->age<siegeFlashSeconds;
+            const float flashStrength=siegeFlash?1.0f-TwinShieldDestructionSmooth(siegeRound->age,.016f,.094f):0;
+            const bool siegeWarning=singleSiege && presentation && presentation->turretMuzzleActive &&
+                enemy.behaviorState.attackIntentActive && enemy.attackState.tokenReserved && enemy.behaviorState.telegraphPresented;
+            int siegeBarrel=singleSiege && !practice?ResolvePredictiveTurretBarrel(enemy):0;
+            if(siegeRound && !practice) {
+                // Recovery may already be tracking the player again. Keep the
+                // kick on the tube that owned this round's launch.
+                const float launchLateral=siegeRound->lateralOffset-siegeRound->lateralSpeed*siegeRound->age;
+                const float launchDistance=siegeRound->spawnDistance+siegeRound->distanceOffset-siegeRound->forwardSpeed*siegeRound->age;
+                const float across=(launchDistance-enemy.desc.spawnDistance-enemy.desc.distanceOffset)*siegeRound->lateralSpeed
+                    -(launchLateral-enemy.desc.lateralOffset)*siegeRound->forwardSpeed;
+                siegeBarrel=across>0?1:0;
+            }
+            if((siegeWarning && enemy.targetingState.solutionLocked) || siegeFlash) {
+                // The visual head finishes tracking at the committed solution.
+                // The targeting and projectile simulation retain their own state.
+                const float settle=siegeFlash?1.0f-TwinShieldDestructionSmooth(siegeRound->age,.024f,siegeFlashSeconds):
+                    TwinShieldDestructionSmooth(presentation->weaponCharge,.18f,.68f);
+                const auto tracked=enemy.targetingState.turretAimDirection;
+                const auto locked=siegeFlash?Vector3{
+                    siegeRound->lockedTargetLateralOffset-enemy.desc.lateralOffset,
+                    siegeRound->lockedTargetVerticalOffset-enemy.desc.verticalOffset-geometry.muzzleHeight*enemy.desc.radius,
+                    siegeRound->lockedTargetDistance-enemy.desc.spawnDistance-enemy.desc.distanceOffset}:ResolveTurretAimDirection(enemy);
+                const float lockedLength=std::hypot(locked.x,locked.y,locked.z);
+                const auto aim=Add(Scale(tracked,1-settle),Scale(locked,settle/(std::max)(.001f,lockedLength)));
+                const auto forward=Add(Add(Scale(sample.right,aim.x),Scale(sample.up,aim.y)),Scale(sample.tangent,aim.z));
+                rotation={std::atan2(forward.y,std::hypot(forward.x,forward.z)),
+                    std::atan2(-forward.x,-forward.z),0};
+                WriteItemTransform(*item,model.rootLocal,{baseScale,baseScale,baseScale},rotation,center,viewProjection);
+            }
+            const auto impactRotation=presentation?presentation->primaryImpactRotation:Vector3{};
+            if(!siegeFlash && (impactRotation.x!=0 || impactRotation.y!=0 || impactRotation.z!=0)) {
+                rotation=Add(rotation,impactRotation);
+                WriteItemTransform(*item,model.rootLocal,{baseScale,baseScale,baseScale},rotation,center,viewProjection);
+            }
+            const auto head=MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
+            const float rotorAngle=enemy.desc.meshId=="gatling_turret"?RailTurret::RotorAngle(enemy.turretMotion,enemy.age):0;
+            const auto local=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,rotorAngle},
+                Vector3{0,siege?0.0f:geometry.muzzleHeight,recoil});
+            auto movingWorld=Multiply(local,head);
+            if(siegeFlash || siegeWarning) {
+                const auto rim=RailTurret::MuzzleLocalAtPhase(enemy.desc.meshId,siegeBarrel,0);
+                const auto restMouth=TransformTurretPoint(rim,head);
+                const auto mouthRail=siegeFlash?Vector3{
+                    siegeRound->lateralOffset-siegeRound->lateralSpeed*siegeRound->age,
+                    siegeRound->verticalOffset-siegeRound->verticalSpeed*siegeRound->age,
+                    siegeRound->spawnDistance+siegeRound->distanceOffset-siegeRound->forwardSpeed*siegeRound->age}:
+                    ResolveTurretMuzzleRailPosition(enemy,siegeBarrel==0?-1.0f:1.0f);
+                const auto launch=ResolveEnemyProjectileWorldPosition(railPath,mouthRail);
+                // The committed round anchors the rim at ignition. The barrel
+                // still recoils along its local axis as the alignment fades.
+                const float blend=siegeFlash?1.0f-TwinShieldDestructionSmooth(siegeRound->age,0.0f,siegeFlashSeconds):presentation->weaponCharge;
+                movingWorld.m[3][0]+=(launch.x-restMouth.x)*blend;
+                movingWorld.m[3][1]+=(launch.y-restMouth.y)*blend;
+                movingWorld.m[3][2]+=(launch.z-restMouth.z)*blend;
+            }
             const uint32_t baseIndex = ResolveModelIndex(models,geometry.baseMesh,nullptr);
             if (model.name == geometry.headMesh && models[baseIndex].name == geometry.baseMesh) {
                 if (CourseMeshRenderItem* base = AllocateItem()) {
@@ -1070,27 +1300,34 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                                 item->materialData->padding2[0],item->materialData->padding2[1]);
                         base->useMaterialOverride = true;
                     }
+                    auto baseRotation=RotationFromRailTangent(sample.tangent);
+                    if(siege)baseRotation.y+=RailTurret::SiegePedestalKick(shotAge);
                     WriteItemTransform(*base,models[baseIndex].rootLocal,
-                        {baseScale,baseScale,baseScale},RotationFromRailTangent(sample.tangent),center,viewProjection);
+                        {baseScale,baseScale,baseScale},baseRotation,center,viewProjection);
                 }
             }
             if(geometry.movingMesh) {
-                const uint32_t rotorIndex=ResolveModelIndex(models,geometry.movingMesh,nullptr);
-                if(models[rotorIndex].name==geometry.movingMesh)if(auto* rotor=AllocateItem()) {
+                constexpr auto singleMesh="siege_turret_single_barrel";
+                const bool split=singleSiege && models[ResolveModelIndex(models,singleMesh,nullptr)].name==singleMesh;
+                const auto mesh=split?singleMesh:geometry.movingMesh;
+                const uint32_t rotorIndex=ResolveModelIndex(models,mesh,nullptr);
+                if(models[rotorIndex].name==mesh)for(int barrel=0;barrel<(split?2:1);++barrel)if(auto* rotor=AllocateItem()) {
                     rotor->kind=CourseMeshRenderKind::Enemy;rotor->sourceActorId=enemy.actorId;
-                    rotor->meshId=geometry.movingMesh;rotor->modelIndex=rotorIndex;
+                    rotor->meshId=mesh;rotor->modelIndex=rotorIndex;
                     rotor->visible=models[rotorIndex].loaded && rotor->transformData;
                     if(rotor->materialData && item->materialData) {
-                        *rotor->materialData=BuildCarrierBatterySurfaceMaterial(geometry.movingMesh,item->materialData->color,
-                            item->materialData->padding2[0],item->materialData->padding2[1]);rotor->useMaterialOverride=true;
+                        *rotor->materialData=siege?*item->materialData:
+                            BuildCarrierBatterySurfaceMaterial(geometry.movingMesh,item->materialData->color,
+                                item->materialData->padding2[0],item->materialData->padding2[1]);
+                        rotor->useMaterialOverride=true;
                     }
-                    // Roll around the barrel axis before applying the aimed
-                    // head transform, keeping the pedestal and armour fixed.
-                    const auto head=MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
-                    const float angle=enemy.desc.meshId=="gatling_turret"?RailTurret::RotorAngle(enemy.turretMotion,enemy.age):0;
-                    const float recoil=RailTurret::Recoil(enemy.turretMotion,enemy.desc.meshId,enemy.age);
-                    const auto local=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,angle},Vector3{0,geometry.muzzleHeight,recoil});
-                    auto world=Multiply(models[rotorIndex].rootLocal,Multiply(local,head));
+                    auto parent=movingWorld;
+                    if(split) {
+                        const auto offset=MakeAffineMatrix(Vector3{1,1,1},Vector3{},
+                            Vector3{(barrel==0?-1:1)*geometry.muzzleSide,0,0});
+                        parent=Multiply(offset,barrel==siegeBarrel?movingWorld:head);
+                    }
+                    auto world=Multiply(models[rotorIndex].rootLocal,parent);
                     if(rotor->transformData) {
                         rotor->transformData->World=world;
                         rotor->transformData->WVP=Multiply(world,viewProjection);
@@ -1099,53 +1336,62 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 }
             }
             if(enemy.desc.meshId=="carrier_heavy_turret" && presentation) {
-                const uint32_t ventIndex=ResolveModelIndex(models,"carrier_heavy_turret_vent",nullptr);
-                if(models[ventIndex].name=="carrier_heavy_turret_vent")for(float side:{-1.0f,1.0f})if(auto* vent=AllocateItem()) {
-                    vent->kind=CourseMeshRenderKind::Enemy;vent->sourceActorId=enemy.actorId;
-                    vent->meshId="carrier_heavy_turret_vent";vent->modelIndex=ventIndex;
-                    vent->visible=models[ventIndex].loaded && vent->transformData;
-                    if(vent->materialData && item->materialData){
-                        *vent->materialData=BuildCarrierBatterySurfaceMaterial("carrier_heavy_turret_vent",item->materialData->color,
-                            item->materialData->padding2[0],item->materialData->padding2[1]);vent->useMaterialOverride=true;
+                const auto drawPart=[&](const char* mesh,const Matrix4x4& parent) {
+                    const uint32_t index=ResolveModelIndex(models,mesh,nullptr);
+                    if(models[index].name!=mesh || !models[index].loaded)return;
+                    auto* part=AllocateItem();
+                    if(!part)return;
+                    part->kind=CourseMeshRenderKind::Enemy;part->sourceActorId=enemy.actorId;
+                    part->meshId=mesh;part->modelIndex=index;
+                    part->visible=part->transformData!=nullptr;
+                    if(part->materialData && item->materialData){
+                        *part->materialData=BuildCarrierBatterySurfaceMaterial(mesh,item->materialData->color,
+                            item->materialData->padding2[0],item->materialData->padding2[1]);part->useMaterialOverride=true;
                     }
-                    const auto head=MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
+                    if(part->transformData) {
+                        auto world=Multiply(models[index].rootLocal,parent);
+                        part->transformData->World=world;part->transformData->WVP=Multiply(world,viewProjection);
+                        part->transformData->WorldInverseTranspose=Transpose(Inverse(world));
+                    }
+                };
+                const float opening=HeavyMuzzleArmorOpen(presentation->batteryThermal,shotAge);
+                for(float side:{-1.0f,1.0f}) {
                     const auto offset=MakeAffineMatrix(Vector3{1,1,1},Vector3{},Vector3{side*.18f,0,0});
                     const auto hinge=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,side*presentation->batteryThermal.ventOpen*1.05f},
                         Vector3{side*.68f,.76f,.12f});
-                    auto world=Multiply(models[ventIndex].rootLocal,Multiply(offset,Multiply(hinge,head)));
-                    if(vent->transformData) {
-                        vent->transformData->World=world;vent->transformData->WVP=Multiply(world,viewProjection);
-                        vent->transformData->WorldInverseTranspose=Transpose(Inverse(world));
-                    }
+                    drawPart("carrier_heavy_turret_vent",Multiply(offset,Multiply(hinge,head)));
+
+                    // Both plates use the same inward-facing mesh. They hinge
+                    // outward from the moving barrel without relocating the bore.
+                    const auto flip=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,side<0?3.14159265f:0},Vector3{});
+                    const auto shutter=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,side*1.28f*opening,0},
+                        Vector3{side*(.86f+.38f*opening),0,-2.06f});
+                    drawPart("carrier_heavy_turret_shutter",Multiply(flip,Multiply(shutter,movingWorld)));
                 }
             }
-            if (presentation && presentation->turretMuzzleActive) {
+            if (presentation && (singleSiege?(siegeFlash || siegeWarning):presentation->turretMuzzleActive)) {
                 const uint32_t glowIndex = ResolveModelIndex(models,"ball",nullptr);
                 if (models[glowIndex].name == "ball") {
-                    const Matrix4x4 head = MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
-                    const int barrels=enemy.desc.meshId=="gatling_turret"?6:geometry.muzzleSide==0?1:2;
+                    const int barrels=singleSiege?1:enemy.desc.meshId=="gatling_turret"?6:geometry.muzzleSide==0?1:2;
                     for (int barrel=0;barrel<barrels;++barrel) {
                         CourseMeshRenderItem* glow = AllocateItem();
                         if (!glow) break;
                         glow->kind = CourseMeshRenderKind::Enemy;
                         glow->sourceActorId = enemy.actorId;
-                        glow->meshId = "turret_muzzle_glow";
+                        glow->meshId = siegeFlash?"siege_muzzle_flash":"turret_muzzle_glow";
                         glow->modelIndex = glowIndex;
                         glow->visible = models[glowIndex].loaded && glow->transformData != nullptr;
-                        const Vector3 p=RailTurret::MuzzleLocalAtPhase(enemy.desc.meshId,barrel,
-                            RailTurret::RotorAngle(enemy.turretMotion,enemy.age),RailTurret::Recoil(enemy.turretMotion,enemy.desc.meshId,enemy.age));
-                        const Vector3 muzzle{p.x*head.m[0][0]+p.y*head.m[1][0]+p.z*head.m[2][0]+head.m[3][0],
-                            p.x*head.m[0][1]+p.y*head.m[1][1]+p.z*head.m[2][1]+head.m[3][1],
-                            p.x*head.m[0][2]+p.y*head.m[1][2]+p.z*head.m[2][2]+head.m[3][2]};
+                        const Vector3 p=RailTurret::MuzzleLocalAtPhase(enemy.desc.meshId,singleSiege?siegeBarrel:barrel,rotorAngle,singleSiege?0:recoil);
+                        const auto muzzle=TransformTurretPoint(p,singleSiege?movingWorld:head);
                         if (glow->materialData) {
                             *glow->materialData = {};
-                            glow->materialData->color = presentation->coreColor;
+                            glow->materialData->color = siegeFlash?Vector4{5.2f*flashStrength,4.8f*flashStrength,4.0f*flashStrength,flashStrength}:presentation->coreColor;
                             glow->materialData->enableLighting = false;
                             glow->materialData->specularMode = 5;
                             glow->materialData->uvTransform = MakeIdentity4x4();
                             glow->useMaterialOverride = true;
                         }
-                        const float radius = baseScale*(0.09f+0.14f*presentation->weaponCharge);
+                        const float radius = baseScale*(siegeFlash?0.05f+0.29f*flashStrength:0.07f+0.10f*presentation->weaponCharge);
                         WriteItemTransform(*glow,models[glowIndex].rootLocal,{radius,radius,radius},{},muzzle,viewProjection);
                     }
                 }
@@ -1416,7 +1662,7 @@ void CourseMeshRenderQueue::WriteItemTransform(
 
 void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrier,
     std::span<const CourseMeshModelBinding> models,
-    const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix) {
+    const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix,float routeShotAge,Vector3 routeShotTarget) {
     if(!carrier.visible || models.empty()) return;
     Matrix4x4 ship=MakeIdentity4x4();
     ship.m[0][0]=carrier.right.x; ship.m[0][1]=carrier.right.y; ship.m[0][2]=carrier.right.z;
@@ -1424,7 +1670,7 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
     ship.m[2][0]=carrier.forward.x; ship.m[2][1]=carrier.forward.y; ship.m[2][2]=carrier.forward.z;
     ship.m[3][0]=carrier.center.x; ship.m[3][1]=carrier.center.y; ship.m[3][2]=carrier.center.z;
     const auto vp=Multiply(viewMatrix,projMatrix);
-    auto part=[&](const char* mesh,const char* name,Vector3 center,Vector3 scale,Vector4 color,bool lit) {
+    auto part=[&](const char* mesh,const char* name,Vector3 center,Vector3 scale,Vector4 color,bool lit,Vector3 rotation={}) {
         const uint32_t model=ResolveModelIndex(models,mesh,nullptr);
         if(models[model].name!=mesh || !models[model].loaded) return;
         auto* item=AllocateItem(); if(!item) return;
@@ -1442,16 +1688,35 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
         item->materialData->specularMode=2;
         item->materialData->shininess=1.0f;
         item->materialData->environmentCoefficient=lit?0.025f:0.0f;
+        if(std::string_view(mesh)=="carrier_hull") {
+            item->materialData->specularMode=16;
+            item->materialData->shininess=.08f;
+            item->materialData->environmentCoefficient=.74f;
+        }
+        if(IsCarrierBatterySurfaceMesh(mesh))
+            *item->materialData=BuildCarrierBatterySurfaceMaterial(mesh,color,0,0);
         item->useMaterialOverride=true;
         auto world=Multiply(models[model].rootLocal,
-            Multiply(MakeAffineMatrix(scale,Vector3{},center),ship));
+            Multiply(MakeAffineMatrix(scale,rotation,center),ship));
         item->transformData->World=world;
         item->transformData->WVP=Multiply(world,vp);
         item->transformData->WorldInverseTranspose=Transpose(Inverse(world));
     };
     const float dying=carrier.battleDestruction;
     part("carrier_hull","carrier/blockout-hull",{},{1,1,1},
-        {0.18f+dying*0.15f,0.24f-dying*0.12f,0.29f-dying*0.22f,1},true);
+        {0.92f+dying*.08f,.98f-dying*.45f,1.08f-dying*.62f,1},true);
+    if(routeShotAge>=0) {
+        using namespace RailRouteHazards;
+        const auto rotation=HeavyGunRotation(carrier,routeShotTarget);
+        const float scale=HeavyGunScale;
+        const float recoil=RailTurret::RecoilAtAge("carrier_heavy_turret",routeShotAge-BoltLaunch);
+        part("carrier_box","carrier/route-heavy-yoke",{HeavyMount.x,-9.1f,HeavyMount.z+1.8f},
+            {4.8f,3.6f,5.1f},{.23f,.27f,.30f,1},true);
+        part("carrier_heavy_turret_head","carrier/route-heavy-head",HeavyMount,
+            {scale,scale,scale},{.82f,.88f,.94f,1},true,rotation);
+        part("carrier_heavy_turret_barrel","carrier/route-heavy-barrel",HeavyGunLocal(rotation,{0,.32f,recoil}),
+            {scale,scale,scale},{.92f,.92f,.98f,1},true,rotation);
+    }
     if(carrier.partsBattle) {
         // Intact hull and independently destructible weapon pods. Their live
         // meshes are Enemy actors, so aim, damage and rendering share anchors.
@@ -1480,8 +1745,6 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
     }
     for(int side:{-1,1}) {
         const float x=float(side)*RailMothership::BayLateral;
-        part("carrier_box",side<0?"carrier/port-bay":"carrier/starboard-bay",
-            {x,-8.5f,0},{18,1.0f,28},{0.022f,0.028f,0.032f,1},true);
         const float glow=carrier.launchGlow;
         const Vector4 amber{1.8f*glow,0.65f*glow,0.12f*glow,1};
         for(int edge:{-1,1})
@@ -1533,6 +1796,7 @@ void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
         hull.materialData->uvTransform = MakeIdentity4x4();
         hull.materialData->enableLighting = true;
         hull.materialData->specularMode = 10; // Normal/roughness-mapped industrial metal.
+        hull.materialData->shininess = static_cast<float>(hull.sourceActorId); // Scorch receiver id for mode 10.
         hull.materialData->environmentCoefficient = 0.72f;
         hull.materialData->padding2[0] = wreck?breakup.hullFlash:pose.flash;
         hull.useMaterialOverride = true;

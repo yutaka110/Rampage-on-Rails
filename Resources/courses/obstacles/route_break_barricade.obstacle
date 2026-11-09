@@ -1,0 +1,5 @@
+# Two panels share the closed collision volume and release outwards.
+obstacle|route_break_barricade|Rail barricade|route_barricade_panel|24|2.8|1.45|0.72|1|1|1|1
+placement|68|0|1.38|0
+breakable|true|72
+vfx|hit_plane_burst

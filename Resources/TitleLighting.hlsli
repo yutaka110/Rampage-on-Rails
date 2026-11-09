@@ -23,6 +23,23 @@ cbuffer Camera : register(b2)
     float4 railFrictionLights[2]; // short warm flashes at the wheel contacts
     float4 bridgeBeamStart;
     float4 bridgeBeamEnd;
+    float4 batteryFootContacts[2];
+    float4 combatMarkPosition[6]; // world position and receiver id (0 means empty)
+    float4 combatMarkNormalAge[6];
+    float4 combatMarkTintRadius[6];
+    float4 combatImpactLight;
+    float4 combatImpactTint;
+}
+
+static float3 CombatImpactRadiance(float3 worldPosition,out float3 direction)
+{
+    direction=float3(0,1,0);
+    if(combatImpactLight.w<=0)return 0;
+    float3 delta=combatImpactLight.xyz-worldPosition;
+    float d2=dot(delta,delta);
+    float edge=saturate(1-d2/max(.01f,combatImpactTint.w*combatImpactTint.w));
+    direction=delta*rsqrt(max(d2,.025f));
+    return combatImpactTint.rgb*combatImpactLight.w*edge*edge/(1+d2*.19f);
 }
 
 static float3 BridgeBeamRadiance(float3 worldPosition, out float3 direction)
@@ -40,6 +57,34 @@ static float3 BridgeBeamRadiance(float3 worldPosition, out float3 direction)
     float edge=1.0f-distanceSquared/radiusSquared;
     float head=lerp(.78f,1.32f,smoothstep(.80f,1.0f,along));
     return float3(6.3f,1.24f,.38f)*bridgeBeamStart.w*head*edge*edge/(1.0f+distanceSquared*.012f);
+}
+
+static float GroundBatteryContactVisibility(float3 worldPosition)
+{
+    float visibility=1;
+    [unroll] for(int i=0;i<2;++i) {
+        float4 foot=batteryFootContacts[i];
+        if(foot.w>0) {
+            float3 d=worldPosition-foot.xyz;
+            float contact=1.0f-smoothstep(.73f,1.75f,length(d.xz)/foot.w);
+            contact*=1.0f-smoothstep(.70f,3.0f,abs(d.y));
+            visibility=min(visibility,1.0f-.55f*contact);
+        }
+    }
+    return visibility;
+}
+
+static float GameplayWheelContactVisibility(float3 worldPosition, float3 normal)
+{
+    if(titleSubject.w>.5f || normal.y<.20f) return 1.0f;
+    float occlusion=0;
+    [unroll] for(int i=0;i<4;++i) {
+        float3 d=worldPosition-titleWheelContacts[i].xyz;
+        float radial=1.0f-smoothstep(.12f,.90f,length(d.xz));
+        float height=1.0f-smoothstep(.04f,.34f,abs(d.y));
+        occlusion=max(occlusion,titleWheelContacts[i].w*radial*height);
+    }
+    return 1.0f-.48f*occlusion*smoothstep(.20f,.75f,normal.y);
 }
 
 static float3 RailFrictionRadiance(float3 worldPosition, int source, out float3 direction)

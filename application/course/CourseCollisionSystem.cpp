@@ -646,20 +646,21 @@ void CourseCollisionSystem::FirePlayerShot(
         shotAim.worldRayOrigin=PrimaryMuzzle(input,weapon_.muzzleForwardOffset);
         const Vector3 delta{shotAim.worldAimPoint.x-shotAim.worldRayOrigin.x,
             shotAim.worldAimPoint.y-shotAim.worldRayOrigin.y,shotAim.worldAimPoint.z-shotAim.worldRayOrigin.z};
-        shotAim.worldRayDirection=NormalizeOr(delta,aim->worldRayDirection);
-        shotAim.aimDistance=std::sqrt(LengthSquared(delta));
-        if(projectileDepth) {
-            // The converged muzzle ray must still respect real world cover.
-            // No synthetic world hit or enlarged interception radius is used.
-            shotAim.maxDistance=shot.range;
-            RailWorldRaycastInput blocker;blocker.aim=&shotAim;blocker.railPath=input.railPath;
-            blocker.spawnRuntime=&runtime;blocker.course=input.course;blocker.playerDistance=input.player.distance;
-            blocker.terrainSettings=input.primaryTerrainSettings;
-            blocker.terrainEdits=input.course?&input.course->terrainEditLayer:nullptr;
-            blocker.terrainPreview=input.primaryTerrainPreview;
-            blocker.includeProceduralTerrain=input.primaryTerrainSettings!=nullptr;
-            ApplyRailAimHit(shotAim,RailWorldRaycast::Query(blocker));
-        }
+        const auto rawDirection=shotAim.worldRayDirection;
+        const float ahead=delta.x*rawDirection.x+delta.y*rawDirection.y+delta.z*rawDirection.z;
+        shotAim.worldRayDirection=ahead>0?NormalizeOr(delta,rawDirection):rawDirection;
+        shotAim.maxDistance=shot.range;
+        RailWorldRaycastInput muzzleQuery;
+        muzzleQuery.aim=&shotAim;
+        muzzleQuery.railPath=input.railPath;
+        muzzleQuery.spawnRuntime=&runtime;
+        muzzleQuery.course=input.course;
+        muzzleQuery.playerDistance=input.player.distance;
+        muzzleQuery.terrainSettings=input.primaryTerrainSettings;
+        muzzleQuery.terrainEdits=input.course?&input.course->terrainEditLayer:nullptr;
+        muzzleQuery.terrainPreview=input.primaryTerrainPreview;
+        muzzleQuery.includeProceduralTerrain=input.primaryTerrainSettings!=nullptr;
+        ApplyRailAimHit(shotAim,RailWorldRaycast::Query(muzzleQuery));
     }
 
     const Vector3 direction = NormalizeOr(aim->worldRayDirection, {0.0f, 0.0f, 1.0f});
@@ -670,7 +671,9 @@ void CourseCollisionSystem::FirePlayerShot(
         shootDownRequest.shotId = shot.shotId;
         shootDownRequest.rayOrigin = aim->worldRayOrigin;
         shootDownRequest.rayDirection = direction;
-        shootDownRequest.maximumDistance = shot.range;
+        // Extending hull reach does not extend the close-range interception window.
+        constexpr float primaryInterceptRange=92.0f;
+        shootDownRequest.maximumDistance = (std::min)(shot.range,primaryInterceptRange);
         shootDownRequest.maximumWorldHitDistance =
             aim->hasWorldHit ? aim->aimDistance : shot.range;
         shootDownRequest.damage = shot.damage;
@@ -704,6 +707,8 @@ void CourseCollisionSystem::FirePlayerShot(
         return;
     }
 
+    // The tracer stops at physical cover even if that surface rejects damage.
+    lastShotWorldPoint_=aim->worldAimPoint;
     WeaponHitRequest request{};
     request.shotId = shot.shotId;
     request.targetActorId = aim->hitActorId;

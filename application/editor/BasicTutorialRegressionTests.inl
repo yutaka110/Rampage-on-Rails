@@ -24,7 +24,7 @@ void TestBasicTutorialActions(RegressionRunner& runner) {
         in.locks={};in.release=tokens;in.lockHeld=false;guide.Update(in);
         runner.Expect(!guide.Learned(Lesson::Lock),"an unaccepted volley cannot complete lock instruction");
         in.volleyAccepted=true;guide.Update(in);runner.Expect(guide.Learned(Lesson::Lock) && guide.Success(),"two real enemy locks and an accepted release earn success");
-        in.volleyAccepted=false;in.release={};in.targetVisible=false;in.distance=700;
+        in.volleyAccepted=false;in.release={};in.targetVisible=false;in.distance=RailBasicTutorial::BoostGuideStart;
         for(int f=0;f<fps*2;++f)guide.Update(in);
         runner.Expect(guide.Current()==Lesson::Boost,"clear runway introduces the accelerator");
         in.normalSpeed=32;in.speed=32;in.boostHeld=true;
@@ -33,8 +33,9 @@ void TestBasicTutorialActions(RegressionRunner& runner) {
         in.speed=40;in.rewardBoost=true;
         for(int f=0;f<fps;++f)guide.Update(in);
         runner.Expect(!guide.Learned(Lesson::Boost),"automatic kill boost cannot teach the accelerator");
-        runner.Expect(!guide.Visible(),"automatic reward acceleration does not display a misleading E instruction");
+        runner.Expect(guide.Visible() && guide.BoostWaiting(),"early E instruction signals that automatic boost is still active");
         in.rewardBoost=false;
+        in.distance=700;
         for(int f=0;f<fps;++f)guide.Update(in);
         runner.Expect(guide.Learned(Lesson::Boost),"held manual acceleration and achieved speed earn the lesson");
         in.boostHeld=false;
@@ -50,7 +51,10 @@ void TestBasicTutorialActions(RegressionRunner& runner) {
         runner.Expect(guide.LearnedMask()==learned && !guide.Visible(),"checkpoint retry preserves knowledge without repeating prompts");
         guide.Reset();guide.Update(in);runner.Expect(!guide.Learned(Lesson::Primary),"new run resets tutorial knowledge");
         in.boss=true;guide.Update(in);runner.Expect(!guide.Visible(),"boss keeps only the local interception cue");
-        guide.Reset();in.boss=false;in.targetVisible=in.lockFormation=true;in.distance=445;
+        guide.Reset();in.boss=false;in.targetVisible=in.lockFormation=true;
+        in.distance=RailBasicTutorial::SpeedEnd;guide.Update(in);
+        runner.Expect(!guide.Visible(),"unlearned operations stay off the HUD in live combat");
+        in.distance=445;
         in.brakeHeld=false;in.locks=std::span<const RailLockToken>(tokens.data(),1);guide.Update(in);
         runner.Expect(guide.LockPhase()==LockStep::Release,"one captured enemy already permits release under normal combat rules");
         in.release=in.locks;in.locks={};in.volleyAccepted=true;guide.Update(in);
@@ -77,6 +81,15 @@ void TestBasicTutorialLayoutAndRunway(RegressionRunner& runner) {
         input.bossVisible=true;renderer.Update(input);
         runner.Expect(!has(renderer.Frame().commands,u8"左クリック長押しで連射"),"global guide yields to the boss");input.bossVisible=false;
     }
+    GameSessionRuntimeState liveSession;liveSession.phase=GameSessionPhase::Playing;
+    liveSession.courseDistance=RailBasicTutorial::SpeedEnd-1;
+    guide.Reset();action.targetVisible=false;action.threat=true;action.distance=liveSession.courseDistance;guide.Update(action);
+    input.shortRun=true;input.resultSession=&liveSession;
+    RailShooterHudRenderer liveHud;liveHud.Update(input);
+    runner.Expect(has(liveHud.Frame().commands,u8"Q : ブレーキ"),"the control footer remains available in the practice area");
+    liveSession.courseDistance=RailBasicTutorial::SpeedEnd;
+    action.distance=liveSession.courseDistance;guide.Update(action);liveHud.Update(input);
+    runner.Expect(!has(liveHud.Frame().commands,u8"Q : ブレーキ"),"the live course also hides the control footer");
     CourseAsset course;std::string error;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"tutorial course loads");
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});runner.Expect(cooked.succeeded,"retimed teaching course compiles");
     for(const auto& wave:cooked.program.waves)if(wave.waveGuid=="short_intercept" || wave.waveGuid=="short_finale") {

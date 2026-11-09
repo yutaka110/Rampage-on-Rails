@@ -1,5 +1,6 @@
 #include "RailRearPursuitRules.h"
 #include "WeaponDamageSystem.h"
+#include "RailRouteHazards.h"
 
 #include "CourseAsset.h"
 #include "CourseSpawnRuntime.h"
@@ -215,7 +216,7 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
             result.targetResolved = true;
             result.hitPointsBefore = (std::max)(obstacle.desc.hitPoints, 0.0f);
             result.remainingHitPoints = result.hitPointsBefore;
-            if (!obstacle.desc.breakable ||
+            if (!obstacle.desc.breakable || (RailRouteHazards::IsBarricade(obstacle) && request.lockOnContact) ||
                 (obstacle.desc.payload=="bridge_escape_release" && !request.lockOnContact)) {
                 result.blocked = true;
                 result.rejectReason = DamageRejectReason::Indestructible;
@@ -226,6 +227,8 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 return result;
             }
             ApplyHitPoints(obstacle.desc.hitPoints, result);
+            if(obstacle.desc.hitPoints<=0 && RailRouteHazards::IsBarricade(obstacle))
+                RailRouteHazards::OpenBarricade(obstacle);
             return result;
         }
         result.rejectReason = DamageRejectReason::TargetNotFound;

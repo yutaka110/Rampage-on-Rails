@@ -1,4 +1,5 @@
 #include "RailVehicleBodyCollisionSystem.h"
+#include "RailRouteHazards.h"
 
 #include "../terrain/RailPath.h"
 #include "../terrain/TerrainGenerationSettings.h"
@@ -239,12 +240,22 @@ const RailVehicleBodyCollisionFrame& RailVehicleBodyCollisionSystem::Update(
             // obstacle must stop blocking the vehicle in the same frame.
             if (obstacle.age >= obstacle.desc.lifetime ||
                 (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f)) continue;
-            const RailLocalPoint center{
+            RailLocalPoint center{
                 obstacle.desc.spawnDistance + obstacle.desc.distanceOffset,
                 obstacle.desc.lateralOffset,
                 obstacle.desc.verticalOffset};
+            auto relativeEnd=end;
+            if(RailRouteHazards::IsSlab(obstacle)) {
+                const auto previous=RailRouteHazards::Stone(obstacle,obstacle.age).rail;
+                const auto current=RailRouteHazards::Stone(obstacle,obstacle.age+
+                    (end.distance>=RailRouteHazards::SlabTrigger?input.deltaTime:0)).rail;
+                center={previous.z,previous.x,previous.y};
+                relativeEnd.distance+=previous.z-current.z;
+                relativeEnd.lateral+=previous.x-current.x;
+                relativeEnd.vertical+=previous.y-current.y;
+            }
             if (!OverlapsSweepBounds(
-                    start, end, center, obstacle.desc.halfExtents,
+                    start, relativeEnd, center, obstacle.desc.halfExtents,
                     profile_.bodyHalfExtents)) {
                 continue;
             }
@@ -258,7 +269,7 @@ const RailVehicleBodyCollisionFrame& RailVehicleBodyCollisionSystem::Update(
             bool startedInside = false;
             Vector3 normalRailLocal{};
             if (SweepPointAgainstExpandedAabb(
-                    start, end, center, obstacle.desc.halfExtents,
+                    start, relativeEnd, center, obstacle.desc.halfExtents,
                     profile_.bodyHalfExtents, fraction, startedInside,
                     normalRailLocal)) {
                 (void)startedInside;

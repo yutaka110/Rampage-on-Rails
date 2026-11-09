@@ -53,9 +53,49 @@ struct RailFrictionFlash final {
 // the actual wheel supports and fires once per landing.
 class RailBrakePresentation final {
 public:
+    static constexpr float PassDuckSeconds=.14f;
+    static float PassFrictionGain(float remaining) {
+        const float recovery=1-(std::clamp)(remaining/.10f,0.0f,1.0f);
+        return .32f+.68f*recovery*recovery*(3-2*recovery);
+    }
+    struct LoadFrame {
+        float pitchDegrees=0, compression=0, scrape=0;
+        bool engaged=false, released=false;
+    };
     void Reset() { *this = {}; }
     const auto& Sparks() const { return sparks_; }
     const auto& Flashes() const { return flashes_; }
+    const LoadFrame& Load() const { return loadFrame_; }
+
+    void UpdateLoad(float dt, float speed, bool held, bool supported, bool enabled) {
+        loadFrame_.engaged=loadFrame_.released=false;
+        if(!std::isfinite(dt) || dt<=0)return;
+        if(!enabled || !supported) {
+            loadFrame_={};
+            load_=releaseFrom_=0;
+            releaseAge_=.36f;
+            loaded_=false;
+            return;
+        }
+        dt=(std::min)(dt,.10f);
+        const float rolling=(std::clamp)((speed-1.0f)/25.0f,0.0f,1.0f);
+        const bool braking=held && rolling>0;
+        loadFrame_.engaged=braking && !loaded_;
+        loadFrame_.released=!braking && loaded_ && rolling>.06f;
+        if(braking) {
+            load_+=(rolling-load_)*(1.0f-std::exp(-dt*16.0f));
+        } else {
+            if(loaded_){releaseFrom_=load_;releaseAge_=0;}
+            releaseAge_=(std::min)(.36f,releaseAge_+dt);
+            const float phase=releaseAge_/.36f;
+            const float damping=(1-phase)*(1-phase);
+            load_=releaseFrom_*damping*std::cos(phase*4.65f);
+        }
+        loaded_=braking;
+        loadFrame_.pitchDegrees=3.8f*load_;
+        loadFrame_.compression=.11f*load_;
+        loadFrame_.scrape=braking ? rolling*(.28f+.72f*(std::max)(0.0f,load_)) : 0.0f;
+    }
 
     bool Visible() const {
         return std::any_of(sparks_.begin(), sparks_.end(), [](const auto& p) { return p.Visible(); }) ||
@@ -104,8 +144,8 @@ public:
         const float rollingSpeed = (std::clamp)(vehicle.speed / 25.0f, 0.0f, 1.0f);
         const float energy = (.55f + .34f * deceleration) * rollingSpeed;
         if (!brakeWasHeld_) {
-            for (size_t i = 0; i < 2; ++i) {
-                if (supported(wheels.wheels[i])) Emit(vehicle, wheels.wheels[i], i, .82f * rollingSpeed, 5, true, false);
+            for (size_t i = 2; i < wheels.wheels.size(); ++i) {
+                if (supported(wheels.wheels[i])) Emit(vehicle, wheels.wheels[i], i, .94f * rollingSpeed, 5, true, false);
             }
             brakeWasHeld_ = true;
         }
@@ -113,7 +153,7 @@ public:
         while (accumulator_ >= 1.0f) {
             accumulator_ -= 1.0f;
             const uint32_t burst = ++burstSerial_;
-            const size_t wheelIndex = burst % 5 == 0 ? 2 + (burst & 1u) : (burst & 1u);
+            const size_t wheelIndex = burst % 5 == 0 ? (burst & 1u) : 2 + (burst & 1u);
             if (supported(wheels.wheels[wheelIndex]))
                 Emit(vehicle, wheels.wheels[wheelIndex], wheelIndex, energy, 2, burst % 7 == 0, false);
         }
@@ -211,4 +251,7 @@ private:
     uint32_t burstSerial_ = 0;
     bool brakeWasHeld_ = false;
     bool landingEmitted_ = false;
+    LoadFrame loadFrame_{};
+    float load_=0,releaseFrom_=0,releaseAge_=.36f;
+    bool loaded_=false;
 };

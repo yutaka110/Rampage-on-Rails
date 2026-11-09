@@ -8,7 +8,7 @@ def box(m,name,x,y,z,w,h,l,material):
     m.loft(name,[section(z-l/2,x,y,w,h),section(z+l/2,x,y,w,h)],material)
 
 def bridge_deck(length):
-    m=Mesh();box(m,'deck',0,-.70,0,5.5,.35,length,'armour')
+    m=Mesh();box(m,'deck',0,-.70,0,5.5,.35,length,'gunmetal')
     for i in range(int(length/1.25)):
         box(m,'rail_tie',0,-.20,-length/2+.625+i*1.25,4.4,.07,.22,'joint')
     for side in (-1,1):
@@ -19,6 +19,22 @@ def bridge_deck(length):
             z=-length/2+2.5+i*5
             box(m,'guard_post',side*5.1,.35,z,.065,.75,.065,'ivory')
             box(m,'truss_post',side*4.8,-1.4,z,.16,.82,.16,'armour')
+    return m
+
+def torn_joint():
+    m=Mesh()
+    for side in (-1,1):
+        x=side*1.9
+        m.loft('curled_rail',[
+            section(.95,x,-.06,.13,.14),section(-.22,x,-.03,.13,.14),
+            section(-.78,x+side*.12,.23,.11,.11),
+            section(-1.48,x+side*.24,.70+side*.14,.075,.080)],'edge',{1:'joint',2:'copper'})
+        for z in (-.1,.55):
+            box(m,'peeled_fastener',x+side*.22,.015,z,.17,.11,.28,'joint')
+        m.loft('torn_flange',[
+            section(.78,side*3.25,-.62,1.38,.19),
+            section(-.42,side*3.08,-.58,1.13,.16),
+            section(-1.10,side*3.30,-.45,.34,.13)],'gunmetal',{1:'edge'})
     return m
 
 def main():
@@ -46,6 +62,7 @@ def main():
     m.write(DEST/'BridgeEscapeDebris.obj')
     bridge_deck(50).write(DEST/'BridgeEscapeSpan.obj')
     bridge_deck(5).write(DEST/'BridgeEscapeLeaf.obj')
+    torn_joint().write(DEST/'BridgeEscapeTornJoint.obj')
     m=Mesh();box(m,'tension_member',0,0,0,1,1,1,'copper');m.write(DEST/'BridgeEscapeLink.obj')
     m=Mesh();box(m,'anchor_foot',.6,-.65,0,1.65,.38,1.8,'gunmetal')
     box(m,'pin_pylon',0,2.8,0,.40,3.35,.45,'armour')

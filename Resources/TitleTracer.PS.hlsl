@@ -118,6 +118,26 @@ float4 main(PixelInput input) : SV_TARGET0 {
         return float4(lerp(input.color.rgb,float3(5.5f,5.8f,6.2f),hot*packet*.76f),
             (glow*.33f+hot*(.25f+.68f*packet))*ends*input.color.a);
     }
+    if(input.texcoord.x>=72.0f && input.texcoord.x<=73.0f) {
+        // An asymmetric hot seam on the struck plane, cooling into broken filaments.
+        float2 p;float phase,seed;
+        ImpactCoordinates(input.texcoord,72,p,phase,seed);
+        float x=p.x+.31f;
+        float grain=ImpactNoise(float2(x*16.0f,p.y*4.0f)+seed);
+        float seam=p.y-.10f*x*x-.26f*(grain-.5f);
+        float extent=lerp(.49f,1.16f,sqrt(phase));
+        float travel=smoothstep(-.46f,-.17f,x)*(1.0f-smoothstep(extent*.40f,extent,x));
+        float width=max(lerp(.125f,.033f,phase),fwidth(seam)*.70f);
+        float cut=exp(-pow(seam/width,2))*travel;
+        cut*=lerp(1.0f,smoothstep(.24f,.71f,grain),phase*.90f);
+        float fork=exp(-pow((seam+.23f*x+.06f)/max(.046f,width*.50f),2))*travel;
+        fork*=smoothstep(.06f,.28f,x)*smoothstep(.24f,.67f,grain)*.57f;
+        float melt=exp(-x*x*9.0f-seam*seam*21.0f)*(1.0f-phase);
+        float hotEdges=exp(-pow(seam/.26f,2))*travel*grain*.24f;
+        float edge=(1.0f-smoothstep(.81f,1.0f,abs(p.x)))*(1.0f-smoothstep(.71f,1.0f,abs(p.y)));
+        float3 hot=lerp(input.color.rgb,float3(5.5f,5.1f,4.5f),cut*(1.0f-phase));
+        return float4(hot,saturate(cut+fork+melt*.60f+hotEdges)*edge*input.color.a);
+    }
     if(input.texcoord.x>63.5f)return RenderRailEnergyShield(input.texcoord,input.color);
     if(input.texcoord.x>=50.0f && input.texcoord.x<=51.0f) {
         float u=input.texcoord.x-50.0f;

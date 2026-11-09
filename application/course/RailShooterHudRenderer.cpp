@@ -328,7 +328,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
             detail=success?u8"複数の敵をまとめて攻撃できる":u8"押したまま敵をなぞると複数ロック";
         } else if(lesson==Lesson::Boost) {
             instruction=success?u8"加速を確認":u8"E 長押しで加速";
-            detail=success?u8"前方の砲台に注目":u8"離すと通常速度に戻る";
+            detail=success?u8"前方の砲台に注目":guide.BoostWaiting()?u8"自動加速が終わったら試そう":u8"離すと通常速度に戻る";
         } else {
             instruction=success?u8"減速を確認":u8"Q 長押しでブレーキ";
             detail=u8"離すと通常速度に戻る";
@@ -376,10 +376,14 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const bool counter=input.miniBossCounterRemaining>0 && input.miniBossCounterDuration>0;
         const bool defending=!counter && (input.miniBossGatlingFiring || input.miniBossHeavyFiring);
         if((counter && input.miniBossCounterPart!=1) || (defending && input.miniBossGatlingFiring)) {
-            const float cardY=y-87*scale,cardX=width*.5f-270*scale;
+            // The gatling status stays off the cart while incoming rounds and
+            // body-bound impacts are visible in the middle of the view.
+            const float cardWidth=(counter?540:370)*scale;
+            const float cardY=y-87*scale,cardX=counter?(width-cardWidth)*.5f:safe;
+            const float cardCenter=cardX+cardWidth*.5f;
             const Vector4 accent=counter?Vector4{1,.84f,.32f,opacity}:Vector4{.30f,.92f,1,opacity};
-            rect(cardX,cardY,540*scale,76*scale,{.012f,.025f,.032f,.90f*opacity});
-            rect(cardX,cardY,540*scale,(counter?3+2*input.miniBossCounterUnlockPulse:2)*scale,accent);
+            rect(cardX,cardY,cardWidth,76*scale,{.012f,.025f,.032f,.90f*opacity});
+            rect(cardX,cardY,cardWidth,(counter?3+2*input.miniBossCounterUnlockPulse:2)*scale,accent);
             if(counter) {
                 text(Utf8(u8"反撃解放"),width*.5f,cardY+26*scale,1.04f*scale,accent,center);
                 auto remaining=std::to_string(int(std::ceil(input.miniBossCounterRemaining*10)));
@@ -392,10 +396,11 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
                     (std::clamp)(input.miniBossCounterRemaining/input.miniBossCounterDuration,0.0f,1.0f),accent,{.13f,.10f,.05f,opacity});
             } else if(input.miniBossGatlingFiring) {
                 text(Utf8(u8"弾の相殺  ")+std::to_string(input.miniBossGatlingIntercepts)+" / 24",
-                    width*.5f,cardY+25*scale,.80f*scale,accent,center);
-                text(Utf8(u8"通常弾を撃ち続けて相殺"),width*.5f,cardY+48*scale,.62f*scale,{.82f,.94f,1,opacity},center);
+                    cardCenter,cardY+25*scale,.80f*scale,accent,center);
+                text(Utf8(u8"通常弾を撃ち続けて相殺"),cardCenter,cardY+48*scale,.62f*scale,{.82f,.94f,1,opacity},center);
+                const float cell=(cardWidth-40*scale)/24;
                 for(unsigned round=0;round<24;++round)
-                    rect(cardX+(30+round*20)*scale,cardY+62*scale,17*scale,4*scale,
+                    rect(cardX+20*scale+round*cell,cardY+62*scale,cell*.84f,4*scale,
                         round<input.miniBossGatlingIntercepts?accent:Vector4{.09f,.18f,.22f,opacity});
             } else {
                 text(Utf8(u8"重砲弾を迎撃"),width*.5f,cardY+25*scale,.80f*scale,accent,center);
@@ -509,6 +514,11 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     const auto center=RailShooterHudTextAlignment::Center;
     const float gaugeWidth=definition.leftPanelWidth*scale;
     const float startupGauge=(std::clamp)(input.startupGaugeProgress,0.0f,1.0f);
+    const auto flashLostSegment=[&](float y,float w,float height,float value,float trail) {
+        if(input.damageGaugePulse>0 && trail>value)
+            rect(safe+w*value*startupGauge,y,w*(trail-value)*startupGauge,height,
+                {1.0f,.38f,.14f,opacity*input.damageGaugePulse*.78f});
+    };
     const size_t gaugeBegin=next.commands.size();
     float healthBottom=safe;
     // Vehicle survival leads. Player HP is a distinct, secondary gauge.
@@ -522,6 +532,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         ink(hud.vehicleText,safe+45*scale,y+28*scale,0.95f*scale,textColor);
         bar(safe,y+42*scale,gaugeWidth,18*scale,hud.vehicleIntegrityNormalized*startupGauge,
             color,barBackground,hud.vehicleIntegrityTrail*startupGauge);
+        flashLostSegment(y+42*scale,gaugeWidth,18*scale,hud.vehicleIntegrityNormalized,hud.vehicleIntegrityTrail);
         // Tick marks aid estimating remaining durability without reading digits.
         for(int i=1;i<5;++i) rect(safe+gaugeWidth*i/5.0f,y+42*scale,2*scale,18*scale,panel);
         healthBottom=y+60*scale;
@@ -531,6 +542,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         ink(hud.healthText,safe,y+19*scale,0.68f*scale,textColor);
         bar(safe,y+29*scale,gaugeWidth*0.72f,8*scale,hud.playerHealthNormalized*startupGauge,
             hud.playerHealthCritical?critical:healthy,barBackground,hud.playerHealthTrail*startupGauge);
+        flashLostSegment(y+29*scale,gaugeWidth*.72f,8*scale,hud.playerHealthNormalized,hud.playerHealthTrail);
         healthBottom=y+37*scale;
     }
     const size_t gaugeEnd=next.commands.size();
@@ -659,8 +671,9 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     if(input.gateClearPulse>0 && !input.startCueActive)
         text("STONE GATE CLEAR",width*.5f,height*.20f,1.15f*responsive,
             {1.0f,.83f,.48f,(std::min)(1.0f,input.gateClearPulse*4)},center);
-    // Keep compact reminders at the edge, not a permanent panel across combat.
-    if(width>=960 && !(input.basicTutorial && input.basicTutorial->Visible())) {
+    const bool liveCourseCombat=input.shortRun && input.resultSession &&
+        input.resultSession->courseDistance>=RailBasicTutorial::SpeedEnd;
+    if(width>=960 && !liveCourseCombat && !(input.basicTutorial && input.basicTutorial->Visible())) {
         text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   E : 加速   Q : ブレーキ   P : 一時停止"),
             width*0.5f,height-10*responsive,0.50f*responsive,muted,center);
     }

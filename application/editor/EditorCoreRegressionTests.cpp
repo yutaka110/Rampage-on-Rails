@@ -20442,10 +20442,11 @@ void TestWarningEnergyColorAndOnset(RegressionRunner& runner) {
 }
 
 void TestCarrierBatterySurfaceMaterials(RegressionRunner& runner) {
-    const std::array<std::pair<const char*,const char*>,7> parts{{
+    const std::array<std::pair<const char*,const char*>,8> parts{{
         {"GatlingTurretBase","gatling_turret_base"},{"GatlingTurretHead","gatling_turret_head"},{"GatlingTurretRotor","gatling_turret_rotor"},
         {"CarrierHeavyTurretBase","carrier_heavy_turret_base"},{"CarrierHeavyTurretHead","carrier_heavy_turret_head"},
-        {"CarrierHeavyTurretBarrel","carrier_heavy_turret_barrel"},{"CarrierHeavyTurretVent","carrier_heavy_turret_vent"}}};
+        {"CarrierHeavyTurretBarrel","carrier_heavy_turret_barrel"},{"CarrierHeavyTurretVent","carrier_heavy_turret_vent"},
+        {"CarrierHeavyTurretShutter","carrier_heavy_turret_shutter"}}};
     std::ofstream report("logs/carrier_battery_materials.csv");report<<"part,indices,material_bands,roughness_bias\n";
     for(const auto& [asset,id]:parts) {
         const auto model=LoadObjFile_Assimp(std::string("Resources/enemies/")+asset,std::string(asset)+".obj");
@@ -20493,7 +20494,7 @@ void TestCarrierBatterySurfaceMaterials(RegressionRunner& runner) {
 }
 
 void TestCarrierBatteryGeometryAndSockets(RegressionRunner& runner) {
-    for(const char* part:{"GatlingTurretBase","GatlingTurretHead","GatlingTurretRotor","CarrierHeavyTurretBase","CarrierHeavyTurretHead","CarrierHeavyTurretBarrel","CarrierHeavyTurretVent"}) {
+    for(const char* part:{"GatlingTurretBase","GatlingTurretHead","GatlingTurretRotor","CarrierHeavyTurretBase","CarrierHeavyTurretHead","CarrierHeavyTurretBarrel","CarrierHeavyTurretVent","CarrierHeavyTurretShutter"}) {
         const auto model=LoadObjFile_Assimp(std::string("Resources/enemies/")+part,std::string(part)+".obj");
         runner.Expect(!model.indices.empty() && model.indices.size()<20000 && ValidateModelGeometryOrientation(model),
             "each distinct carrier weapon component imports with bounded geometry and correct face normals: "+std::string(part));
@@ -20510,8 +20511,8 @@ void TestCarrierBatteryGeometryAndSockets(RegressionRunner& runner) {
         return count?RailMothership::Scale(sum,1.0f/count):Vector3{};
     };
     std::array<Vector3,6> bores{};
-    for(int i=0;i<6;++i){const float a=float(i)*6.2831853f/6;bores[i]=boreCenter(rapid,{.4f*std::cos(a),.4f*std::sin(a),0},.166f,-2.25f);}
-    const auto heavyBore=boreCenter(heavy,{},.611f,-2.10f);
+    for(int i=0;i<6;++i){const float a=float(i)*6.2831853f/6;bores[i]=boreCenter(rapid,{.4f*std::cos(a),.4f*std::sin(a),0},.185f,-2.25f);}
+    const auto heavyBore=boreCenter(heavy,{},.761f,-2.10f);
     runner.Expect(std::abs(heavyBore.x)+std::abs(heavyBore.y)<.0001f,"heavy has one centered large bore instead of twin small barrels");
     RailPathControlPoint a{{0,0,0}},b{{0,0,1000}};a.tangentMode=b.tangentMode=RailPathTangentMode::Broken;
     a.outgoingTangent={0,0,1000.0f/3};b.incomingTangent={0,0,-1000.0f/3};RailPath rail;rail.SetControlPoints({a,b});
@@ -20552,6 +20553,20 @@ void TestCarrierBatteryGeometryAndSockets(RegressionRunner& runner) {
 }
 
 void TestCarrierBatteryMotion(RegressionRunner& runner) {
+    RailBatteryThermalFrame armor;
+    armor.valid=armor.heavy=true;
+    armor.phase=RailBatteryThermalPhase::Standby;
+    runner.Expect(HeavyMuzzleArmorOpen(armor,-1)==0,"cold heavy muzzle is covered before its first warning");
+    armor.phase=RailBatteryThermalPhase::Charging;armor.charge=.30f;
+    const float opening=HeavyMuzzleArmorOpen(armor,-1);
+    armor.phase=RailBatteryThermalPhase::Imminent;armor.charge=.72f;
+    runner.Expect(opening>0 && opening<.6f && HeavyMuzzleArmorOpen(armor,-1)==1,
+        "the admitted charge opens the armor well before projectile release");
+    armor.phase=RailBatteryThermalPhase::Firing;
+    runner.Expect(HeavyMuzzleArmorOpen(armor,0)==1,"the firing frame keeps the muzzle clear");
+    armor.phase=RailBatteryThermalPhase::Cooling;
+    runner.Expect(HeavyMuzzleArmorOpen(armor,.15f)==1 && HeavyMuzzleArmorOpen(armor,.36f)<.6f &&
+        HeavyMuzzleArmorOpen(armor,.63f)==0,"armor stays open through the kick and closes during recoil recovery");
     std::ofstream report("logs/carrier_battery_motion.csv");report<<"fps,spin_speed,prediction_error,heavy_peak,rapid_peak\n";
     for(int fps:{30,60,120}) {
         const float dt=1.0f/fps;RailTurret::MotionState motion;float age=0;
@@ -20794,6 +20809,24 @@ void TestIncomingWarningCollisionCourse(RegressionRunner& runner) {
     runtime.ClearProjectiles();shot.projectileId++;shot.lateralOffset=0;shot.forwardSpeed=40;runtime.SpawnProjectile(shot);
     runner.Expect(!RailAttackWarningPresentation::Incoming(runtime,rail,1500,0,4,20).active,
         "a receding projectile cannot raise an incoming warning");
+
+    runtime.ClearProjectiles();
+    shot.projectileId=910;shot.spawnDistance=1510;shot.forwardSpeed=-30;runtime.SpawnProjectile(shot);
+    shot.projectileId=911;shot.spawnDistance=1530;shot.lateralOffset=-12;shot.lateralSpeed=20;
+    shot.definitionId="enemy_turret_predictive";
+    shot.defenseResponses=EnemyAttackDefenseResponse::ShootDown|EnemyAttackDefenseResponse::Duck;
+    runtime.SpawnProjectile(shot);
+    PlayerHitboxRuntimeState cart;cart.distance=1500;cart.verticalOffset=4;
+    const auto brake=RailAttackWarningPresentation::BrakeIncoming(runtime,rail,cart,20,false);
+    runner.Expect(brake.active && brake.projectileId==911 && std::abs(brake.timeToApproach-.6f)<.001f &&
+        RailAttackWarningPresentation::Incoming(runtime,rail,1500,0,4,20,1.6f,brake.projectileId).projectileId==910,
+        "the Q marker owns the crossing shell while the nearer ordinary shot keeps its own cue");
+    runner.Expect(!RailAttackWarningPresentation::BrakeIncoming(runtime,rail,cart,10,false).active &&
+        RailAttackWarningPresentation::BrakeIncoming(runtime,rail,cart,10,true).projectileId==911,
+        "the Q marker stays with the shell as the cart opens space under braking");
+    cart.lateralOffset=-13;
+    runner.Expect(!RailAttackWarningPresentation::BrakeIncoming(runtime,rail,cart,20,false).active,
+        "a shell that has already crossed the cart lane has no Q marker");
 }
 
 void TestShortFrameInputEdges(RegressionRunner& runner) {
@@ -23819,11 +23852,14 @@ void TestRailWorldShotRouting(RegressionRunner& runner) {
     {
         CourseSpawnRuntime runtime;
         CourseEnemyActorDesc enemy{};
-        enemy.spawnDistance = 110.0f;
+        enemy.spawnDistance = 172.0f;
         enemy.radius = 3.0f;
         enemy.hitPoints = 30.0f;
         runtime.SpawnEnemyActor(enemy);
         RailAimState aim = buildAim();
+        aim.maxDistance=190.0f;
+        aim.aimDistance=190.0f;
+        aim.worldAimPoint={0,0,190};
         RailWorldRaycastInput query{};
         query.aim = &aim;
         query.railPath = &rail;
@@ -23839,8 +23875,43 @@ void TestRailWorldShotRouting(RegressionRunner& runner) {
                 std::abs(runtime.Enemies().front().desc.hitPoints - 30.0f) < 0.001f &&
                 collision.LastShotHasWorldPoint() &&
                 !collision.LastShotHasWorldHit() &&
-                std::abs(collision.LastShotWorldPoint().z - 92.0f) < 0.001f,
+                std::abs(collision.LastShotWorldPoint().z - 150.0f) < 0.001f,
             "shot routing should reject a confirmed hit beyond the asset-defined weapon range");
+    }
+
+    for(bool covered:{false,true}) {
+        CourseSpawnRuntime runtime;
+        CourseEnemyActorDesc enemy;
+        enemy.spawnDistance=135.0f;enemy.radius=2.0f;enemy.hitPoints=30.0f;
+        runtime.SpawnEnemyActor(enemy);
+        if(covered) {
+            CourseObstacleActorDesc obstacle;
+            obstacle.spawnDistance=24;obstacle.halfExtents={1.7f,2.0f,1.7f};
+            obstacle.hitPoints=100;obstacle.breakable=false;
+            runtime.SpawnObstacle(obstacle);
+        }
+        auto aim=buildAim();
+        aim.maxDistance=170;
+        aim.worldRayOrigin={5,0,-10};
+        aim.worldRayDirection=Normalize(Vector3{-5,0,145});
+        RailWorldRaycastInput query{};
+        query.aim=&aim;query.railPath=&rail;query.spawnRuntime=&runtime;
+        ApplyRailAimHit(aim,RailWorldRaycast::Query(query));
+        runner.Expect(aim.hitKind==RailAimHitKind::Enemy,"The camera must see the distant enemy beside foreground cover");
+        auto input=fireInput(aim,nullptr);
+        input.railPath=&rail;
+        CourseCollisionSystem collision;
+        const auto stats=collision.Update(runtime,input);
+        const auto traces=collision.PlayerShotTraces();
+        const float end=traces.empty()?0.0f:traces.front().end.z;
+        const float surface=covered?rail.Evaluate(24).position.z-1.7f:rail.Evaluate(135).position.z-2.0f;
+        runner.Expect(traces.size()==1 && std::abs(end-surface)<.08f && (covered?
+            stats.playerShotEnemyHits==0 && collision.LastShotHitKind()==RailAimHitKind::Obstacle &&
+                runtime.Enemies().front().desc.hitPoints==30:
+            stats.playerShotEnemyHits==1 && runtime.Enemies().front().desc.hitPoints==18),
+            std::string("Muzzle trace and damage must resolve at the first surface. Cover=")+
+                (covered?"yes":"no")+" end="+std::to_string(end)+" expected="+std::to_string(surface)+
+                " kind="+ToRailAimHitKindString(collision.LastShotHitKind()));
     }
 
     {
@@ -38391,7 +38462,7 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
             drawn && drawn->visible && drawn->materialColor.w==1 && drawn->scaleMultiplier==1,
             "combat activation preserves the already visible tower without duplication, fade or foundation movement");
     }
-    const float fixedDistances[]={1300,1550,2220,3000};
+    const float fixedDistances[]={1325,1615,2220,3000};
     size_t placementIndex=0;
     for(const auto& event:course.events) if(event.payload=="route:turret") {
         CourseSpawnRuntime probe;CourseEventDispatcher dispatcher;
@@ -38476,15 +38547,26 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
             runner.Expect(!cache.Query(anchor,footprint,cachedHeight),"course reload clears prepared foundations");
         }
     }
-    for(const char* part:{"SiegeTurretBase","SiegeTurretHead"}) {
+    for(const char* part:{"SiegeTurretBase","SiegeTurretHead","SiegeTurretBarrel"}) {
         const auto model=LoadObjFile_Assimp(std::string("Resources/enemies/")+part,std::string(part)+".obj");
         runner.Expect(!model.indices.empty() && model.indices.size()<20000 && ValidateModelGeometryOrientation(model),
             "tower geometry imports with outward faces and a bounded draw cost");
         float bottom=1000,front=1000;
         for(const auto& vertex:model.vertices) {bottom=(std::min)(bottom,vertex.position.y);front=(std::min)(front,vertex.position.z);}
         if(std::string_view(part)=="SiegeTurretBase") runner.Expect(bottom<-3.5f,"tower includes a deep foundation skirt");
-        else runner.Expect(std::abs(front+RailTurret::ForMesh("siege_turret").muzzleForward)<0.001f,
-            "imported barrel ends share the runtime muzzle depth");
+        if(std::string_view(part)=="SiegeTurretBarrel")for(int barrel=0;barrel<2;++barrel) {
+            const auto rim=RailTurret::MuzzleLocalAtPhase("siege_turret",barrel,0);
+            Vector2 low{1000,1000},high{-1000,-1000};
+            for(const auto& vertex:model.vertices) {
+                const auto& p=vertex.position;
+                if(std::abs(p.z-front)>.001f || (p.x>0)!=(barrel==1))continue;
+                low.x=(std::min)(low.x,p.x);low.y=(std::min)(low.y,p.y);
+                high.x=(std::max)(high.x,p.x);high.y=(std::max)(high.y,p.y);
+            }
+            runner.Expect(low.x<high.x && low.y<high.y && std::abs(front-rim.z)<.001f &&
+                std::abs((low.x+high.x)*.5f-rim.x)<.001f && std::abs((low.y+high.y)*.5f-rim.y)<.001f,
+                "each imported moving barrel rim is centered on its runtime muzzle socket");
+        }
     }
     std::vector<CourseEventMarker> markers;
     for(const auto& event:course.events) if(event.type=="enemy_wave" && event.payload=="route:turret") markers.push_back(event);
@@ -42580,7 +42662,10 @@ void TestShortRunFinishAndEarlyWaves(RegressionRunner& runner) {
     runner.Expect(waves.Phase("short_intercept")!=CourseGameplayWavePhase::Active,"speed tutorial runway remains free of promoted combat");
     const float speedEnd=RailBasicTutorial::SpeedEnd;
     for(int i=0;i<25;++i) tick(0.1f,speedEnd,ShortRunAllowsEarlyWave(speedEnd));
-    runner.Expect(waves.Phase("short_intercept")==CourseGameplayWavePhase::Active,"intercept resumes after speed instruction");
+    runner.Expect(waves.Phase("short_intercept")!=CourseGameplayWavePhase::Active,"the battery fires before the interceptor formation enters");
+    const float interceptStart=compiled.program.FindWave("short_intercept")->triggerRailDistance;
+    for(int i=0;i<25;++i) tick(0.1f,interceptStart,ShortRunAllowsEarlyWave(interceptStart));
+    runner.Expect(waves.Phase("short_intercept")==CourseGameplayWavePhase::Active,"intercept resumes at its authored marker");
     kills.clear();for(const auto& enemy:spawn.Enemies()) kills.push_back(enemy.desc.sourcePlacementGuid);
     for(const auto& id:kills) waves.NotifyEnemyDefeated(id);
     const float finaleStart=compiled.program.FindWave("short_finale")->triggerRailDistance;

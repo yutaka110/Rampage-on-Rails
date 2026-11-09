@@ -15,6 +15,7 @@ class CourseSpawnRuntime;
 class RailMinibossCombatDirector;
 class RailAttackWarningPresentation;
 struct CourseEnemyActor;
+struct RailPrimaryContact;
 namespace ge3::debug { class DebugDrawSystem; }
 
 enum class EnemyCombatAnimationState : uint8_t {
@@ -64,6 +65,7 @@ struct EnemyCombatActorPresentation final {
     float lateralOffset = 0.0f;
     float verticalOffset = 0.0f;
     Vector3 rotationOffset{};
+    Vector3 primaryImpactOffset{},primaryImpactRotation{};
     Vector3 bodyScale{1.0f, 1.0f, 1.0f};
     float scaleMultiplier = 1.0f;
     Vector4 materialColor{1.0f, 1.0f, 1.0f, 1.0f};
@@ -141,6 +143,7 @@ struct EnemyCombatPresentationInput final {
     const CourseSpawnRuntime* runtime = nullptr;
     const RailPath* railPath = nullptr;
     std::span<const EnemyCombatEvent> events{};
+    std::span<const RailPrimaryContact> primaryContacts{};
     Vector3 listenerPosition{};
     Vector3 listenerRight{1.0f, 0.0f, 0.0f};
     float deltaTime = 0.0f;

@@ -4,6 +4,7 @@
 #include "course/RailLockVolley.h"
 #include "course/RailPulseShotPresentation.h"
 #include "course/RailPrimaryKillPresentation.h"
+#include "course/RailCombatImpactMarks.h"
 #include "course/RailBoostPresentation.h"
 #include "course/RailBrakePresentation.h"
 #include "SunfallAtmosphere.h"
@@ -304,6 +305,8 @@ private:
     void DispatchEnemyAttackDefenseOutcomeFeedback();
     void StopGameSessionPresentation();
     void DispatchRailVehicleAudio(float deltaTime, float realDeltaTime);
+    void StopManualBrakeAudio();
+    void PlayBrakeRoundPass(uint64_t projectileId,float pan);
     void UpdateRailRollingAudio(float deltaTime, float targetGain, float tunnelBlend, float targetPitch = 1.0f);
     void UpdateRailSandTransitionAudio(bool active,float age,bool focused,float dust,float coverage);
     void StopRailSandTransitionAudio();
@@ -519,6 +522,13 @@ private:
     audio::SoundHandle railVehicleRollingSound_{};
     audio::SoundHandle railVehicleJointSound_{};
     audio::SoundHandle railVehicleBrakeSound_{};
+    audio::SoundHandle railProjectileCartHitSound_{},railHeavyCartHitSound_{};
+    audio::SoundHandle railBrakeBiteSound_{},railBrakeLoopSound_{},railBrakeReleaseSound_{},railBrakeRoundPassSound_{};
+    audio::SoundHandle railSiegeTurretFireSound_{};
+    audio::SoundHandle railSiegeTurretLatchSound_{};
+    float railBrakeLoopGain_=0,railBrakePassDuck_=0;
+    uint64_t railBrakePassProjectile_=0;
+    bool railBrakeLoopPlaying_=false;
     audio::SoundHandle railVehicleStopSound_{};
     audio::SoundHandle railVehicleCollisionSound_{};
     audio::SoundHandle railVehicleEvasionStartSound_{};
@@ -549,15 +559,18 @@ private:
     RailLockVolley railLockVolley_;
     RailPulseShotPresentation railPulseShots_;
     RailPrimaryKillPresentation railPrimaryKills_;
+    RailCombatImpact::Marks railCombatImpactMarks_;
     RailBoostPresentation railBoostVfx_;
     RailBrakePresentation railBrakeVfx_;
     audio::SoundHandle railPulseFireSound_{};
+    audio::SoundHandle railPrimaryHitSound_{},railPrimaryArmorSound_{};
+    audio::SoundHandle railPrimaryHullResonance_{},railPrimaryPlateResonance_{};
     audio::SoundHandle railPrimaryKillSound_{};
     audio::SoundHandle railBoostIgnitionSound_{};
     audio::SoundHandle railBoostReleaseSound_{};
     audio::SoundHandle railEnergyShieldHitSound_{},railEnergyShieldBreakSound_{};
     uint64_t railEnergyShieldFeedbackSequence_=0;
-    audio::SoundHandle railLockAcquireSound_{}, railLockFullSound_{}, railLockReleaseSound_{};
+    audio::SoundHandle railLockAcquireSound_{}, railLockFullSound_{}, railLockReleaseSound_{}, railLockContactSound_{};
     RailAimAssistPresetRegistry railAimAssistPresetRegistry_{};
     struct RailHudAtlasVertex {
         Vector4 position;

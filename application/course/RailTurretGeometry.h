@@ -10,7 +10,7 @@ struct Geometry { const char* baseMesh; const char* headMesh; float groundFootY,
 inline Geometry ForMesh(std::string_view mesh) {
     return mesh=="gatling_turret" ? Geometry{"gatling_turret_base","gatling_turret_head",-2.55f,2.25f,0,0.32f,1.10f,"gatling_turret_rotor"} :
         mesh=="carrier_heavy_turret" ? Geometry{"carrier_heavy_turret_base","carrier_heavy_turret_head",-2.55f,2.10f,0,0.32f,1.25f,"carrier_heavy_turret_barrel"} :
-        mesh=="siege_turret" ? Geometry{"siege_turret_base","siege_turret_head",-2.55f,1.95f,0.44f,0.32f,1.10f} :
+        mesh=="siege_turret" ? Geometry{"siege_turret_base","siege_turret_head",-2.55f,1.95f,0.44f,0.32f,1.10f,"siege_turret_barrel"} :
         Geometry{"combat_turret_base","combat_turret_head",-0.47f,0.8272f,0.2538f,0.1598f,0.86f};
 }
 inline float GatlingRotation(float seconds) { return std::fmod(seconds*18.0f,6.28318530718f); }
@@ -43,16 +43,39 @@ inline float RotorAngle(const MotionState& state,float age,float delay=0) {
     float speed=state.rotorSpeed;
     return state.rotorAngle+AdvanceRotor(speed,SpinSpeed,delay);
 }
-inline float Recoil(const MotionState& state,std::string_view mesh,float age) {
-    if(!state.initialized || state.lastFireAge<0)return 0;
-    float t=age-state.lastFireAge;
+inline float RecoilAtAge(std::string_view mesh,float t) {
     if(t<0)return 0;
+    if(mesh=="siege_turret") {
+        constexpr float kick=.048f, finish=.49f, travel=.45f;
+        if(t>=finish)return 0;
+        if(t<kick)return travel*std::sin(t/kick*1.570796327f);
+        const float u=(t-kick)/(finish-kick);
+        return travel*(1-u*u*(3-2*u));
+    }
     const bool rapid=mesh=="gatling_turret";
     if(rapid)t-=float((std::min)(23,int((t+.00001f)/.05f)))*.05f;
     const float kick=rapid?.010f:.055f,finish=rapid?.047f:.72f,travel=rapid?.050f:.36f;
     if(t>=finish)return 0;
     if(t<kick)return travel*std::sin((std::max)(0.0f,t)/kick*1.570796327f);
     const float u=(t-kick)/(finish-kick);return travel*(1-u)*(1-u);
+}
+inline float ShotAge(const MotionState& state,float age) {
+    return state.initialized && state.lastFireAge>=0 ? age-state.lastFireAge : -1.0f;
+}
+inline float Recoil(const MotionState& state,std::string_view mesh,float age) {
+    return RecoilAtAge(mesh,ShotAge(state,age));
+}
+inline float SiegeVisualRecoil(float age) {
+    constexpr float kick=.034f, hold=.064f, finish=.49f, travel=.62f;
+    if(age<0 || age>=finish)return 0;
+    if(age<kick)return travel*std::sin(age/kick*1.570796327f);
+    const float u=(std::max)(0.0f,age-hold)/(finish-hold);
+    return travel*(1-u*u*(3-2*u));
+}
+inline float SiegePedestalKick(float age) {
+    if(age<0 || age>.23f)return 0;
+    const float u=age/.23f;
+    return .045f*std::sin(3.14159265f*u)*(1-u);
 }
 inline Vector3 MuzzleLocalAtPhase(std::string_view mesh,int barrel,float phase,float recoil=0) {
     const auto g=ForMesh(mesh);

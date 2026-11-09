@@ -41,15 +41,13 @@ struct Frame {
     float impactPower = 0.0f;
 };
 
-inline Frame Evaluate(const RailVeilAttackFrame& gun, Vector3 impact, float age) {
+inline Frame Evaluate(const RailVeilAttackFrame& gun, Vector3 storedMuzzle, Vector3 impact, float age) {
     Frame frame;
     const float sinceFire=age-RailBridgeEscape::FireSeconds;
     const float sinceImpact=age-RailBridgeEscape::ImpactSeconds;
     if(sinceImpact>=0.0f)
         frame.impactPower=1.0f-TwinShieldDestructionSmooth(sinceImpact,0.0f,ImpactFlashSeconds);
-    if(!gun.bridgePose.visible)return frame;
-
-    frame.mouth=RailVeilModel::MuzzleWorld(gun.bridgePose,gun);
+    frame.mouth=gun.bridgePose.visible ? RailVeilModel::MuzzleWorld(gun.bridgePose,gun) : storedMuzzle;
     frame.head=frame.mouth;
     if(sinceFire>=0.0f && sinceImpact<DischargeTailSeconds) {
         constexpr float flightTime=RailBridgeEscape::ImpactSeconds-RailBridgeEscape::FireSeconds;
@@ -61,7 +59,7 @@ inline Frame Evaluate(const RailVeilAttackFrame& gun, Vector3 impact, float age)
         frame.width=std::lerp(1.0f,.68f,settle)*std::lerp(1.0f,.08f,taper);
         return frame;
     }
-    if(sinceFire>=0.0f)return frame;
+    if(sinceFire>=0.0f || !gun.bridgePose.visible)return frame;
 
     frame.charge=gun.charge;
     frame.compression=TwinShieldDestructionSmooth(sinceFire,-.20f,-.035f);

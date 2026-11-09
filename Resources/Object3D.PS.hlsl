@@ -187,9 +187,39 @@ static float CartSurfaceNoise(float2 p)
     return lerp(lerp(h.x,h.y,f.x),lerp(h.z,h.w,f.x),f.y);
 }
 
-// ------------------------------------------------------------
-// PS Main
-// ------------------------------------------------------------
+static float3 CombatScorch(float owner,float3 world,float3 normal,inout float3 base,inout float roughness)
+{
+    float3 emission=0;
+    if(owner==0 || titleSubject.w>.5f)return emission;
+    [unroll] for(int i=0;i<6;++i) {
+        float4 stamp=combatMarkPosition[i], contact=combatMarkNormalAge[i], ink=combatMarkTintRadius[i];
+        [branch] if(stamp.w==owner && ink.w>0) {
+            float3 delta=world-stamp.xyz;
+            if(dot(delta,delta)>5.0f*ink.w*ink.w)continue;
+            float along=dot(delta,contact.xyz);
+            float3 side=normalize(cross(abs(contact.y)>.9f?float3(1,0,0):float3(0,1,0),contact.xyz));
+            float3 up=cross(contact.xyz,side);
+            float2 uv=float2(dot(delta,side),dot(delta,up))/ink.w;
+            float facing=smoothstep(.16f,.68f,dot(normal,contact.xyz));
+            float depth=1-smoothstep(ink.w*.48f,ink.w*1.95f,abs(along));
+            float jitter=CartSurfaceNoise(uv*6+9);
+            float distanceToEdge=length(uv*float2(.86f,1.18f))+(jitter-.5f)*.23f;
+            float coverage=(1-smoothstep(.34f,.94f,distanceToEdge))*facing*depth;
+            float opacity=1-smoothstep(2.2f,3.4f,contact.w);
+            float gouge=(1-smoothstep(.035f,.17f,abs(uv.y+.14f*sin(uv.x*12))))*
+                (1-smoothstep(.24f,.65f,abs(uv.x)))*coverage;
+            base*=1-opacity*(coverage*.68f+gouge*.18f);
+            roughness=lerp(roughness,.85f,coverage*opacity);
+            float front=.14f+contact.w*4.4f;
+            float edge=1-smoothstep(.05f,.23f,abs(distanceToEdge-front));
+            float hot=(1-smoothstep(.035f,.25f,contact.w))*
+                (gouge*1.15f+edge*coverage*(.30f+.75f*jitter));
+            emission+=ink.rgb*hot;
+        }
+    }
+    return emission;
+}
+
 static float3 CaveSubjectLighting(float3 base, float metal, float rough,
     float3 N, float3 shapeN, float3 V, float3 worldPosition, float contactVisibility)
 {
@@ -227,6 +257,9 @@ static float3 RailWorldEffectSurfaceLighting(float3 base,float metal,float rough
     float3 bridgeLight=BridgeBeamRadiance(worldPosition,beamDirection);
     [branch] if(any(bridgeLight>0.0f))
         lighting+=DroneDirect(base,metal,max(rough,.30f),N,V,beamDirection,bridgeLight);
+    float3 impactDirection;
+    float3 impactLight=CombatImpactRadiance(worldPosition,impactDirection);
+    if(any(impactLight>0.0f))lighting+=DroneDirect(base,metal,max(rough,.30f),N,V,impactDirection,impactLight);
     return lighting;
 }
 
@@ -270,6 +303,62 @@ PixelShaderOutput main(VertexShaderOutput input)
     PixelShaderOutput output;
 
     float2 uv = input.texcoord;
+
+    if (gMaterial.specularMode == 18) {
+        // Project onto the moving stone's metric axes. Large blocks and
+        // chips retain the same grain scale, including through the fall.
+        float3 axisX=gMaterial.caveSurface.xyz, axisY=gMaterial.caveResponse.xyz;
+        float3 axisZ=SafeNormalize(cross(axisX,axisY));
+        float3 N=SafeNormalize(input.normal);
+        float3 rel=input.worldPosition-gMaterial.railLightingOrigin.xyz;
+        float3 p=float3(dot(rel,axisX),dot(rel,axisY),dot(rel,axisZ));
+        float3 localN=float3(dot(N,axisX),dot(N,axisY),dot(N,axisZ));
+        bool arch=gMaterial.caveResponse.w>=1;
+        if(gMaterial.caveSurface.w>1.5f)p+=float3(4.8f,5.9f,-.70f);
+        float3 weights=pow(abs(localN),4);
+        weights/=max(dot(weights,float3(1,1,1)),.001f);
+        float broad=dot(weights,float3(CartSurfaceNoise(p.yz*.62f+3),CartSurfaceNoise(p.xz*.62f+8),CartSurfaceNoise(p.xy*.62f+13)));
+        float grain=dot(weights,float3(CartSurfaceNoise(p.yz*5.2f+12),CartSurfaceNoise(p.xz*5.2f+21),CartSurfaceNoise(p.xy*5.2f+32)));
+        float bed=CartSurfaceNoise(float2(p.y*.88f+p.x*.17f,p.z*.22f)+float2(broad*.52f,19));
+        float seam=CartSurfaceNoise(float2(p.y*2.35f+p.x*.31f,p.z*.48f)+float2(broad*.84f,27));
+        float vein=smoothstep(.58f,.81f,seam)*smoothstep(.24f,.59f,broad);
+        float pores=smoothstep(.48f,.77f,grain)*(1-smoothstep(.16f,.78f,length(fwidth(p*5.2f))));
+        float fresh=arch?smoothstep(.58f,.74f,uv.x):gMaterial.caveSurface.w*smoothstep(.43f,.83f,-localN.y);
+        float height=-vein*.076f+(bed-.5f)*.066f+(broad-.5f)*.145f-pores*.034f;
+        float3 dpdx=ddx(input.worldPosition),dpdy=ddy(input.worldPosition);
+        float3 u=cross(dpdy,N),v=cross(N,dpdx);
+        float determinant=dot(dpdx,u);
+        float3 bumped=SafeNormalize(N*max(abs(determinant),.00001f)-
+            sign(determinant)*(ddx(height)*u+ddy(height)*v));
+        float3 base=gMaterial.color.rgb*(.29f+.36f*broad+.29f*bed-.18f*vein-.16f*pores);
+        if(arch) {
+            float layerY=p.y+.095f*p.x+.16f*p.z+(broad-.5f)*.68f;
+            float bands=CartSurfaceNoise(float2(p.x*.105f+p.z*.18f,layerY*1.17f)+27);
+            float worn=smoothstep(.22f,.78f,bands);
+            base*=lerp(float3(.74f,.78f,.84f),float3(1.16f,1.10f,1.02f),worn);
+        }
+        base=lerp(base,float3(.61f,.53f,.42f)*(.58f+.24f*broad+.35f*grain),fresh*.85f);
+        float3 V=SafeNormalize(cameraWorldPosition-input.worldPosition);
+        float3 lit=RailSurfaceLighting(base,0,.86f,bumped,V,input.worldPosition,.92f,
+            GameplayCaveWeight(input.worldPosition));
+        lit=max(lit,base*.52f);
+        float3 hit=gMaterial.railLightingAxis-input.worldPosition;
+        float distanceToHit=length(hit);
+        if(arch && gMaterial.caveResponse.w>1.001f) {
+            float x=dot(hit,axisX), y=-dot(hit,axisY),z=dot(hit,axisZ);
+            float reach=gMaterial.caveResponse.w-1;
+            float split=abs(y+x*.26f+.13f*sin(x*7.9f)+.053f*sin(x*21.0f));
+            float mask=(1-smoothstep(.035f,.10f,split))*(1-smoothstep(.5f,1.0f,abs(z)));
+            mask*=smoothstep(-.22f,0,x)*(1-smoothstep(reach*3.1f-.13f,reach*3.1f+.08f,x));
+            lit*=1-mask*.77f;
+        }
+        float falloff=1-smoothstep(.8f,17.0f,distanceToHit);
+        float facing=saturate(dot(bumped,hit/max(distanceToHit,.05f))*.7f+.32f);
+        lit+=gMaterial.railLightingOrigin.w*falloff*falloff*facing*float3(3.9f,.96f,1.21f)*(.44f+base);
+        if(titleSubject.w>.5f)lit=TitleAtmosphere(lit*TitleCaveExposure(),input.worldPosition);
+        output.color=float4(lit,gMaterial.color.a);
+        return output;
+    }
 
     if (gMaterial.specularMode == 16) {
         // Carrier weapon UV contract: the integer band selects paint, steel,
@@ -323,6 +412,64 @@ PixelShaderOutput main(VertexShaderOutput input)
     float caveSurfaceWeight = 0.0f;
     float3 caveSurfaceLit = 0.0f;
     if (gMaterial.specularMode == 15) {
+        int profile=(int)gMaterial.caveResponse.w;
+        if(profile>0 && gMaterial.enableLighting!=0) {
+            float3 N=SafeNormalize(input.normal),V=SafeNormalize(cameraWorldPosition-input.worldPosition);
+            float3 base=texColor.rgb*gMaterial.caveSurface.rgb;
+            float metal=gMaterial.caveResponse.x,rough=gMaterial.caveSurface.w;
+            float contact=gMaterial.caveResponse.y;
+            float caveWeight=GameplayCaveWeight(input.worldPosition);
+            if(gMaterial.caveResponse.z>.5f) {
+                float along=gMaterial.railLightingOrigin.w+dot(input.worldPosition-gMaterial.railLightingOrigin.xyz,gMaterial.railLightingAxis);
+                caveWeight=GameplayCaveWeightAtDistance(along);
+            }
+            if(profile<=3) {
+                bool bevel=uv.x>1.5f;
+                float2 face=float2(uv.x-(bevel?2:0),uv.y);
+                float grain=CartSurfaceNoise(face*float2(8,15)+3.2f);
+                float rim=min(min(face.x,1-face.x),min(face.y,1-face.y));
+                float wear=(bevel?.82f:1.0f-smoothstep(.015f,.08f,rim))*smoothstep(.48f,.82f,grain);
+                float dirt=smoothstep(.42f,.96f,face.y)*smoothstep(.27f,.83f,grain);
+                base*=1.0f-.18f*dirt;
+                base=lerp(base,float3(.31f,.33f,.34f),wear*(profile==2?.16f:.27f));
+                metal=lerp(metal,.78f,wear*.42f);
+                rough=saturate(rough+.12f*dirt-.16f*wear);
+            } else if(profile<=6) {
+                float grain=CartSurfaceNoise(input.worldPosition.xz*float2(.8f,.49f));
+                if(profile==4) {
+                    float crown=smoothstep(.56f,.87f,N.y);
+                    float worn=crown*lerp(.67f,.94f,grain);
+                    base=lerp(base*float3(.60f,.51f,.43f),float3(.39f,.43f,.46f),worn);
+                    metal=lerp(.22f,.84f,worn);
+                    rough=lerp(.83f,.44f,worn);
+                } else if(profile==5) {
+                    base=lerp(base,base*float3(1.48f,1.07f,.73f),.25f+.54f*grain);
+                } else {
+                    float tread=1.0f-smoothstep(.38f,.82f,abs(dot(N,gMaterial.railLightingAxis)));
+                    base=lerp(base,float3(.25f,.28f,.31f),tread*.43f);
+                    rough=lerp(.72f,.49f,tread);
+                }
+                if(profile!=6)contact*=GameplayWheelContactVisibility(input.worldPosition,N);
+            } else {
+                float grain=CartSurfaceNoise(input.worldPosition.xz*.18f+input.worldPosition.y*.23f);
+                base*=lerp(.83f,1.12f,grain);
+                if(profile==7) {
+                    int panel=clamp((int)floor(uv.x*7.0f),0,6);
+                    metal=panel==2?.68f:panel==3?.24f:.16f;
+                    rough=panel==2?.44f:panel==3?.88f:.69f;
+                    base*=panel==3?.54f:1.0f;
+                }
+                if(profile==8)contact*=GameplayWheelContactVisibility(input.worldPosition,N);
+            }
+            const float3 impactEmission=CombatScorch(profile==1 || profile==3?-1.0f:0.0f,
+                input.worldPosition,N,base,rough);
+            float3 lit=RailSurfaceLighting(base,metal,rough,N,V,input.worldPosition,contact,caveWeight);
+            float fill=profile<=3?.39f:profile==7?.33f:.22f;
+            lit=max(lit,base*fill*contact);
+            if(profile==4 || profile==5 || profile==8)lit*=lerp(.69f,1.0f,contact);
+            output.color=float4(lit+impactEmission,baseA);
+            return output;
+        }
         if (gMaterial.caveResponse.z > 0.5f && gMaterial.enableLighting != 0) {
             float along = gMaterial.railLightingOrigin.w + dot(input.worldPosition -
                 gMaterial.railLightingOrigin.xyz, gMaterial.railLightingAxis);
@@ -360,6 +507,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         float3 N = DroneNormal(input,surface.rgb);
         float3 V = SafeNormalize(cameraWorldPosition-input.worldPosition);
         float rough = clamp(surface.a,0.30f,0.90f);
+        float3 impactEmission=CombatScorch(gMaterial.shininess,input.worldPosition,SafeNormalize(input.normal),baseRgb,rough);
         float painted = saturate((texColor.r-texColor.b)*4.0f);
         float metal = lerp(saturate(gMaterial.environmentCoefficient),0.10f,painted);
         float caveAmount = GameplayCaveWeight(input.worldPosition);
@@ -418,6 +566,9 @@ PixelShaderOutput main(VertexShaderOutput input)
                 float3(1.90f,2.10f,2.20f) * lerp(0.78f, 1.0f, contact));
             lit = lerp(lit, caveLit, caveAmount);
         }
+        float3 impactDirection;
+        float3 impactLight=CombatImpactRadiance(input.worldPosition,impactDirection);
+        lit+=DroneDirect(baseRgb,metal,rough,N,V,impactDirection,impactLight)+impactEmission;
         lit = lerp(lit,float3(1.4f,1.15f,0.80f),saturate(gMaterial.pad_)*0.85f);
         if (titleSubject.w > 0.5f) lit = TitleAtmosphere(lit,input.worldPosition);
         output.color = float4(lit,baseA);

@@ -163,10 +163,12 @@ def build():
             hull_ring=[[(side*x,.02+cos(tau*i/16)*.21,z+sin(tau*i/16)*.21) for i in range(16)] for x in (.94,1.07)]
             wing.loft('wing_root_bearing',hull_ring,'joint',{0:'steel'})
     cannon=parts['VeilCannon']
-    ring(cannon,'structural_breech',[(.47,.53),(.49,.85),(.40,1.20),(.28,1.20),(.27,.53)],'machinery',sides=24)
-    ring(cannon,'optical_sleeve',[(.40,1.10),(.405,1.28),(.335,1.53),(.235,1.53),(.26,1.10)],'coal',sides=24)
-    ring(cannon,'focus_bezel',[(.35,1.49),(.36,1.57),(.325,1.64),(.248,1.64),(.24,1.49)],'steel',sides=24)
-    ring(cannon,'recessed_iris',[(.25,1.41),(.25,1.53),(.14,1.53),(.14,1.41)],'joint')
+    ring(cannon,'structural_breech',[(.47,.53),(.49,.85),(.40,1.20),(.28,1.20),(.27,.53)],'machinery',sides=40)
+    ring(cannon,'optical_sleeve',[(.40,1.10),(.405,1.28),(.335,1.53),(.235,1.53),(.26,1.10)],'coal',sides=48)
+    ring(cannon,'focus_bezel',[(.35,1.49),(.36,1.55),(.350,1.59),(.325,1.64),(.248,1.64),(.24,1.49)],'steel',sides=48)
+    ring(cannon,'thermal_neck',[(.355,1.41),(.365,1.44),(.362,1.48),(.335,1.49),(.324,1.42)],'heat',sides=48)
+    ring(cannon,'recessed_iris',[(.25,1.35),(.25,1.54),(.20,1.55),(.15,1.48),(.14,1.35)],'joint',sides=40)
+    ring(cannon,'ceramic_iris_seat',[(.197,1.49),(.197,1.52),(.162,1.49),(.146,1.42),(.146,1.40)],'ceramic',sides=40)
     for i in range(8):
         a=tau*i/8
         ring(cannon,'bezel_fastener',[(.015,1.62),(.015,1.64),(.008,1.64),(.008,1.62)],'edge',.313*cos(a),.313*sin(a),8)
@@ -186,6 +188,8 @@ def build():
         for side in (-1,1):
             box(armour,'hinge_trunnion',side*.40,.10+up*.48,.73,.065,.055,.10,'machinery')
             box(armour,'exposed_actuator',side*.39,.10+up*.36,.89,.040,.040,.17,'steel')
+            box(armour,'actuator_guide',side*.39,.10+up*.36,.76,.056,.054,.059,'joint')
+            box(armour,'jaw_inner_stop',side*.31,.10+up*.25,1.25,.038,.031,.11,'ceramic')
     sensor=parts['VeilSensor']
     sensor.loft('sensor_lens',[tube(z,0,0,r) for z,r in [(.10,.118),(.16,.108)]],'glass')
     # Sensor is already authored about its gameplay centre. Other parts are

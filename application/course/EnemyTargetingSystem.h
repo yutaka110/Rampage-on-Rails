@@ -61,6 +61,7 @@ struct EnemyTargetingRuntimeState final {
 // Shared by the turret model and projectile spawn. Imported barrels point -Z.
 Vector3 ResolveTurretAimDirection(const CourseEnemyActor& actor);
 Vector3 ResolveTurretMuzzleRailPosition(const CourseEnemyActor& actor, float barrelSide);
+int ResolvePredictiveTurretBarrel(const CourseEnemyActor& actor);
 // Uses the actual barrel position at launch. x/y/z are lateral/up/rail distance.
 Vector3 ResolveEnemyProjectileTargetRailPosition(const CourseEnemyActor& actor, const Vector3& muzzle);
 enum class EnemyForwardInterceptStatus : uint8_t {

@@ -172,8 +172,13 @@ struct CameraForGPU {
     std::array<Vector4, 2> railFrictionLights{};
     Vector4 bridgeBeamStart{}; // world source and radiant strength
     Vector4 bridgeBeamEnd{};   // live beam head and influence radius
+    std::array<Vector4, 2> batteryFootContacts{};
+    std::array<Vector4,6> combatMarkPosition{};
+    std::array<Vector4,6> combatMarkNormalAge{};
+    std::array<Vector4,6> combatMarkTintRadius{};
+    Vector4 combatImpactLight{},combatImpactTint{};
 };
-static_assert(sizeof(CameraForGPU) == 432);
+static_assert(sizeof(CameraForGPU) == 784);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};

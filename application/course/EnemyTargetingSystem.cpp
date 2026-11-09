@@ -315,9 +315,7 @@ Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,i
         if(RailGroundBattery::IsPredictive(actor.desc.actorAssetId)) {
             // One coherent crossing volley uses the rail-outer barrel. The inner
             // barrel's shallow crossing angle covered the post-launch brake escape.
-            const auto left=ResolveTurretMuzzleRailPosition(actor,-1.0f);
-            const auto right=ResolveTurretMuzzleRailPosition(actor,1.0f);
-            return std::abs(left.x)>std::abs(right.x)?left:right;
+            return ResolveTurretMuzzleRailPosition(actor,ResolvePredictiveTurretBarrel(actor)==0?-1.0f:1.0f);
         }
         return ResolveTurretMuzzleRailPosition(actor,(index & 1)?1.0f:-1.0f);
     }
@@ -445,6 +443,12 @@ Vector3 ResolveTurretMuzzleRailPosition(const CourseEnemyActor& actor, float bar
     return {actor.desc.lateralOffset+r*(forward.x*front+right.x*barrelSide*geometry.muzzleSide+up.x*geometry.muzzleHeight),
         actor.desc.verticalOffset+r*(forward.y*front+right.y*barrelSide*geometry.muzzleSide+up.y*geometry.muzzleHeight),
         actor.desc.spawnDistance+actor.desc.distanceOffset+r*(forward.z*front+right.z*barrelSide*geometry.muzzleSide+up.z*geometry.muzzleHeight)};
+}
+
+int ResolvePredictiveTurretBarrel(const CourseEnemyActor& actor) {
+    const auto left=ResolveTurretMuzzleRailPosition(actor,-1.0f);
+    const auto right=ResolveTurretMuzzleRailPosition(actor,1.0f);
+    return std::abs(left.x)>std::abs(right.x)?0:1;
 }
 
 void EnemyTargetingSystem::Reset() {

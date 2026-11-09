@@ -7,6 +7,13 @@
 static_assert(offsetof(Material, padding2) + sizeof(float) == 112);
 static_assert(sizeof(Material) >= 172); // Rail origin / distance and distance gradient.
 
+enum class CourseSurfaceProfile { CartPaint=1, RunningGear, SafetyTrim, Rail, Sleeper, Wheel, Turret, Structure };
+
+inline Material WithCourseSurfaceProfile(Material material, CourseSurfaceProfile profile) {
+    material.padding2[8] = static_cast<float>(profile);
+    return material;
+}
+
 // Preserve the original outdoor material. Mode 15 blends a separate cave
 // surface into it using the same world-space opening probes as the terrain.
 inline Material WithCaveSurfaceLighting(Material material, Vector3 albedo,

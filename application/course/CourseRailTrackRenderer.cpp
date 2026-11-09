@@ -212,5 +212,14 @@ void CourseRailTrackRenderer::WriteItem(
     const bool wheel = item.kind == CourseMeshRenderKind::VehicleWheel;
     *item.materialData = WithCaveSurfaceLighting(*item.materialData, {color.x, color.y, color.z},
         iron ? 0.56f : 0.82f, iron ? 0.70f : 0.0f, wheel ? 0.62f : 0.90f);
+    const auto profile = wheel ? CourseSurfaceProfile::Wheel :
+        iron ? CourseSurfaceProfile::Rail : CourseSurfaceProfile::Sleeper;
+    *item.materialData = WithCourseSurfaceProfile(*item.materialData,profile);
+    if(wheel) {
+        const auto axle=Normalize(Vector3{world.m[0][0],world.m[0][1],world.m[0][2]});
+        item.materialData->padding2[13]=axle.x;
+        item.materialData->padding2[14]=axle.y;
+        item.materialData->padding2[15]=axle.z;
+    }
     item.useMaterialOverride = true;
 }

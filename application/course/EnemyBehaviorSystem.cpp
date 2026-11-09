@@ -429,7 +429,7 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
                             (definition.aimingDurationSeconds+definition.attackLeadSeconds+2.0f*dt)) &&
                 (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) || actor.fireSequence>0 ||
                     actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance <=
-                        RailGroundBattery::FirstShotDistance+playerForwardSpeed*
+                        RailGroundBattery::FirstShotDistance(actor.desc.waveId)+playerForwardSpeed*
                             (definition.aimingDurationSeconds+definition.attackLeadSeconds+2.0f*dt)) &&
                 (!definition.maintainForwardEngagementBand ||
                     state.engagementBandAttackAllowed) &&

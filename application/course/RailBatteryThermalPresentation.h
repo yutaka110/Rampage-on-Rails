@@ -89,6 +89,13 @@ inline std::vector<RailWarningSprite> BuildRailBatteryThermalSprites(const Cours
         const auto from=point(a),to=point(b);const Vector3 half{(to.x-from.x)*.5f,(to.y-from.y)*.5f,(to.z-from.z)*.5f};
         const Vector3 middle{(to.x+from.x)*.5f,(to.y+from.y)*.5f,(to.z+from.z)*.5f};
         if(alpha>.001f)sprites.push_back({middle,half,{up.x*width*size,up.y*width*size,up.z*width*size},RailEnemyEnergy::Alpha(color,alpha),32});};
+    if(frame.heavy && charging) {
+        const float opening=HeavyMuzzleArmorOpen(frame,-1);
+        const Vector3 bore{0,.32f,-RailTurret::ForMesh(actor.desc.meshId).muzzleForward-.035f};
+        // Keep a dark edge around the single bore until the shot ignites.
+        glow(bore,.19f+.30f*frame.charge,opening*(.30f+.62f*frame.charge),palette.trail);
+        glow(bore,.07f+.14f*frame.charge,opening*frame.charge,palette.hot);
+    }
     for(float side:{-1.0f,1.0f}) {
         if(!frame.heavy)for(int cell=0;cell<3;++cell) {
             const float stage=(std::clamp)(frame.charge*3-cell,0.0f,1.0f);

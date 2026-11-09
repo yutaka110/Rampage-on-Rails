@@ -2,6 +2,7 @@
 #include "EnemyCombatPresentationBridge.h"
 #include "RailEnemyEnergyPalette.h"
 #include "RailBatteryThermalPresentation.h"
+#include "RailPrimaryKillPresentation.h"
 
 #include "CourseSpawnRuntime.h"
 #include "RailRearPursuitRules.h"
@@ -618,6 +619,26 @@ void EnemyCombatPresentationBridge::Update(
                 }
             }
         }
+        const auto hit=std::find_if(input.primaryContacts.rbegin(),input.primaryContacts.rend(),
+            [&](const auto& contact){return contact.actorId==actor.actorId;});
+        if(hit!=input.primaryContacts.rend() && actor.desc.hitPoints>0 &&
+            !output.attackCommittedThisFrame && !IsRailElitePursuer(actor.desc.actorAssetId)) {
+            const auto rail=input.railPath->Evaluate(actor.desc.spawnDistance+actor.desc.distanceOffset);
+            const auto center=Add(rail.position,Add(Scale(rail.right,actor.desc.lateralOffset),
+                Scale(rail.up,actor.desc.verticalOffset)));
+            const auto offset=Subtract(hit->position,center);
+            const float size=(std::max)(.5f,actor.desc.radius);
+            const float side=(std::clamp)(Dot(offset,rail.right)/size,-1.0f,1.0f);
+            const float high=(std::clamp)(Dot(offset,rail.up)/size,-1.0f,1.0f);
+            const float duration=hit->plated?.082f:.138f;
+            const float t=Saturate(hit->age/duration);
+            const float recovery=(1-SmoothStep(t))*(1-1.28f*t);
+            const float impulse=recovery/std::sqrt(1+.28f*float(hit->streak));
+            if(!output.turret)
+                output.primaryImpactOffset=Scale(hit->incoming,impulse*(hit->plated?.07f:.22f));
+            const float angle=impulse*(output.turret?.031f:hit->plated?.050f:.102f);
+            output.primaryImpactRotation={angle*(.26f+high),angle*side,-angle*side*.75f};
+        }
         frame_.actors.push_back(output);
     }
 
@@ -653,6 +674,10 @@ void EnemyCombatPresentationBridge::Update(
             }
             const SpatialMix mix = BuildSpatialMix(*actor, input);
             const float rollSign = (actor->actorId & 1u) != 0u ? 1.0f : -1.0f;
+            const bool primaryImpact=event->kind==EnemyCombatEventKind::HitReacted &&
+                std::any_of(input.primaryContacts.begin(),input.primaryContacts.end(),[&](const auto& hit) {
+                    return hit.actorId==event->actorId && hit.age==0;
+                });
             switch (event->kind) {
             case EnemyCombatEventKind::Spawned:
                 frame_.cameraShakeImpulse = (std::max)(
@@ -674,6 +699,7 @@ void EnemyCombatPresentationBridge::Update(
                 frame_.cameraRollImpulseRadians += rollSign * 0.006f;
                 break;
             case EnemyCombatEventKind::HitReacted:
+                if(primaryImpact)break;
                 frame_.cameraShakeImpulse = (std::max)(
                     frame_.cameraShakeImpulse, 0.16f);
                 frame_.cameraFovImpulseRadians -= 0.004f;
@@ -712,6 +738,7 @@ void EnemyCombatPresentationBridge::Update(
                 emitAudio = input.settings.emitAttackAudio;
                 break;
             case EnemyCombatEventKind::HitReacted:
+                if(primaryImpact) {emitAudio=false;break;}
                 cue.kind = EnemyCombatPresentationAudioCueKind::HitReact;
                 cue.volume = 0.36f;
                 cue.pitch = event->feedbackKind == HitFeedbackKind::WeakPointHit

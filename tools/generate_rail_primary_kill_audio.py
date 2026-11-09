@@ -1,7 +1,6 @@
 """Original internal core blast followed by a 60ms delayed armor fracture."""
-from pathlib import Path
-import wave
 import numpy as np
+from generate_rail_brake_audio import write_wave
 
 
 def main():
@@ -27,13 +26,7 @@ def main():
     tail = np.clip((duration - t) / .055, 0, 1) ** 2
     samples = (snap + metal + body + blast + edge + fracture) * attack * tail
     samples *= .80 / max(float(np.abs(samples).max()), .001)
-    target = Path(__file__).resolve().parents[1] / 'Resources/audio/rail_primary_kill.wav'
-    with wave.open(str(target), 'wb') as output:
-        output.setnchannels(1)
-        output.setsampwidth(2)
-        output.setframerate(rate)
-        output.writeframes((samples * 32767).astype('<i2').tobytes())
-    print(f'{target.name}: {len(samples)/rate:.3f}s')
+    write_wave('rail_primary_kill', (samples * 32767).astype('<i2').tobytes(), rate)
 
 
 if __name__ == '__main__':

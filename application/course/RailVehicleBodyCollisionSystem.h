@@ -30,6 +30,7 @@ struct RailVehicleBodyCollisionInput final {
     const TerrainEditLayer* terrainEdits = nullptr;
     const TerrainEditLayer* terrainPreview = nullptr;
     bool gameplayActive = true;
+    float deltaTime = 0.0f;
 };
 
 struct RailVehicleBodyCollisionFrame final {

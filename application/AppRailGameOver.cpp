@@ -85,6 +85,7 @@ void AppRunLoop::UpdateRailGameOver(float deltaTime) {
     const bool focused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
     const float dt=focused && std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,0.05f):0.0f;
     if(!railGameOverScene_.Active()) {
+        StopManualBrakeAudio();
         const auto prepareStart=std::chrono::steady_clock::now();
         LogRailRetryBoundary("defeat");
         railGameOverWorld_=std::make_unique<CourseSpawnRuntime>(railShooterSpawnRuntime_);

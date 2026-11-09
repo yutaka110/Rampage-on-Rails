@@ -233,6 +233,7 @@ public:
     float Age()const{return age_;}
     float PhaseAge()const{return phaseAge_;}
     const std::array<uint32_t,2>& ActorIds()const{return ids_;}
+    bool VeilDefeated() const {return defeated_[1];}
     std::span<const CourseTerrainPlacement> Scenery()const{return scenery_;}
     const char* Label()const {
         switch(phase_) {

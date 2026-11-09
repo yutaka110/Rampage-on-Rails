@@ -1055,6 +1055,17 @@ PixelShaderOutput main(VertexShaderOutput input)
         wallDetailMask *
         saturate(microDetailStrength));
     float highFrequencyDetail = lerp(proceduralHighFrequency, cachedHighFrequency, useDetailCache);
+    float exposedRock=1.0f;
+    if(titleSubject.w<.5f) {
+        float broad=ValueNoise(input.worldPosition*float3(.032f,.075f,.034f)+17.2f);
+        float shelf=ValueNoise(input.worldPosition*float3(.082f,.21f,.067f)+5.9f);
+        float slope=1.0f-abs(normal.y);
+        exposedRock=smoothstep(.34f,.76f,.53f*slope+.34f*broad+.13f*shelf);
+        float breakup=lerp(.38f,1.0f,exposedRock)*(1.0f-.42f*distantWallAtmosphere);
+        microCracks*=breakup;
+        chippedEdges*=breakup;
+        highFrequencyDetail*=breakup;
+    }
     float ao = lerp(
         1.0f,
         0.42f,
@@ -1076,6 +1087,12 @@ PixelShaderOutput main(VertexShaderOutput input)
     float variationAmount = saturate(abs(variationSigned) * 2.0f);
     rockColor *= lerp(float3(1.0f, 1.0f, 1.0f), variationTint, variationAmount * 0.42f);
     rockColor *= 0.92f + rockVariation * 0.18f;
+    if(titleSubject.w<.5f) {
+        float mineral=ValueNoise(input.worldPosition*float3(.025f,.095f,.032f)+23.6f);
+        float3 bedrock=lerp(float3(.69f,.73f,.77f),float3(1.07f,.95f,.80f),mineral);
+        float3 sediment=float3(1.08f,.99f,.88f);
+        rockColor*=lerp(sediment,bedrock,exposedRock*(1.0f-.52f*caveAmount));
+    }
     rockColor = lerp(rockColor, rockColor * float3(0.58f, 0.45f, 0.34f), strata);
     rockColor = lerp(rockColor, rockColor * float3(0.46f, 0.34f, 0.24f), saturate(erosionCracks * 0.65f));
     rockColor = lerp(
@@ -1232,6 +1249,8 @@ PixelShaderOutput main(VertexShaderOutput input)
     }
     float3 canyonAirLight = lerp(float3(0.42f, 0.46f, 0.47f), float3(0.76f, 0.78f, 0.76f), distanceAir);
     if(sunfallSky.x<0.5f) lit = lerp(lit, canyonAirLight, distantWallAtmosphere * 0.26f);
+    else if(titleSubject.w<.5f) lit=lerp(lit,lit*float3(.85f,.94f,1.08f),
+        distantWallAtmosphere*(1.0f-caveAmount)*.66f);
 
     float silhouetteBase = 1.0f - saturate(dot(normal, viewDir));
     float silhouette = Pow2(silhouetteBase) * lerp(1.0f, silhouetteBase, 0.35f);
@@ -1266,6 +1285,9 @@ PixelShaderOutput main(VertexShaderOutput input)
     float3 bridgeDirection;
     float3 bridgeEnergy=BridgeBeamRadiance(input.worldPosition,bridgeDirection);
     lit+=rockColor*bridgeEnergy*saturate(dot(normal,bridgeDirection))*.56f;
+    float3 impactDirection;
+    float3 impactEnergy=CombatImpactRadiance(input.worldPosition,impactDirection);
+    lit+=rockColor*impactEnergy*saturate(dot(normal,impactDirection))*.55f;
 
     // READY contact light shares the actual wall position used by sparks and dust.
     if (!titleLandscape && titleRailImpact.w > 0.0f) {
@@ -1288,6 +1310,7 @@ PixelShaderOutput main(VertexShaderOutput input)
             lit = TitleAtmosphere(lit,input.worldPosition);
         }
     }
+    if(!titleLandscape)lit*=GroundBatteryContactVisibility(input.worldPosition);
     output.color = float4(saturate(lit), texColor.a);
     return output;
 }

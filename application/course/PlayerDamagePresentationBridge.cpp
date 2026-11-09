@@ -62,7 +62,7 @@ void PlayerDamagePresentationBridge::Update(
             if (result.sequence != 0 && result.sequence <= lastPresentedSequence_) continue;
             lastPresentedSequence_ = result.sequence;
             lastDamage_ = result;
-            damageNoticeRemainingSeconds_ = 3.0f;
+            damageNoticeRemainingSeconds_ = DamageNoticeSeconds;
             const float normalizedDamage = (std::clamp)(
                 result.appliedDamage / 30.0f,
                 0.0f,

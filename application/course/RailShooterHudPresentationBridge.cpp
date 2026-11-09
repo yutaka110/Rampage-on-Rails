@@ -235,7 +235,7 @@ void RailShooterHudPresentationBridge::Update(
             input.playerDamage->damageNoticeRemainingSeconds / 0.4f, 0.0f, 1.0f);
         next.damageNoticeText = (damage.lethal ? Utf8(u8"敗因: ") : Utf8(u8"被害: ")) +
             cause + "  -" + Whole(damage.appliedDamage);
-        next.damageHealthText = Utf8(u8"耐久 ") + Whole(damage.hitPointsBefore) +
+        next.damageHealthText = Utf8(u8"体力 ") + Whole(damage.hitPointsBefore) +
             " -> " + Whole(damage.hitPointsAfter);
     }
 

@@ -74,6 +74,7 @@ struct PlayerDamagePresentationInput final {
 // presentation commands. It never changes health or collision state.
 class PlayerDamagePresentationBridge final {
 public:
+    static constexpr float DamageNoticeSeconds=3.0f;
     void Reset();
     void Update(const PlayerDamagePresentationInput& input);
 

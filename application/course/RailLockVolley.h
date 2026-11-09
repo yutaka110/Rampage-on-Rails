@@ -55,6 +55,8 @@ struct RailLockContact final {
     bool destroyed=false;
     TwinShieldDronePose wreckPose{};
     bool hasWreckPose=false;
+    bool enemyHull=false;
+    Vector3 incoming{};
     float Duration() const {return destroyed?DestroyedLifetime:Lifetime;}
     RailLockImpactFrame Presentation() const;
     Vector3 CenterAt(float time) const;

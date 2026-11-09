@@ -45,7 +45,7 @@ WeaponDefinitionAsset PulseFallback() {
     asset.definition.fireMode = WeaponFireMode::Automatic;
     asset.definition.damageType = WeaponDamageType::Energy;
     asset.definition.baseDamage = 12.0f;
-    asset.definition.range = 92.0f;
+    asset.definition.range = 150.0f;
     asset.definition.shotInterval = 0.085f;
     asset.definition.projectilesPerShot = 1;
     asset.definition.maxProjectilesPerTrigger = 1;

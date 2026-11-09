@@ -101,10 +101,10 @@ void RailVehiclePresentationBridge::Update(
     frame_.right = contact != nullptr ? contact->right : state.right;
     const Vector3 basePosition = contact != nullptr
         ? contact->visualPosition : state.position;
-    frame_.visualPosition = Add(basePosition, Scale(frame_.up, suspension));
+    frame_.visualPosition = Add(basePosition, Scale(frame_.up, suspension-input.brakeCompression));
     frame_.wheelRotationRadians = std::fmod(state.distance / wheelRadius, 2.0f * kPi);
     frame_.visualBankDegrees = smoothedBankDegrees_;
-    frame_.visualPitchDegrees = smoothedPitchDegrees_;
+    frame_.visualPitchDegrees = smoothedPitchDegrees_+input.brakePitchDegrees;
     frame_.visualYawDegrees = dynamics != nullptr
         ? dynamics->visualYawDegrees : 0.0f;
     frame_.suspensionOffset = suspension;

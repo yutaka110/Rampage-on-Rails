@@ -42,6 +42,21 @@ struct RailPrimaryKillFrame final {
     Vector3 center{};
     float flash=0;
 };
+struct RailPrimaryContact final {
+    static constexpr float Lifetime=.18f;
+    uint64_t shotId=0;
+    Vector3 position{},normal{},incoming{};
+    float age=0;
+    bool plated=false,weakPoint=false;
+    uint32_t actorId=0,streak=0;
+
+    static bool Matches(const WeaponFeedbackEvent& event) {
+        return event.hitKind==RailAimHitKind::Enemy && event.damageType==WeaponDamageType::Energy &&
+            !event.lockOnContact && !event.shieldHit && !event.destroyed &&
+            (event.audioCueId=="weapon_impact_armor" || (event.appliedDamage>0 &&
+                (event.feedbackKind==HitFeedbackKind::NormalHit || event.feedbackKind==HitFeedbackKind::WeakPointHit)));
+    }
+};
 struct RailPrimaryKill final {
     static constexpr float Lifetime=0.72f;
     uint64_t shotId=0;
@@ -71,7 +86,7 @@ struct RailPrimaryKill final {
             right=Unit({body.m[0][0],body.m[0][1],body.m[0][2]},right);
             up=Unit({body.m[1][0],body.m[1][1],body.m[1][2]},up);
         }
-        frame.flash=1-Ramp(age,0.006f,0.032f);
+        frame.flash=1-Ramp(age,0.012f,0.052f);
         const float sign=shotId%2?1.0f:-1.0f;
         const float tilt=sign*0.68f+0.12f*(incoming.x*right.x+incoming.y*right.y+incoming.z*right.z);
         const auto axis=Add(Scale(right,std::cos(tilt)),Scale(up,std::sin(tilt)));
@@ -139,17 +154,35 @@ struct RailPrimaryKill final {
 class RailPrimaryKillPresentation final {
 public:
     static constexpr size_t Capacity=16;
-    void Reset() { kills_.clear(); history_={}; historyCursor_=newCount_=0; lastSequence_=0; }
+    void Reset() { kills_.clear(); contacts_.clear(); history_={}; historyCursor_=newCount_=0; lastSequence_=lastContactSequence_=0; }
     void Update(float dt) {
         newCount_=0;
         if(!std::isfinite(dt) || dt<=0) return;
         for(auto& kill:kills_) kill.age+=dt;
         std::erase_if(kills_,[](const auto& kill){return kill.age>=RailPrimaryKill::Lifetime;});
+        for(auto& contact:contacts_)contact.age+=dt;
+        std::erase_if(contacts_,[](const auto& contact){return contact.age>=RailPrimaryContact::Lifetime;});
     }
     uint64_t LastObservedSequence() const { return lastSequence_; }
+    void ObserveContact(const WeaponFeedbackEvent& event) {
+        using namespace rail_primary_kill_detail;
+        if(event.sequence<=lastContactSequence_)return;
+        lastContactSequence_=event.sequence;
+        if(!RailPrimaryContact::Matches(event) || !Finite(event.worldPosition) ||
+            !Finite(event.worldNormal) || !Finite(event.incomingDirection))return;
+        const bool plated=event.audioCueId=="weapon_impact_armor";
+        const auto prior=std::find_if(contacts_.rbegin(),contacts_.rend(),[&](const auto& hit) {
+            return hit.actorId==event.targetActorId && hit.plated==plated && hit.age<=.15f;
+        });
+        const uint32_t streak=prior==contacts_.rend()?0u:(std::min)(prior->streak+1,4u);
+        if(contacts_.size()>=24)contacts_.erase(contacts_.begin());
+        contacts_.push_back({event.shotId,event.worldPosition,Unit(event.worldNormal,{0,0,-1}),
+            Unit(event.incomingDirection,{0,0,1}),0,plated,event.weakPoint,event.targetActorId,streak});
+    }
     bool ObserveFeedback(const WeaponFeedbackEvent& event,float size=1,const TwinShieldDronePose* pose=nullptr) {
         if(event.sequence==0 || event.sequence<=lastSequence_) return false;
         lastSequence_=event.sequence;
+        ObserveContact(event);
         return Enqueue(event,size,pose);
     }
     bool Enqueue(const WeaponFeedbackEvent& event,float size=1,const TwinShieldDronePose* pose=nullptr) {
@@ -170,15 +203,18 @@ public:
         ++newCount_;
         return true;
     }
-    bool Visible() const { return !kills_.empty(); }
+    bool Visible() const { return !kills_.empty() || !contacts_.empty(); }
     bool ContainsActor(uint32_t actorId) const {
         return std::any_of(kills_.begin(),kills_.end(),[actorId](const auto& kill){return kill.actorId==actorId;});
     }
     size_t NewCount() const { return newCount_; }
     std::span<const RailPrimaryKill> Kills() const { return kills_; }
+    std::span<const RailPrimaryContact> Contacts() const { return contacts_; }
 private:
     std::vector<RailPrimaryKill> kills_;
+    std::vector<RailPrimaryContact> contacts_;
     std::array<uint64_t,128> history_{};
     size_t historyCursor_=0,newCount_=0;
     uint64_t lastSequence_=0;
+    uint64_t lastContactSequence_=0;
 };

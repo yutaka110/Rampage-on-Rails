@@ -456,6 +456,10 @@ void CourseEventDispatcher::SpawnEnemyWave(
             desc.firePattern = FirePatternForRole(unit.role);
             desc.bulletCount = DefaultBulletCountForPattern(desc.firePattern);
         }
+        if(RailGroundBattery::IsFirstLiveBattery(desc.waveId) && RailGroundBattery::IsProjectile(desc.projectileDefinition.id)) {
+            desc.projectileDefinition.initialSpeed=RailGroundBattery::FirstLiveProjectileSpeed;
+            desc.projectileDefinition.maximumSpeed=RailGroundBattery::FirstLiveProjectileSpeed;
+        }
         spawnRuntime.SpawnEnemyActor(std::move(desc));
     }
 }

@@ -357,6 +357,7 @@ public:
     void UpdateCarrierDeployments(float deltaTime, float playerDistance, float playerSpeed);
     void UpdateTerrainIngresses(float deltaTime, const CourseEnemyFireSafetyFrameInput& input);
     bool SpawnObstacle(CourseObstacleActorDesc desc, std::string* errorMessage = nullptr);
+    void BreakRouteBarricade(uint32_t actorId);
     void SpawnVfxCue(CourseVfxCueDesc desc);
     void SubmitPendingVfx(EffectRuntime& effectRuntime, const RailPath& railPath);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw, const RailPath& railPath) const;

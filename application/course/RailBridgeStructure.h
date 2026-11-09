@@ -34,6 +34,15 @@ inline CourseTerrainPlacement Piece(const char* id,const char* mesh,float d,floa
     CourseTerrainPlacement p;p.id=id;p.meshId=mesh;p.distance=d;p.lateralOffset=x;p.verticalOffset=y;
     p.cullAheadDistance=1000;p.cullBehindDistance=350;p.renderPriority=23;return p;
 }
+inline CourseTerrainPlacement TornJoint(const RailBridgeEscape& e,int index,const SpanPose& s) {
+    const float sign=index==0?1.0f:-1.0f;
+    auto p=Piece(index==0?"escape-near-torn-joint":"escape-far-torn-joint","bridge_escape_torn_joint",
+        s.distance+sign*25*std::cos(s.pitch),s.lateral,s.height-25*std::sin(std::abs(s.pitch)));
+    p.rotation.x=std::abs(s.pitch);
+    p.rotation.y=index==0?0.0f:3.14159265f;
+    p.rotation.z=-sign*(std::max)(0.0f,CollapseAge(e)-TearSeconds)*.12f;
+    return p;
+}
 // Endpoints are rail-local (lateral, vertical, distance). Unit cable is along Z.
 inline CourseTerrainPlacement Link(const char* id,Vector3 a,Vector3 b,float radius=.10f) {
     auto p=Piece(id,"bridge_escape_link",(a.z+b.z)*.5f,(a.x+b.x)*.5f,(a.y+b.y)*.5f);
@@ -55,6 +64,7 @@ inline void Append(const RailBridgeEscape& e,std::vector<CourseTerrainPlacement>
         const auto s=Span(e,i);if(s.height<-90)continue;
         auto p=Piece(i==0?"escape-near-span":"escape-far-span","bridge_escape_span",s.distance,s.lateral,s.height);
         p.rotation.x=s.pitch;p.rotation.z=(i==0?-1.0f:1.0f)*(std::max)(0.0f,t-TearSeconds)*.12f;out.push_back(p);
+        if(!s.attached)out.push_back(TornJoint(e,i,s));
     }
     if(t<TearSeconds)for(int side:{-1,1}) {
         const auto s=Span(e,0);const float gap=(std::max)(.05f,50*(1-std::cos(s.pitch)));

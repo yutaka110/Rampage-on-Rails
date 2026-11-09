@@ -1,4 +1,5 @@
 #include "RailShooterHudRuntimeModel.h"
+#include "RailRouteHazards.h"
 
 #include "CourseGameplayWaveRuntimeBridge.h"
 #include "EnemyEncounterReadabilityDirector.h"
@@ -107,6 +108,7 @@ void RailShooterHudRuntimeModel::Update(
         const auto& body = *input.vehicleDefinition;
         float nearestContact = 5.0f;
         for (const auto& actor : input.spawnRuntime->Obstacles()) {
+            if(RailRouteHazards::IsSlab(actor) || RailRouteHazards::IsBarricade(actor))continue;
             const auto& obstacle = actor.desc;
             if (obstacle.hitPoints <= 0.0f || actor.age >= obstacle.lifetime ||
                 std::abs(obstacle.lateralOffset) > obstacle.halfExtents.x + body.collisionHalfExtents.x ||

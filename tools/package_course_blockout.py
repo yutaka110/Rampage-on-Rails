@@ -48,7 +48,15 @@ def main():
                          'enemies/ElitePursuers/BridgeEscapeRamp.obj','enemies/ElitePursuers/BridgeEscapeClamp.obj','enemies/ElitePursuers/BridgeEscapeDebris.obj',
                          'enemies/ElitePursuers/BridgeEscapeSpan.obj','enemies/ElitePursuers/BridgeEscapeLeaf.obj','enemies/ElitePursuers/BridgeEscapeLink.obj','enemies/ElitePursuers/BridgeEscapePylon.obj',
                          'audio/rail_kill_boost_release.wav',
-                         'audio/rail_brake_scrape.wav',
+                         'audio/rail_lock_contact.wav',
+                         'audio/rail_primary_hull_contact.wav',
+                         'audio/rail_primary_plate_contact.wav',
+                         'audio/rail_primary_hull_resonance.wav',
+                         'audio/rail_primary_plate_resonance.wav',
+                         'effects/CombatImpactSmoke.effect',
+                         'audio/rail_brake_scrape.wav','audio/rail_brake_bite.wav','audio/rail_brake_loop.wav',
+                         'audio/rail_brake_release.wav','audio/rail_brake_round_pass.wav',
+                         'audio/rail_siege_turret_fire.wav','audio/rail_siege_turret_latch.wav',
                          'audio/rail_energy_shield_hit.wav','audio/rail_energy_shield_break.wav',
                          'courses/actors/short_shield_scout.actor',
                          'courses/actors/short_rear_pursuer.actor',
@@ -71,7 +79,9 @@ def main():
                          'courses/waves/short_turret_left.wave',
                          'courses/waves/short_turret_right.wave',
                          'courses/waves/route_turret_left.wave',
-                         'courses/waves/route_turret_right.wave']:
+                         'courses/waves/route_turret_right.wave',
+                         'courses/obstacles/route_arch_slab.obstacle',
+                         'courses/obstacles/route_break_barricade.obstacle']:
             for suffix in ['', '.meta']:
                 source=ROOT/'Resources'/(relative+suffix)
                 if source.exists():shutil.copy2(source,target/'Resources'/(relative+suffix))
@@ -82,12 +92,21 @@ def main():
                         target/'Resources/enemies/ElitePursuers', dirs_exist_ok=True)
         shutil.copytree(ROOT/'Resources/enemies/VeilInterceptor',
                         target/'Resources/enemies/VeilInterceptor', dirs_exist_ok=True)
+        for mesh in ('MothershipBlockout','SiegeTurret','SiegeTurretBase','SiegeTurretHead','SiegeTurretBarrel','SiegeTurretSingleBarrel',
+                     'GatlingTurretBase','GatlingTurretHead','GatlingTurretRotor','CarrierHeavyTurretBase',
+                     'CarrierHeavyTurretHead','CarrierHeavyTurretBarrel','CarrierHeavyTurretVent','CarrierHeavyTurretShutter'):
+            shutil.copytree(ROOT/'Resources/enemies'/mesh,
+                            target/'Resources/enemies'/mesh,dirs_exist_ok=True)
         shutil.copytree(ROOT/'Resources/course_meshes/CourseBlockoutBridge',
                         target/'Resources/course_meshes/CourseBlockoutBridge', dirs_exist_ok=True)
         shutil.copytree(ROOT/'Resources/course_meshes/RailSpeedMarker',
                         target/'Resources/course_meshes/RailSpeedMarker', dirs_exist_ok=True)
         shutil.copytree(ROOT/'Resources/course_meshes/EnergyShieldEmitter',
                         target/'Resources/course_meshes/EnergyShieldEmitter', dirs_exist_ok=True)
+        shutil.copytree(ROOT/'Resources/course_meshes/RouteBarricadePanel',
+                        target/'Resources/course_meshes/RouteBarricadePanel', dirs_exist_ok=True)
+        shutil.copytree(ROOT/'Resources/course_meshes/RouteNaturalArch',
+                        target/'Resources/course_meshes/RouteNaturalArch', dirs_exist_ok=True)
         for wave in ['ridge_dive_left','ridge_dive_right']:
             for suffix in ['.wave','.wave.meta']:
                 shutil.copy2(ROOT/'Resources/courses/waves'/(wave+suffix),

@@ -1,5 +1,6 @@
 #include "RailRearPursuitRules.h"
 #include "RailWorldRaycast.h"
+#include "RailRouteHazards.h"
 #include "../diagnostics/DronePerformanceProfile.h"
 
 #include "CourseAsset.h"
@@ -777,16 +778,25 @@ RailAimHit RailWorldRaycast::Query(const RailWorldRaycastInput& input) {
             if (obstacle.desc.hitPoints <= 0.0f) {
                 continue;
             }
-            const float railDistance =
-                obstacle.desc.spawnDistance + obstacle.desc.distanceOffset;
+            auto rail=Vector3{obstacle.desc.lateralOffset,obstacle.desc.verticalOffset,
+                obstacle.desc.spawnDistance+obstacle.desc.distanceOffset};
+            float roll=0;
+            if(RailRouteHazards::IsSlab(obstacle)) {
+                const auto pose=RailRouteHazards::VisibleStone(obstacle,obstacle.age);
+                rail=pose.rail;
+                roll=pose.roll;
+            }
+            const float railDistance=rail.z;
             const RailPathSample sample = input.railPath->Evaluate(railDistance);
             const Vector3 center = ResolveRailLocal(
                 *input.railPath,
                 railDistance,
-                obstacle.desc.lateralOffset,
-                obstacle.desc.verticalOffset);
+                rail.x,
+                rail.y);
+            auto rotation=RotationFromRailTangent(sample.tangent);
+            rotation.z+=roll;
             const std::array<Vector3, 3> axes = AxesFromEuler(
-                RotationFromRailTangent(sample.tangent));
+                rotation);
             const Vector3 halfExtents{
                 obstacle.desc.halfExtents.x + padding,
                 obstacle.desc.halfExtents.y + padding,

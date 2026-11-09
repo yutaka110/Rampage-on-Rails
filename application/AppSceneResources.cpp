@@ -1,5 +1,6 @@
 #include "course/RailVehicleBreakawayGeometry.h"
 #include "AppSceneResources.h"
+#include "course/RailRouteHazards.h"
 #include "course/RailFangModel.h"
 #include "course/RailVeilModel.h"
 
@@ -1220,9 +1221,14 @@ namespace {
             if(!panelOnly) AppendCartBeveledBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 3.15f},0.045f);
             if(!damaged || panelOnly) AppendCartBeveledBox(model,RailVehicleBreakaway::PanelMinimum,RailVehicleBreakaway::PanelMaximum,0.05f);
             if(!panelOnly) {
-                AppendCartBeveledBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f},0.05f);
-                AppendCartBeveledBox(model, {-1.78f, 0.38f, -3.20f}, {1.78f, 1.25f, -2.75f},0.045f);
-                AppendCartBeveledBox(model, {-1.78f, 0.38f, 2.75f}, {1.78f, 1.25f, 3.20f},0.045f);
+                AppendCartBeveledBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f},0.095f);
+                for(float side:{-1.0f,1.0f}) {
+                    const float z=side*2.975f;
+                    AppendCartBeveledBox(model, {-1.78f,.38f,z-.225f}, {1.78f,1.25f,z+.225f},.085f);
+                    const float face=side*3.215f;
+                    for(float x:{-1.30f,1.30f})
+                        AppendCartBeveledBox(model,{x-.13f,.36f,face-.10f},{x+.13f,1.23f,face+.10f},.045f);
+                }
             }
         });
         if(!panelOnly) appendPart("running_gear", 1, [&]() {
@@ -1231,6 +1237,10 @@ namespace {
             // rail-contact transforms and rotation.
             AppendCartBeveledBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f},0.035f);
             AppendCartBeveledBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f},0.035f);
+            for(float side:{-1.0f,1.0f}) {
+                const float z=side*3.26f;
+                AppendCartBeveledBox(model,{-1.04f,.47f,z-.065f},{1.04f,.69f,z+.065f},.026f);
+            }
             // Hollow side-sill housings: four closed beveled strips per
             // nozzle leave the rear aperture open for the rooted boost jet.
             for(float side:{-1.0f,1.0f}) {
@@ -3229,11 +3239,13 @@ bool AppSceneResources::Initialize(
         });
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
+    registerCourseMesh("route_barricade_panel", "Resources/course_meshes/RouteBarricadePanel", "RouteBarricadePanel.obj", "animatedCube");
     registerCourseMesh("course_blockout_bridge", "Resources/course_meshes/CourseBlockoutBridge", "CourseBlockoutBridge.obj", "courseBlockoutSteel");
     registerCourseMesh("bridge_escape_clamp", "Resources/enemies/ElitePursuers", "BridgeEscapeClamp.obj", "elitePursuerPalette");
     registerCourseMesh("bridge_escape_ramp", "Resources/enemies/ElitePursuers", "BridgeEscapeRamp.obj", "elitePursuerPalette");
     registerCourseMesh("bridge_escape_debris", "Resources/enemies/ElitePursuers", "BridgeEscapeDebris.obj", "elitePursuerPalette");
     registerCourseMesh("bridge_escape_span", "Resources/enemies/ElitePursuers", "BridgeEscapeSpan.obj", "elitePursuerPalette");
+    registerCourseMesh("bridge_escape_torn_joint", "Resources/enemies/ElitePursuers", "BridgeEscapeTornJoint.obj", "elitePursuerPalette");
     registerCourseMesh("bridge_escape_leaf", "Resources/enemies/ElitePursuers", "BridgeEscapeLeaf.obj", "elitePursuerPalette");
     registerCourseMesh("bridge_escape_link", "Resources/enemies/ElitePursuers", "BridgeEscapeLink.obj", "elitePursuerPalette");
     registerCourseMesh("bridge_escape_pylon", "Resources/enemies/ElitePursuers", "BridgeEscapePylon.obj", "elitePursuerPalette");
@@ -3260,6 +3272,8 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
     registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
     registerCourseMesh("siege_turret_head", "Resources/enemies/SiegeTurretHead", "SiegeTurretHead.obj", "siegeTurret");
+    registerCourseMesh("siege_turret_barrel", "Resources/enemies/SiegeTurretBarrel", "SiegeTurretBarrel.obj", "siegeTurret");
+    registerCourseMesh("siege_turret_single_barrel", "Resources/enemies/SiegeTurretSingleBarrel", "SiegeTurretSingleBarrel.obj", "siegeTurret");
     registerCourseMesh("siege_turret", "Resources/enemies/SiegeTurret", "SiegeTurret.obj", "siegeTurret");
     registerCourseMesh("gatling_turret_base", "Resources/enemies/GatlingTurretBase", "GatlingTurretBase.obj", "carrierGatling");
     registerCourseMesh("gatling_turret_head", "Resources/enemies/GatlingTurretHead", "GatlingTurretHead.obj", "carrierGatling");
@@ -3268,9 +3282,10 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("carrier_heavy_turret_head", "Resources/enemies/CarrierHeavyTurretHead", "CarrierHeavyTurretHead.obj", "carrierHeavy");
     registerCourseMesh("carrier_heavy_turret_barrel", "Resources/enemies/CarrierHeavyTurretBarrel", "CarrierHeavyTurretBarrel.obj", "carrierHeavy");
     registerCourseMesh("carrier_heavy_turret_vent", "Resources/enemies/CarrierHeavyTurretVent", "CarrierHeavyTurretVent.obj", "carrierHeavy");
+    registerCourseMesh("carrier_heavy_turret_shutter", "Resources/enemies/CarrierHeavyTurretShutter", "CarrierHeavyTurretShutter.obj", "carrierHeavy");
     registerCourseMesh("combat_turret_base", "Resources/enemies/CombatTurretBase", "CombatTurretBase.obj", "default");
     registerCourseMesh("combat_turret_head", "Resources/enemies/CombatTurretHead", "CombatTurretHead.obj", "default");
-    registerCourseMesh("carrier_hull", "Resources/enemies/MothershipBlockout", "MothershipHull.obj", "default");
+    registerCourseMesh("carrier_hull", "Resources/enemies/MothershipBlockout", "MothershipHull.obj", "veilInterceptorPalette");
     registerCourseMesh("mothership_core", "Resources/enemies/MothershipBlockout", "MothershipReactor.obj", "default");
     registerCourseMesh("carrier_box", "Resources/enemies/MothershipBlockout", "MothershipBox.obj", "default");
     registerCourseMesh("twin_shield_hull", "Resources/enemies/TwinShieldDrone", "TwinShieldHull.obj", "default");
@@ -3327,6 +3342,10 @@ bool AppSceneResources::Initialize(
         "Resources/course_meshes/RailHazardSolid",
         "RailHazardSolid.obj",
         "courseRootRock");
+    registerCourseMesh("route_arch_roots","Resources/course_meshes/RouteNaturalArch",
+        "RouteArchRoots.obj","courseRootRock");
+    registerCourseMesh("route_arch_shoulder","Resources/course_meshes/RouteNaturalArch",
+        "RouteArchShoulder.obj","courseRootRock");
     registerCourseMesh(
         "combat_turret",
         "Resources/enemies/CombatTurret",
@@ -3901,6 +3920,12 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     mappedCamera->railFrictionLights = {};
     mappedCamera->bridgeBeamStart = {};
     mappedCamera->bridgeBeamEnd = {};
+    mappedCamera->batteryFootContacts = {};
+    mappedCamera->combatMarkPosition = {};
+    mappedCamera->combatMarkNormalAge = {};
+    mappedCamera->combatMarkTintRadius = {};
+    mappedCamera->combatImpactLight = {};
+    mappedCamera->combatImpactTint = {};
 }
 
 SkinnedModelInstance* AppSceneResources::GetActiveSkinnedModel() {
@@ -3986,7 +4011,29 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         enemyReadability,
         includeStartupRearScenery,veilAttack,eliteFire);
     courseMeshRenderQueue.AppendTerrain(sequenceScenery,currentDistance,railPath,bindings,viewMatrix,projMatrix);
-    if (mothership) courseMeshRenderQueue.AppendMothership(*mothership,bindings,viewMatrix,projMatrix);
+    if(mothership) {
+        auto carrier=*mothership;
+        float shotAge=-1;
+        Vector3 shotTarget{};
+        const float weight=RailRouteHazards::HeavyPassWeight(currentDistance);
+        if(carrier.visible && weight>0 && course &&
+            std::any_of(course->events.begin(),course->events.end(),[](const auto& event) {
+                return event.id==RailRouteHazards::SlabId;
+            })) {
+            const auto pass=RailRouteHazards::CollapseCarrier(railPath);
+            carrier.center=RailMothership::Mix(carrier.center,pass.center,weight);
+            carrier.right=RailMothership::Mix(carrier.right,pass.right,weight);
+            carrier.up=RailMothership::Mix(carrier.up,pass.up,weight);
+            carrier.forward=RailMothership::Mix(carrier.forward,pass.forward,weight);
+            for(const auto& obstacle:courseRuntime.Obstacles())if(RailRouteHazards::IsSlab(obstacle)) {
+                const auto hit=RailRouteHazards::Strike(obstacle);
+                shotTarget=ResolveEnemyProjectileWorldPosition(railPath,hit);
+                shotAge=obstacle.age;
+                break;
+            }
+        }
+        courseMeshRenderQueue.AppendMothership(carrier,bindings,viewMatrix,projMatrix,shotAge,shotTarget);
+    }
     if (titlePursuer) courseMeshRenderQueue.AppendTwinShieldDrone(*titlePursuer,bindings,viewMatrix,projMatrix);
 }
 
@@ -4487,22 +4534,16 @@ void AppSceneResources::SyncRuntimeState(AppRuntimeState& runtimeState, float de
                 }
                 syncGpuMaterial(gpuMaterial);
                 if (managedModel.name.starts_with("rail_vehicle.mine_cart") && gpuMaterial.mappedConstants != nullptr) {
-                    // Keep the established warm cart palette inside the cave,
-                    // while preserving the original material outside it.
-                    const auto& paletteLight = titleVehicleReferenceLight.intensity > 0.0f
-                        ? titleVehicleReferenceLight : directionalLightData;
-                    Material caveSurface = BuildRailVehicleTitleMaterial(gpuMaterial.source,
-                        runtimeState.materialData, paletteLight, titleVehicleReferenceNormal, titleVehicleReferenceView);
-                    // The legacy broad highlight can clip the orange trim to
-                    // white. Retain its paint identity under diffuse cave light.
-                    if (gpuMaterial.source.name == "safety_trim") {
-                        caveSurface.color.y *= 0.65f;
-                        caveSurface.color.z *= 0.28f;
-                    }
                     const bool iron = gpuMaterial.source.name == "iron_running_gear";
-                    *gpuMaterial.mappedConstants = WithCaveSurfaceLighting(*gpuMaterial.mappedConstants,
-                        {caveSurface.color.x, caveSurface.color.y, caveSurface.color.z},
-                        caveSurface.shininess, caveSurface.environmentCoefficient, iron ? 0.62f : 1.0f);
+                    const bool trim = gpuMaterial.source.name == "safety_trim";
+                    const auto profile = iron ? CourseSurfaceProfile::RunningGear :
+                        trim ? CourseSurfaceProfile::SafetyTrim : CourseSurfaceProfile::CartPaint;
+                    const auto& paint = gpuMaterial.source.baseColorFactor;
+                    const Vector3 base = iron ? Vector3{.095f,.115f,.13f} :
+                        trim ? Vector3{.84f,.37f,.057f} : Vector3{paint.x,paint.y,paint.z};
+                    *gpuMaterial.mappedConstants = WithCourseSurfaceProfile(
+                        WithCaveSurfaceLighting(*gpuMaterial.mappedConstants,base,
+                            iron?.56f:trim?.48f:.55f,iron?.64f:.04f,iron?.69f:.94f),profile);
                 }
             }
         }

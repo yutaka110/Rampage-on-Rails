@@ -117,21 +117,22 @@ def generate_gatling():
     for i in range(6):
         a = i * math.tau / 6
         x, y = .40*math.cos(a), .40*math.sin(a)
-        tube(rotor, x, y, [(.48, .13), (1.83, .13)], 2)
-        tube(rotor, x, y, [(1.83, .13), (1.95, .13), (2.06, .165), (2.25, .165)], 7)
+        tube(rotor, x, y, [(.48, .115), (1.83, .115)], 2)
+        tube(rotor, x, y, [(1.83, .115), (1.96, .13), (2.06, .184), (2.25, .184)], 7)
         for z in (.65, .85):
             tube(rotor, x, y, [(z, .15), (z+.045, .15)], 1)
-        tube(rotor, x, y, [(2.25, .165), (2.25, .135)], 2)
-        tube(rotor, x, y, [(2.25, .135), (2.25, .103)], 3)
-        tube(rotor, x, y, [(2.03, .103), (2.25, .103)], 3, inside=True)
-        tube(rotor, x, y, [(2.025, .10), (2.03, .10)], 3, cap=True)
-    tube(rotor, 0, 0, [(1.45, .57), (1.53, .57)], 1, n=18)
-    tube(rotor, 0, 0, [(1.53, .57), (1.53, .50)], 2, n=18)
-    # Index mark makes acceleration and deceleration readable at play distance.
-    box(rotor, (.54, 0, 1.49), (.09, .13, .085), 4)
+        tube(rotor, x, y, [(2.25, .184), (2.25, .148)], 8)
+        tube(rotor, x, y, [(2.25, .148), (2.25, .132)], 3)
+        tube(rotor, x, y, [(1.96, .132), (2.25, .132)], 3, inside=True)
+        tube(rotor, x, y, [(1.955, .13), (1.96, .13)], 3, cap=True)
+    # Keep the last meter open around each tube. The asymmetric painted lug
+    # spins with the group and breaks the sixfold symmetry at game distance.
+    tube(rotor, 0, 0, [(1.03, .53), (1.14, .53)], 1, n=18)
+    tube(rotor, 0, 0, [(1.14, .53), (1.14, .48)], 2, n=18)
+    bevel_box(rotor, (.52, 0, 1.09), (.22, .25, .32), 4, 11)
     for i in range(6):
         a = i*math.tau/6 + math.pi/6
-        bolt(rotor, .535*math.cos(a), .535*math.sin(a), 1.535, .025)
+        bolt(rotor, .505*math.cos(a), .505*math.sin(a), 1.145, .025)
     save(base, head, rotor)
 
 
@@ -165,23 +166,34 @@ def generate_heavy():
                 bolt(head, side*.87+dx, y, .822, .032)
     barrel = Mesh('CarrierHeavyTurretBarrel', PALETTE)
     tube(barrel, 0, 0, [(-.40, .46), (.48, .46), (.66, .52), (1.52, .52)], 2, n=16)
-    tube(barrel, 0, 0, [(1.52, .52), (1.70, .66), (1.98, .66), (2.10, .61)], 9, n=16)
+    tube(barrel, 0, 0, [(1.52, .52), (1.70, .78), (1.98, .78), (2.10, .76)], 9, n=16)
     tube(barrel, 0, 0, [(1.38, .525), (1.49, .525)], 7, n=16)
     tube(barrel, 0, 0, [(.50, .56), (.68, .56)], 1, n=16)
-    tube(barrel, 0, 0, [(2.10, .61), (2.10, .57)], 2, n=16)
-    tube(barrel, 0, 0, [(2.10, .57), (2.10, .43)], 3, n=16)
-    tube(barrel, 0, 0, [(1.72, .43), (2.10, .43)], 3, n=16, inside=True)
-    tube(barrel, 0, 0, [(1.71, .42), (1.72, .42)], 3, n=16, cap=True)
+    tube(barrel, 0, 0, [(2.10, .76), (2.10, .66)], 8, n=16)
+    tube(barrel, 0, 0, [(2.10, .66), (2.10, .55)], 3, n=16)
+    tube(barrel, 0, 0, [(1.72, .55), (2.10, .55)], 3, n=16, inside=True)
+    tube(barrel, 0, 0, [(1.71, .54), (1.72, .54)], 3, n=16, cap=True)
     for side in (-1, 1):
         tube(barrel, side*.76, -.41, [(.18, .075), (1.25, .075)], 8, cap=True)
         box(barrel, (side*.62, -.38, 1.24), (.32, .18, .16), 6)
+        bevel_box(barrel, (side*.99, 0, 1.86), (.56, .31, .27), 7, 8)
+        box(barrel, (side*1.05, 0, 1.99), (.44, .12, .045), 8)
     vent = Mesh('CarrierHeavyTurretVent', PALETTE)
     bevel_box(vent, (0, 0, 0), (.36, .10, .84), 9, 1)
     box(vent, (0, .057, .05), (.24, .018, .60), 0)
     box(vent, (0, .070, .26), (.22, .012, .065), 4)
     for z in (-.22, -.08, .06):
         box(vent, (0, .070, z), (.22, .012, .045), 6)
-    save(base, head, barrel, vent)
+    shutter = Mesh('CarrierHeavyTurretShutter', PALETTE)
+    # Local origin is the outer hinge. At rest the inward edges nearly meet
+    # over the bore. The second plate is the same part rolled by half a turn.
+    bevel_box(shutter, (-.385, 0, .04), (.82, 1.46, .24), 9, 2)
+    bevel_box(shutter, (-.38, 0, .165), (.64, 1.15, .065), 0, 1)
+    box(shutter, (-.68, 0, .20), (.055, .87, .025), 11)
+    box(shutter, (-.15, 0, -.10), (.19, .95, .11), 6)
+    for y in (-.54, .54):
+        bolt(shutter, -.18, y, .203, .05)
+    save(base, head, barrel, vent, shutter)
 
 
 if __name__ == '__main__':

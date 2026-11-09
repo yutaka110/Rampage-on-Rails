@@ -92,6 +92,7 @@ struct RailShooterHudRenderInput final {
     float miniBossCounterDamage=0,miniBossCounterFeedbackRemaining=0;
     int miniBossCounterFeedbackPart=-1;
     float miniBossCounterUnlockPulse=0,miniBossCounterHitPulse=0,miniBossCounterDamageRatio=0;
+    float damageGaugePulse=0;
 };
 
 struct RailShooterHudRenderFrame final {

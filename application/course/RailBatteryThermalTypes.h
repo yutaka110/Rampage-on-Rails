@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 enum class RailBatteryThermalPhase : unsigned char {
     Inactive, Standby, Charging, Imminent, Firing, Cooling, Counter, Destroyed
 };
@@ -11,3 +13,15 @@ struct RailBatteryThermalFrame {
     float remainingSeconds=0,durationSeconds=1,clock=0;
     bool valid=false,heavy=false;
 };
+
+inline float HeavyMuzzleArmorOpen(const RailBatteryThermalFrame& frame,float shotAge) {
+    if(!frame.valid || !frame.heavy || frame.phase==RailBatteryThermalPhase::Destroyed)return 0;
+    const auto smooth=[](float value){
+        const float t=(std::clamp)(value,0.0f,1.0f);
+        return t*t*(3-2*t);
+    };
+    if(frame.phase==RailBatteryThermalPhase::Charging || frame.phase==RailBatteryThermalPhase::Imminent)
+        return smooth((frame.charge-.06f)/.62f);
+    if(frame.phase==RailBatteryThermalPhase::Firing)return 1;
+    return shotAge>=0 ? 1-smooth((shotAge-.16f)/.44f) : 0;
+}
