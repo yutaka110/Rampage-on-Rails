@@ -80,6 +80,11 @@ public:
         CourseSpawnRuntime& runtime,
         const WeaponHitRequest& request,
         const DamageResult& damageResult);
+    WeaponFeedbackDispatchResult Submit(
+        CourseSpawnRuntime& runtime,
+        const WeaponHitRequest& request,
+        const DamageResult& damageResult,
+        bool nativePrimaryImpact);
 
     const WeaponFeedbackDispatchResult& LastResult() const { return lastResult_; }
     const WeaponFeedbackEvent& LastAcceptedEvent() const { return lastAcceptedEvent_; }

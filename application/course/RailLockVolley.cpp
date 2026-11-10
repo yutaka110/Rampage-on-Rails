@@ -67,6 +67,24 @@ Vector3 RailLockContact::CenterAt(float time) const {
     }
     return Add(position,Add(Scale(drift,time),Scale(normal,size*0.24f)));
 }
+RailLockScoutBlast RailLockContact::ScoutBlast() const {
+    if(!scoutImpact || !std::isfinite(age) || age<0 || age>=Duration())return {};
+    const auto smooth=TwinShieldDestructionSmooth;
+    RailLockScoutBlast blast;
+    blast.origin=position;
+    blast.phase=(std::min)(age/RailLockScoutBlast::Lifetime,1.0f);
+    blast.expansion=1-std::exp(-age*14.5f);
+    blast.opacity=1-smooth(age,.135f,(std::min)(Duration(),RailLockScoutBlast::Lifetime));
+    blast.flash=1-smooth(age,.025f,.092f);
+    blast.lighting=(.40f+.60f*smooth(age,0,.085f))*(1-smooth(age,.105f,(std::min)(Duration(),.29f)));
+    const float recovery=1-(std::clamp)(age/RailLockScoutBlast::CameraDuration,0.0f,1.0f);
+    blast.camera=recovery*recovery;
+    if(destroyed) {
+        blast.fire=smooth(age,.135f,.245f)*(1-smooth(age,.34f,.65f));
+        blast.smoke=smooth(age,.19f,.32f)*(1-smooth(age,.64f,DestroyedLifetime));
+    }
+    return blast;
+}
 RailLockDebrisFrame RailLockContact::Debris() const {
     RailLockDebrisFrame frame;
     if(!destroyed || !std::isfinite(age) || !std::isfinite(size) || size<=0 || age<0 || age>=Duration()) return frame;
@@ -279,11 +297,13 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 contact.enemyHull=laser.target.kind==RailLockTargetKind::Enemy;
                 contact.incoming=Add(laser.end,Scale(laser.Curve(.94f),-1));
                 // Capture before lethal damage clears the live weapon mount.
-                for(const auto& actor:runtime.Enemies()) if(actor.actorId==contact.actorId &&
-                        actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready) {
-                    const auto& pose=actor.weaponMount.dronePose;
-                    contact.size=(std::clamp)((pose.scale.x+pose.scale.y+pose.scale.z)/3,0.5f,4.0f);
-                    if(pose.hasFlightVelocity) contact.drift=pose.flightVelocity;
+                for(const auto& actor:runtime.Enemies()) if(actor.actorId==contact.actorId) {
+                    contact.scoutImpact=contact.enemyHull && actor.desc.actorAssetId=="short_scout";
+                    if(actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready) {
+                        const auto& pose=actor.weaponMount.dronePose;
+                        contact.size=(std::clamp)((pose.scale.x+pose.scale.y+pose.scale.z)/3,0.5f,4.0f);
+                        if(pose.hasFlightVelocity) contact.drift=pose.flightVelocity;
+                    }
                     break;
                 }
                 const auto damage=collision.ApplyWeaponHit(runtime,course,request);

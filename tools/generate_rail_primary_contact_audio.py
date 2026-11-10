@@ -52,24 +52,51 @@ def contact_resonance(plated):
     return samples
 
 
-def lock_contact():
-    duration = .164
+def lock_cue(duration, render):
     rng = random.Random(1541)
     samples = bytearray()
-    for i in range(round(44100 * duration)):
-        t = i / 44100
-        crack = .24 * rng.uniform(-1, 1) * math.exp(-t * 115)
-        punch = .54 * math.sin(math.tau * (390*t - 870*t*t)) * math.exp(-t * 39)
-        echo = max(0.0, t - .014)
-        ring = .23 * math.sin(math.tau * (1870*echo - 5300*echo*echo)) * math.exp(-echo * 44)
-        ring *= min(1.0, echo / .004)
-        edge = min(1.0, t / .001, (duration - t) / .022)
-        samples.extend(struct.pack('<h', round(.88 * math.tanh(1.4 * (crack+punch+ring)) * edge * 32767)))
+    for i in range(round(SAMPLE_RATE * duration)):
+        t = i / SAMPLE_RATE
+        edge = min(1.0, t/.001, (duration-t)/.018)
+        value = render(t, rng.uniform(-1.0, 1.0))
+        samples.extend(struct.pack('<h', round(.90 * math.tanh(1.50*value) * edge * 32767)))
     return samples
+
+
+def lock_confirm(t, _):
+    echo = max(0.0, t-.022)
+    click = .38 * math.sin(math.tau*1350*t) * math.exp(-115*t)
+    chime = .54 * math.sin(math.tau*2030*echo) * math.exp(-90*echo) * min(1.0, echo/.003)
+    return click+chime
+
+
+def lock_launch(t, noise):
+    charge = math.tau*(475*t+10200*t*t)
+    snap = .21*noise*math.exp(-195*t)
+    body = .49*math.sin(charge)*math.exp(-36*t)
+    overtone = .22*math.sin(charge*2.07)*math.exp(-53*t)
+    return snap+body+overtone
+
+
+def lock_flight(t, _):
+    sweep = math.tau*(1960*t-5600*t*t)
+    envelope = min(1.0, t/.016) * math.exp(-23*t)
+    return (.42*math.sin(sweep)+.17*math.sin(sweep*.73))*envelope
+
+
+def lock_contact(t, noise):
+    crack = .29*noise*math.exp(-160*t)
+    punch = .62*math.sin(math.tau*(196*t-390*t*t))*math.exp(-29*t)
+    echo = max(0.0, t-.018)
+    ring = (.32*math.sin(math.tau*(1160*echo-3100*echo*echo))
+            + .17*math.sin(math.tau*1733*echo))*math.exp(-34*echo)*min(1.0, echo/.005)
+    return crack+punch+ring
 
 
 if __name__ == '__main__':
     for material, plated in [('hull', False), ('plate', True)]:
         write_wave(f'rail_primary_{material}_contact', contact_transient(plated))
         write_wave(f'rail_primary_{material}_resonance', contact_resonance(plated))
-    write_wave('rail_lock_contact', lock_contact())
+    for name, duration, render in [('confirm', .071, lock_confirm), ('launch', .134, lock_launch),
+                                    ('flight', .108, lock_flight), ('contact', .188, lock_contact)]:
+        write_wave(f'rail_lock_{name}', lock_cue(duration, render))

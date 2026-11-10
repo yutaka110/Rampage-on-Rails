@@ -7,6 +7,8 @@ struct Material
 {
     float32_t4 color;
     int32_t enableLighting;
+    float detailNormalPadding;
+    float primaryImpactReceiver;
     float32_t4x4 uvTransform;
     float shininess;
     float environmentCoefficient;
@@ -187,19 +189,102 @@ static float CartSurfaceNoise(float2 p)
     return lerp(lerp(h.x,h.y,f.x),lerp(h.z,h.w,f.x),f.y);
 }
 
+static float3 ArmorContactArc(float2 uv,float age,float width,bool blue)
+{
+    const float delay=blue?.018f:0;
+    if(age<delay)return 0;
+    age-=delay;
+    const float travel=lerp(.42f,2.15f,smoothstep(0,.064f,age));
+    const float decay=1-smoothstep(.044f,.18f-delay,age);
+    const float phase=floor(age*38.0f);
+    float core=0, glow=0;
+    [unroll] for(int branch=0;branch<3;++branch) {
+        float angle=.37f+2.39996f*branch;
+        float2 axis=float2(cos(angle),sin(angle));
+        float2 across=float2(-axis.y,axis.x);
+        float x=dot(uv,axis), y=dot(uv,across);
+        float xCell=max(0,x)*4.8f;
+        float cell=floor(xCell);
+        // Keep the root fixed. New charge paths form only farther along the plate.
+        float bend0=sin(cell*14.7f+branch*7.3f+phase*2.1f)*min(cell,1)*.19f;
+        float bend1=sin((cell+1)*14.7f+branch*7.3f+phase*2.1f)*.19f;
+        float bend=lerp(bend0,bend1,frac(xCell));
+        float limit=travel*(1-.17f*branch);
+        float extent=smoothstep(-width,0,x)*(1-smoothstep(limit*.74f,limit,x));
+        float split=1-smoothstep(.45f,max(.46f,limit),x);
+        float spur=abs(y-bend*.70f-max(0,x-.31f)*.67f);
+        float distance=abs(y-bend);
+        core=max(core,extent*(1-smoothstep(width*.44f,width*1.15f,distance)));
+        glow=max(glow,extent*max(1-smoothstep(width, width*2.75f,distance),
+            .59f*smoothstep(.31f,.45f,x)*split*(1-smoothstep(width*.36f,width*1.35f,spur))));
+    }
+    float root=(1-smoothstep(.075f,.38f,length(uv)))*(1-smoothstep(.012f,.056f,age));
+    const float3 coreColor=blue?float3(2.4f,3.9f,7.6f):float3(1.55f,4.2f,2.95f);
+    const float3 glowColor=blue?float3(.12f,.84f,3.4f):float3(.12f,1.65f,.68f);
+    const float3 rootColor=blue?float3(2.8f,4.1f,6.3f):float3(2.85f,4.7f,3.8f);
+    return decay*(coreColor*core+glowColor*glow+rootColor*root);
+}
+
 static float3 CombatScorch(float owner,float3 world,float3 normal,inout float3 base,inout float roughness)
 {
     float3 emission=0;
     if(owner==0 || titleSubject.w>.5f)return emission;
+    float pixelWorld=max(length(ddx(world)),length(ddy(world)));
     [unroll] for(int i=0;i<6;++i) {
         float4 stamp=combatMarkPosition[i], contact=combatMarkNormalAge[i], ink=combatMarkTintRadius[i];
-        [branch] if(stamp.w==owner && ink.w>0) {
+        [branch] if(floor(stamp.w)==owner && ink.w>0) {
             float3 delta=world-stamp.xyz;
-            if(dot(delta,delta)>5.0f*ink.w*ink.w)continue;
+            float style=frac(stamp.w);
+            const uint effect=uint(style*16.0f)&3u;
+            const bool blue=effect==1u || effect==3u;
+            if(dot(delta,delta)>(effect!=0u?10.0f:5.0f)*ink.w*ink.w)continue;
             float along=dot(delta,contact.xyz);
             float3 side=normalize(cross(abs(contact.y)>.9f?float3(1,0,0):float3(0,1,0),contact.xyz));
             float3 up=cross(contact.xyz,side);
             float2 uv=float2(dot(delta,side),dot(delta,up))/ink.w;
+            if(owner>0) {
+                style-=float(effect)*.0625f;
+                if(effect!=0u) {
+                    float arcFace=smoothstep(-.07f,.48f,dot(normal,contact.xyz));
+                    float arcDepth=1-smoothstep(.33f,1.35f,abs(along)/ink.w);
+                    float arcWidth=clamp(pixelWorld*.72f/ink.w,.025f,.17f);
+                    if(effect!=3u)emission+=ArmorContactArc(uv,contact.w,arcWidth,blue)*arcFace*arcDepth;
+                    if(blue) {
+                        const float blueFlash=(1-smoothstep(.006f,.059f,contact.w))*
+                            (1-smoothstep(.18f,1.48f,length(uv)));
+                        emission+=float3(.20f,1.25f,5.8f)*blueFlash*arcFace*arcDepth;
+                    }
+                }
+                bool deflect=style>.4f && style<.6f;
+                bool rupture=style>.6f;
+                // Evaluate on the receiver's actual fragments. Depth and facing
+                // keep the pulse on the struck side of the opaque geometry.
+                float face=smoothstep(.02f,.68f,dot(normal,contact.xyz));
+                float slab=1-smoothstep(.65f,1.85f,abs(along)/ink.w);
+                float grain=CartSurfaceNoise(uv*7.0f+9.0f);
+                float r=length(uv*(deflect?float2(.90f,1.65f):float2(.73f,.88f)));
+                r+=(grain-.5f)*.11f;
+                float area=(1-smoothstep(.43f,1.22f,r))*slab*face;
+                float age=contact.w;
+                float wake=1-smoothstep(deflect?.021f:.046f,deflect?.091f:.154f,age);
+                float spread=.23f+min(age,.16f)*(deflect?7.2f:5.2f);
+                float front=1-smoothstep(.075f,.22f,abs(r-spread));
+                float core=1-smoothstep(.09f,deflect?.48f:.59f,r);
+                emission+=ink.rgb*area*wake*(.49f+.47f*front+core*.90f)*(blue?.36f:1.0f);
+                emission+=float3(1.0f,.95f,.77f)*area*core*wake*(rupture?.85f:.54f);
+                if(!deflect && !rupture && !blue) {
+                    // Keep a mint edge on pale paint after tone mapping.
+                    float tint=saturate(area*wake*(1.0f-.62f*core));
+                    base*=lerp(1.0f,float3(.34f,1.0f,.77f),tint);
+                }
+                if(!deflect) {
+                    float scar=area*(1-smoothstep(.29f,.72f,r))*
+                        smoothstep(.065f,.19f,age)*(1-smoothstep(2.20f,3.40f,age));
+                    base*=1-scar*(rupture?.77f:.47f);
+                    roughness=lerp(roughness,.84f,scar);
+                }
+                continue;
+            }
             float facing=smoothstep(.16f,.68f,dot(normal,contact.xyz));
             float depth=1-smoothstep(ink.w*.48f,ink.w*1.95f,abs(along));
             float jitter=CartSurfaceNoise(uv*6+9);
@@ -390,6 +475,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         }
         rough=clamp(rough,.30f,.95f);
         float3 N=SafeNormalize(input.normal),V=SafeNormalize(cameraWorldPosition-input.worldPosition);
+        float3 impactEmission=CombatScorch(gMaterial.primaryImpactReceiver,input.worldPosition,N,base,rough);
         float3 lit=RailSurfaceLighting(base,metal,rough,N,V,input.worldPosition,.92f,GameplayCaveWeight(input.worldPosition));
         // Retain readable dark steel in shadow without the old orange outline.
         lit=max(lit,base*.16f);
@@ -398,7 +484,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         lit+=float3(.12f,.075f,.012f)*counter*(.3f+.7f*rim);
         lit=lerp(lit,float3(1.4f,1.3f,1.1f),saturate(gMaterial.pad_)*.85f);
         if(titleSubject.w>.5f)lit=TitleAtmosphere(lit*TitleCaveExposure(),input.worldPosition);
-        output.color=float4(lit,gMaterial.color.a);return output;
+        output.color=float4(lit+impactEmission,gMaterial.color.a);return output;
     }
 
     // Only the forward surfaces of exposed pursuit hardware use the extra U band.
@@ -461,7 +547,7 @@ PixelShaderOutput main(VertexShaderOutput input)
                 }
                 if(profile==8)contact*=GameplayWheelContactVisibility(input.worldPosition,N);
             }
-            const float3 impactEmission=CombatScorch(profile==1 || profile==3?-1.0f:0.0f,
+            const float3 impactEmission=CombatScorch(profile==1 || profile==3?-1.0f:gMaterial.primaryImpactReceiver,
                 input.worldPosition,N,base,rough);
             float3 lit=RailSurfaceLighting(base,metal,rough,N,V,input.worldPosition,contact,caveWeight);
             float fill=profile<=3?.39f:profile==7?.33f:.22f;
@@ -507,7 +593,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         float3 N = DroneNormal(input,surface.rgb);
         float3 V = SafeNormalize(cameraWorldPosition-input.worldPosition);
         float rough = clamp(surface.a,0.30f,0.90f);
-        float3 impactEmission=CombatScorch(gMaterial.shininess,input.worldPosition,SafeNormalize(input.normal),baseRgb,rough);
+        float3 impactEmission=CombatScorch(gMaterial.primaryImpactReceiver,input.worldPosition,SafeNormalize(input.normal),baseRgb,rough);
         float painted = saturate((texColor.r-texColor.b)*4.0f);
         float metal = lerp(saturate(gMaterial.environmentCoefficient),0.10f,painted);
         float caveAmount = GameplayCaveWeight(input.worldPosition);
@@ -846,6 +932,10 @@ PixelShaderOutput main(VertexShaderOutput input)
                           float3(6.4f,1.75f,1.30f)*hot;
         outRgb += emission * gMaterial.pad_;
     }
-    output.color = float4(outRgb, baseA);
+    float impactRoughness=.65f;
+    float3 impactBase=1.0f;
+    const float3 surfaceHit=CombatScorch(gMaterial.primaryImpactReceiver,input.worldPosition,
+        SafeNormalize(input.normal),impactBase,impactRoughness);
+    output.color = float4(outRgb*impactBase+surfaceHit, baseA);
     return output;
 }

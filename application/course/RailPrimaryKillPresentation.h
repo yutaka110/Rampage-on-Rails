@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace rail_primary_kill_detail {
@@ -65,6 +66,13 @@ struct RailPrimaryKill final {
     float size=1,age=0;
     TwinShieldDronePose dronePose{};
     bool hasDronePose=false;
+
+    static bool Matches(const WeaponFeedbackEvent& event) {
+        return event.shotId && event.targetActorId && event.destroyed && !event.lockOnContact &&
+            !event.shieldHit && !event.blocked && event.hitKind==RailAimHitKind::Enemy &&
+            event.damageType==WeaponDamageType::Energy && event.feedbackKind==HitFeedbackKind::Destroyed &&
+            std::isfinite(event.appliedDamage) && event.appliedDamage>0;
+    }
 
     Vector3 CoreAt(float time) const {
         using namespace rail_primary_kill_detail;
@@ -153,8 +161,12 @@ struct RailPrimaryKill final {
 // critical-hit probability, new collision query or repeated kill is created.
 class RailPrimaryKillPresentation final {
 public:
+    struct PendingHit {
+        WeaponFeedbackEvent event;
+        float distance=0, duration=0, muzzleGain=0, age=0;
+    };
     static constexpr size_t Capacity=16;
-    void Reset() { kills_.clear(); contacts_.clear(); history_={}; historyCursor_=newCount_=0; lastSequence_=lastContactSequence_=0; }
+    void Reset() { kills_.clear(); contacts_.clear(); pending_.clear(); history_={}; historyCursor_=newCount_=0; lastSequence_=lastContactSequence_=0; }
     void Update(float dt) {
         newCount_=0;
         if(!std::isfinite(dt) || dt<=0) return;
@@ -162,12 +174,41 @@ public:
         std::erase_if(kills_,[](const auto& kill){return kill.age>=RailPrimaryKill::Lifetime;});
         for(auto& contact:contacts_)contact.age+=dt;
         std::erase_if(contacts_,[](const auto& contact){return contact.age>=RailPrimaryContact::Lifetime;});
+        for(auto& hit:pending_)hit.age+=dt;
+    }
+    void QueueFeedback(const WeaponFeedbackEvent& event,float distance,float duration,float muzzleGain) {
+        if(event.sequence<=lastSequence_)return;
+        lastSequence_=event.sequence;
+        if(RailPrimaryContact::Matches(event) || RailPrimaryKill::Matches(event) ||
+            (event.hitKind==RailAimHitKind::Obstacle && event.appliedDamage>0))
+            pending_.push_back({event,distance,duration,muzzleGain});
     }
     uint64_t LastObservedSequence() const { return lastSequence_; }
+    std::vector<PendingHit> TakeArrivals() {
+        std::vector<PendingHit> arrivals;
+        for(auto& hit:pending_)
+            if(hit.age>=hit.duration)arrivals.push_back(std::move(hit));
+        std::erase_if(pending_,[](const auto& hit){return hit.age>=hit.duration;});
+        return arrivals;
+    }
+    const PendingHit* FindPending(uint64_t shotId) const {
+        const auto hit=std::find_if(pending_.begin(),pending_.end(),[&](const auto& pending) {
+            return pending.event.shotId==shotId;
+        });
+        return hit==pending_.end()?nullptr:&*hit;
+    }
+    bool HasPendingContact(uint32_t actorId) const {
+        return std::any_of(pending_.begin(),pending_.end(),[actorId](const auto& hit) {
+            return hit.event.targetActorId==actorId && RailPrimaryContact::Matches(hit.event);
+        });
+    }
     void ObserveContact(const WeaponFeedbackEvent& event) {
-        using namespace rail_primary_kill_detail;
         if(event.sequence<=lastContactSequence_)return;
         lastContactSequence_=event.sequence;
+        PresentContact(event);
+    }
+    void PresentContact(const WeaponFeedbackEvent& event) {
+        using namespace rail_primary_kill_detail;
         if(!RailPrimaryContact::Matches(event) || !Finite(event.worldPosition) ||
             !Finite(event.worldNormal) || !Finite(event.incomingDirection))return;
         const bool plated=event.audioCueId=="weapon_impact_armor";
@@ -187,9 +228,7 @@ public:
     }
     bool Enqueue(const WeaponFeedbackEvent& event,float size=1,const TwinShieldDronePose* pose=nullptr) {
         using namespace rail_primary_kill_detail;
-        if(!event.shotId || !event.targetActorId || !event.destroyed || event.lockOnContact || event.blocked ||
-            event.hitKind!=RailAimHitKind::Enemy || event.damageType!=WeaponDamageType::Energy ||
-            event.feedbackKind!=HitFeedbackKind::Destroyed || !std::isfinite(event.appliedDamage) || event.appliedDamage<=0 ||
+        if(!RailPrimaryKill::Matches(event) ||
             !Finite(event.worldPosition) || !Finite(event.worldNormal) || !Finite(event.incomingDirection) || !std::isfinite(size) ||
             std::find(history_.begin(),history_.end(),event.shotId)!=history_.end()) return false;
         history_[historyCursor_++%history_.size()]=event.shotId;
@@ -213,6 +252,7 @@ public:
 private:
     std::vector<RailPrimaryKill> kills_;
     std::vector<RailPrimaryContact> contacts_;
+    std::vector<PendingHit> pending_;
     std::array<uint64_t,128> history_{};
     size_t historyCursor_=0,newCount_=0;
     uint64_t lastSequence_=0;

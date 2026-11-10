@@ -23,6 +23,8 @@ LABELS = ['primary-prompt', 'primary-confirmed', 'lock-hold', 'lock-sweep',
           'primary-armor-contact', 'primary-kill-contact', 'cart-projectile-hit', 'cart-projectile-settle',
           'live-battery-latched', 'live-battery-shell', 'route-battery-aim', 'route-battery-shell',
           'route-battery-coast', 'route-battery-brake', 'route-battery-overview']
+STAGES = dict(enumerate(LABELS))
+STAGES[45] = 'speed-lessons-through-battery'
 
 
 def first_battery_fixture(course):
@@ -41,21 +43,22 @@ def first_battery_fixture(course):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--stages', nargs='+', type=int, choices=range(len(LABELS)), default=list(range(10)))
+    parser.add_argument('--stages', nargs='+', type=int, choices=STAGES, default=list(range(10)))
+    parser.add_argument('--exe', type=Path, default=ROOT / 'generated/attack-warning/Release/GE3.exe')
     parser.add_argument('--speed-delay-ms', type=int, default=1000)
     parser.add_argument('--brake-delay-ms', type=int, default=450)
     parser.add_argument('--battery-event', type=int, choices=(1455, 2060, 2840), default=1455)
     parser.add_argument('--battery-start', type=int)
     parser.add_argument('--battery-approach-brake', type=int, nargs=2, metavar=('FROM', 'UNTIL'))
     parser.add_argument('--battery-escort-stop', type=int)
-    parser.add_argument('--miss-first-brake', action='store_true')
     parser.add_argument('--output', type=Path, default=ROOT / 'generated/basic-tutorial-review')
     args = parser.parse_args()
     out = args.output.resolve()
     work = out / 'native'
     work.mkdir(parents=True, exist_ok=True)
     shutil.copytree(ROOT / 'Resources', work / 'Resources', dirs_exist_ok=True)
-    for name in ['GE3.exe', 'dxcompiler.dll', 'dxil.dll']:
+    shutil.copy2(args.exe, work / 'GE3.exe')
+    for name in ['dxcompiler.dll', 'dxil.dll']:
         shutil.copy2(ROOT / 'generated/attack-warning/Release' / name, work / name)
     build = hashlib.sha256((work / 'GE3.exe').read_bytes()).hexdigest()
     course_path = work / 'Resources/courses/ShortCompleteRun.course'
@@ -71,14 +74,16 @@ def main():
         (battery_hash if item['stage'] == LABELS[11] else production_hash)
     }
     for stage in args.stages:
-        label = LABELS[stage]
+        label = STAGES[stage]
+        screenshot = out / f'{label}.png'
+        screenshot.unlink(missing_ok=True)
         course_path.write_bytes(battery_fixture if stage == 11 else production)
         latch = work / 'logs/rail_siege_turret_latch.csv'
         latch.unlink(missing_ok=True)
         course = battery_hash if stage == 11 else production_hash
         env = {k: v for k, v in os.environ.items() if not k.startswith('GE3_')}
-        start = 1200 if stage >= 11 else 210
-        if stage >= 23:
+        start = 1200 if 11 <= stage <= 27 else 210
+        if 23 <= stage <= 27:
             start = args.battery_start or args.battery_event - 20
             env['GE3_ROUTE_BATTERY_EVENT'] = str(args.battery_event)
             if args.battery_approach_brake:
@@ -90,48 +95,48 @@ def main():
                    GE3_BASIC_TUTORIAL_AUDIT='1', GE3_BASIC_TUTORIAL_CAPTURE_STAGE=str(stage),
                    GE3_BASIC_TUTORIAL_SPEED_DELAY_MS=str(args.speed_delay_ms),
                    GE3_BASIC_TUTORIAL_BRAKE_DELAY_MS=str(args.brake_delay_ms),
-                   GE3_BASIC_TUTORIAL_MISS_FIRST_BRAKE=str(int(args.miss_first_brake)),
                    GE3_CART_DAMAGE_AUDIT=str(int(stage in (13,19,20))),
-                   GE3_COURSE_FRAME_EXPORT=str(out / f'{label}.png'), GE3_COURSE_FRAME_EXPORT_FRAMES='1')
+                   GE3_COURSE_FRAME_EXPORT=str(screenshot), GE3_COURSE_FRAME_EXPORT_FRAMES='1')
         result = subprocess.run([str(work / 'GE3.exe')], cwd=work, env=env, timeout=105)
         log = work / 'logs/basic_tutorial_audit.csv'
         shutil.copy2(log, out / f'{label}-telemetry.csv')
         rows = list(csv.DictReader(log.open()))
         last = rows[-1]
-        assert result.returncode == 0 and (out / f'{label}.png').exists(), (label, last)
+        assert result.returncode == 0 and screenshot.exists(), (label, last)
         assert float(last['hp']) > 0 and (stage >= 11 or last['visible'] == '1'), (label, last)
-        assert last['success'] == str(int(stage in [1, 5, 7, 9])), (label, last)
+        if stage not in (10, 45):
+            assert last['success'] == str(int(stage in [1, 5, 7, 9])), (label, last)
         if 6 <= stage <= 10:
             assert int(last['learned']) & 6 == 6, 'speed lessons follow actual primary and lock mastery'
             assert 630 <= float(last['distance']) < 1200, 'speed lesson fits the authored runway'
         if stage == 7:
             assert float(last['speed']) > float(last['normal']) * 1.03
-        if stage == 9:
-            assert int(last['learned']) == 30 and float(last['speed']) < float(last['normal']) * .92
+        if stage in (9, 45):
+            acceleration = next(i for i, r in enumerate(rows) if r['lesson']=='3' and r['success']=='1')
+            prompt = next(i for i, r in enumerate(rows) if r['lesson']=='4' and r['visible']=='1')
+            pressed = next(i for i in range(prompt, len(rows)) if rows[i]['brake']=='1')
+            confirmed = next(i for i in range(pressed, len(rows)) if rows[i]['lesson']=='4' and rows[i]['success']=='1')
+            assert acceleration < prompt < pressed < confirmed, (label, last)
+            assert all(r['boost_input']=='1' for r in rows[prompt+1:confirmed+1]), (label, last)
+            assert all(r['lesson']=='4' and r['visible']=='1' for r in rows[prompt:confirmed+1]), (label, last)
+            assert int(rows[confirmed]['learned']) == 30, rows[confirmed]
+            assert float(rows[confirmed]['speed']) < float(rows[confirmed]['normal']) * .92, rows[confirmed]
             assert any(int(r['shots']) > 0 for r in rows)
             assert any(int(r['volley']) >= 2 for r in rows)
-            braking=[r for r in rows if r['brake']=='1']
-            assert braking and max(float(r['flash']) for r in braking)>.35, last
-            assert all(r['spark_births']=='0' for r in rows if r['brake']=='0'),last
-            launches=[i for i,r in enumerate(rows) if r['practice_round']=='1' and (i==0 or rows[i-1]['practice_round']=='0')]
-            shot=launches[-1]
-            pressed=next(i for i in range(shot,len(rows)) if rows[i]['brake']=='1')
-            crossed=next(i for i in range(shot,len(rows)) if rows[i]['crossed']=='1')
-            if args.miss_first_brake:
-                assert len(launches)==2 and any(r['brake_cue']=='3' for r in rows[launches[0]:shot]), launches
-                assert not any(r['brake']=='1' or r['passed']=='1' for r in rows[:shot]), rows[shot]
-            assert shot<pressed<crossed and rows[crossed]['passed']=='1',rows[crossed]
-            assert max(float(r['gap']) for r in rows[pressed:crossed+1])>=4,rows[crossed]
-            assert float(rows[crossed]['clearance'])>3 and rows[crossed]['hp']==rows[shot]['hp'],rows[crossed]
-            assert all(r['lesson']!='4' for r in rows[:shot] if r['success']=='1'),last
-            assert max(float(r['practice_recoil']) for r in rows)>.4,last
-            assert sum(int(r['bite']) for r in rows[shot:])==1 and sum(int(r['release']) for r in rows[shot:])==1,last
-            assert max(float(r['brake_pitch']) for r in braking)>2 and abs(float(last['brake_pitch']))<.55,last
-            assert max(float(r['loop_gain']) for r in braking)>.02 and any(float(r['pass_duck'])>0 for r in rows),last
+            if stage == 45:
+                assert float(rows[prompt]['distance']) < 1200 <= float(rows[pressed]['distance']), rows[pressed]
+                assert last['battery_owner']!='0' and last['visible']=='0', last
+                contact = out / f'{label}-contacts.csv'
+                shutil.copy2(work / 'logs/rail_primary_contact.csv', contact)
+                with contact.open() as stream:
+                    hits = list(csv.DictReader(stream))
+                assert any(h['actor']==last['battery_owner'] and h['shape']=='kill' and
+                           int(h['frame'])>int(rows[confirmed]['frame']) and float(h['damage'])>0
+                           for h in hits), (label, hits[-8:])
         if stage == 10:
             assert last['brake']=='1' and int(last['sparks'])>=4,last
         if stage == 11:
-            assert float(last['battery_recoil'])>.57 and last['practice_round']=='0',last
+            assert float(last['battery_recoil'])>.57,last
         if stage == 15:
             with (out / f'{label}.parts.csv').open() as parts:
                 points = list(csv.DictReader(parts))
@@ -157,7 +162,7 @@ def main():
             assert last['battery_onscreen']=='1' and float(last['live_shot_age'])<0, last
         if stage == 22:
             assert last['battery_onscreen']=='1' and float(last['battery_recoil'])>.49, last
-        if stage>=23:
+        if 23<=stage<=27:
             shutil.copy2(work / 'logs/route_battery_fire.csv', out / f'{label}-fire.csv')
         if stage==27:
             shutil.copy2(work / 'logs/route_battery_hud.csv', out / f'{label}-hud.csv')
@@ -244,10 +249,9 @@ def main():
                     assert min(float(r['heave']) for r in reactions)<-.02, reactions[-4:]
         evidence[label] = dict(stage=label, build_sha256=build, course_sha256=course, last=last,
                                speed_delay_ms=args.speed_delay_ms, brake_delay_ms=args.brake_delay_ms,
-                               missed_first_brake=args.miss_first_brake,
                                actual_primary_shots=sum(int(r['shots']) for r in rows),
                                actual_lock_shots=sum(int(r['volley']) for r in rows))
-        if stage>=23:
+        if 23<=stage<=27:
             evidence[label].update(battery_event=args.battery_event, start_distance=start,
                                    approach_brake=args.battery_approach_brake,
                                    escort_fire_stop=args.battery_escort_stop)

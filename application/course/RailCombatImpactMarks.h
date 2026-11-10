@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <span>
+#include <string>
 #include <vector>
 
 // Geometry keeps the heat mark in the struck object's space. Spall and smoke
@@ -11,6 +12,9 @@
 namespace RailCombatImpact {
 inline constexpr size_t DrawCapacity=6;
 inline constexpr uint32_t CartOwner=0;
+inline constexpr float ArcLifetime=.18f;
+inline constexpr float BlueArcDelay=.018f;
+enum class Arc { None, Blue, Green };
 enum class Kind { Hull, Plate, Cart, Heavy, Kill };
 
 inline Vector3 Transform(Vector3 p,const Matrix4x4& m,float w) {
@@ -26,6 +30,11 @@ struct Mark {
     Kind kind=Kind::Hull;
     float age=0,radius=1;
     bool smokeEmitted=false;
+    bool needsSurfaceBinding=false;
+    Vector3 incoming{};
+    std::string receiverMesh;
+    Arc arc=Arc::None;
+    bool surfaceProjected=false;
 };
 
 class Marks final {

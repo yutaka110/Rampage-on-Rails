@@ -49,6 +49,8 @@ def main():
                          'enemies/ElitePursuers/BridgeEscapeSpan.obj','enemies/ElitePursuers/BridgeEscapeLeaf.obj','enemies/ElitePursuers/BridgeEscapeLink.obj','enemies/ElitePursuers/BridgeEscapePylon.obj',
                          'audio/rail_kill_boost_release.wav',
                          'audio/rail_lock_contact.wav',
+                         'audio/rail_lock_confirm.wav','audio/rail_lock_launch.wav','audio/rail_lock_flight.wav',
+                         'audio/rail_pulse_fire.wav',
                          'audio/rail_primary_hull_contact.wav',
                          'audio/rail_primary_plate_contact.wav',
                          'audio/rail_primary_hull_resonance.wav',

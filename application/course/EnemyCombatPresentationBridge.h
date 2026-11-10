@@ -14,8 +14,10 @@
 class CourseSpawnRuntime;
 class RailMinibossCombatDirector;
 class RailAttackWarningPresentation;
+class RailPrimaryKillPresentation;
 struct CourseEnemyActor;
 struct RailPrimaryContact;
+struct RailLockContact;
 namespace ge3::debug { class DebugDrawSystem; }
 
 enum class EnemyCombatAnimationState : uint8_t {
@@ -156,6 +158,7 @@ struct EnemyCombatPresentationInput final {
     uint32_t counterHitActorId=0;
     const RailMinibossCombatDirector* minibossCombat=nullptr;
     const RailAttackWarningPresentation* attackWarnings=nullptr;
+    const RailPrimaryKillPresentation* primaryPresentation=nullptr;
 };
 
 // Converts authoritative combat state/events into procedural model animation,
@@ -164,6 +167,7 @@ class EnemyCombatPresentationBridge final {
 public:
     void Reset();
     void Update(const EnemyCombatPresentationInput& input);
+    void Update(const EnemyCombatPresentationInput& input, std::span<const RailLockContact> lockContacts);
     void AppendDestructionPrimitives(ge3::debug::DebugDrawSystem& draw) const;
 
     const EnemyCombatPresentationFrame& Frame() const noexcept { return frame_; }

@@ -191,6 +191,11 @@ public:
     PlayerDamageResult ApplyPlayerHit(const PlayerHitRequest& request);
 
 private:
+    DamageResult ApplyWeaponHit(
+        CourseSpawnRuntime& runtime,
+        const CourseAsset* course,
+        const WeaponHitRequest& request,
+        bool nativePrimaryImpact);
     std::vector<EnemyProjectilePresentationEvent> projectileContacts_;
     void FirePlayerShot(
         CourseSpawnRuntime& runtime,

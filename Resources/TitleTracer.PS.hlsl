@@ -119,24 +119,45 @@ float4 main(PixelInput input) : SV_TARGET0 {
             (glow*.33f+hot*(.25f+.68f*packet))*ends*input.color.a);
     }
     if(input.texcoord.x>=72.0f && input.texcoord.x<=73.0f) {
-        // An asymmetric hot seam on the struck plane, cooling into broken filaments.
-        float2 p;float phase,seed;
-        ImpactCoordinates(input.texcoord,72,p,phase,seed);
-        float x=p.x+.31f;
-        float grain=ImpactNoise(float2(x*16.0f,p.y*4.0f)+seed);
-        float seam=p.y-.10f*x*x-.26f*(grain-.5f);
-        float extent=lerp(.49f,1.16f,sqrt(phase));
-        float travel=smoothstep(-.46f,-.17f,x)*(1.0f-smoothstep(extent*.40f,extent,x));
-        float width=max(lerp(.125f,.033f,phase),fwidth(seam)*.70f);
-        float cut=exp(-pow(seam/width,2))*travel;
-        cut*=lerp(1.0f,smoothstep(.24f,.71f,grain),phase*.90f);
-        float fork=exp(-pow((seam+.23f*x+.06f)/max(.046f,width*.50f),2))*travel;
-        fork*=smoothstep(.06f,.28f,x)*smoothstep(.24f,.67f,grain)*.57f;
-        float melt=exp(-x*x*9.0f-seam*seam*21.0f)*(1.0f-phase);
-        float hotEdges=exp(-pow(seam/.26f,2))*travel*grain*.24f;
-        float edge=(1.0f-smoothstep(.81f,1.0f,abs(p.x)))*(1.0f-smoothstep(.71f,1.0f,abs(p.y)));
-        float3 hot=lerp(input.color.rgb,float3(5.5f,5.1f,4.5f),cut*(1.0f-phase));
-        return float4(hot,saturate(cut+fork+melt*.60f+hotEdges)*edge*input.color.a);
+        // One cross-section for every segment of the curved ion wake.
+        float v=2.0f*input.texcoord.y-1.0f;
+        float core=exp(-v*v*22.0f);
+        float halo=exp(-v*v*3.8f)*(1.0f-smoothstep(.72f,1.0f,abs(v)));
+        return float4(lerp(input.color.rgb,float3(1.18f,2.1f,4.6f),core),
+            (core*.78f+halo*.39f)*input.color.a);
+    }
+    if(input.texcoord.x>=74.0f && input.texcoord.x<=75.0f) {
+        // A compact laser bolt with a tight white core and a cyan shoulder.
+        float along=input.texcoord.x-74.0f;
+        float across=input.texcoord.y*2.0f-1.0f;
+        float width=lerp(.50f,1.0f,smoothstep(.05f,.78f,along));
+        float tip=(max(0.0f,along-.86f)/.14f);
+        float radiusSquared=across*across/(width*width)+tip*tip;
+        float core=exp(-radiusSquared*14.0f);
+        float shoulder=exp(-radiusSquared*3.5f)*.50f;
+        float envelope=smoothstep(0.0f,.22f,along)*(1.0f-smoothstep(.68f,1.0f,radiusSquared));
+        float3 color=lerp(input.color.rgb,float3(4.25f,5.75f,6.5f),core);
+        return float4(color,saturate(core+shoulder)*envelope*input.color.a);
+    }
+    if(input.texcoord.x>=76.0f && input.texcoord.x<=77.0f) {
+        float2 p; float phase,seed;
+        ImpactCoordinates(input.texcoord,76.0f,p,phase,seed);
+        float r=length(p),angle=atan2(p.y,p.x);
+        float2 flow=p*5.2f+float2(seed,-seed*.73f)-float2(0,phase*1.3f);
+        float noise=ImpactNoise(flow);
+        float edge=.68f+.10f*sin(angle*5.0f+seed+phase*1.8f)+.07f*sin(angle*8.0f-seed);
+        edge+=(noise-.5f)*.19f;
+        float band=(r-edge)/(.24f-phase*.11f);
+        float shell=exp(-band*band);
+        float tongues=smoothstep(.12f,.78f,noise+.18f*sin(angle*3.0f+seed));
+        float streak=abs(ImpactNoise(flow*2.2f+phase*2.0f)-.51f);
+        float filaments=(1-smoothstep(.018f,.082f,streak))*shell*tongues;
+        float core=exp(-r*r*11.0f)*(1-smoothstep(.07f,.39f,phase));
+        float glow=exp(-r*r*3.0f)*(.19f+.37f*noise)*(1-phase);
+        float3 green=lerp(float3(.10f,2.35f,1.09f),float3(1.46f,4.4f,2.67f),filaments);
+        return float4(lerp(green,float3(5.1f,5.3f,3.9f),saturate(core*1.7f)),
+            saturate(shell*tongues*.83f+filaments*.33f+core+glow)*
+            (1-smoothstep(.86f,1.0f,r))*input.color.a);
     }
     if(input.texcoord.x>63.5f)return RenderRailEnergyShield(input.texcoord,input.color);
     if(input.texcoord.x>=50.0f && input.texcoord.x<=51.0f) {
@@ -334,13 +355,14 @@ float4 main(PixelInput input) : SV_TARGET0 {
         return float4(color,(core+shoulder)*ends*taper*input.color.a);
     }
     if(input.texcoord.x>25.5f) {
-        // Primary rapid-fire dash: a rounded capsule with a white-blue core.
+        // Short laser pulse with a bright core and a saturated green edge.
         float2 p=float2(input.texcoord.x-26.5f,input.texcoord.y-0.5f)*2.0f;
-        float end=max(0.0f,abs(p.x)-0.72f)/0.28f;
+        float end=max(0.0f,abs(p.x)-0.83f)/0.17f;
         float d2=end*end+p.y*p.y;
-        float edge=1.0f-smoothstep(0.60f,1.0f,sqrt(d2));
-        float core=exp(-d2*7.0f);
-        return float4(lerp(input.color.rgb,float3(2.5f,2.9f,3.0f),core*0.65f),edge*input.color.a);
+        float edge=1.0f-smoothstep(.53f,1.0f,sqrt(d2));
+        float core=exp(-d2*16.0f);
+        float3 highlight=input.color.rgb*float3(4.0f,1.16f,2.1f);
+        return float4(lerp(input.color.rgb,highlight,core),edge*input.color.a);
     }
     if(input.texcoord.x>23.5f) {
         // Small faceted energy fragments, with a sharp centre and soft edges.

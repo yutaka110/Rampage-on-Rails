@@ -1215,7 +1215,6 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             const auto geometry=RailTurret::ForMesh(enemy.desc.meshId);
             const bool siege=enemy.desc.meshId=="siege_turret";
             const bool singleSiege=siege && RailGroundBattery::IsPredictive(enemy.desc.actorAssetId) && enemy.desc.bulletCount==1;
-            const bool practice=siege && enemy.desc.suppressFire && enemy.stationaryDormant;
             const CourseBulletActor* siegeRound=nullptr;
             float shotAge=RailTurret::ShotAge(enemy.turretMotion,enemy.age);
             if(singleSiege) {
@@ -1232,8 +1231,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             const float flashStrength=siegeFlash?1.0f-TwinShieldDestructionSmooth(siegeRound->age,.016f,.094f):0;
             const bool siegeWarning=singleSiege && presentation && presentation->turretMuzzleActive &&
                 enemy.behaviorState.attackIntentActive && enemy.attackState.tokenReserved && enemy.behaviorState.telegraphPresented;
-            int siegeBarrel=singleSiege && !practice?ResolvePredictiveTurretBarrel(enemy):0;
-            if(siegeRound && !practice) {
+            int siegeBarrel=singleSiege?ResolvePredictiveTurretBarrel(enemy):0;
+            if(siegeRound) {
                 // Recovery may already be tracking the player again. Keep the
                 // kick on the tube that owned this round's launch.
                 const float launchLateral=siegeRound->lateralOffset-siegeRound->lateralSpeed*siegeRound->age;
@@ -1796,7 +1795,6 @@ void CourseMeshRenderQueue::WriteTwinShieldDrone(CourseMeshRenderItem& hull,
         hull.materialData->uvTransform = MakeIdentity4x4();
         hull.materialData->enableLighting = true;
         hull.materialData->specularMode = 10; // Normal/roughness-mapped industrial metal.
-        hull.materialData->shininess = static_cast<float>(hull.sourceActorId); // Scorch receiver id for mode 10.
         hull.materialData->environmentCoefficient = 0.72f;
         hull.materialData->padding2[0] = wreck?breakup.hullFlash:pose.flash;
         hull.useMaterialOverride = true;

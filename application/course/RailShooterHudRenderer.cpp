@@ -289,14 +289,10 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     if(input.basicTutorial && input.basicTutorial->Visible() && !input.bossVisible && !input.startCueActive) {
         const auto& guide=*input.basicTutorial;
         using Lesson=RailBasicTutorial::Lesson;using LockStep=RailBasicTutorial::LockStep;
-        using BrakeCue=RailBasicTutorial::BrakeCue;
         const auto lesson=guide.Current();const bool success=guide.Success();
-        const auto brakeCue=guide.BrakePrompt();
-        const bool brakeNow=lesson==Lesson::Brake && !success && brakeCue==BrakeCue::Now;
         const float w=760*scale,x=(width-w)*.5f,y=height*.19f;
-        const float fade=brakeNow?opacity:(std::min)(1.0f,guide.Age()*7+.25f)*opacity;
-        const Vector4 accent=WithOpacity(success?Vector4{.48f,1,.72f,1}:
-            brakeNow?Vector4{1,.71f,.31f,1}:Vector4{.45f,.90f,1,1},brakeNow?opacity:fade);
+        const float fade=(std::min)(1.0f,guide.Age()*7+.25f)*opacity;
+        const Vector4 accent=WithOpacity(success?Vector4{.48f,1,.72f,1}:Vector4{.45f,.90f,1,1},fade);
         const Vector4 white{.94f,.98f,1,fade},muted{.62f,.73f,.80f,fade};
         rect(x,y,w,120*scale,{.008f,.018f,.028f,.92f*fade});
         rect(x,y,3*scale,120*scale,accent);
@@ -311,8 +307,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         } else {
             rect(iconX,iconY+6*scale,62*scale,62*scale,accent);
             rect(iconX+2*scale,iconY+8*scale,58*scale,58*scale,{.025f,.055f,.075f,fade});
-            const char* key=lesson==Lesson::Boost?"E":
-                !success && (brakeCue==BrakeCue::Watch || brakeCue==BrakeCue::Retry)?"!":"Q";
+            const char* key=lesson==Lesson::Boost?"E":"Q";
             text(key,iconX+31*scale,iconY+53*scale,1.55f*scale,accent,RailShooterHudTextAlignment::Center);
         }
         const auto title=lesson==Lesson::Primary?u8"01 / 04   通常攻撃":lesson==Lesson::Lock?u8"02 / 04   ロックオン":
@@ -328,23 +323,10 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
             detail=success?u8"複数の敵をまとめて攻撃できる":u8"押したまま敵をなぞると複数ロック";
         } else if(lesson==Lesson::Boost) {
             instruction=success?u8"加速を確認":u8"E 長押しで加速";
-            detail=success?u8"前方の砲台に注目":guide.BoostWaiting()?u8"自動加速が終わったら試そう":u8"離すと通常速度に戻る";
+            detail=success?u8"次はブレーキ":guide.BoostWaiting()?u8"自動加速が終わったら試そう":u8"離すと通常速度に戻る";
         } else {
             instruction=success?u8"減速を確認":u8"Q 長押しでブレーキ";
-            detail=u8"離すと通常速度に戻る";
-            if(success && brakeCue==BrakeCue::Now) {
-                instruction=u8"回避成功";
-                detail=u8"弾が自機の前を通過した";
-            } else if(brakeNow) {
-                instruction=u8"発射！ 今、Qを長押し";
-                detail=u8"弾が目の前を横切るまで減速";
-            } else if(!success && brakeCue==BrakeCue::Watch) {
-                instruction=u8"前方の砲台に注目";
-                detail=u8"発射する瞬間を見よう";
-            } else if(!success && brakeCue==BrakeCue::Retry) {
-                instruction=u8"もう一度、発射を待とう";
-                detail=u8"Qを離して次の発射に備える";
-            }
+            detail=u8"Qを押している間は加速より減速を優先";
         }
         text(Utf8(instruction),x+111*scale,y+62*scale,1.10f*scale,white);
         text(Utf8(detail),x+111*scale,y+90*scale,.64f*scale,muted);

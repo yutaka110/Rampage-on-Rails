@@ -89,9 +89,16 @@ inline RailLockReticleVisual BuildRailConfirmedReticleVisual(const RailLockToken
             append(point(jaw[i-1].x,jaw[i-1].y),point(jaw[i].x,jaw[i].y),1,1,highlight);
         }
         append(point(4*scale,-ry*0.38f),point(4*scale,ry*0.38f),0.38f,0.75f);
+        // A short pair of chevrons snaps toward the jaws on confirmation.
+        if(pulse>0) {
+            const float snap=(1.0f-settle)*4.0f*scale;
+            const auto tip=point(snap,0);
+            append(point(snap+6*scale,-5*scale),tip,pulse*.84f,.85f,pulse);
+            append(tip,point(snap+6*scale,5*scale),pulse*.84f,.85f,pulse);
+        }
     }
     result.capture=pulse;
-    result.ink={0.20f+0.55f*pulse,0.94f+0.06f*pulse,1.0f,
+    result.ink={0.20f+0.70f*pulse,0.94f+0.05f*pulse,1.0f,
         (0.88f+0.12f*pulse)*(std::clamp)(opacity,0.0f,1.0f)};
     result.stroke=(1.6f+0.4f*pulse)*scale;
     result.ordinalPosition={result.center.x+result.halfExtent.x-4.0f*scale,

@@ -182,6 +182,14 @@ DamageResult CourseCollisionSystem::ApplyWeaponHit(
     CourseSpawnRuntime& runtime,
     const CourseAsset* course,
     const WeaponHitRequest& contact) {
+    return ApplyWeaponHit(runtime, course, contact, false);
+}
+
+DamageResult CourseCollisionSystem::ApplyWeaponHit(
+    CourseSpawnRuntime& runtime,
+    const CourseAsset* course,
+    const WeaponHitRequest& contact,
+    bool nativePrimaryImpact) {
     WeaponHitRequest request=contact;
     if(request.hitKind==RailAimHitKind::Enemy && request.sourceIndex==UINT32_MAX) {
         for(const auto& actor:runtime.Enemies()) {
@@ -197,7 +205,7 @@ DamageResult CourseCollisionSystem::ApplyWeaponHit(
     if (!subsystemContact && attackInterruptSystem_.Submit(runtime,lastDamageResult_).interrupted)
         ++lastFrameStats_.enemyAttacksInterrupted;
     lastWeaponFeedbackResult_ =
-        weaponFeedbackSystem_.Submit(runtime, request, lastDamageResult_);
+        weaponFeedbackSystem_.Submit(runtime, request, lastDamageResult_, nativePrimaryImpact);
     if (!subsystemContact) {
         runtime.EnemyCombat().SubmitDamageResult(
             runtime,
@@ -300,8 +308,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     for (const WeaponShot& shot : lastWeaponFireResult_.shots) {
         FirePlayerShot(runtime, input, shot);
         if (lastShotHasWorldPoint_) {
-            // Catch-up contacts also resolve now, so every corresponding
-            // instantaneous pulse must be visible on this same render frame.
+            // Catch-up shots all resolve now and each starts its own visual flight.
             playerShotTraces_.push_back({shot.shotId,lastShotWorldPoint_,0,
                 PrimaryMuzzle(input,weapon_.muzzleForwardOffset),weapon_.radius});
         }
@@ -727,7 +734,7 @@ void CourseCollisionSystem::FirePlayerShot(
         request.baseDamage*=(std::clamp)(input.bonusDamageMultiplier,1.0f,4.0f);
         if(input.bonusDamageMultiplier>1)request.counterTargetActorId=request.targetActorId;
     }
-    ApplyWeaponHit(runtime, input.course, request);
+    ApplyWeaponHit(runtime, input.course, request, input.combatMount && input.combatMount->valid);
 
     if (!lastWeaponFeedbackResult_.accepted) {
         lastFrameStats_.playerShotStaleHits++;

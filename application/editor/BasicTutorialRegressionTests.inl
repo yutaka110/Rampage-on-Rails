@@ -38,15 +38,18 @@ void TestBasicTutorialActions(RegressionRunner& runner) {
         in.distance=700;
         for(int f=0;f<fps;++f)guide.Update(in);
         runner.Expect(guide.Learned(Lesson::Boost),"held manual acceleration and achieved speed earn the lesson");
-        in.boostHeld=false;
+        in.distance=RailBasicTutorial::SpeedEnd+1;
+        in.threat=true;
         for(int f=0;f<fps*2;++f)guide.Update(in);
-        runner.Expect(guide.Current()==Lesson::Brake,"brake follows the accelerator");
+        runner.Expect(guide.Current()==Lesson::Brake && guide.Visible(),
+            "holding E past the runway into combat still shows the Q lesson");
         in.speed=20;
         for(int f=0;f<fps;++f)guide.Update(in);
         runner.Expect(!guide.Learned(Lesson::Brake),"coasting or impact slowdown never earns brake mastery");
         in.brakeHeld=true;
         for(int f=0;f<fps;++f)guide.Update(in);
-        runner.Expect(guide.Learned(Lesson::Brake),"Q and actual low speed complete braking");
+        runner.Expect(guide.Learned(Lesson::Brake) && guide.Visible() && guide.Success(),
+            "actual braking completes the Q lesson even after the runway");
         const auto learned=guide.LearnedMask();guide.ResetAttempt();guide.Update(in);
         runner.Expect(guide.LearnedMask()==learned && !guide.Visible(),"checkpoint retry preserves knowledge without repeating prompts");
         guide.Reset();guide.Update(in);runner.Expect(!guide.Learned(Lesson::Primary),"new run resets tutorial knowledge");

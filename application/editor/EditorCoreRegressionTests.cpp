@@ -23559,6 +23559,42 @@ void TestRailPrimaryKillPresentation(RegressionRunner& runner) {
         "A lethal primary shot must retain a drawable wreck for the same presentation frame");
     if(primaryBridge.Frame().destructionBursts.empty()) return;
     const auto wreckPose=primaryBridge.Frame().destructionBursts.front().frozenPose;
+    RailPrimaryKillPresentation timed;
+    constexpr float farDistance=120.0f, nearDistance=30.0f;
+    const float farDuration=RailPulseShot::TravelDuration(farDistance);
+    const float nearDuration=RailPulseShot::TravelDuration(nearDistance);
+    auto next=feedback;
+    ++next.sequence; ++next.shotId;
+    timed.QueueFeedback(feedback,farDistance,farDuration,.105f);
+    timed.QueueFeedback(next,nearDistance,nearDuration,.105f);
+    timed.QueueFeedback(next,nearDistance,nearDuration,.105f);
+    EnemyCombatPresentationBridge timedBridge;
+    const auto defeatEvent=std::find_if(primaryEvents.begin(),primaryEvents.end(),[](const auto& event) {
+        return event.kind==EnemyCombatEventKind::Defeated;
+    });
+    runner.Expect(defeatEvent!=primaryEvents.end(),"The lethal shot published a defeat event");
+    if(defeatEvent==primaryEvents.end())return;
+    primaryInput.events=std::span(&*defeatEvent,1);
+    primaryInput.primaryPresentation=&timed;
+    timedBridge.Update(primaryInput);
+    runner.Expect(timed.TakeArrivals().empty() && timedBridge.Frame().destructionBursts.size()==1 &&
+        timedBridge.Frame().destructionBursts.front().age<0 && timedBridge.Frame().audioCues.empty(),
+        "A committed lethal hit must retain the intact pose and wait for the bolt before showing the defeat");
+    timed.Update(nearDuration);
+    const auto earlyArrival=timed.TakeArrivals();
+    runner.Expect(earlyArrival.size()==1 && earlyArrival.front().event.shotId==next.shotId &&
+        timed.FindPending(feedback.shotId),"The shorter bolt arrives first and a repeated feedback event does not replay");
+    timed.Update(farDuration);
+    primaryInput.events={}; primaryInput.deltaTime=farDuration;
+    timedBridge.Update(primaryInput);
+    const auto lateArrival=timed.TakeArrivals();
+    runner.Expect(lateArrival.size()==1 && lateArrival.front().event.shotId==feedback.shotId &&
+        timedBridge.Frame().destructionBursts.size()==1 &&
+        timedBridge.Frame().destructionBursts.front().age==0,
+        "The wreck begins its fall as the lethal bolt arrives");
+    timed.Reset();
+    runner.Expect(timed.TakeArrivals().empty() && !timed.FindPending(feedback.shotId),
+        "Reset drops pending shot feedback");
     runner.Expect(lethal.playerShotEnemyHits==1 && feedback.destroyed && wreckPose.primaryDestruction &&
         presentation.ObserveFeedback(feedback,1.5f,&wreckPose) &&
         presentation.NewCount()==1 && presentation.Kills().front().actorId==feedback.targetActorId,
@@ -23692,10 +23728,17 @@ void TestRailPulseShotPresentation(RegressionRunner& runner) {
             "Pulse travel, fade and muzzle flash must freeze with gameplay time");
         pulses.Update(0.01f);
         const auto& after=pulses.Shots().back();
-        const auto head=after.Head(),tail=after.Tail();
-        runner.Expect(head.z==before.Head().z && head.z==after.end.z && tail.z==after.start.z &&
-            after.Opacity()<before.Opacity(),
-            "The whole primary pulse is visible on its contact frame, then fades without a late flying head");
+        const auto leftHead=after.Head(-1),rightHead=after.Head(1);
+        const auto leftTail=after.Tail(-1),rightTail=after.Tail(1);
+        runner.Expect(leftHead.z>before.Head().z && leftTail.z>before.Tail().z &&
+            leftHead.z<after.end.z && std::abs(leftHead.z-leftTail.z-RailPulseShot::BoltLength)<.001f &&
+            leftHead.x<0 && rightHead.x>0 && rightHead.x-leftHead.x<rightTail.x-leftTail.x,
+            "Two short bolts advance away from the muzzle and converge toward the resolved point");
+        auto arrival=after;
+        arrival.age=arrival.Duration();
+        runner.Expect(arrival.Head(-1).x==arrival.end.x && arrival.Head(1).x==arrival.end.x &&
+            arrival.Head(-1).z==arrival.end.z && arrival.Head(1).z==arrival.end.z,
+            "Neither bolt passes the resolved point at arrival");
         input.weapon.enabled=false;
         const auto blocked=collision.Update(runtime,input);
         runner.Expect(!blocked.playerShotsFired && collision.PlayerShotTraces().empty(),
@@ -28466,6 +28509,7 @@ void TestTwinShieldDroneCoreBreak(RegressionRunner& runner) {
     for(float amount:{5.0f,100.0f}) {
         CourseSpawnRuntime targets;targets.SpawnEnemyActor(BuildRailReadyDrone(0));
         auto target=actor;target.actorId=targets.Enemies().front().actorId;
+        target.desc.actorAssetId="short_scout";
         target.weaponMount.dronePose.flightVelocity=pose.destructionDrift;
         target.weaponMount.dronePose.hasFlightVelocity=true;
         RestoreEnemyFixture(runner,targets,target);targets.EnemyCombat().ConsumeEvents();
@@ -28492,7 +28536,27 @@ void TestTwinShieldDroneCoreBreak(RegressionRunner& runner) {
             (!lethal || (contactBridge.Frame().destructionBursts.front().age==0 &&
                 EvaluateTwinShieldDroneKillFlash(contactBridge.Frame().destructionBursts.front().frozenPose,0).count>0)),
             "The first contact frame must retain the captured scale/motion and start a lethal cut at age zero without a full-body wash");
-        const auto arrivalProfile=volley.Contacts().front().Presentation();
+        if(volley.Contacts().empty() || volley.Lasers().empty())continue;
+        const auto& arrival=volley.Contacts().front();
+        const auto initialBlast=arrival.ScoutBlast();
+        auto expanding=arrival;expanding.age=.075f;
+        const auto expandedBlast=expanding.ScoutBlast();
+        auto expiredBlast=arrival;expiredBlast.age=RailLockScoutBlast::Lifetime;
+        auto otherTarget=arrival;otherTarget.scoutImpact=false;
+        runner.Expect(arrival.scoutImpact && initialBlast.opacity>0 && initialBlast.expansion==0 &&
+            length(subtract(initialBlast.origin,volley.Lasers().front().position))<.0001f &&
+            length(subtract(initialBlast.origin,expandedBlast.origin))<.0001f && expandedBlast.expansion>.5f &&
+            expiredBlast.ScoutBlast().opacity==0 && otherTarget.ScoutBlast().opacity==0,
+            "The scout blast grows from the resolved laser endpoint, stays there during recoil and expires without affecting other targets");
+        auto cameraSettled=arrival;cameraSettled.age=RailLockScoutBlast::CameraDuration;
+        auto aftermath=arrival;aftermath.age=.42f;
+        const auto lateBlast=aftermath.ScoutBlast();
+        runner.Expect(initialBlast.camera==1 && expandedBlast.camera>0 && expandedBlast.camera<.1f &&
+            cameraSettled.ScoutBlast().camera==0 && cameraSettled.ScoutBlast().opacity>0 &&
+            expandedBlast.lighting>initialBlast.lighting && lateBlast.lighting==0 && lateBlast.opacity==0 &&
+            (lethal?(lateBlast.fire>.1f && lateBlast.smoke>.1f):(lateBlast.fire==0 && lateBlast.smoke==0)),
+            "The camera settles in 100ms while the wave expands, then only a real defeat leaves flame and smoke");
+        const auto arrivalProfile=arrival.Presentation();
         runner.Expect(arrivalProfile.pierceOpacity>=0.70f && arrivalProfile.pierceExtent>volley.Contacts().front().size*1.4f,
             "Every confirmed lock contact, including a nonlethal one, must begin with a readable penetrating flash");
         if(lethal) {
@@ -38138,6 +38202,11 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
         if(runtime.Enemies().empty())return;
         const uint32_t owner=runtime.Enemies().front().actorId;
         CourseCollisionSystem collision;collision.LoadWeaponDefinitions("Resources/weapons",&error);
+        const auto* lockWeapon=collision.FindWeaponDefinition(RailWeaponIds::LockOnIce);
+        const float lockDamagePerHit=lockWeapon?lockWeapon->definition.baseDamage:0.0f;
+        runner.Expect(lockDamagePerHit>0,"battery defense test loads the lock weapon");
+        if(lockDamagePerHit<=0)return;
+        const unsigned locksToDefeat=static_cast<unsigned>(std::ceil(runtime.Enemies().front().desc.hitPoints/lockDamagePerHit));
         RailVehicleMovementSystem vehicle;vehicle.Initialize(controls.vehicle);RailVehicleCombatMountBridge mounts;
         CourseRuntime travel;travel.Bind(&course);travel.Reset(start);vehicle.Reset(start,boosted?64:speed,&rail);
         RailSpeedDirector speedPolicy;speedPolicy.Configure(controls.speedPolicy);speedPolicy.SetManualBoostInput(boosted && !reward,true);
@@ -38153,7 +38222,7 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
         RailCameraDirector camera;EnemyAttackTelegraphSystem warnings;RailTargetRegistry registry;
         RailLockResolver locks;RailLockVolley volley;bool released=false,killed=false;unsigned lockReleases=0;
         float firstWarning=-1,firstFire=-1,fireForward=-1,firstHit=-1,warningSeconds=0;
-        unsigned cancelled=0;Vector3 fixed{};bool anchored=false;uint64_t observedFire=0;float peakSpeed=0;
+        unsigned cancelled=0;Vector3 fixed{};bool anchored=false;uint64_t observedFire=0;float peakSpeed=0,lockDamage=0;
         for(int step=0;step<int(23*fps);++step) {
             const float t=step*dt;
             if(boosted && step>0) {
@@ -38243,11 +38312,14 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
                 auto result=collision.UpdateWeaponFire(fire);
                 if(volley.Enqueue(tokens,result.shots,muzzle,rail,runtime,{})==tokens.size())++lockReleases;
                 if(allBatteries && fps==30 && boosted)lockTrace<<marker.distance<<','<<t<<",release,"<<tokens.size()<<','<<lockReleases<<','<<at<<'\n';
-                released=lockReleases>=2;
+                released=lockReleases>=locksToDefeat;
             }
             volley.Update(dt,muzzle,rail,runtime,collision,&course,&terrain);
             if(allBatteries && fps==30 && boosted)for(const auto& hit:volley.Hits())lockTrace<<marker.distance<<','<<t<<",hit,"<<hit.appliedDamage<<','<<hit.remainingHitPoints<<','<<hit.destroyed<<'\n';
-            for(const auto& hit:volley.Hits())if(hit.targetActorId==owner && hit.destroyed)killed=true;
+            for(const auto& hit:volley.Hits())if(hit.targetActorId==owner) {
+                lockDamage+=hit.appliedDamage;
+                killed|=hit.destroyed;
+            }
             RailAimRayBuildInput ray;ray.viewportWidth=1600;ray.viewportHeight=900;ray.gameplayViewProjection=vp;
             ray.gameplayCameraPosition=view.gameplayPosition;ray.pixelPosition=cursor;ray.maxDistance=120;
             auto aim=BuildRailAimState(ray);RailWorldRaycastInput query;query.aim=&aim;query.railPath=&rail;query.spawnRuntime=&runtime;
@@ -38265,18 +38337,25 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
         report<<fps<<','<<speed<<','<<mode<<','<<firstWarning<<','<<firstFire<<','<<fireForward<<','<<firstHit<<','<<damage<<','<<cancelled<<','<<killed<<','<<warningSeconds<<std::endl;
         const auto context=" event="+std::to_string(marker.distance)+" fps="+std::to_string(fps)+" speed="+std::to_string(speed)+" mode="+std::to_string(mode)+
             " fire="+std::to_string(firstFire)+" forward="+std::to_string(fireForward)+" damage="+std::to_string(damage)+" cancelled="+std::to_string(cancelled);
-        if(mode==1)check(killed && firstFire<0 && damage==0,"two actual travelling locks preempt the first shot"+context);
+        if(mode==1) {
+            check(lockDamage>0,"actual travelling locks still damage the strengthened battery"+context);
+            if(speed<=30)check(killed,
+                "consecutive travelling locks destroy the strengthened battery on a normal or slow approach"+context);
+        }
         else {
             check(firstWarning>=0 && firstFire>firstWarning && warningSeconds+dt>=.90f &&
-                fireForward>=RailGroundBattery::MinimumFireDistance && fireForward<=115,
+                fireForward>=RailGroundBattery::MinimumFireDistance &&
+                fireForward<=RailGroundBattery::FirstShotDistance(marker.id)+2.0f*speed*dt+.01f,
                 "the readable first warning finishes before passing the planned firing window"+context);
             check(mode==0 ? damage>0 : (damage==0 && cancelled>=1),
                 "ignoring the battery is damaging; screen-aimed primary interception prevents its real volley"+context);
+            if(mode==0 && speed==30 && RailGroundBattery::IsFirstLiveBattery(marker.id))
+                check(observedFire>=2,"the first battery can fire twice during a normal approach"+context);
         }
     }
     }
     std::string details;for(const auto& failure:failures)details+="\n"+failure;
-    runner.Expect(failures.empty(),"every placement supports warning, arrival, preemption and interception"+details);
+    runner.Expect(failures.empty(),"every placement supports warning, arrival, lock damage and interception"+details);
 }
 
 void TestManualBrakeTravel(RegressionRunner& runner) {
@@ -39860,11 +39939,11 @@ void TestPrimaryContactPresentationCoherence(RegressionRunner& runner) {
         const auto trace=collision.PlayerShotTraces().front();
         RailPulseShotPresentation pulses;runner.Expect(pulses.Enqueue(trace.shotId,trace.start,trace.end,trace.presentationAge,trace.radius),"contact frame enqueues real trace");
         const auto visual=pulses.Shots().front();
-        const float originError=length(add(trace.start,scale(muzzle,-1))),endError=length(add(visual.Head(),scale(trace.end,-1)));
+        const float originError=length(add(trace.start,scale(muzzle,-1))),endError=length(add(visual.end,scale(trace.end,-1)));
         runner.Expect(originError<.00001f && endError==0 && trace.presentationAge==0 &&
-            length(add(visual.Tail(),scale(muzzle,-1)))<.00001f,"same-frame visible pulse uses the exact collision muzzle and endpoint");
-        const float touch=length(add(center,scale(visual.Head(),-1)));
-        runner.Expect(std::abs(touch-(body+visual.radius))<.0001f,"two visible body radii meet at the accepted contact");
+            length(add(visual.Tail(),scale(muzzle,-1)))<.00001f,"visual flight uses the exact collision muzzle and endpoint");
+        const float touch=length(add(center,scale(visual.end,-1)));
+        runner.Expect(std::abs(touch-(body+visual.radius))<.0001f,"the resolved endpoint preserves the two collision radii");
         pi.shootDownResults=collision.ProjectileShootDown().Frame().results;presentation.Update(pi);renderer.Update(vi);
         unsigned areas=0,chains=0;float areaRadius=0;
         for(const auto& event:presentation.Frame().events)if(event.kind==EnemyProjectilePresentationEventKind::Intercepted && event.clashRadius>0) {
@@ -39898,14 +39977,14 @@ void TestPrimaryContactPresentationCoherence(RegressionRunner& runner) {
         EnemyProjectileShootDownSystem system;runner.Expect(system.SubmitPrimary(shots,rail,q).destroyed,
             "a body overlapping the pulse endpoint can be intercepted even when its centre is beyond the endpoint");
     }
-    // A long frame must not backdate away pulses whose hits resolve now.
+    // A long frame must not backdate away the flights of newly resolved shots.
     CourseCollisionSystem collision;collision.LoadWeaponDefinitions("Resources/weapons",&error);CourseSpawnRuntime empty;
     RailAimState aim;aim.valid=true;aim.worldRayOrigin={0,4,0};aim.worldRayDirection={0,0,1};aim.worldAimPoint={0,4,90};
     CourseCollisionFrameInput input;input.worldAim=&aim;input.railPath=&rail;input.player.verticalOffset=4;
     input.weapon.enabled=input.weapon.triggerHeld=true;collision.Update(empty,input);input.deltaTime=.25f;collision.Update(empty,input);
     RailPulseShotPresentation pulses;
     for(const auto& t:collision.PlayerShotTraces())runner.Expect(t.presentationAge==0 && pulses.Enqueue(t.shotId,t.start,t.end,t.presentationAge,t.radius),
-        "catch-up contact cannot lose its instantaneous pulse by being backdated past the fade duration");
+        "catch-up contact cannot lose its flight by being backdated past its travel time");
     runner.Expect(collision.PlayerShotTraces().size()>1,"coherence fixture actually exercised catch-up shots");
 }
 

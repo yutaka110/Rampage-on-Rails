@@ -3,6 +3,7 @@
 
 #include "CourseSpawnRuntime.h"
 #include "RailGroundBatteryAttack.h"
+#include "RailPrimaryKillPresentation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -213,6 +214,14 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
     CourseSpawnRuntime& runtime,
     const WeaponHitRequest& request,
     const DamageResult& damageResult) {
+    return Submit(runtime, request, damageResult, false);
+}
+
+WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
+    CourseSpawnRuntime& runtime,
+    const WeaponHitRequest& request,
+    const DamageResult& damageResult,
+    bool nativePrimaryImpact) {
     WeaponFeedbackDispatchResult result{};
     if (!PayloadMatchesDamage(request, damageResult)) {
         result.rejectReason = WeaponFeedbackRejectReason::InvalidPayload;
@@ -325,9 +334,12 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
         event.impactCueId=droneCoreBreak ? "weapon_feedback_drone_core_break" : "weapon_feedback_lock_contact";
         event.impactEffectName.clear();
         event.hudDuration=0.18f;
-    } else if(!event.shieldHit) SpawnImpactVfx(runtime, event);
+    }
+    const bool spawnImpact=!droneCoreBreak && !event.lockOnContact && !event.shieldHit &&
+        !(nativePrimaryImpact && (RailPrimaryContact::Matches(event) || RailPrimaryKill::Matches(event)));
+    if(spawnImpact) SpawnImpactVfx(runtime, event);
     result.accepted = true;
-    result.vfxSpawned = !droneCoreBreak && !event.lockOnContact && !event.shieldHit;
+    result.vfxSpawned = spawnImpact;
     ++acceptedEventCount_;
     lastAcceptedEvent_ = event;
     recentEvents_.push_back(event);

@@ -46,6 +46,14 @@ struct RailLockDebrisFrame final {
     std::array<RailLockDebris,16> fragments{};
     size_t count=0;
 };
+struct RailLockScoutBlast final {
+    static constexpr float Lifetime=.34f;
+    static constexpr float CameraDuration=.10f;
+    Vector3 origin{};
+    float expansion=0, phase=0, opacity=0;
+    float flash=0, lighting=0, camera=0;
+    float fire=0, smoke=0;
+};
 struct RailLockContact final {
     static constexpr float Lifetime=0.25f, DestroyedLifetime=0.84f;
     uint64_t shotId=0;
@@ -56,9 +64,11 @@ struct RailLockContact final {
     TwinShieldDronePose wreckPose{};
     bool hasWreckPose=false;
     bool enemyHull=false;
+    bool scoutImpact=false;
     Vector3 incoming{};
     float Duration() const {return destroyed?DestroyedLifetime:Lifetime;}
     RailLockImpactFrame Presentation() const;
+    RailLockScoutBlast ScoutBlast() const;
     Vector3 CenterAt(float time) const;
     RailLockDebrisFrame Debris() const;
 };

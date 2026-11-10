@@ -3,6 +3,7 @@
 #include "RailEnemyEnergyPalette.h"
 #include "RailBatteryThermalPresentation.h"
 #include "RailPrimaryKillPresentation.h"
+#include "RailLockVolley.h"
 
 #include "CourseSpawnRuntime.h"
 #include "RailRearPursuitRules.h"
@@ -498,6 +499,11 @@ void EnemyCombatPresentationBridge::Reset() {
 
 void EnemyCombatPresentationBridge::Update(
     const EnemyCombatPresentationInput& input) {
+    Update(input,{});
+}
+
+void EnemyCombatPresentationBridge::Update(
+    const EnemyCombatPresentationInput& input, std::span<const RailLockContact> lockContacts) {
     std::array<std::pair<uint32_t,RailBatteryThermalFrame>,2> previousThermals{};size_t previousCount=0;
     for(const auto& actor:frame_.actors)if(actor.batteryThermal.valid && previousCount<previousThermals.size())
         previousThermals[previousCount++]={actor.actorId,actor.batteryThermal};
@@ -519,7 +525,9 @@ void EnemyCombatPresentationBridge::Update(
 
     if (input.gameplayActive) {
         for (auto& burst : frame_.destructionBursts) {
+            const float age=burst.age;
             burst.age += std::isfinite(input.deltaTime) ? (std::max)(0.0f,input.deltaTime) : 0.0f;
+            if(age<0 && burst.age>=-0.000001f)burst.age=0;
             const float impactAge=burst.frozenPose.destructionImpactAge;
             if(!burst.twinShield || impactAge<0 || burst.age<impactAge || burst.crashEmitted) continue;
             burst.crashEmitted=true;
@@ -553,6 +561,19 @@ void EnemyCombatPresentationBridge::Update(
         if (!actor.combatState.initialized) continue;
         EnemyCombatActorPresentation output{};
         ApplyProceduralAnimation(output, actor, input.settings);
+        const auto hit=std::find_if(input.primaryContacts.rbegin(),input.primaryContacts.rend(),
+            [&](const auto& contact){return contact.actorId==actor.actorId;});
+        if(actor.combatState.phase==EnemyCombatPhase::HitReact &&
+            (hit!=input.primaryContacts.rend() ||
+                (input.primaryPresentation && input.primaryPresentation->HasPendingContact(actor.actorId)))) {
+            output.flashStrength=0.0f;
+            output.emissiveStrength=0.0f;
+            output.lateralOffset=0.0f;
+            output.rotationOffset.z=0.0f;
+            output.scaleMultiplier=1.0f;
+            output.bodyScale={1,1,1};
+            output.materialColor={1,1,1,output.materialColor.w};
+        }
         if (RailTurret::IsMesh(actor.desc.meshId)) {
             output.turret = true;
             const auto sample = input.railPath->Evaluate(actor.desc.spawnDistance+actor.desc.distanceOffset);
@@ -619,8 +640,6 @@ void EnemyCombatPresentationBridge::Update(
                 }
             }
         }
-        const auto hit=std::find_if(input.primaryContacts.rbegin(),input.primaryContacts.rend(),
-            [&](const auto& contact){return contact.actorId==actor.actorId;});
         if(hit!=input.primaryContacts.rend() && actor.desc.hitPoints>0 &&
             !output.attackCommittedThisFrame && !IsRailElitePursuer(actor.desc.actorAssetId)) {
             const auto rail=input.railPath->Evaluate(actor.desc.spawnDistance+actor.desc.distanceOffset);
@@ -674,10 +693,16 @@ void EnemyCombatPresentationBridge::Update(
             }
             const SpatialMix mix = BuildSpatialMix(*actor, input);
             const float rollSign = (actor->actorId & 1u) != 0u ? 1.0f : -1.0f;
+            const auto* pendingPrimary=input.primaryPresentation?input.primaryPresentation->FindPending(event->shotId):nullptr;
             const bool primaryImpact=event->kind==EnemyCombatEventKind::HitReacted &&
-                std::any_of(input.primaryContacts.begin(),input.primaryContacts.end(),[&](const auto& hit) {
+                (pendingPrimary || std::any_of(input.primaryContacts.begin(),input.primaryContacts.end(),[&](const auto& hit) {
                     return hit.actorId==event->actorId && hit.age==0;
-                });
+                }));
+            const bool primaryKill=event->kind==EnemyCombatEventKind::Defeated && pendingPrimary &&
+                RailPrimaryKill::Matches(pendingPrimary->event);
+            const bool scoutLockImpact=std::any_of(lockContacts.begin(),lockContacts.end(),[&](const auto& contact) {
+                return contact.scoutImpact && contact.age==0 && contact.shotId==event->shotId;
+            });
             switch (event->kind) {
             case EnemyCombatEventKind::Spawned:
                 frame_.cameraShakeImpulse = (std::max)(
@@ -699,13 +724,14 @@ void EnemyCombatPresentationBridge::Update(
                 frame_.cameraRollImpulseRadians += rollSign * 0.006f;
                 break;
             case EnemyCombatEventKind::HitReacted:
-                if(primaryImpact)break;
+                if(primaryImpact || scoutLockImpact)break;
                 frame_.cameraShakeImpulse = (std::max)(
                     frame_.cameraShakeImpulse, 0.16f);
                 frame_.cameraFovImpulseRadians -= 0.004f;
                 frame_.cameraRollImpulseRadians -= rollSign * 0.005f;
                 break;
             case EnemyCombatEventKind::Defeated:
+                if(primaryKill || scoutLockImpact)break;
                 frame_.cameraShakeImpulse = (std::max)(
                     frame_.cameraShakeImpulse, 0.42f);
                 frame_.cameraFovImpulseRadians -= 0.014f;
@@ -745,6 +771,7 @@ void EnemyCombatPresentationBridge::Update(
                     ? 1.22f : 1.0f;
                 break;
             case EnemyCombatEventKind::Defeated:
+                if(primaryKill) {emitAudio=false;break;}
                 if(actor->desc.meshId=="twin_shield_hull") {
                     cue.kind=EnemyCombatPresentationAudioCueKind::CoreBreak;
                     const auto simultaneous=std::count_if(frame_.audioCues.begin(),frame_.audioCues.end(),
@@ -795,7 +822,8 @@ void EnemyCombatPresentationBridge::Update(
                         [&](const EnemyDestructionBurst& burst) { return burst.actorId == actor->actorId; });
                     if (!alreadyVisible && frame_.destructionBursts.size() < 16) {
                         EnemyDestructionBurst burst{actor->actorId,mix.position,
-                            (std::clamp)(actor->desc.radius,0.6f,4.0f),0.0f};
+                            (std::clamp)(actor->desc.radius,0.6f,4.0f),
+                            primaryKill ? -pendingPrimary->duration : 0.0f};
                         burst.twinShield=actor->desc.meshId=="twin_shield_hull" &&
                             !IsRailElitePursuer(actor->desc.actorAssetId);
                         if(burst.twinShield) {
@@ -858,7 +886,7 @@ void EnemyCombatPresentationBridge::Update(
                     }
                     // The depth-tested core cut and small connection arcs own
                     // drone defeat. Keep the large particle blast for ground impact.
-                    if(actor->desc.meshId=="twin_shield_hull") continue;
+                    if(primaryKill || actor->desc.meshId=="twin_shield_hull") continue;
                     // WeaponFeedback owns the contact impact. This is a larger,
                     // actor-centered destruction burst and is emitted once.
                     vfx.cueId = "enemy_combat_death";
