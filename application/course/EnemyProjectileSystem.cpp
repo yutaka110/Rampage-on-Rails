@@ -186,6 +186,24 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
 
 void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile,float deltaTime) {
     const float dt=(std::max)(0.0f,deltaTime);
+    if (projectile.sourceRole==kFangCrossfireRole &&
+        projectile.forwardSpeed>0.0f) {
+        // The fixed entry line joins the warned lane well before the cart.
+        // After joining it, the round travels straight down that lane.
+        const float remaining=(projectile.lockedTargetDistance-projectile.spawnDistance-projectile.distanceOffset)/
+            projectile.forwardSpeed;
+        const float alignTime=(std::clamp)(remaining,0.0f,dt);
+        projectile.lateralOffset+=projectile.lateralSpeed*alignTime;
+        projectile.verticalOffset+=projectile.verticalSpeed*alignTime;
+        if(remaining<=dt) {
+            projectile.lateralOffset=projectile.lockedTargetLateralOffset;
+            projectile.verticalOffset=projectile.lockedTargetVerticalOffset;
+            projectile.lateralSpeed=0;projectile.verticalSpeed=0;
+        }
+        projectile.distanceOffset+=projectile.forwardSpeed*dt;
+        projectile.age+=dt;
+        return;
+    }
     RailVector velocity{projectile.forwardSpeed,projectile.lateralSpeed,projectile.verticalSpeed};
     float speed=std::sqrt((std::max)(0.0f,LengthSquared(velocity)));
     const RailVector direction=NormalizeOr(velocity,{-1.0f,0.0f,0.0f});

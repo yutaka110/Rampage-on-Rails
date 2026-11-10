@@ -15,6 +15,20 @@ float Fbm(float2 p) {
     return Noise(p)*0.5f+Noise(p*2.07f+7.1f)*0.28f+Noise(p*4.13f+17.3f)*0.15f+Noise(p*8.3f)*0.07f;
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=3200.0f && input.texcoord.x<=3201.0f) {
+        float2 p=float2((input.texcoord.x-3200.5f)*2,frac(input.texcoord.y*.5f)*4-1);
+        float packed=floor(input.texcoord.y*.5f);
+        float phase=fmod(packed,32)/31,seed=floor(packed/32)*6.7f;
+        float y=.5f-.5f*p.y;
+        float2 flow=float2(p.x*4.2f,y*20-phase*6)+seed;
+        float turbulence=Fbm(flow),fine=Noise(flow*2.7f+4.5f);
+        float center=.10f*sin(y*27.0f+seed)+.14f*(Noise(float2(y*8,phase*2)+seed)-.5f);
+        float edge=abs(p.x-center)+.48f*(turbulence-.5f);
+        float cover=(1-smoothstep(.22f,.90f,edge))*(1-smoothstep(.76f,1,y));
+        float rim=smoothstep(.49f,.83f,turbulence)*fine;
+        float3 color=lerp(input.color.rgb,float3(.26f,.032f,.015f),rim*(1-phase)*.72f);
+        return float4(color,cover*(.42f+.70f*turbulence)*input.color.a);
+    }
     if(input.texcoord.x>=3000 && input.texcoord.x<3002)return RenderRailEnergyShieldBacking(input.texcoord,input.color);
     if(input.texcoord.x>=3100 && input.texcoord.x<=3101) {
         float2 p=float2((input.texcoord.x-3100.5f)*2,input.texcoord.y*2-1);

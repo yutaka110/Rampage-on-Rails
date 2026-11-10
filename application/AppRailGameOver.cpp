@@ -75,6 +75,7 @@ void AppRunLoop::LogRailRetryBoundary(const char* boundary) {
     const auto& body=railShooterVehiclePresentation_.Frame();const auto& eye=frameState_.cameraWorldPosition;
     log<<boundary<<" run="<<s.runIndex<<" attempt="<<s.attemptIndex
        <<" checkpoint="<<railShooterRetryCoordinator_.Checkpoint().revision
+       <<" id="<<railShooterRetryCoordinator_.Checkpoint().checkpointId
        <<" distance="<<railShooterDistance_<<" vehicleDistance="<<v.distance<<" speed="<<v.speed
        <<" bank="<<body.visualBankDegrees<<" pitch="<<body.visualPitchDegrees
        <<" eye="<<eye.x<<','<<eye.y<<','<<eye.z<<" entry="<<railTitleGameplayEntry_.Elapsed()

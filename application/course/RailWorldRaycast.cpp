@@ -775,13 +775,14 @@ RailAimHit RailWorldRaycast::Query(const RailWorldRaycastInput& input) {
         }
 
         for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-            if (obstacle.desc.hitPoints <= 0.0f) {
+            const bool slab=RailRouteHazards::IsSlab(obstacle);
+            if (slab ? obstacle.age>=RailRouteHazards::GroundImpact : obstacle.desc.hitPoints<=0.0f) {
                 continue;
             }
             auto rail=Vector3{obstacle.desc.lateralOffset,obstacle.desc.verticalOffset,
                 obstacle.desc.spawnDistance+obstacle.desc.distanceOffset};
             float roll=0;
-            if(RailRouteHazards::IsSlab(obstacle)) {
+            if(slab) {
                 const auto pose=RailRouteHazards::VisibleStone(obstacle,obstacle.age);
                 rail=pose.rail;
                 roll=pose.roll;

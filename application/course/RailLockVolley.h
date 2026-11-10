@@ -65,6 +65,7 @@ struct RailLockContact final {
     bool hasWreckPose=false;
     bool enemyHull=false;
     bool scoutImpact=false;
+    int8_t rearPanelIndex=-1;
     Vector3 incoming{};
     float Duration() const {return destroyed?DestroyedLifetime:Lifetime;}
     RailLockImpactFrame Presentation() const;

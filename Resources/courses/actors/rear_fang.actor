@@ -1,4 +1,4 @@
-actor|rear_fang|Fang|twin_shield_hull|2.1|120|120|0.8|0.75|0.65|1|rear_fang_burst
+actor|rear_fang|Fang|twin_shield_hull|2.1|2534.4|120|0.8|0.75|0.65|1|rear_fang_burst
 combat|3.4|1.0|46|rear_fang_burst
 movement|1
 behavior|assault|0.24|0.12|0.18|1.3|3.4|0.65|0.7|3.0|1.3|0.25|true

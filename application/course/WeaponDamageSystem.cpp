@@ -164,7 +164,7 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 result.hitPointsBefore=currentHitPoints;
                 result.remainingHitPoints=currentHitPoints;
                 if (!exposed || hitPoints<=0 ||
-                    request.lockOnContact || request.damageType!=WeaponDamageType::Energy) {
+                    (request.lockOnContact ? cannon : request.damageType!=WeaponDamageType::Energy)) {
                     result.rejectReason=DamageRejectReason::TargetNotDamageable;
                     return result;
                 }
@@ -217,6 +217,8 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
             result.hitPointsBefore = (std::max)(obstacle.desc.hitPoints, 0.0f);
             result.remainingHitPoints = result.hitPointsBefore;
             if (!obstacle.desc.breakable || (RailRouteHazards::IsBarricade(obstacle) && request.lockOnContact) ||
+                (RailRouteHazards::IsSlab(obstacle) && (request.lockOnContact ||
+                    !RailRouteHazards::SlabCanBeReleased(obstacle))) ||
                 (obstacle.desc.payload=="bridge_escape_release" && !request.lockOnContact)) {
                 result.blocked = true;
                 result.rejectReason = DamageRejectReason::Indestructible;
@@ -227,8 +229,10 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 return result;
             }
             ApplyHitPoints(obstacle.desc.hitPoints, result);
-            if(obstacle.desc.hitPoints<=0 && RailRouteHazards::IsBarricade(obstacle))
-                RailRouteHazards::OpenBarricade(obstacle);
+            if(obstacle.desc.hitPoints<=0) {
+                if(RailRouteHazards::IsBarricade(obstacle))RailRouteHazards::OpenBarricade(obstacle);
+                if(RailRouteHazards::IsSlab(obstacle))RailRouteHazards::ReleaseSlab(obstacle,request.shotId);
+            }
             return result;
         }
         result.rejectReason = DamageRejectReason::TargetNotFound;

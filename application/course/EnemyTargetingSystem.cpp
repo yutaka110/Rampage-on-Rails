@@ -356,8 +356,11 @@ EnemyProjectileAimSolution ResolveEnemyProjectileAimSolution(
         const int barrel=squared(mount.muzzleRail[0])<=squared(mount.muzzleRail[1])?0:1;
         result.muzzleRail=mount.scheduledMuzzleRail[barrel];
     }
+    // The shelf battery opens by cutting across the rail in front of the cart.
+    // Later volleys use the ordinary predictive intercept.
+    const float crossingLead=actor.desc.waveId==RailGroundBattery::ShelfBatteryWave && actor.fireSequence==0 ? 4.0f : 0.0f;
     const Vector3 relative{result.targetRail.x-result.muzzleRail.x,result.targetRail.y-result.muzzleRail.y,
-        playerAtLaunch-result.muzzleRail.z};
+        playerAtLaunch+crossingLead-result.muzzleRail.z};
     auto flight = forecast ? SolveEnemyPredictedForwardIntercept(*forecast,wait,relative,
         actor.desc.projectileDefinition.initialSpeed,actor.desc.projectileDefinition.lifetime) :
         SolveEnemyForwardIntercept(relative,state.playerForwardVelocity,
@@ -409,6 +412,7 @@ EnemyProjectileAimSolution ResolveEnemyProjectileAimSolution(
     result.targetRail.z = forecast ? state.forwardTravelReferenceDistance +
         forecast->DistanceAt(wait + flight.flightSeconds) - forecast->samples.front().distance :
         playerAtLaunch + state.playerForwardVelocity*flight.flightSeconds;
+    result.targetRail.z+=crossingLead;
     return result;
 }
 
@@ -637,6 +641,8 @@ void EnemyTargetingSystem::LockSolution(
         playerLateralVelocity * predictionSeconds;
     state.targetVerticalOffset = input.playerVerticalOffset +
         playerVerticalVelocity * predictionSeconds;
+    if(actor.desc.waveId==RailGroundBattery::ShelfBatteryWave && actor.fireSequence==0)
+        state.targetLateralOffset=-1.75f;
     // A damaged sensor keeps the position it acquired when the descent began.
     // The forward intercept still accounts for the cart's automatic travel.
     if(actor.desc.actorAssetId=="rear_veil" && actor.veilSensorHitPoints<=0 &&

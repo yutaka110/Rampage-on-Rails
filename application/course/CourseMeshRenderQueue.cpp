@@ -1,6 +1,7 @@
 #include "RailGroundBatteryAttack.h"
 #include "RailRouteHazards.h"
 #include "RailRearPursuitRules.h"
+#include "RailRearPanelMaterial.h"
 #include "RailVeilModel.h"
 #include "RailFangModel.h"
 #include "RailEliteFirePresentation.h"
@@ -102,6 +103,28 @@ bool ShouldDrawTerrainPlacement(const CourseTerrainPlacement& placement, float c
 
 bool IsPlaceholderCourseMesh(const std::string& meshId) {
     return meshId == "animated_cube" || meshId == "ball";
+}
+
+Matrix4x4 RearPanelLocal(size_t index, bool broken) {
+    return MakeAffineMatrix(broken ? Vector3{.88f,.86f,.38f} : Vector3{1,1,1},
+        Vector3{}, kRearPanelAnchors[index]);
+}
+
+void WriteRearPanelMaterial(CourseMeshRenderItem& panel, float alpha, size_t index, bool veil, bool broken) {
+    auto& material = *panel.materialData;
+    material = {};
+    material.color = {1, 1, 1, alpha};
+    material.uvTransform = MakeIdentity4x4();
+    material.enableLighting = veil || broken;
+    material.specularMode = RailRearPanelMaterial::Mode;
+    const auto& basis = panel.transformData->WorldInverseTranspose;
+    for (size_t axis = 0; axis < 3; ++axis) {
+        std::copy_n(basis.m[axis], 4, material.padding2 + RailRearPanelMaterial::WorldToPanel + axis * 4);
+    }
+    material.padding2[RailRearPanelMaterial::VeilShape] = veil ? 1.0f : 0.0f;
+    material.padding2[RailRearPanelMaterial::PanelIndex] =
+        static_cast<float>(RailRearPanelMaterial::EncodeIndex(static_cast<int>(index), broken));
+    panel.useMaterialOverride = true;
 }
 } // namespace
 
@@ -509,6 +532,7 @@ void CourseMeshRenderQueue::AddObstacleInstances(
         if(obstacle.age>=obstacle.desc.lifetime)continue;
         if(RailRouteHazards::IsBarricade(obstacle) || RailRouteHazards::IsSlab(obstacle)) {
             using namespace RailRouteHazards;
+            const bool shelf=IsShelf(obstacle);
             const float distance=obstacle.desc.spawnDistance+obstacle.desc.distanceOffset;
             const auto track=railPath.Evaluate(distance);
             const auto facing=RotationFromRailTangent(track.tangent);
@@ -521,14 +545,18 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                 part->name=obstacle.desc.id;part->meshId=mesh;part->modelIndex=index;
                 part->sortDistance=rail.z;part->visible=part->transformData!=nullptr;
                 if(part->materialData) {
-                    part->materialData->color=ink;part->materialData->enableLighting=!unlit;
+                    part->materialData->color=ink;
+                    const bool barricade=std::string_view(mesh)=="route_barricade_panel";
+                    part->materialData->enableLighting=!unlit && !barricade;
+                    // Painted safety colors should remain distinct against both shaded and sunlit rock.
+                    if(barricade)part->materialData->environmentCoefficient=0;
                     part->materialData->shininess=5;
                     part->materialData->specularMode=unlit?5:2;part->useMaterialOverride=true;
                 }
                 WriteItemTransform(*part,models[index].rootLocal,size,Add(facing,tilt),
                     ResolveRailLocal(railPath,rail.z,0,rail.x,rail.y),viewProjection);
                 const std::string_view meshId=mesh;
-                const bool naturalArch=meshId.starts_with("route_arch_");
+                const bool naturalArch=meshId.starts_with("route_arch_") || meshId.starts_with("route_shelf_");
                 if(!unlit && part->materialData && (naturalArch || meshId=="rail_hazard_solid" ||
                     meshId=="rail_hazard_block")) {
                     const auto hit=Strike(obstacle);
@@ -544,7 +572,8 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                     auto& material=*part->materialData;
                     material.specularMode=18;
                     material.padding2[1]=x.x;material.padding2[2]=x.y;material.padding2[3]=x.z;
-                    material.padding2[4]=meshId=="route_arch_shoulder"?2.0f:(meshId=="rail_hazard_block"?1.0f:0.0f);
+                    material.padding2[4]=(meshId=="route_arch_shoulder" || meshId=="route_shelf_tip")?
+                        2.0f:(meshId=="rail_hazard_block"?1.0f:0.0f);
                     material.padding2[5]=y.x;material.padding2[6]=y.y;material.padding2[7]=y.z;
                     material.padding2[8]=naturalArch ? 1+Ramp(obstacle.age,FractureStart,FractureEnd)*
                         (1-Ease(obstacle.age,SupportBreak,1.49f)) : 0.0f;
@@ -565,21 +594,36 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                         obstacle.desc.verticalOffset+(open?1.8f*u-4.2f*u*u:0),distance+(open?u*1.45f:0)},
                         {extents.x*.5f,extents.y,extents.z},
                         {open?u*.48f:0,side*(open?.32f+1.4f*u:damage*.055f),side*(open?.17f+1.6f*u:damage*.045f)},
-                        {.61f-.12f*damage,.62f-.14f*damage,.56f-.14f*damage,1});
+                        {.95f-.14f*damage,.95f-.14f*damage,.95f-.14f*damage,1});
                 }
                 if(!open && damage<.55f)
                     draw("route_barricade_panel",{0,obstacle.desc.verticalOffset+.43f,distance-.66f},
                         {.37f,.24f,.12f},{0,0,.16f*damage},{1.0f,.64f,.20f,1});
             } else {
                 const Vector4 bedrock{.58f,.47f,.35f,1};
-                draw("route_arch_roots",{0,0,distance},{1,1,1},{},bedrock);
+                draw(shelf?"route_shelf_root":"route_arch_roots",{0,0,distance},{1,1,1},{},bedrock);
+                for(float side:{-1.0f,1.0f}) {
+                    if(shelf && side<0)continue;
+                    draw("rail_hazard_solid",{side*10.1f,ArchPlatformTop-1.8f,distance},
+                        {5.6f,1.8f,4.3f},{},bedrock);
+                    draw("rail_hazard_solid",{side*12.2f,ArchPlatformTop-4.5f,distance+.55f},
+                        {3.4f,2.4f,3.25f},{0,0,side*.25f},bedrock);
+                }
                 const auto slab=VisibleStone(obstacle,age);
-                draw("route_arch_shoulder",slab.rail,{1,1,1},{0,0,slab.roll},bedrock);
-                if(age>=SupportBreak && age<2.50f)for(unsigned i=0;i<5;++i) {
+                if(age<GroundImpact)draw(shelf?"route_shelf_tip":"route_arch_shoulder",slab.rail,{1,1,1},{},bedrock);
+                if(age>=GroundImpact)for(float side:{-1.0f,1.0f})for(int i=0;i<3;++i) {
+                    const float spread=Ease(age,GroundImpact,GroundImpact+.35f);
+                    const float size=1.3f+.4f*i;
+                    const float x=slab.rail.x+side*((shelf?1.7f:4.9f)+2.1f*i+1.5f*spread);
+                    draw("rail_hazard_block",{x,size*.52f,distance+(i-1)*1.8f},
+                        {size,size*.78f,size*.94f},{.17f*i,side*(.35f+.4f*i),side*.24f},bedrock);
+                }
+                if(age>=SupportBreak && age<GroundImpact)for(unsigned i=0;i<5;++i) {
                     const float t=age-SupportBreak-.031f*i;
                     if(t<0)continue;
                     const auto strike=Strike(obstacle);
-                    const auto fragment=Add(strike,{-t*(.65f+.51f*i),.18f*i-6.1f*t*t,
+                    const float side=i%2==0?-1.0f:1.0f;
+                    const auto fragment=Add(strike,{side*(3.4f*i+t*(.65f+.51f*i)),.18f*i-6.1f*t*t,
                         -.15f-t*(.49f+.31f*i)});
                     if(fragment.y<-5.0f)continue;
                     const float size=.19f+.054f*(i%4);
@@ -587,7 +631,7 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                         {t*2.6f,t*1.2f,t*(2.1f+.64f*i)},{.75f,.63f,.49f,1});
                 }
                 const auto landing=LandingContact(obstacle);
-                if(age>=GroundImpact)for(unsigned i=0;i<11;++i) {
+                if(age>=GroundImpact && age<GroundImpact+1.1f)for(unsigned i=0;i<11;++i) {
                     const float t=age-GroundImpact-.009f*(i%5);
                     if(t<0)continue;
                     const float size=.076f+.023f*(i%5);
@@ -599,7 +643,7 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                     // Lose speed at each impact, then let the chip roll to rest.
                     const float rollOut=Ease(t,firstHop+secondHop,firstHop+secondHop+.21f);
                     const float travel=(.78f+.14f*(i%6))*(first+.36f*second+.14f*rollOut);
-                    const float x=landing.x+.52f+std::cos(angle)*travel;
+                    const float x=landing.x+(i%2==0?-1.0f:1.0f)*(1.3f+.68f*i)+std::cos(angle)*travel;
                     const float z=landing.z-1.10f-.10f*(i%4)+(std::sin(angle)-.20f)*travel*.58f;
                     const float spin=first+.66f*second+.35f*rollOut;
                     draw("rail_hazard_block",{x,landing.y+size+height,z},{size,size*.78f,size*.88f},
@@ -688,7 +732,7 @@ void CourseMeshRenderQueue::AddObstacleInstances(
 }
 
 bool CourseMeshRenderQueue::WriteFang(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
-    float recoil,bool exposed,bool damaged,uint8_t panelMask,
+    float recoil,bool exposed,bool damaged,const RailRearArmor* armor,
     std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection) {
     std::array<uint32_t,RailFangModel::Parts.size()> indices{};
     for(size_t i=0;i<indices.size();++i) {
@@ -697,7 +741,7 @@ bool CourseMeshRenderQueue::WriteFang(CourseMeshRenderItem& hull,const TwinShiel
         if(!models[indices[i]].loaded || models[indices[i]].name!=name)return false;
     }
     const auto panelIndex=ResolveModelIndex(models,"rear_boost_panel",nullptr);
-    unsigned panelCount=0;for(size_t i=0;i<kRearPanelAnchors.size();++i)if(panelMask&(1u<<i))++panelCount;
+    const size_t panelCount=armor ? kRearPanelAnchors.size() : 0;
     if(items_.size()-visibleCount_<7u-unsigned(damaged)+panelCount)return false;
     const auto parent=BuildTwinShieldDroneWorldMatrix(pose);
     const auto motion=RailFangModel::FiringPose(recoil);
@@ -721,22 +765,21 @@ bool CourseMeshRenderQueue::WriteFang(CourseMeshRenderItem& hull,const TwinShiel
         material.shininess=12;material.environmentCoefficient=.04f;item->useMaterialOverride=true;
         world(*item,part.local,indices[i]);
     }
-    if(models[panelIndex].loaded && models[panelIndex].name=="rear_boost_panel")
-        for(size_t i=0;i<kRearPanelAnchors.size();++i)if(panelMask&(1u<<i)) {
+    if(armor && models[panelIndex].loaded && models[panelIndex].name=="rear_boost_panel")
+        for(size_t i=0;i<panelCount;++i) {
+            const bool broken=!armor->HasPanel(i);
             auto* panel=AllocateItem();if(!panel)break;
             panel->kind=CourseMeshRenderKind::Enemy;panel->name=panel->meshId="rear_boost_panel";
             panel->sourceActorId=owner;panel->sortDistance=sort;panel->modelIndex=panelIndex;
             panel->visible=panel->transformData && panel->materialData;if(!panel->visible)continue;
-            *panel->materialData={};panel->materialData->color={1,1,1,pose.alpha};
-            panel->materialData->uvTransform=MakeIdentity4x4();panel->materialData->specularMode=11;
-            panel->materialData->padding2[0]=1.6f;panel->useMaterialOverride=true;
-            world(*panel,MakeAffineMatrix(Vector3{1,1,1},Vector3{},kRearPanelAnchors[i]),panelIndex);
+            world(*panel,RearPanelLocal(i,broken),panelIndex);
+            WriteRearPanelMaterial(*panel, pose.alpha, i, false, broken);
         }
     return true;
 }
 
 bool CourseMeshRenderQueue::WriteVeil(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
-    const RailVeilAttackFrame& attack,bool sensorExposed,bool sensorDamaged,uint8_t panelMask,
+    const RailVeilAttackFrame& attack,bool sensorExposed,bool sensorDamaged,const RailRearArmor* armor,
     std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection) {
     std::array<uint32_t,RailVeilModel::Parts.size()> indices{};
     for(size_t i=0;i<indices.size();++i) {
@@ -778,18 +821,16 @@ bool CourseMeshRenderQueue::WriteVeil(CourseMeshRenderItem& hull,const TwinShiel
         writeWorld(*item,Multiply(models[indices[i]].rootLocal,Multiply(frame.local,parent)));
     }
     const auto panelIndex=ResolveModelIndex(models,"veil_boost_panel",nullptr);
-    if(models[panelIndex].loaded && models[panelIndex].name=="veil_boost_panel")
-        for(size_t i=0;i<kRearPanelAnchors.size();++i)if(panelMask&(1u<<i)) {
+    if(armor && models[panelIndex].loaded && models[panelIndex].name=="veil_boost_panel")
+        for(size_t i=0;i<kRearPanelAnchors.size();++i) {
+            const bool broken=!armor->HasPanel(i);
             auto* panel=AllocateItem();if(!panel)break;
             panel->kind=CourseMeshRenderKind::Enemy;panel->name="veil_boost_panel";panel->meshId=panel->name;
             panel->sourceActorId=owner;panel->sortDistance=sort;panel->modelIndex=panelIndex;
             panel->visible=panel->transformData && panel->materialData;if(!panel->visible)continue;
-            *panel->materialData={};panel->materialData->color={1,1,1,pose.alpha};
-            panel->materialData->uvTransform=MakeIdentity4x4();panel->materialData->specularMode=16;
-            panel->materialData->environmentCoefficient=1;panel->materialData->shininess=.02f;
-            panel->useMaterialOverride=true;
             writeWorld(*panel,Multiply(models[panelIndex].rootLocal,
-                Multiply(MakeAffineMatrix(Vector3{1,1,1},Vector3{},kRearPanelAnchors[i]),parent)));
+                Multiply(RearPanelLocal(i,broken),parent)));
+            WriteRearPanelMaterial(*panel, pose.alpha, i, true, broken);
         }
     return true;
 }
@@ -809,7 +850,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
         // draw the shrinking, camera-facing live actor during its retirement.
         if(enemyPresentation && std::any_of(enemyPresentation->Frame().destructionBursts.begin(),
                 enemyPresentation->Frame().destructionBursts.end(),[&](const auto& burst) {
-                    return burst.twinShield && burst.actorId==enemy.actorId;
+                    return (burst.twinShield || burst.groundTurret.Active()) && burst.actorId==enemy.actorId;
                 })) continue;
 
         if (enemy.combatState.initialized &&
@@ -954,18 +995,19 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                     const float scale=kElitePursuerModelScale*presentationScale;
                     pose.scale={scale,scale,scale};
                 }
-                const uint8_t panels=enemy.rearArmor.enabled && enemy.desc.hitPoints>0 && enemy.weaponMount.ready?
-                    enemy.rearArmor.intact:0;
+                const auto* armor=enemy.rearArmor.enabled && enemy.desc.hitPoints>0 && enemy.weaponMount.ready?
+                    &enemy.rearArmor:nullptr;
                 if(WriteVeil(*item,pose,veilAttack?*veilAttack:RailVeilAttackFrame{},
-                    enemy.veilSensorExposed,enemy.veilSensorHitPoints<=0,panels,models,viewProjection))continue;
+                    enemy.veilSensorExposed,enemy.veilSensorHitPoints<=0,armor,models,viewProjection))continue;
             }
             if(enemy.desc.actorAssetId=="rear_fang") {
                 if(!enemy.weaponMount.ready) {
                     const float scale=kElitePursuerModelScale*presentationScale;pose.scale={scale,scale,scale};
                 }
-                const uint8_t panels=enemy.rearArmor.enabled && enemy.desc.hitPoints>0 && enemy.weaponMount.ready?enemy.rearArmor.intact:0;
+                const auto* armor=enemy.rearArmor.enabled && enemy.desc.hitPoints>0 && enemy.weaponMount.ready?
+                    &enemy.rearArmor:nullptr;
                 if(WriteFang(*item,pose,eliteFire?eliteFire->FangRecoil(enemy.actorId):0,
-                    enemy.fangCannonExposed,enemy.fangCannonHitPoints<=0,panels,models,viewProjection))continue;
+                    enemy.fangCannonExposed,enemy.fangCannonHitPoints<=0,armor,models,viewProjection))continue;
             }
             if(IsRailElitePursuer(enemy.desc.actorAssetId)) {
                 const bool fang=enemy.desc.actorAssetId=="rear_fang";
@@ -1028,7 +1070,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                         const auto panelIndex=ResolveModelIndex(models,"rear_boost_panel",nullptr);
                         if(models[panelIndex].loaded && models[panelIndex].name=="rear_boost_panel") {
                             for(size_t index=0;index<kRearPanelAnchors.size();++index) {
-                                if(!enemy.rearArmor.HasPanel(index)) continue;
+                                const bool broken=!enemy.rearArmor.HasPanel(index);
                                 auto* panel=AllocateItem();
                                 if(!panel) break;
                                 panel->kind=CourseMeshRenderKind::Enemy;
@@ -1039,15 +1081,13 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                                 panel->modelIndex=panelIndex;
                                 panel->visible=panel->transformData && panel->materialData;
                                 if(!panel->visible) continue;
-                                *panel->materialData={};
-                                panel->materialData->color={1,1,1,alpha};
-                                panel->materialData->uvTransform=MakeIdentity4x4();
-                                panel->materialData->specularMode=11;
-                                panel->materialData->padding2[0]=1.6f;
-                                panel->useMaterialOverride=true;
-                                const auto center=RearSubsystemWorldCenter(pose,kRearPanelAnchors[index]);
-                                WriteItemTransform(*panel,models[panelIndex].rootLocal,pose.scale,
-                                    pose.rotation,center,viewProjection);
+                                const auto world=Multiply(models[panelIndex].rootLocal,
+                                    Multiply(RearPanelLocal(index,broken),BuildTwinShieldDroneWorldMatrix(pose)));
+                                panel->transformData->World=world;
+                                panel->transformData->WVP=Multiply(world,viewProjection);
+                                auto inverseSource=world;
+                                panel->transformData->WorldInverseTranspose=Transpose(Inverse(inverseSource));
+                                WriteRearPanelMaterial(*panel, alpha, index, false, broken);
                             }
                         }
                     }
@@ -1530,6 +1570,43 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             coreModelIndex);
     }
     if(enemyPresentation && !models.empty()) for(const auto& burst:enemyPresentation->Frame().destructionBursts) {
+        if(burst.groundTurret.Active()) {
+            const auto pose=RailGroundTurretCollapse::Evaluate(burst.groundTurret,burst.age);
+            const auto geometry=RailTurret::ForMesh(burst.groundTurret.meshId);
+            const auto draw=[&](const char* mesh,const Matrix4x4& transform) {
+                if(!mesh)return;
+                const auto index=ResolveModelIndex(models,mesh,nullptr);
+                if(models[index].name!=mesh || !models[index].loaded)return;
+                auto* part=AllocateItem();
+                if(!part || !part->transformData || !part->materialData)return;
+                part->kind=CourseMeshRenderKind::Enemy;
+                part->name="battery_wreck";part->meshId=mesh;part->sourceActorId=burst.actorId;
+                part->modelIndex=index;part->collisionMode=CourseTerrainCollisionMode::None;
+                part->visible=true;part->useMaterialOverride=true;
+                auto& material=*part->materialData;
+                material={};material.uvTransform=MakeIdentity4x4();material.enableLighting=true;
+                const float soot=RailGroundTurretCollapse::Smooth(burst.age,.30f,1.1f);
+                material.color={.35f-.19f*soot,.39f-.23f*soot,.42f-.24f*soot,pose.opacity};
+                material.shininess=4.0f;
+                material.environmentCoefficient=.025f;
+                material.specularMode=3;
+                material=WithCourseSurfaceProfile(WithCaveSurfaceLighting(material,
+                    {.67f,.73f,.80f},.61f,.12f,.78f),CourseSurfaceProfile::Turret);
+                auto world=Multiply(models[index].rootLocal,transform);
+                part->transformData->World=world;
+                part->transformData->WVP=Multiply(world,viewProjection);
+                part->transformData->WorldInverseTranspose=Transpose(Inverse(world));
+            };
+            draw(geometry.baseMesh,pose.base);
+            draw(geometry.headMesh,pose.head);
+            if(burst.groundTurret.meshId=="siege_turret") {
+                for(float side:{-1.0f,1.0f}) {
+                    const auto socket=MakeAffineMatrix(Vector3{1,1,1},Vector3{},Vector3{side*geometry.muzzleSide,0,0});
+                    draw(geometry.movingMesh,Multiply(socket,pose.barrel));
+                }
+            } else draw(geometry.movingMesh,pose.barrel);
+            continue;
+        }
         if(!burst.twinShield) continue;
         auto pose=burst.frozenPose;
         pose.destructionAge=burst.age;

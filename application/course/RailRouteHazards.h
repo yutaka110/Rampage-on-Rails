@@ -1,26 +1,62 @@
 #pragma once
 
 #include "CourseSpawnRuntime.h"
+#include "RailGroundBatteryAttack.h"
 #include "RailMothershipPresentation.h"
 #include "utils/math/MathUtils.h"
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <string_view>
 
 namespace RailRouteHazards {
 inline constexpr std::string_view BarricadeId="route_break_barricade";
 inline constexpr std::string_view SlabId="route_arch_slab";
+inline constexpr std::string_view ShelfSlabId="route_shelf_slab";
+inline constexpr std::string_view ArchBatteryWave="arch_inner_batteries";
+using RailGroundBattery::ShelfBatteryWave;
+inline constexpr float ArchPlatformTop=-2.25f;
+inline constexpr std::string_view SlabShotPrefix="slab-shot:";
 inline constexpr float SlabTrigger=1689.0f;
 inline constexpr float BoltLaunch=.12f, BoltImpact=.39f;
-inline constexpr float SupportBreak=.98f, SlipSound=1.52f, GroundImpact=2.30f;
+inline constexpr float SupportBreak=.64f, SlipSound=.85f, GroundImpact=1.63f;
 inline constexpr float LandingDustDelay=.16f, LandingDustSeconds=1.40f;
-inline constexpr Vector3 ShoulderOpeningOffset{-2.2f,-1.5f,-.70f};
 inline constexpr float BarricadeHealth=72.0f;
 inline constexpr float BarricadeDebrisSeconds=.78f;
 
 inline bool IsBarricade(const CourseObstacleActor& actor) { return actor.desc.id==BarricadeId; }
-inline bool IsSlab(const CourseObstacleActor& actor) { return actor.desc.id==SlabId; }
+inline bool IsShelf(const CourseObstacleActor& actor) { return actor.desc.id==ShelfSlabId; }
+inline bool IsSlab(const CourseObstacleActor& actor) { return actor.desc.id==SlabId || IsShelf(actor); }
+inline bool IsRockfallBattery(std::string_view wave) { return wave==ArchBatteryWave || wave==ShelfBatteryWave; }
+
+inline bool CarrierStrikesSlab(const CourseObstacleActor& actor) {
+    // The original setpiece uses an empty payload. Later arches wait for a shot.
+    return !IsShelf(actor) && actor.desc.payload.empty();
+}
+
+inline float SlabAdvance(const CourseObstacleActor& actor,float distance,float dt) {
+    if(actor.age<=0 && (!CarrierStrikesSlab(actor) || distance<SlabTrigger))return 0;
+    return IsShelf(actor)?1.55f*dt:dt;
+}
+
+inline uint64_t SlabTriggerShot(const CourseObstacleActor& actor) {
+    const std::string_view payload=actor.desc.payload;
+    if(!payload.starts_with(SlabShotPrefix))return 0;
+    uint64_t shot=0;
+    const auto parsed=std::from_chars(payload.data()+SlabShotPrefix.size(),payload.data()+payload.size(),shot);
+    return parsed.ec==std::errc{} && parsed.ptr==payload.data()+payload.size()?shot:0;
+}
+
+inline bool SlabCanBeReleased(const CourseObstacleActor& actor) {
+    return actor.age<BoltImpact && SlabTriggerShot(actor)==0;
+}
+
+inline void ReleaseSlab(CourseObstacleActor& actor,uint64_t shotId) {
+    // The slab payload travels with the obstacle through checkpoint capture.
+    actor.desc.payload=std::string(SlabShotPrefix)+std::to_string(shotId);
+    actor.age=BoltImpact;
+}
 
 inline void OpenBarricade(CourseObstacleActor& actor) {
     actor.desc.hitPoints=0;
@@ -43,20 +79,15 @@ struct SlabPose {
 };
 
 inline SlabPose Stone(const CourseObstacleActor& actor,float age) {
-    const float crack=Ease(age,BoltImpact,1.39f);
-    const float crossing=Ease(age,1.77f,2.34f);
-    const float settle=Ease(age,2.23f,2.66f);
-    return {{actor.desc.lateralOffset-.42f*crack-15.0f*crossing,
-        actor.desc.verticalOffset-.44f*crack-4.75f*Ease(age,1.52f,1.99f)-5.2f*settle,
-        actor.desc.spawnDistance+actor.desc.distanceOffset},
-        -.23f*crack-.78f*crossing};
+    const float drop=Ramp(age,SupportBreak,GroundImpact);
+    return {{actor.desc.lateralOffset,
+        std::lerp(actor.desc.verticalOffset,actor.desc.halfExtents.y,drop*drop),
+        actor.desc.spawnDistance+actor.desc.distanceOffset},0};
 }
 
 inline Vector3 Strike(const CourseObstacleActor& actor) {
-    // Front face of the lower shear joint in RouteArchRoots.
-    return {actor.desc.lateralOffset+1.90f+ShoulderOpeningOffset.x,
-        actor.desc.verticalOffset-2.01f+ShoulderOpeningOffset.y,
-        actor.desc.spawnDistance+actor.desc.distanceOffset-2.92f+ShoulderOpeningOffset.z};
+    return {actor.desc.lateralOffset,actor.desc.verticalOffset-1.4f,
+        actor.desc.spawnDistance+actor.desc.distanceOffset-actor.desc.halfExtents.z};
 }
 
 inline constexpr float ArchDistance=1755.0f;
@@ -103,55 +134,26 @@ inline Vector3 HeavyMuzzle(const RailMothership::Frame& carrier,Vector3 target) 
     return carrier.World(HeavyGunLocal(HeavyGunRotation(carrier,target),{0,.32f,-2.10f}));
 }
 
-inline constexpr float FractureStart=.46f, FractureEnd=.91f;
-inline constexpr float ShoulderLandingRoll=.58f, ShelfHeight=-.83f;
-
-inline Vector2 RotateRockPoint(float x,float y,float roll) {
-    const float s=std::sin(roll),c=std::cos(roll);
-    return {x*c-y*s,x*s+y*c};
-}
+inline constexpr float FractureStart=.40f, FractureEnd=SupportBreak;
 
 inline Vector3 LandingContact(const CourseObstacleActor& actor) {
     const auto slab=Stone(actor,GroundImpact);
-    // Lowest vertex of the authored shoulder at impact. The shelf is part
-    // of the stationary canyon mesh.
-    const auto edge=RotateRockPoint(-1.028f,-1.481f,ShoulderLandingRoll);
-    return {slab.rail.x+edge.x,ShelfHeight,slab.rail.z-.905f};
+    return {slab.rail.x,0,slab.rail.z};
 }
 
 inline SlabPose VisibleStone(const CourseObstacleActor& actor,float age) {
-    auto slab=Stone(actor,age);
-    // Hinge on the surviving lower lip until it tears, then continue the
-    // same rotation through the fall. Stone() remains the vehicle sweep.
-    const float tip=.23f*Ease(age,1.08f,1.70f);
-    const auto lip=RotateRockPoint(1.9f,-1.6f,tip);
-    const float free=Ease(age,1.57f,1.86f);
-    slab.rail.x=std::lerp(actor.desc.lateralOffset+1.9f-lip.x,slab.rail.x,free);
-    slab.rail.y=std::lerp(actor.desc.verticalOffset-1.6f-lip.y,slab.rail.y,free);
-    // Start in the arch opening and blend onto the established crossing.
-    slab.rail.x+=ShoulderOpeningOffset.x*(1-Ease(age,1.84f,2.10f));
-    slab.rail.y+=ShoulderOpeningOffset.y*(1-Ease(age,1.63f,1.94f));
-    slab.rail.z+=ShoulderOpeningOffset.z*(1-Ease(age,1.75f,2.18f));
-    slab.roll=tip+(ShoulderLandingRoll-.23f)*Ease(age,1.59f,GroundImpact);
-    if(age>=GroundImpact) {
-        slab.roll+=.11f*Ease(age,GroundImpact,2.50f)-.035f*Ease(age,2.50f,2.72f);
-    }
-    const auto edge=RotateRockPoint(-1.028f,-1.481f,slab.roll);
-    const float floor=ShelfHeight-edge.y;
-    // Carry downward speed into contact, then let the shelf arrest the fall.
-    const float drop=Ramp(age,2.12f,GroundImpact);
-    slab.rail.y=std::lerp(slab.rail.y,floor,drop*drop);
-    return slab;
+    return Stone(actor,age);
 }
 
-inline float ChipRelease(unsigned index) {return .98f+.15f*float(index);}
-inline constexpr float ChipFlight=.79f;
+inline float ChipRelease(unsigned index) {return SupportBreak+.11f*float(index);}
+inline constexpr float ChipFlight=.90f;
 inline Vector3 CrossingChip(const CourseObstacleActor& actor,unsigned index,float age) {
     const float release=ChipRelease(index);
     const float t=Ramp(age,release,release+ChipFlight);
     const auto origin=VisibleStone(actor,release).rail;
-    return {origin.x-.50f-(.55f+.43f*index)*t,
-        std::lerp(origin.y-.99f,.14f,t*t),
-        origin.z-1.85f-.45f*index-.52f*t};
+    const float side=index%2==0?-1.0f:1.0f;
+    return {origin.x+side*(4.7f+index*1.45f+.8f*t),
+        std::lerp(origin.y-4.0f,.14f,t*t),
+        origin.z-2.4f-.42f*index-.52f*t};
 }
 }

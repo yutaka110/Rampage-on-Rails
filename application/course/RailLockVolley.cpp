@@ -88,6 +88,33 @@ RailLockScoutBlast RailLockContact::ScoutBlast() const {
 RailLockDebrisFrame RailLockContact::Debris() const {
     RailLockDebrisFrame frame;
     if(!destroyed || !std::isfinite(age) || !std::isfinite(size) || size<=0 || age<0 || age>=Duration()) return frame;
+    if (rearPanelIndex >= 0) {
+        const auto tangent = Normalize(std::abs(normal.y) < .95f ? Vector3{normal.z, 0, -normal.x} :
+            Vector3{0, -normal.z, normal.y});
+        const Vector3 up{normal.y*tangent.z-normal.z*tangent.y, normal.z*tangent.x-normal.x*tangent.z,
+            normal.x*tangent.y-normal.y*tangent.x};
+        for (unsigned i = 0; i < 10; ++i) {
+            const float t = age - .005f * float(i % 5);
+            const float life = .27f + .035f * float(i % 5);
+            if (t < 0 || t >= life) continue;
+            const float angle = 2.399963f * float(i) + .37f * float(shotId % 17);
+            const auto radial = Add(Scale(tangent, std::cos(angle)), Scale(up, std::sin(angle)));
+            const auto velocity = Add(Scale(drift, .84f), Add(Scale(radial, 7.4f + 1.25f * float(i % 5)),
+                Scale(normal, 2.0f + .65f * float(i % 3))));
+            const auto origin = Add(position, Scale(normal, .10f));
+            const auto point = [&](float time) {
+                return Add(origin, Add(Scale(velocity, time), {0, -6.7f*time*time, 0}));
+            };
+            auto& chip = frame.fragments[frame.count++];
+            chip.position = point(t);
+            chip.tail = point((std::max)(0.0f, t - .023f));
+            chip.radius = i < 4 ? .132f + .024f * float(i) : .062f + .014f * float(i % 3);
+            chip.rotation = angle + t * (i % 2 ? 13.0f : -17.0f);
+            chip.opacity = 1 - TwinShieldDestructionSmooth(t, life * .62f, life);
+            chip.heat = 1 - TwinShieldDestructionSmooth(t, .015f, life * .70f);
+        }
+        return frame;
+    }
     const auto anchor=hasWreckPose?BuildTwinShieldDroneWorldMatrix(wreckPose):MakeIdentity4x4();
     const auto right=Normalize(Vector3{anchor.m[0][0],anchor.m[0][1],anchor.m[0][2]});
     const auto up=Normalize(Vector3{anchor.m[1][0],anchor.m[1][1],anchor.m[1][2]});
@@ -178,15 +205,24 @@ bool RailLockVolley::TargetPosition(RailLockTargetHandle target,const RailPath& 
             p->age>=p->lifetime || !p->shootDownEnabled || p->shootDownHitPoints<=0 || !RailHeavy::IsProjectile(p->definitionId))return false;
         position=Point(rail,p->spawnDistance+p->distanceOffset,p->lateralOffset,p->verticalOffset);return true;
     }
-    if(target.kind==RailLockTargetKind::Enemy || target.kind==RailLockTargetKind::RearPanel)
+    if(target.kind==RailLockTargetKind::Enemy || target.kind==RailLockTargetKind::RearPanel ||
+        target.kind==RailLockTargetKind::VeilSensor)
         for(const auto& e:runtime.Enemies()) {
         if(e.actorId!=target.actorId) continue;
         if(e.desc.hitPoints<=0 || (e.combatState.initialized && !e.combatState.canReceiveDamage)) return false;
+        if(target.kind==RailLockTargetKind::VeilSensor) {
+            if(e.desc.actorAssetId!="rear_veil" || !e.weaponMount.ready || !e.veilSensorExposed ||
+                e.veilSensorHitPoints<=0 || target.generationId!=e.actorId)return false;
+            position=VeilSensorWorldCenter(e.weaponMount.dronePose);
+            return true;
+        }
         if(target.kind==RailLockTargetKind::RearPanel) {
             const auto index=target.panelIndex;
             if(!e.weaponMount.ready || !e.rearArmor.HasPanel(index) ||
                 e.rearArmor.generation[index]!=target.generationId) return false;
-            position=RearSubsystemWorldCenter(e.weaponMount.dronePose,kRearPanelAnchors[index]);
+            auto face = kRearPanelAnchors[index];
+            face.z -= e.desc.actorAssetId=="rear_veil" ? .23f : .32f;
+            position=RearSubsystemWorldCenter(e.weaponMount.dronePose,face);
             return true;
         }
         if(e.desc.meshId=="twin_shield_hull" && e.weaponMount.ready) {
@@ -287,6 +323,8 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 request.hitKind=laser.target.kind==RailLockTargetKind::Obstacle?RailAimHitKind::Obstacle:RailAimHitKind::Enemy;
                 if(laser.target.kind==RailLockTargetKind::RearPanel)
                     request.sourceIndex=kRearPanelSourceBase+laser.target.panelIndex;
+                const bool sensor=laser.target.kind==RailLockTargetKind::VeilSensor;
+                if(sensor)request.sourceIndex=kVeilSensorHitSource;
                 request.damageType=laser.weapon.damageType;request.rayOrigin=origin;
                 request.rayDirection=Scale(delta,1/distance);request.hitPoint=laser.end;
                 request.hitNormal=Scale(request.rayDirection,-1);request.hitDistance=distance;request.baseDamage=laser.weapon.damage;
@@ -294,7 +332,7 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 request.counterTargetActorId=laser.weapon.counterTargetActorId;
                 RailLockContact contact;contact.shotId=request.shotId;contact.actorId=request.targetActorId;
                 contact.position=request.hitPoint;contact.normal=request.hitNormal;
-                contact.enemyHull=laser.target.kind==RailLockTargetKind::Enemy;
+                contact.enemyHull=laser.target.kind==RailLockTargetKind::Enemy || sensor;
                 contact.incoming=Add(laser.end,Scale(laser.Curve(.94f),-1));
                 // Capture before lethal damage clears the live weapon mount.
                 for(const auto& actor:runtime.Enemies()) if(actor.actorId==contact.actorId) {
@@ -312,8 +350,9 @@ void RailLockVolley::Update(float dt,Vector3 muzzle,const RailPath& rail,CourseS
                 laser.hit=damage.damageApplied;
                 if(laser.hit) {
                     hits_.push_back(damage);
+                    if(sensor)contact.size=.72f;
                     contact.destroyed=damage.destroyed || damage.rearPanelBroken;
-                    if(damage.rearPanelBroken) contact.size=.65f;
+                    if(damage.rearPanelBroken) contact.rearPanelIndex=static_cast<int8_t>(laser.target.panelIndex);
                     if(damage.destroyed) for(const auto& actor:runtime.Enemies()) {
                         if(actor.actorId!=contact.actorId || !actor.hasDefeatedPose) continue;
                         contact.wreckPose=actor.defeatedPose;

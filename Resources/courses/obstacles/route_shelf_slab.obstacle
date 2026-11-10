@@ -1,0 +1,4 @@
+# The fractured tip of the right canyon shelf sits over its battery.
+obstacle|route_shelf_slab|Fractured canyon shelf|rail_hazard_block|300|7.1|4.1|4.6|1|1|1|1
+placement|180|8.5|17|0
+breakable|true|12

@@ -1,34 +1,46 @@
-"""Build the canyon arch and its detachable shoulder from a shared rock profile."""
+"""Build the canyon arch and its detachable overhead slab from a shared profile."""
 from math import cos, sin, sqrt
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "Resources/course_meshes/RouteNaturalArch"
-SHOULDER_OFFSET = (-2.2, -1.5, -.70)
-SHOULDER_ORIGIN = tuple(a+b for a,b in zip((7.0, 7.4, 0.0),SHOULDER_OFFSET))
+SLAB_ORIGIN = (0, 20, 0)
 
 # Outer and inner edges in rail X/Y, followed by front and back depth.
 PROFILE = [
-    ((-31.0, -15.3), (-11.1, -16.8), 8.9, 10.1),
-    ((-26.8, -6.7), (-8.6, -7.7), 6.8, 7.5),
-    ((-22.2, -1.1), (-7.3, -.6), 5.0, 6.5),
-    ((-17.8, 4.7), (-6.8, 4.0), 4.3, 5.5),
-    ((-14.1, 9.9), (-5.7, 6.8), 4.6, 4.6),
-    ((-9.8, 13.6), (-4.2, 8.1), 3.6, 4.7),
-    ((-5.1, 15.1), (-1.2, 8.8), 3.4, 3.7),
-    ((-.4, 15.6), (1.0, 9.2), 2.7, 3.3),
-    ((3.8, 13.9), (3.2, 8.8), 3.1, 3.1),
-    ((6.25, 11.45), (4.5, 8.10), 2.7, 2.8),
-    ((8.55, 9.0), (5.35, 7.05), 2.45, 2.55),
-    ((10.50, 7.15), (6.1, 6.1), 2.8, 2.9),
-    ((11.20, 5.05), (6.5, 5.85), 2.9, 3.1),
-    ((13.9, 2.6), (6.65, 3.0), 4.15, 4.0),
-    ((18.1, -.95), (7.15, -.55), 5.55, 6.1),
-    ((25.7, -6.7), (8.3, -8.2), 7.0, 7.9),
-    ((32.6, -15.1), (11.0, -17.5), 9.3, 9.8),
+    ((-34.0, -15.3), (-18.0, -16.8), 8.9, 10.1),
+    ((-29.8, -6.7), (-15.8, -7.7), 6.8, 7.5),
+    ((-25.4, -.9), (-14.6, -.6), 5.6, 6.5),
+    ((-22.8, 5.3), (-13.3, 5.0), 5.3, 5.5),
+    ((-19.4, 11.9), (-12.2, 10.2), 4.6, 5.0),
+    ((-15.4, 18.3), (-11.4, 13.0), 3.9, 4.7),
+    ((-10.4, 22.6), (-10.5, 14.5), 3.4, 3.4),
+    ((-5.4, 24.6), (-5.0, 15.9), 3.5, 3.3),
+    ((-.4, 25.0), (0.0, 16.6), 3.35, 3.4),
+    ((4.6, 24.4), (5.1, 15.7), 3.3, 3.4),
+    ((10.2, 22.4), (10.3, 14.4), 3.3, 3.35),
+    ((15.1, 19.1), (11.5, 13.0), 3.8, 4.6),
+    ((19.4, 13.6), (12.6, 10.3), 4.3, 5.1),
+    ((23.0, 6.5), (13.8, 5.5), 5.05, 5.8),
+    ((25.0, -.95), (15.2, -.55), 5.65, 6.3),
+    ((29.6, -6.7), (16.1, -8.2), 7.4, 8.3),
+    ((34.1, -15.1), (18.0, -17.5), 9.3, 9.8),
 ]
-CROWN_CUT, FOOT_CUT = 9, 12
+LEFT_SEAM, RIGHT_SEAM = 6, 10
+SHELF_ORIGIN = (8.5, 17, 0)
+SHELF_PROFILE = [
+    ((2.0, 16.4), (2.9, 14.2), 2.7, 2.6),
+    ((5.2, 19.8), (5.3, 13.6), 4.4, 4.2),
+    ((9.7, 21.0), (9.1, 13.1), 4.6, 5.0),
+    ((15.6, 19.3), (14.1, 13.4), 3.8, 4.9),
+    ((23.9, 25.2), (18.4, 12.4), 6.8, 7.7),
+    ((33.6, 26.0), (28.8, 15.6), 7.9, 11.2),
+    ((47.2, 34.5), (38.2, 7.5), 13.9, 16.7),
+    ((64.0, 37.0), (53.0, -3.0), 18.6, 20.4),
+    ((83.0, 37.9), (72.0, -16.0), 21.8, 23.2),
+]
+SHELF_SEAM = 3
 # Fraction across the rock and fraction of front/back depth.
 RIM = (
     (.02, -.36), (.16, -.82), (.37, -1), (.62, -.96), (.85, -.76),
@@ -139,24 +151,14 @@ def export(name, spans, origin=(0,0,0)):
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     arch = rings_for(PROFILE,.22,first_index=-1)
-    # Bring the detachable shoulder into the opening while leaving its shape
-    # and contact point intact. Blend the adjacent bedrock into the new seams.
-    placement = {7:.09, 8:.42, 9:1, 10:1, 11:1, 12:1, 13:.37, 14:.08}
-    for index, weight in placement.items():
-        arch[index] = [tuple(a+b*weight for a,b in zip(p,SHOULDER_OFFSET)) for p in arch[index]]
-    shelf = rings_for([
-        ((-21,-2.8),(-15,-2.5),4.8,4.2),
-        ((-17,-1.8),(-11,-1.0),4.0,4.8),
-        ((-13,-1.7),(-8.1,-.77),3.8,3.7),
-        ((-8,-2.7),(-5.1,-.94),3.1,2.6),
-        ((-6,-3.5),(-4.9,-2.7),2.2,1.7),
-    ],.16)
     export("RouteArchRoots", [
-        (arch,0,CROWN_CUT,False,True),
-        (arch,FOOT_CUT,len(arch)-1,True,False),
-        (shelf,0,len(shelf)-1,False,False),
+        (arch,0,LEFT_SEAM,False,True),
+        (arch,RIGHT_SEAM,len(arch)-1,True,False),
     ])
-    export("RouteArchShoulder", [(arch,CROWN_CUT,FOOT_CUT,True,True)], SHOULDER_ORIGIN)
+    export("RouteArchShoulder", [(arch,LEFT_SEAM,RIGHT_SEAM,True,True)], SLAB_ORIGIN)
+    shelf = rings_for(SHELF_PROFILE, .35)
+    export("RouteShelfRoot", [(shelf, SHELF_SEAM, len(shelf)-1, True, False)])
+    export("RouteShelfTip", [(shelf, 0, SHELF_SEAM, False, True)], SHELF_ORIGIN)
 
 
 if __name__ == "__main__":

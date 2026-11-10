@@ -238,17 +238,19 @@ const RailVehicleBodyCollisionFrame& RailVehicleBodyCollisionSystem::Update(
         for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
             // Damage resolves before the next runtime cleanup; a destroyed
             // obstacle must stop blocking the vehicle in the same frame.
-            if (obstacle.age >= obstacle.desc.lifetime ||
-                (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f)) continue;
+            const bool slab=RailRouteHazards::IsSlab(obstacle);
+            if(obstacle.age>=obstacle.desc.lifetime ||
+                (slab?obstacle.age>=RailRouteHazards::GroundImpact:
+                    obstacle.desc.breakable && obstacle.desc.hitPoints<=0.0f))continue;
             RailLocalPoint center{
                 obstacle.desc.spawnDistance + obstacle.desc.distanceOffset,
                 obstacle.desc.lateralOffset,
                 obstacle.desc.verticalOffset};
             auto relativeEnd=end;
-            if(RailRouteHazards::IsSlab(obstacle)) {
+            if(slab) {
                 const auto previous=RailRouteHazards::Stone(obstacle,obstacle.age).rail;
                 const auto current=RailRouteHazards::Stone(obstacle,obstacle.age+
-                    (end.distance>=RailRouteHazards::SlabTrigger?input.deltaTime:0)).rail;
+                    RailRouteHazards::SlabAdvance(obstacle,end.distance,input.deltaTime)).rail;
                 center={previous.z,previous.x,previous.y};
                 relativeEnd.distance+=previous.z-current.z;
                 relativeEnd.lateral+=previous.x-current.x;

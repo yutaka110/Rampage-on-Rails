@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "RailGroundTurretCollapse.h"
 
 #include <cstdint>
 #include <functional>
@@ -17,6 +18,7 @@ class RailAttackWarningPresentation;
 class RailPrimaryKillPresentation;
 struct CourseEnemyActor;
 struct RailPrimaryContact;
+class WeaponFeedbackSystem;
 struct RailLockContact;
 namespace ge3::debug { class DebugDrawSystem; }
 
@@ -126,6 +128,7 @@ struct EnemyDestructionBurst final {
     TwinShieldDronePose frozenPose{};
     Vector3 crashPosition{}, crashNormal{0,1,0};
     bool crashEmitted = false;
+    RailGroundTurretCollapse::Wreck groundTurret{};
 };
 
 struct EnemyCombatPresentationFrame final {
@@ -146,6 +149,7 @@ struct EnemyCombatPresentationInput final {
     const RailPath* railPath = nullptr;
     std::span<const EnemyCombatEvent> events{};
     std::span<const RailPrimaryContact> primaryContacts{};
+    const WeaponFeedbackSystem* weaponFeedback=nullptr;
     Vector3 listenerPosition{};
     Vector3 listenerRight{1.0f, 0.0f, 0.0f};
     float deltaTime = 0.0f;

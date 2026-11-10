@@ -106,13 +106,13 @@ void TestBridgeEscapeInteraction(RegressionRunner& runner) {
 }
 
 void TestPostBossTiming(RegressionRunner& runner) {
-    for(int fps:{30,60,120})for(float speed:{36.45f,43.74f,51.03f})for(float clear:{3500.0f,6200.0f}) {
+    for(int fps:{30,60,120})for(float speed:{21.87f,36.45f,43.74f,51.03f})for(float clear:{3500.0f,6200.0f}) {
         RailPostBossSequence sequence;CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;
         float d=clear;
         for(int i=0;i<fps*4;++i){sequence.Update(1.0f/fps,d,false,runtime,dispatcher);d+=speed/fps;}
         runner.Expect(!sequence.Started() && runtime.Enemies().empty(),"a living miniboss never starts the bridge or rear pair");
         sequence.Update(1.0f/fps,d,true,runtime,dispatcher);const float anchor=sequence.Anchor();
-        runner.Expect(std::abs(sequence.Scenery().front().distance-anchor-360)<.01f,"the bridge is placed relative to the actual early/late clear");
+        runner.Expect(std::abs(sequence.Scenery().front().distance-anchor-RailPostBossSequence::BridgeStart)<.01f,"the bridge is placed relative to the actual early/late clear");
         const auto floor=sequence.TerrainPreview(TerrainEditLayer{}).Evaluate(anchor+600,4.712389f).radialOffset;
         runner.Expect(floor>8 && floor<32 && sequence.TerrainPreview(TerrainEditLayer{}).Evaluate(anchor+600,0).radialOffset>16,
             "the derived valley opens laterally with a bounded gentle floor, without editing the source course");
@@ -120,17 +120,52 @@ void TestPostBossTiming(RegressionRunner& runner) {
         runner.Expect(sequence.Age()==frozen.Age() && sequence.ActorIds()==frozen.ActorIds(),"pause advances neither the sequence nor its actors");
         bool notice=false;for(int i=0;i<fps*25;++i) {
             d+=speed/fps;sequence.Update(1.0f/fps,d,true,runtime,dispatcher);
-            if(sequence.CurrentPhase()==RailPostBossSequence::Phase::Notice) {
-                notice=true;runner.Expect(sequence.Age()>=12 && d-anchor>=490,"normal, E and reward speeds all retain the minimum breather and bridge entry");
+            if(sequence.CurrentPhase()==RailPostBossSequence::Phase::Notice && !notice) {
+                notice=true;
+                runner.Expect(sequence.Age()>=RailPostBossSequence::MinimumBreather &&
+                    d-anchor>=RailPostBossSequence::BridgeStart && sequence.CheckpointPending(),
+                    "the rear checkpoint is captured on the bridge ahead of the camera turn");
             }
             if(sequence.CurrentPhase()==RailPostBossSequence::Phase::Combat)break;
         }
         runner.Expect(notice && runtime.Enemies().size()==2 && sequence.CameraWeight()==1,"exactly two real pursuers enter after the vista, bridge and camera turn");
+        runner.Expect(sequence.Age()>=7 && sequence.Age()<=9,"brake, cruise and boost reach rear combat in seven to nine seconds");
         runner.Expect(!sequence.Complete(),"merely travelling through the new section never claims a combat clear");
         const auto checkpoint=sequence;const auto ids=sequence.ActorIds();
         sequence.Update(1,d+speed,true,runtime,dispatcher);sequence=checkpoint;
         sequence.Update(1.0f/fps,d,true,runtime,dispatcher);
         runner.Expect(sequence.ActorIds()==ids && runtime.Enemies().size()==2 && sequence.Anchor()==anchor,"restoring sequence history preserves the bridge origin and never respawns its pair");
+        const float fangHull=runtime.Enemies()[0].desc.hitPoints;
+        runner.Expect(fangHull==2534.4f && runtime.Enemies()[1].desc.hitPoints==1900.8f,
+            "both pursuers spawn with their authored endurance hulls");
+        const float dt=1.0f/fps;
+        // Old clear thresholds must still be in combat. A timed exit must
+        // leave enough physical bridge for the authored escape jump.
+        const auto setFangHull=[&](float hp) {
+            auto damaged=runtime.CaptureCheckpoint();
+            auto& fang=damaged.enemies.front();
+            fang.desc.hitPoints=fang.combatState.currentHitPoints=hp;
+            runner.Expect(runtime.RestoreCheckpoint(damaged),"restore the timing fixture with specified hull damage");
+        };
+        setFangHull(fangHull*.75f);
+        while(sequence.SurvivalSeconds()<27 && !sequence.EscapeActive()) {
+            d+=speed*dt;sequence.Update(dt,d,true,runtime,dispatcher);
+        }
+        runner.Expect(!sequence.EscapeActive() && sequence.HullSmoke(0).Stage()==1 &&
+            sequence.HullSmoke(1).Stage()==0,"25 percent hull damage opens one vent on the struck pursuer only");
+        const float firstVent=sequence.HullSmoke(0).since.front();
+        setFangHull(fangHull*.25f);
+        sequence.Update(dt,d,true,runtime,dispatcher);
+        runner.Expect(!sequence.EscapeActive() && sequence.HullSmoke(0).Stage()==3 &&
+            sequence.HullSmoke(0).since.front()==firstVent,
+            "deeper damage opens the darker vents and keeps the original trail clock");
+        for(int i=0;i<fps*40 && !sequence.EscapeActive();++i) {
+            d+=speed*dt;sequence.Update(dt,d,true,runtime,dispatcher);
+        }
+        runner.Expect(sequence.EscapeActive() && sequence.SurvivalSeconds()>=RailPostBossSequence::SurvivalGoalSeconds &&
+            sequence.SurvivalSeconds()<RailPostBossSequence::SurvivalGoalSeconds+dt+.01f &&
+            sequence.Escape().Arc().Landing()<anchor+RailPostBossSequence::BridgeStart+RailPostBossSequence::BridgeLength,
+            "the longer survival clock still leaves bridge runway for the jump");
     }
 }
 
@@ -207,7 +242,8 @@ void TestVeilModularModel(RegressionRunner& runner) {
 }
 
 void TestVeilSensorAim(RegressionRunner& runner) {
-    for(const bool damaged:{false,true}) {
+    for(const int mode:{0,1,2}) {
+        const bool damaged=mode!=0;
         CourseSpawnRuntime runtime;
         CourseEnemyActorDesc desc;
         desc.actorAssetId="rear_veil";
@@ -247,9 +283,10 @@ void TestVeilSensorAim(RegressionRunner& runner) {
                 hit.hitNormal={0,0,-1};
                 hit.damageType=WeaponDamageType::Energy;
                 hit.baseDamage=12;
+                hit.lockOnContact=mode==2;
                 const auto result=collision.ApplyWeaponHit(runtime,nullptr,hit);
-                runner.Expect(result.damageApplied,
-                    "a primary contact removes sensor HP during Veil's descent, reject="+
+                runner.Expect(result.damageApplied && result.weakPointHit,
+                    "an aimed primary or lock contact removes exposed sensor HP, reject="+
                     std::to_string(int(result.rejectReason)));
             }
         }
@@ -348,6 +385,63 @@ void TestFangArmourImpact(RegressionRunner& runner) {
 void TestRearPursuitCombat(RegressionRunner& runner) {
     TestFangArmourImpact(runner);
     TestVeilSensorAim(runner);
+    for(int fps:{20,30,60,120}) for(float brakeDelay:{-1.0f,.70f,.75f}) {
+        const bool brake=brakeDelay>=0;
+        const float dt=1.0f/fps;
+        RailVeilLightning::Chain chain;
+        chain.Begin(100.0f,RailVeilLightning::CruiseSpeed);
+        const auto positions=chain.positions;
+        RailManualBrake input;
+        float distance=100;
+        uint8_t order=0;
+        for(int frame=0;frame<fps*2;++frame) {
+            input.SetInput(brake && frame*dt>=brakeDelay-.0001f,true);input.Update(dt);
+            distance+=dt*RailVeilLightning::CruiseSpeed*std::lerp(1.0f,RailManualBrake::MinimumMultiplier,input.Blend());
+            chain.Advance(dt,distance);
+            if(chain.flashNow) {
+                runner.Expect(chain.flashNow==(1u<<order),"Veil rail lightning strikes far to near");
+                ++order;
+            }
+        }
+        runner.Expect(order==3 && chain.positions==positions && chain.hits==(brake?0u:4u) &&
+            chain.CounterOpen()==brake,"cruise hits the nearest column, while braking from .70s (or one 20fps frame later) clears all three");
+    }
+    for(int fps:{30,60,120}) {
+        using Phase=RailPursuerCoordination::CrossfirePhase;
+        RailPursuerCoordination planner;
+        RailPursuerCoordination::Input input;
+        input.aircraft[0].alive=input.aircraft[0].ready=true;
+        input.aircraft[0].gap=32;input.aircraft[0].lateral=6;input.aircraft[0].height=6;
+        input.fangNearPanel=2;input.playerLane=.17f;input.playerHeight=3;
+        const float dt=1.0f/fps;
+        for(int i=0;i<fps*3 && !planner.FangCanFire();++i)planner.Tick(dt,input);
+        runner.Expect(planner.FangCanFire(),"Fang opens with its ordinary burst");
+        input.aircraft[0].shots=1;
+        for(int i=0;i<fps*7 && planner.FangCrossfire().phase!=Phase::Warning;++i)planner.Tick(dt,input);
+        runner.Expect(planner.FangCrossfire().phase==Phase::Warning && !planner.FangCanFire(),
+            "the second Fang reservation begins a dedicated crossfire warning");
+        auto interrupted=planner;
+        runner.Expect(!interrupted.InterruptCrossfire(0) && interrupted.InterruptCrossfire(2) &&
+            interrupted.FangCrossfire().phase==Phase::Stagger && !interrupted.CrossfireRoundDue(),
+            "only the marked wing can stop a crossfire before the first round");
+        input.playerLane=-.83f;
+        for(int i=0;i<fps && !planner.CrossfireRoundDue();++i)planner.Tick(dt,input);
+        const auto& attack=planner.FangCrossfire();
+        runner.Expect(attack.age>=.80f && attack.age<=.80f+dt+.001f && attack.lane==.17f &&
+            planner.AircraftState(0).formation.y<0 && std::abs(planner.AircraftState(0).bank)>.85f,
+            "the warning holds one lane while Fang banks and crosses before its .8 second deadline");
+        planner.CrossfireRoundEmitted(3);
+        runner.Expect(!planner.InterruptCrossfire(2) && planner.FangCrossfire().rounds==1,
+            "a late panel break cannot recall committed fire");
+        CourseBulletActor round;
+        round.sourceRole=kFangCrossfireRole;
+        round.forwardSpeed=160;round.lateralOffset=-2.0f;round.verticalOffset=5.0f;
+        round.lockedTargetDistance=12;round.lockedTargetLateralOffset=.17f;round.lockedTargetVerticalOffset=3;
+        round.lateralSpeed=(.17f+2.0f)/.075f;round.verticalSpeed=-2.0f/.075f;
+        for(int i=0;i<fps/4;++i)AdvanceEnemyProjectileTrajectory(round,dt);
+        runner.Expect(round.distanceOffset>35 && round.lateralOffset==.17f && round.verticalOffset==3 &&
+            round.lateralSpeed==0 && round.verticalSpeed==0,"Fang rounds keep to the warned lane after entry");
+    }
     for(int fps:{30,60,120}) {
         CourseAsset course;course.railPoints={{{0,24,0},70,36.45f},{{0,24,12000},70,36.45f}};
         RailPath rail;course.ApplyToRailPath(rail);CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;
@@ -368,7 +462,12 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
         query.spawnRuntime=&runtime;query.railPath=&rail;query.playerDistance=distance;
         query.cameraPosition={cart.x,cart.y+7.8f,cart.z+17};query.viewRelativeTargeting=true;query.viewForward={0,0,-1};
         registry.Build(query);
-        runner.Expect(registry.Anchors().size()==8,"rear camera registers two hulls and six independent panels");
+        const auto anchors=registry.Anchors();
+        const auto sensors=std::count_if(anchors.begin(),anchors.end(),[](const auto& anchor){
+            return anchor.target.kind==RailLockTargetKind::VeilSensor;
+        });
+        runner.Expect(anchors.size()==8+size_t(sensors) && sensors<=1,
+            "rear camera registers two hulls, six independent panels and at most one exposed sensor");
         for(const auto& actor:runtime.Enemies()) {
             const float rear=distance-actor.desc.spawnDistance-actor.desc.distanceOffset;
             runner.Expect(rear>=22.5f && rear<=101 && actor.combatState.canReceiveDamage && !actor.startupFlightControlled,
@@ -407,7 +506,7 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
                 }
             }
             const auto& fang=runtime.Enemies().front();
-            runner.Expect(breaks==3 && fang.rearArmor.intact==0 && fang.desc.hitPoints==120 &&
+            runner.Expect(breaks==3 && fang.rearArmor.intact==0 && fang.desc.hitPoints==fang.combatDefinition.maximumHitPoints &&
                 fang.rearArmor.exposedRemaining==1.2f,"breaking the full set exposes the hull without killing it");
             WeaponHitRequest body;
             body.shotId=1100;
@@ -444,7 +543,8 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
             } else runner.Expect(false,"rearm registers new lock targets");
         } else runner.Expect(false,"Fang registers three panel locks");
         runner.Expect(runtime.RestoreCheckpoint(armorCheckpoint,true,&error),"restore the original fight before hull tests");
-        for(uint64_t i=1;i<=10;++i) {
+        const auto primaryShots=uint64_t(std::ceil(runtime.Enemies()[0].desc.hitPoints/12.0f));
+        for(uint64_t i=1;i<=primaryShots;++i) {
             CourseEnemyFireSafetyFrameInput settle;settle.playerDistance=distance;settle.playerSpeed=0;
             settle.railPath=&rail;settle.hasCameraPosition=true;settle.cameraPosition={cart.x,cart.y+7.8f,cart.z+17};
             settle.cameraAllowsEnemyFire=false;
@@ -467,14 +567,19 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
             hit.rayDirection=aim.worldRayDirection;hit.hitPoint=contact.position;hit.hitNormal=contact.normal;hit.hitDistance=contact.distance;
             const auto result=collision.ApplyWeaponHit(runtime,&course,hit);
             runner.Expect(result.damageApplied,"ordinary primary contacts damage the rear enemy through the shared receiver");
+            if(i==25)runner.Expect(!result.destroyed && actor.desc.hitPoints>0,
+                "the former full-hull barrage no longer defeats Fang");
         }
         sequence.Notify(runtime.EnemyCombat().ConsumeEvents());
         RailLockVolley volley;RailLockToken token;token.target.actorId=ids[1];
-        WeaponShot shot;shot.shotId=100;shot.damageType=WeaponDamageType::Ice;shot.damage=34;shot.range=120;
-        for(int burst=0;burst<2;++burst) {
-            shot.shotId=100+burst;
+        WeaponShot shot;shot.damageType=WeaponDamageType::Ice;shot.damage=34;shot.range=120;
+        const int lockShots=int(std::ceil(runtime.Enemies()[1].desc.hitPoints/shot.damage));
+        for(int burst=0;burst<lockShots;++burst) {
+            shot.shotId=primaryShots+1+burst;
             runner.Expect(volley.Enqueue(std::span(&token,1),std::span(&shot,1),muzzle,rail,runtime,{})==1,"a real travelling volley launches behind the moving cart");
             for(int i=0;i<fps*2;++i)volley.Update(dt,muzzle,rail,runtime,collision,&course);
+            if(burst==5)runner.Expect(runtime.Enemies()[1].desc.hitPoints>0,
+                "the former full-hull lock count no longer defeats Veil");
         }
         sequence.Notify(runtime.EnemyCombat().ConsumeEvents());
         for(int i=0;i<fps*4;++i)sequence.Update(dt,distance,true,runtime,dispatcher);
@@ -502,10 +607,24 @@ void TestPostBossCameraAndRetry(RegressionRunner& runner) {
     runner.Expect(director.Evaluate(input).shakeAmount==0,"precision escape aiming suppresses residual impact and authored camera shake");
     RailRetryFollowState live;CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;
     live.postBoss.Update(.1f,4400,true,runtime,dispatcher);
-    for(int i=0;i<40;++i)live.postBoss.Update(.1f,4770,true,runtime,dispatcher);
+    for(int i=1;i<=40 && live.postBoss.CurrentPhase()!=RailPostBossSequence::Phase::Bridge;++i)
+        live.postBoss.Update(.1f,4400+3.645f*i,true,runtime,dispatcher);
     runner.Expect(live.postBoss.CheckpointPending(),"bridge entry creates a dedicated checkpoint before the rear battle");
     live.postBoss.MarkCheckpointCaptured(true);
     RailRetryPresentationCheckpoint checkpoint;checkpoint.Capture(1,1,BindRailRetryFollowState(live));
     live.postBoss.Reset();runner.Expect(checkpoint.Restore(1,1,BindRailRetryFollowState(live)) && live.postBoss.Started() && live.postBoss.Anchor()==4400 && !live.postBoss.CheckpointPending(),
         "the ordinary retry follower transaction restores post-boss timing and relative scenery");
+    for(int i=0;i<150 && live.postBoss.CurrentPhase()!=RailPostBossSequence::Phase::Notice;++i)
+        live.postBoss.Update(.1f,4891,true,runtime,dispatcher);
+    runner.Expect(live.postBoss.PendingCheckpointId() &&
+        std::string_view(live.postBoss.PendingCheckpointId())=="REAR PURSUIT" &&
+        live.postBoss.CameraWeight()==0 && runtime.Enemies().empty(),
+        "the rear checkpoint precedes the camera turn and the first enemy");
+    live.postBoss.MarkCheckpointCaptured(true);
+    checkpoint.Capture(1,2,BindRailRetryFollowState(live));
+    live.postBoss.Reset();
+    runner.Expect(checkpoint.Restore(1,2,BindRailRetryFollowState(live)) &&
+        live.postBoss.CurrentPhase()==RailPostBossSequence::Phase::Notice &&
+        live.postBoss.CameraWeight()==0 && !live.postBoss.CheckpointPending(),
+        "retry restores the notice and captured checkpoint without replaying the miniboss");
 }

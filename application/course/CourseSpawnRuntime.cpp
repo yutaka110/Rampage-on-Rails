@@ -625,9 +625,36 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     enemyProjectileSystem_.Update(bullets_, projectileInput,enemies_);
 
     for (CourseObstacleActor& obstacle : obstacles_) {
-        if(RailRouteHazards::IsSlab(obstacle) && safetyInput.playerDistance<RailRouteHazards::SlabTrigger)
+        if(RailRouteHazards::IsSlab(obstacle)) {
+            using namespace RailRouteHazards;
+            const float previousAge=obstacle.age;
+            obstacle.age+=SlabAdvance(obstacle,safetyInput.playerDistance,dt);
+            if(previousAge>=GroundImpact || obstacle.age<SupportBreak)continue;
+            const auto stone=Stone(obstacle,obstacle.age).rail;
+            const auto extents=obstacle.desc.halfExtents;
+            const float rockBottom=stone.y-extents.y;
+            const uint64_t shotId=SlabTriggerShot(obstacle);
+            const auto batteryWave=IsShelf(obstacle)?ShelfBatteryWave:ArchBatteryWave;
+            for(const auto& enemy:enemies_) {
+                if(enemy.desc.waveId!=batteryWave || enemy.desc.hitPoints<=0 ||
+                    std::abs(enemy.desc.lateralOffset-stone.x)>extents.x ||
+                    std::abs(enemy.desc.spawnDistance+enemy.desc.distanceOffset-stone.z)>extents.z ||
+                    (rockBottom>enemy.desc.verticalOffset+enemy.desc.radius && obstacle.age<GroundImpact))continue;
+                if(!shotId) {
+                    enemyCombatSystem_.ForceDefeat(*this,enemy.actorId);
+                    continue;
+                }
+                DamageResult crush;
+                crush.requestAccepted=crush.targetResolved=crush.damageApplied=crush.destroyed=true;
+                crush.hitKind=RailAimHitKind::Enemy;
+                crush.targetActorId=enemy.actorId;
+                crush.shotId=shotId;
+                crush.hitPointsBefore=crush.appliedDamage=enemy.desc.hitPoints;
+                enemyCombatSystem_.SubmitDamageResult(*this,crush,nullptr);
+            }
             continue;
-        obstacle.age += dt;
+        }
+        obstacle.age+=dt;
         obstacle.desc.distanceOffset += obstacle.desc.forwardSpeed * dt;
     }
 
@@ -1027,7 +1054,8 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             obstacles_.end(),
             [](const CourseObstacleActor& obstacle) {
                 return obstacle.age >= obstacle.desc.lifetime ||
-                    (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f && !RailRouteHazards::IsBarricade(obstacle));
+                    (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f &&
+                        !RailRouteHazards::IsBarricade(obstacle) && !RailRouteHazards::IsSlab(obstacle));
             }),
         obstacles_.end());
     vfxCues_.erase(
@@ -1091,6 +1119,11 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
 
     CourseEnemyActor actor{};
     actor.desc = std::move(desc);
+    if(RailRouteHazards::IsRockfallBattery(actor.desc.waveId)) {
+        const auto geometry=RailTurret::ForMesh(actor.desc.meshId);
+        actor.desc.verticalOffset=RailRouteHazards::ArchPlatformTop-geometry.groundFootY*actor.desc.radius+.12f;
+        actor.groundPlacementResolved=true;
+    }
     if(actor.desc.actorAssetId=="rear_fang") actor.fangCannonHitPoints=kFangCannonHitPoints;
     if(actor.desc.actorAssetId=="rear_veil") actor.veilSensorHitPoints=kVeilSensorHitPoints;
     actor.stationaryDormant=actor.desc.stationaryActivationDistance>=0;

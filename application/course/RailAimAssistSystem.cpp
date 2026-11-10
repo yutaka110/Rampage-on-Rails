@@ -92,7 +92,7 @@ bool SameTarget(const RailLockTargetHandle& left, const RailLockTargetHandle& ri
 }
 
 RailAimHitKind ExpectedHitKind(RailLockTargetKind kind) {
-    return kind == RailLockTargetKind::Enemy
+    return kind == RailLockTargetKind::Enemy || kind == RailLockTargetKind::VeilSensor
         ? RailAimHitKind::Enemy
         : RailAimHitKind::Obstacle;
 }

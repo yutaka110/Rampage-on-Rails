@@ -1,6 +1,7 @@
 #include "RailRearPursuitRules.h"
 #include "RailGroundBatteryAttack.h"
 #include "CourseEventDispatcher.h"
+#include "RailRouteHazards.h"
 #include "../AppLogFile.h"
 
 #include <Windows.h>
@@ -372,7 +373,7 @@ void CourseEventDispatcher::ApplyBulletPatternAsset(
 std::vector<CourseEnemyActorDesc> CourseEventDispatcher::GroundBatteryPlacements(const CourseAsset& course) {
     std::vector<CourseEnemyActorDesc> placements;
     for(const auto& event:course.events) {
-        if(event.type!="enemy_wave" || event.payload!="route:turret") continue;
+        if(event.type!="enemy_wave" || event.payload!="route:turret" || RailRouteHazards::IsRockfallBattery(event.id))continue;
         const auto* wave=LoadEnemyWave(event.id);
         if(!wave) continue;
         for(const auto& unit:wave->units) {
@@ -434,6 +435,7 @@ void CourseEventDispatcher::SpawnEnemyWave(
             desc.lifetime = unit.lifetime;
             desc.color = unit.color;
         }
+        if(RailRouteHazards::IsRockfallBattery(desc.waveId))desc.radius=unit.radius;
         if (desc.actorAssetId.empty()) {
             desc.hitPoints = HitPointsForRole(unit.role);
             desc.fireInterval = FireIntervalForRole(unit.role);

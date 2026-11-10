@@ -25,31 +25,32 @@ void TestBasicTutorialActions(RegressionRunner& runner) {
         runner.Expect(!guide.Learned(Lesson::Lock),"an unaccepted volley cannot complete lock instruction");
         in.volleyAccepted=true;guide.Update(in);runner.Expect(guide.Learned(Lesson::Lock) && guide.Success(),"two real enemy locks and an accepted release earn success");
         in.volleyAccepted=false;in.release={};in.targetVisible=false;in.distance=RailBasicTutorial::BoostGuideStart;
+        in.normalSpeed=32;in.speed=40;in.rewardBoost=true;in.boostHeld=true;
         for(int f=0;f<fps*2;++f)guide.Update(in);
-        runner.Expect(guide.Current()==Lesson::Boost,"clear runway introduces the accelerator");
-        in.normalSpeed=32;in.speed=32;in.boostHeld=true;
+        runner.Expect(guide.Current()==Lesson::Brake && guide.Visible() && !guide.Learned(Lesson::Boost),
+            "Q is offered first even with an active kill boost and E already held");
+        in.distance=RailBasicTutorial::SpeedEnd+1;in.speed=20;
         for(int f=0;f<fps;++f)guide.Update(in);
-        runner.Expect(!guide.Learned(Lesson::Boost),"an E input stopped by a curve cannot fake actual acceleration");
-        in.speed=40;in.rewardBoost=true;
-        for(int f=0;f<fps;++f)guide.Update(in);
-        runner.Expect(!guide.Learned(Lesson::Boost),"automatic kill boost cannot teach the accelerator");
-        runner.Expect(guide.Visible() && guide.BoostWaiting(),"early E instruction signals that automatic boost is still active");
-        in.rewardBoost=false;
-        in.distance=700;
-        for(int f=0;f<fps;++f)guide.Update(in);
-        runner.Expect(guide.Learned(Lesson::Boost),"held manual acceleration and achieved speed earn the lesson");
-        in.distance=RailBasicTutorial::SpeedEnd+1;
-        in.threat=true;
-        for(int f=0;f<fps*2;++f)guide.Update(in);
-        runner.Expect(guide.Current()==Lesson::Brake && guide.Visible(),
-            "holding E past the runway into combat still shows the Q lesson");
-        in.speed=20;
-        for(int f=0;f<fps;++f)guide.Update(in);
-        runner.Expect(!guide.Learned(Lesson::Brake),"coasting or impact slowdown never earns brake mastery");
+        runner.Expect(!guide.Learned(Lesson::Brake) && guide.Visible(),
+            "speed alone cannot complete Q, and crossing the runway boundary does not discard the prompt");
         in.brakeHeld=true;
+        for(int f=0;f<int(fps*.75f);++f)guide.Update(in);
+        runner.Expect(guide.Learned(Lesson::Brake) && guide.Current()==Lesson::Brake && guide.Success(),
+            "actual braking completes Q during the kill boost");
+        in.brakeHeld=false;in.speed=40;
         for(int f=0;f<fps;++f)guide.Update(in);
-        runner.Expect(guide.Learned(Lesson::Brake) && guide.Visible() && guide.Success(),
-            "actual braking completes the Q lesson even after the runway");
+        runner.Expect(!guide.Visible() && !guide.Learned(Lesson::Boost),
+            "E is withheld while automatic acceleration is active");
+        guide.ResetAttempt();in.rewardBoost=false;in.threat=true;guide.Update(in);
+        runner.Expect(!guide.Visible(),"after retry the pending E lesson still waits for a clear approach");
+        in.threat=false;in.speed=32;guide.Update(in);
+        runner.Expect(guide.Current()==Lesson::Boost && guide.Visible(),"E resumes after the reward ends beyond the original runway");
+        for(int f=0;f<fps;++f)guide.Update(in);
+        runner.Expect(!guide.Learned(Lesson::Boost),"holding E without actual acceleration does not teach it");
+        in.speed=40;
+        for(int f=0;f<int(fps*.75f);++f)guide.Update(in);
+        runner.Expect(guide.Learned(Lesson::Boost) && guide.Visible() && guide.Success(),
+            "accepted manual acceleration completes the sequence");
         const auto learned=guide.LearnedMask();guide.ResetAttempt();guide.Update(in);
         runner.Expect(guide.LearnedMask()==learned && !guide.Visible(),"checkpoint retry preserves knowledge without repeating prompts");
         guide.Reset();guide.Update(in);runner.Expect(!guide.Learned(Lesson::Primary),"new run resets tutorial knowledge");
@@ -89,10 +90,30 @@ void TestBasicTutorialLayoutAndRunway(RegressionRunner& runner) {
     guide.Reset();action.targetVisible=false;action.threat=true;action.distance=liveSession.courseDistance;guide.Update(action);
     input.shortRun=true;input.resultSession=&liveSession;
     RailShooterHudRenderer liveHud;liveHud.Update(input);
-    runner.Expect(has(liveHud.Frame().commands,u8"Q : ブレーキ"),"the control footer remains available in the practice area");
+    const auto hasControls=[&](const auto& commands) {
+        return has(commands,u8"通常攻撃") && has(commands,u8"長押しでロックオン／離して発射") &&
+            has(commands,u8"長押しでブレーキ") && has(commands,u8"長押しで加速");
+    };
+    runner.Expect(hasControls(liveHud.Frame().commands),"all four controls are visible in the practice area");
+    action.threat=false;guide.Update(action);liveHud.Update(input);
+    const auto& commands=liveHud.Frame().commands;
+    const auto brakeHint=std::find_if(commands.begin(),commands.end(),[](const auto& command) {
+        return command.text=="長押しで減速";
+    });
+    const auto key=std::find_if(commands.begin(),commands.end(),[](const auto& command) {return command.text=="Q";});
+    const auto time=std::find_if(commands.begin(),commands.end(),[](const auto& command) {return command.text.starts_with("TIME  ");});
+    runner.Expect(brakeHint!=commands.end() && key!=commands.end() && time!=commands.end() &&
+        brakeHint->x<float(input.viewportWidth)*.25f && brakeHint->y==key->y && brakeHint->y<time->y &&
+        brakeHint->y>float(input.viewportHeight)*.80f,"Q fits on one line at the bottom left above the stage and time");
+    runner.Expect(hasControls(commands),"the permanent controls stay visible beside the Q lesson");
+    guide.Reset();
     liveSession.courseDistance=RailBasicTutorial::SpeedEnd;
     action.distance=liveSession.courseDistance;guide.Update(action);liveHud.Update(input);
-    runner.Expect(!has(liveHud.Frame().commands,u8"Q : ブレーキ"),"the live course also hides the control footer");
+    runner.Expect(hasControls(liveHud.Frame().commands),"the controls remain available after the tutorial runway");
+    input.bossVisible=true;
+    input.viewportWidth=640;input.viewportHeight=360;
+    liveHud.Update(input);
+    runner.Expect(hasControls(liveHud.Frame().commands),"all four controls remain visible in a small boss view");
     CourseAsset course;std::string error;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"tutorial course loads");
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});runner.Expect(cooked.succeeded,"retimed teaching course compiles");
     for(const auto& wave:cooked.program.waves)if(wave.waveGuid=="short_intercept" || wave.waveGuid=="short_finale") {

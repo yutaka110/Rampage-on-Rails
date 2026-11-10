@@ -82,7 +82,10 @@ def main():
                          'courses/waves/short_turret_right.wave',
                          'courses/waves/route_turret_left.wave',
                          'courses/waves/route_turret_right.wave',
+                         'courses/waves/arch_inner_batteries.wave',
                          'courses/obstacles/route_arch_slab.obstacle',
+                         'courses/waves/shelf_battery.wave',
+                         'courses/obstacles/route_shelf_slab.obstacle',
                          'courses/obstacles/route_break_barricade.obstacle']:
             for suffix in ['', '.meta']:
                 source=ROOT/'Resources'/(relative+suffix)

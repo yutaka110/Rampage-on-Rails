@@ -7,6 +7,7 @@
 #include "RailGatlingAttack.h"
 #include "RailHeavyAttack.h"
 #include "RailGroundBatteryAttack.h"
+#include "RailRouteHazards.h"
 
 #include <Windows.h>
 
@@ -62,17 +63,17 @@ float ActorDistance(const CourseEnemyActor& enemy) {
     return enemy.desc.spawnDistance + enemy.desc.distanceOffset;
 }
 
-float ObstacleDistance(const CourseObstacleActor& obstacle) {
-    return obstacle.desc.spawnDistance + obstacle.desc.distanceOffset;
-}
-
 bool PlayerOverlapsObstacle(
     const CourseCollisionPlayerState& player,
     const CourseObstacleActor& obstacle) {
-    const float distance = ObstacleDistance(obstacle);
-    return Abs(player.distance - distance) <= obstacle.desc.halfExtents.z + player.radius &&
-        Abs(player.lateralOffset - obstacle.desc.lateralOffset) <= obstacle.desc.halfExtents.x + player.radius &&
-        Abs(player.verticalOffset - obstacle.desc.verticalOffset) <= obstacle.desc.halfExtents.y + player.radius;
+    const bool slab=RailRouteHazards::IsSlab(obstacle);
+    if(obstacle.age>=obstacle.desc.lifetime ||
+        (slab?obstacle.age>=RailRouteHazards::GroundImpact:obstacle.desc.breakable && obstacle.desc.hitPoints<=0))return false;
+    const auto center=slab?RailRouteHazards::Stone(obstacle,obstacle.age).rail:
+        Vector3{obstacle.desc.lateralOffset,obstacle.desc.verticalOffset,obstacle.desc.spawnDistance+obstacle.desc.distanceOffset};
+    return Abs(player.distance - center.z) <= obstacle.desc.halfExtents.z + player.radius &&
+        Abs(player.lateralOffset - center.x) <= obstacle.desc.halfExtents.x + player.radius &&
+        Abs(player.verticalOffset - center.y) <= obstacle.desc.halfExtents.y + player.radius;
 }
 
 bool PlayerOverlapsTerrainPlacement(
@@ -318,11 +319,29 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
         if (!bullet.active || bullet.age >= bullet.lifetime) {
             continue;
         }
-        const PlayerProjectileContact contact =
-            playerHitboxSystem_.EvaluateProjectile(bullet);
+        auto contact = playerHitboxSystem_.EvaluateProjectile(bullet);
+        const bool crossfire = bullet.sourceRole==kFangCrossfireRole;
+        if (crossfire && contact.kind==PlayerProjectileContactKind::Hit) {
+            const float previous=bullet.spawnDistance+bullet.previousDistanceOffset-hitbox.previousDistance;
+            const float current=bullet.spawnDistance+bullet.distanceOffset-hitbox.distance;
+            if (previous>0 || current<0 || current<=previous) {
+                contact.kind=PlayerProjectileContactKind::None;
+            } else {
+                // Sample the occupant as the round crosses their rail plane.
+                // The warning edges are the lateral bounds for this attack.
+                const float t=-previous/(current-previous);
+                const float lane=std::lerp(hitbox.previousLateralOffset,hitbox.lateralOffset,t);
+                if(std::abs(lane-bullet.lockedTargetLateralOffset)>kFangCrossfireHalfWidth) {
+                    contact.kind=PlayerProjectileContactKind::NearMiss;
+                    contact.nearMissCloseness=1.0f;
+                }
+            }
+        }
         std::optional<RailVehicleProjectileContact> armour;
         if (bullet.definitionId == "enemy_fang_chase" && input.railPath) {
-            if (input.vehicleBody) {
+            // Crossfire passes through the exposed occupant band. The wider
+            // armour probe would stop it before it could reach that band.
+            if (input.vehicleBody && !crossfire) {
                 armour = SweepRailVehicleProjectileContact(*input.vehicleBody, bullet);
             }
             const float previous=bullet.spawnDistance+bullet.previousDistanceOffset;
@@ -489,8 +508,6 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
 
     if (!input.externalBodyCollisionAuthority) {
         for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
-            if (obstacle.age >= obstacle.desc.lifetime ||
-                (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f)) continue;
             if (!PlayerOverlapsObstacle(player_, obstacle)) {
                 continue;
             }

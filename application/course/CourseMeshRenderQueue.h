@@ -21,6 +21,7 @@ class CourseSpawnRuntime;
 class EnemyCombatPresentationBridge;
 class EnemyEncounterReadabilityDirector;
 struct RailVeilAttackFrame;
+struct RailRearArmor;
 class RailEliteFirePresentation;
 
 struct CourseMeshModelBinding {
@@ -117,10 +118,10 @@ public:
 
 private:
     bool WriteFang(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
-        float recoil,bool exposed,bool damaged,uint8_t panelMask,
+        float recoil,bool exposed,bool damaged,const RailRearArmor* armor,
         std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection);
     bool WriteVeil(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
-        const RailVeilAttackFrame& attack,bool sensorExposed,bool sensorDamaged,uint8_t panelMask,
+        const RailVeilAttackFrame& attack,bool sensorExposed,bool sensorDamaged,const RailRearArmor* armor,
         std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection);
     void AddStartupRearScenery(const RailPath& railPath,
         std::span<const CourseMeshModelBinding> models, const Matrix4x4& viewProjection);

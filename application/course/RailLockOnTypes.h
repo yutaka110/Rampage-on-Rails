@@ -13,6 +13,7 @@ enum class RailLockTargetKind {
     Obstacle,
     Projectile,
     RearPanel,
+    VeilSensor,
 };
 
 enum class RailLockRejectReason {

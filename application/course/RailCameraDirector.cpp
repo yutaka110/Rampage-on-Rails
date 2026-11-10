@@ -3,6 +3,7 @@
 #include "GameplaySettingsValidation.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailRouteHazards.h"
 
 #include <algorithm>
 #include <cctype>
@@ -264,12 +265,12 @@ bool ResolveObstacleLineOfSightBlock(
         if (obstacle.actorId == ignoredObstacleActorId) {
             continue;
         }
-        const Vector3 center = ResolveRailLocal(
-            railPath,
-            obstacle.desc.spawnDistance,
-            obstacle.desc.distanceOffset,
-            obstacle.desc.lateralOffset,
-            obstacle.desc.verticalOffset);
+        const bool slab=RailRouteHazards::IsSlab(obstacle);
+        if(slab && obstacle.age>=RailRouteHazards::GroundImpact)continue;
+        const auto rail=slab?RailRouteHazards::Stone(obstacle,obstacle.age).rail:
+            Vector3{obstacle.desc.lateralOffset,obstacle.desc.verticalOffset,
+                obstacle.desc.spawnDistance+obstacle.desc.distanceOffset};
+        const Vector3 center = ResolveRailLocal(railPath,rail.z,0,rail.x,rail.y);
         const Vector3 extent{
             obstacle.desc.halfExtents.x + padding,
             obstacle.desc.halfExtents.y + padding,
@@ -1489,7 +1490,7 @@ void RailCameraDirector::UpdateLookAtTarget(
 
     if (totalWeight <= 0.001f) {
         for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-            if (!obstacle.desc.breakable) {
+            if (!obstacle.desc.breakable || RailRouteHazards::IsSlab(obstacle)) {
                 continue;
             }
             const float distance = ActorDistance(obstacle.desc.spawnDistance, obstacle.desc.distanceOffset);

@@ -11,7 +11,6 @@
 #include "GameSessionSystem.h"
 #include "RailShooterHudPresentationBridge.h"
 
-struct EncounterPerformanceScoreRuntimeState;
 struct RailGameOverFrame;
 
 enum class RailShooterHudDrawCommandKind : uint8_t {
@@ -74,7 +73,6 @@ struct RailShooterHudRenderInput final {
     unsigned courseVisualIndex=0,courseVisualCount=0;
     bool bossVisible=false;
     float bossHealth=1.0f;
-    const EncounterPerformanceScoreRuntimeState* encounterScore=nullptr;
     bool miniBossParts=false;
     std::array<float,2> miniBossPartHealth{};
     std::array<float,2> miniBossPartCharge{},miniBossCooldownRemaining{},miniBossCooldownDuration{1,1};

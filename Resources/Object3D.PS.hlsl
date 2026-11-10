@@ -389,6 +389,67 @@ PixelShaderOutput main(VertexShaderOutput input)
 
     float2 uv = input.texcoord;
 
+    if (gMaterial.specularMode == 19) {
+        // Three world-to-panel columns anchor the light to the moving armor.
+        float4 world = float4(input.worldPosition, 1.0f);
+        float3 local = float3(dot(world, gMaterial.caveSurface), dot(world, gMaterial.caveResponse),
+                             dot(world, gMaterial.railLightingOrigin));
+        bool veil = gMaterial.railLightingAxis.z > .5f;
+        float band = clamp(floor(uv.x / 4.0f), 0.0f, 11.0f);
+        float2 paletteUv = veil ? float2((band + .5f) / 12.0f, .5f) : uv;
+        float3 base = gTexture.SampleLevel(gSampler, paletteUv, 0).rgb;
+        float3 N = SafeNormalize(input.normal);
+        float3 V = SafeNormalize(cameraWorldPosition - input.worldPosition);
+        float3 front = -SafeNormalize(gMaterial.railLightingOrigin.xyz);
+        float facing = saturate(dot(N, front));
+        float2 p = local.xy / (veil ? float2(.195f, .178f) : float2(.235f, .132f));
+        float grain = CartSurfaceNoise(p * float2(11.0f, 8.0f) + 13.7f);
+        bool broken = gMaterial.pad_ < 0.0f;
+        float recess = 1.0f - smoothstep(.45f, .84f, length(p) + .13f * (grain - .5f));
+        base *= float3(.65f, .76f, .88f);
+        if (broken) {
+            base = lerp(float3(.19f, .11f, .078f), float3(.022f, .025f, .031f),
+                recess) * (.78f + .32f * grain);
+        }
+        float roughness = broken ? .68f : .48f;
+        float3 impact = CombatScorch(gMaterial.primaryImpactReceiver, input.worldPosition, N, base, roughness);
+        float3 lit = RailSurfaceLighting(base, .55f, roughness, N, V,
+            input.worldPosition, 1.0f, GameplayCaveWeight(input.worldPosition));
+        lit += base * (.065f + .12f * facing);
+
+        if (broken) {
+            // The sheared rim catches light while the empty middle stays dark.
+            float rim = smoothstep(.04f, .34f, recess) * (1.0f - smoothstep(.51f, .86f, recess));
+            lit += rim * facing * float3(.11f, .064f, .035f);
+            output.color = float4(lit + impact, gMaterial.color.a);
+            return output;
+        }
+        float curve = .28f * p.x + .40f * (CartSurfaceNoise(float2(p.x * 3.7f, 4.2f)) - .5f);
+        float seam = p.y - curve;
+        float branch = p.y - (curve - .63f * (p.x + .22f) + .14f * (grain - .5f));
+        float end = 1.0f - smoothstep(.49f, .96f, abs(p.x));
+        float forkEnd = smoothstep(-.25f, .03f, p.x) * (1.0f - smoothstep(.24f, .65f, p.x));
+        float aa = clamp(fwidth(seam) * .5f, .025f, .22f);
+        float mainCore = (1.0f - smoothstep(.05f, .12f + aa, abs(seam))) * end;
+        float forkCore = (1.0f - smoothstep(.035f, .09f + aa, abs(branch))) * forkEnd;
+        float core = max(mainCore, forkCore * .72f) * lerp(.74f, 1.0f, grain);
+        float fringe = max((1.0f - smoothstep(.07f, .39f, abs(seam))) * end,
+            (1.0f - smoothstep(.06f, .29f, abs(branch))) * forkEnd);
+        float spill = (1.0f - smoothstep(.30f, 1.13f, length(p * float2(1.0f, .86f))));
+        float exposed = smoothstep(.02f, veil ? .21f : .26f, -local.z) * lerp(.24f, 1.0f, facing);
+
+        float time = gMaterial.railLightingAxis.x;
+        float flow = pow(saturate(.5f + .5f * sin(p.x * 4.4f - time * 3.1f)), 3.0f);
+        float pulse = .88f + .12f * sin(time * 3.8f);
+        float lockFlash = gMaterial.railLightingAxis.y;
+        float3 emission = float3(.018f, .17f, .51f) * spill +
+                          float3(.024f, .56f, 2.4f) * fringe +
+                          float3(.62f, 2.25f, 4.5f) * core * (.77f + .33f * flow);
+        lit += exposed * (pulse + .87f * lockFlash) * emission;
+        output.color = float4(lit + impact, gMaterial.color.a);
+        return output;
+    }
+
     if (gMaterial.specularMode == 18) {
         // Project onto the moving stone's metric axes. Large blocks and
         // chips retain the same grain scale, including through the fall.

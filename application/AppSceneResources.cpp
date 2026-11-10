@@ -3346,6 +3346,10 @@ bool AppSceneResources::Initialize(
         "RouteArchRoots.obj","courseRootRock");
     registerCourseMesh("route_arch_shoulder","Resources/course_meshes/RouteNaturalArch",
         "RouteArchShoulder.obj","courseRootRock");
+    registerCourseMesh("route_shelf_root","Resources/course_meshes/RouteNaturalArch",
+        "RouteShelfRoot.obj","courseRootRock");
+    registerCourseMesh("route_shelf_tip","Resources/course_meshes/RouteNaturalArch",
+        "RouteShelfTip.obj","courseRootRock");
     registerCourseMesh(
         "combat_turret",
         "Resources/enemies/CombatTurret",
@@ -4028,7 +4032,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
             for(const auto& obstacle:courseRuntime.Obstacles())if(RailRouteHazards::IsSlab(obstacle)) {
                 const auto hit=RailRouteHazards::Strike(obstacle);
                 shotTarget=ResolveEnemyProjectileWorldPosition(railPath,hit);
-                shotAge=obstacle.age;
+                if(!RailRouteHazards::SlabTriggerShot(obstacle))shotAge=obstacle.age;
                 break;
             }
         }

@@ -42,6 +42,34 @@ float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
 }
 
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=90.0f && input.texcoord.x<=91.0f) {
+        float2 p;float phase,seed;
+        ImpactCoordinates(input.texcoord,90,p,phase,seed);
+        float r=length(p),a=atan2(p.y,p.x);
+        float ring=exp(-pow((r-lerp(.70f,.56f,phase))/max(.035f,fwidth(r)),2));
+        float teeth=smoothstep(.08f,.28f,cos(a*12+seed));
+        float field=exp(-r*r*4.0f)*.23f;
+        return float4(input.color.rgb,(ring*(.42f+.58f*teeth)+field)*input.color.a);
+    }
+    if(input.texcoord.x>=92.0f && input.texcoord.x<=93.0f) {
+        float2 p;float phase,seed;
+        ImpactCoordinates(input.texcoord,92,p,phase,seed);
+        float y=.5f-.5f*p.y,clock=phase*16.0f;
+        float bend=.075f*sin(y*30.0f+seed)+.047f*sin(y*104.0f-clock*2.7f);
+        bend+=(ImpactNoise(float2(y*29.0f,clock*.37f)+seed)-.5f)*.16f;
+        float x=p.x-bend;
+        float aa=max(.016f,fwidth(x)*.56f);
+        float core=exp(-pow(x/aa,2));
+        float arc=exp(-pow((x-.14f*sin(y*61+clock))/max(.018f,aa*.67f),2));
+        arc*=smoothstep(.33f,.68f,ImpactNoise(float2(y*14,clock*.6f)+seed+5));
+        float heat=ImpactNoise(float2(p.x*9.0f,y*30-clock*1.65f)+seed);
+        float fringe=exp(-x*x*7.0f)*smoothstep(.32f,.83f,heat);
+        float glow=exp(-x*x*21.0f);
+        float tip=1-smoothstep(.78f,1,y);
+        float3 tint=lerp(float3(4.3f,.035f,.061f),float3(6.8f,1.18f,.47f),fringe*.68f);
+        tint=lerp(tint,float3(8.0f,3.85f,3.18f),saturate(core+arc*.42f));
+        return float4(tint,(core*.91f+arc*.50f+glow*.27f+fringe*.65f)*tip*input.color.a);
+    }
     if(input.texcoord.x>57.5f && input.texcoord.x<59.5f) {
         // White-hot coherent core surrounded by a turbulent crimson sheath.
         float u=saturate(input.texcoord.x-58);

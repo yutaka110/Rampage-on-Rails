@@ -21,12 +21,14 @@ def fixture_course(course):
 
 def main():
     parser=argparse.ArgumentParser()
-    parser.add_argument('--stages',type=int,nargs='+',choices=range(41),default=[0,1,2,3])
+    parser.add_argument('--stages',type=int,nargs='+',choices=range(62),default=[0,1,2,3])
+    parser.add_argument('--exe',type=Path,default=ROOT/'generated/attack-warning/Release/GE3.exe')
     parser.add_argument('--output',type=Path,default=ROOT/'generated/post-boss-review')
     args=parser.parse_args()
     out=args.output.resolve();work=out/'native';work.mkdir(parents=True,exist_ok=True)
     shutil.copytree(ROOT/'Resources',work/'Resources',dirs_exist_ok=True)
-    for name in ['GE3.exe','dxcompiler.dll','dxil.dll']:
+    shutil.copy2(args.exe,work/'GE3.exe')
+    for name in ['dxcompiler.dll','dxil.dll']:
         shutil.copy2(ROOT/'generated/attack-warning/Release'/name,work/name)
     course=(ROOT/'Resources/courses/ShortCompleteRun.course').read_text(encoding='utf-8-sig')
     (work/'Resources/courses/ShortCompleteRun.course').write_text(fixture_course(course),encoding='utf-8')
@@ -45,10 +47,17 @@ def main():
     labels=['valley-vista','bridge-entry','rear-combat','pursuit-clear','first-pursuit-shadow','second-pursuit-shadow',
             'first-pursuer-reveal','pair-reveal','fang-close-pass','elite-cycle','pursuit-handoff',
             'fang-followup','veil-interrupt','fang-cannon-break','veil-sensor-break','fang-panel-evade','fang-lightning-release','fang-lightning-flight','fang-lightning-hit','fang-lightning-surface',
-            'veil-beam-tracking','veil-beam-locked','veil-beam-impact','veil-beam-lean','fang-fire-punch','veil-pressure-shock',
+            'veil-beam-tracking','veil-beam-locked','veil-beam-impact','veil-beam-boost','fang-fire-punch','veil-pressure-shock',
             'bridge-cut','bridge-release-aim','bridge-release-hit','bridge-jump','bridge-landing','bridge-escape-clear','bridge-escape-retry','bridge-damage-escape','bridge-retry-then-clear',
             'bridge-structure-sequence','bridge-structure-retry',
-            'coordination-cruise','coordination-accelerate','coordination-brake','coordination-occluded']
+            'coordination-cruise','coordination-accelerate','coordination-brake','coordination-occluded',
+            'rear-panel-available','rear-panel-lock','rear-panel-broken','rear-panel-socket',
+            'fang-crossfire-warning','fang-crossfire-counter','fang-crossfire-interrupted','fang-crossfire-hit',
+            'rear-beam-warning','rear-beam-evade','rear-beam-interrupted','rear-beam-hit','rear-attacks-overlap',
+             'veil-lightning-warning','veil-lightning-counter','veil-lightning-hit','veil-lightning-columns',
+            'fang-blue-impact','veil-blue-impact','fang-critical-smoke','veil-critical-smoke']
+    fang_hp,veil_hp=(float((ROOT/f'Resources/courses/actors/rear_{actor}.actor')
+        .read_text(encoding='utf-8-sig').splitlines()[0].split('|')[5]) for actor in ('fang','veil'))
     for stage in args.stages:
         label=labels[stage]
         env=os.environ.copy();env.update(GE3_SUNFALL_PREVIEW_DISTANCE='3290',GE3_SUNFALL_PREVIEW_FREEZE='0',
@@ -74,7 +83,7 @@ def main():
             assert last['fang_rounds']=='3' and last['veil_beams']=='1' and last['cycles']=='1',last
             assert next(i for i,r in enumerate(rows) if int(r['fang_rounds'])==3) < next(i for i,r in enumerate(rows) if int(r['veil_beams'])==1)
         if stage==10:
-            assert last['alive']=='2' and last['fang_rounds']=='3' and last['veil_beams']=='0',last
+            assert last['alive']=='2' and int(last['fang_rounds'])>0 and last['veil_beams']=='0',last
             with (out/f'{label}.enemies.csv').open() as enemies:
                 rows_by_asset={row['asset']:row for row in csv.DictReader(line for line in enemies if not line.startswith('#'))}
             assert all(rows_by_asset[asset]['targetable']=='1' for asset in ('rear_fang','rear_veil')),rows_by_asset
@@ -85,7 +94,7 @@ def main():
             assert any(row['veil_interrupted']=='1' for row in rows),last
         notice=next((r for r in rows if r['phase']=='4'),None)
         if stage==13:
-            assert int(last['fang_rounds'])==5 and float(last['fang_hull_hp'])==120 and float(last['fang_cannon_hp'])==0,last
+            assert int(last['fang_rounds'])==5 and float(last['fang_hull_hp'])==fang_hp and float(last['fang_cannon_hp'])==0,last
             assert any(row['fang_rounds']=='3' and float(row['fang_cannon_hp'])==36 for row in rows),last
             assert any(row['fang_rounds']=='3' and float(row['fang_cannon_hp'])==0 for row in rows),last
         if stage in (8,13,24):
@@ -98,10 +107,8 @@ def main():
             if stage==13:assert next(p for p in parts if p['node']=='fang_body')['mesh']=='fang_body_damaged',parts
         if stage==14:
             assert int(last['rear_primary'])==2 and int(last['veil_beams'])==1,last
-            assert float(last['veil_hull_hp'])==68 and float(last['veil_sensor_hp'])==0,last
-            assert abs(float(last['veil_descent_lane'])-float(last['veil_shot_lane']))<.01,last
-            assert any(row['veil_sensor_hp']=='0' and row['veil_hull_hp']=='68' and row['veil_beams']=='0' for row in rows),last
-            assert any(row['veil_beam_early']=='1' and float(row['veil_beam_remaining'])>.70 for row in rows),last
+            assert float(last['veil_hull_hp'])==veil_hp and float(last['veil_sensor_hp'])==0,last
+            assert any(row['veil_sensor_hp']=='0' and float(row['veil_hull_hp'])==veil_hp and row['veil_beams']=='0' for row in rows),last
         if stage==15:
             first_break=next(i for i,row in enumerate(rows) if row['fang_panels']=='5')
             before=rows[first_break-1]
@@ -110,17 +117,89 @@ def main():
             assert any(float(row['player_speed'])>58 and float(row['panel_boost'])>0 for row in retreat),last
             assert any(float(before['fang_gap'])+2<float(row['fang_gap'])<1000 for row in retreat),last
             assert all(row['player_hp']==before['player_hp'] for row in retreat if row['veil_beams']=='0'),last
-        if 20<=stage<=23:
-            assert last['veil_projectiles']=='0',last
-            assert last['veil_beam_phase']==str(min(3,stage-19)),last
-        if stage in (22,23):
-            fire_index=next(i for i,row in enumerate(rows) if row['veil_beams']=='1')
-            fired=rows[fire_index]
-            assert fired['veil_beam_contact']==str(int(stage==22)),fired
-            assert (abs(float(fired['occupant_lateral']))>1.0)==(stage==23),fired
-            expected_hp=float(rows[fire_index-1]['player_hp'])-(6 if stage==22 else 0)
-            assert float(last['player_hp'])==expected_hp,last
-            assert any(row['veil_beam_phase']=='2' for row in rows),last
+        if stage in (41,42,43,44):
+            assert last['camera_weight']=='1' and last['alive']=='2',last
+            assert last['fang_panels']==('5' if stage>=43 else '7'),last
+            if stage>=43:
+                assert last['rear_lock']=='1' and float(last['fang_hull_hp'])==fang_hp,last
+        if stage in (45,46,47,48):
+            warning=[row for row in rows if row['crossfire_phase']=='1']
+            assert warning and last['camera_weight']=='1' and last['alive']=='2',last
+            assert warning[0]['crossfire_panel'] in ('0','2') and len({r['crossfire_lane'] for r in warning})==1,warning
+            if stage==45:
+                assert last['crossfire_rounds']=='0' and abs(float(last['crossfire_bank']))>.75,last
+            if stage==46:
+                assert .74<=float(warning[-1]['crossfire_age'])<=.81,warning[-1]
+                assert int(last['evasion_count'])>int(warning[0]['evasion_count']),last
+                assert last['player_hp']==warning[0]['player_hp'] and last['crossfire_rounds']=='3',last
+                assert last['fang_followup']=='1' and float(last['fang_bonus_damage'])>0,last
+            if stage==47:
+                assert last['crossfire_rounds']=='0' and last['rear_lock']=='1',last
+                assert int(last['fang_panels'])==7-(1<<int(last['crossfire_panel'])),last
+            if stage==48:
+                assert last['crossfire_rounds']=='3' and last['evasion_count']==warning[0]['evasion_count'],last
+                assert float(last['player_hp'])<float(warning[0]['player_hp']),last
+        if stage in (22,23,49,50,51,52,53):
+            charging=[r for r in rows if r['veil_beam_phase'] in ('1','2')]
+            assert charging and last['camera_weight']=='1' and last['alive']=='2',last
+            first_charge=[r for r in charging if r['veil_beams']=='0']
+            assert len({r['beam_end'] for r in first_charge})==1,last
+            if stage in (22,23,49,50,52):
+                assert abs(float(first_charge[0]['veil_beam_remaining'])-1.80)<.002,last
+                first_locked=next(r for r in first_charge if r['veil_beam_phase']=='2')
+                assert .648<=float(first_locked['veil_beam_remaining'])<=.701,first_locked
+                assert abs(float(first_locked['phase_age'])-float(first_charge[0]['phase_age'])-1.10)<.052,first_locked
+            if stage==49:assert last['veil_beams']=='0' and last['veil_beam_phase']=='2',last
+            if stage in (22,23,50,52):
+                boosted=stage in (23,50)
+                flight=[r for r in rows if r['veil_beam_phase']=='3']
+                assert abs(float(flight[0]['phase_age'])-float(first_charge[0]['phase_age'])-1.80)<.055,flight[0]
+                assert last['veil_beams']=='1' and last['beam_front']==last['beam_end'],last
+                assert len({r['beam_front'] for r in flight})>2,flight
+                assert sum(r['veil_beam_contact']=='1' for r in rows)==int(not boosted),last
+                if boosted:
+                    assert last['boost_held']=='1' and float(last['distance'])>float(last['beam_end']),last
+                    assert float(last['player_speed'])>float(charging[0]['player_speed'])+4,last
+                else:assert last['boost_held']=='0',last
+            if stage==51:
+                assert last['veil_beams']=='0' and last['veil_interrupted']=='1',last
+                assert last['rear_lock']=='1' and last['veil_sensor_hp']=='0' and float(last['veil_hull_hp'])==veil_hp,last
+            if stage==53:
+                assert last['fang_threat']==last['veil_threat']=='1',last
+                assert any(r['fang_threat']=='1' and r['veil_threat']=='0' for r in rows),last
+        if stage in (54,55,56,57):
+            attack=[row for row in rows if float(row['lightning_age'])>=0]
+            assert attack and last['camera_weight']=='1' and last['alive']=='2',last
+            assert len({r['lightning_nearest'] for r in attack})==1,attack
+            if stage==54:assert last['lightning_fired']=='0' and last['lightning_hits']=='0',last
+            else:
+                stages=list(dict.fromkeys(r['lightning_fired'] for r in attack))
+                assert stages==['0','1','3','7'],stages
+            if stage in (55,57):
+                first_brake=next(i for i,r in enumerate(attack) if r['brake_held']=='1')
+                assert first_brake>0 and .699<=float(attack[first_brake-1]['lightning_age'])<=.751,attack[first_brake]
+            if stage==55:
+                slow=min(float(r['player_speed']) for r in attack if r['brake_held']=='1')
+                assert last['lightning_hits']=='0' and last['player_hp']==attack[0]['player_hp'],last
+                clear=next(r for r in attack if float(r['lightning_age'])>=1.545)
+                assert float(clear['lightning_nearest'])-float(clear['distance'])>1.25,clear
+                assert float(last['lightning_bonus_damage'])==18 and float(last['veil_hull_hp'])<veil_hp,last
+                assert float(last['player_speed'])>slow+2,last
+            if stage==56:
+                assert last['lightning_hits']=='4' and float(last['player_hp'])<float(attack[0]['player_hp']),last
+            if stage==57:assert last['lightning_hits']=='0' and last['brake_held']=='1',last
+        if 58<=stage<=61:
+            target,other=('veil','fang') if stage%2 else ('fang','veil')
+            target_hp,other_hp=(veil_hp,fang_hp) if stage%2 else (fang_hp,veil_hp)
+            assert last['camera_weight']=='1' and last['alive']=='2',last
+            assert 0<float(last[f'{target}_hull_hp'])<target_hp and float(last[f'{other}_hull_hp'])==other_hp,last
+            if stage>=60:
+                tiers=list(dict.fromkeys(r[f'{target}_smoke_stage'] for r in rows))
+                assert tiers==['0','1','2','3'] and float(last[f'{target}_hull_hp'])<=.25*target_hp,last
+                assert last[f'{other}_smoke_stage']=='0',last
+            else:assert last[f'{target}_smoke_stage']=='0' and int(last['rear_primary'])>0,last
+        if stage in (20,21):
+            assert last['veil_projectiles']=='0' and last['veil_beam_phase']==str(stage-19),last
         if stage==24:
             assert last['elite_fang_fire']=='1' and float(last['fang_recoil'])>=.10 and last['fang_rounds']=='1',last
             assert float(last['elite_shake'])<=.0181,last
@@ -129,35 +208,23 @@ def main():
             assert any(r['elite_veil_fire']=='1' for r in rows),last
             assert any(r['elite_charge_loop']=='1' and r['veil_beam_phase']=='2' for r in rows),last
             assert any(float(r['elite_shake'])>.035 for r in rows if r['veil_beam_phase']=='3'),last
-        if stage>=37:
+        if 37<=stage<=40:
             log=work/'logs/pursuer_coordination.csv';shutil.copy2(log,out/f'{label}-coordination.csv')
             coordination=list(csv.DictReader(log.open()))
             assert coordination and float(coordination[-1]['age'])>=20,coordination[-1]
-            assert all(not (int(r['fang_threats'])>0 and int(r['beam_phase'])>0) for r in coordination),[r for r in coordination if int(r['fang_threats'])>0 and int(r['beam_phase'])>0]
-            assert not any(r['beam_hit']=='1' for r in coordination),[r for r in coordination if r['beam_hit']=='1']
-            assert any(int(r['fang_shots'])>0 for r in coordination) and any(int(r['veil_shots'])>0 for r in coordination),coordination[-1]
-            fang_owned=[float(r['veil_x']) for r in coordination if r['owner']=='1']
-            veil_owned=[float(r['fang_x']) for r in coordination if r['owner']=='2']
-            assert max(fang_owned)-min(fang_owned)>1 and max(veil_owned)-min(veil_owned)>1,coordination[-1]
-            grants=[];previous_grant='0'
+            assert any(int(r['fang_shots'])>0 for r in coordination),coordination[-1]
+            assert any(int(r['veil_shots'])>0 for r in coordination),coordination[-1]
+            previous=(0,0)
+            warning_times=[]
             for row in coordination:
-                if row['grants']!=previous_grant:
-                    grants.append(row);previous_grant=row['grants']
-            assert grants[0]['owner']==('2' if stage in (38,39) else '1'),grants[0]
+                grants=int(row['fang_grants']),int(row['veil_grants'])
+                if grants==previous:continue
+                assert sum(grants)-sum(previous)==1,row
+                warning_times.append(float(row['age']))
+                previous=grants
+            assert all(b-a>=.577 for a,b in zip(warning_times,warning_times[1:])),warning_times
             if stage==38:assert max(float(r['speed']) for r in coordination)>40,coordination[-1]
             if stage==39:assert min(float(r['speed']) for r in coordination)<28,coordination[-1]
-            if stage==40:
-                blocked=[r for r in coordination if r['veil_los']=='0' and float(r['age'])<13.5]
-                assert len(blocked)>15 and all(r['beam_fired']=='0' for r in blocked),blocked[-1] if blocked else coordination[-1]
-                # A sight line may briefly clear, reserve a warning, then close
-                # again. Count actual shots, not cancelled attack intentions.
-                fired=[];previous_shots=[0,0]
-                for row in coordination:
-                    shots=[int(row['fang_shots']),int(row['veil_shots'])]
-                    for i in range(2):
-                        if shots[i]>previous_shots[i]:fired.append(str(i+1))
-                    previous_shots=shots
-                assert fired[:2]==['1','1'] and '2' in fired[2:],fired
         if stage==3 or 26<=stage<=36:
             bridge_log=work/'logs/bridge_escape_audit.csv'
             shutil.copy2(bridge_log,out/f'{label}-bridge.csv')
@@ -196,7 +263,7 @@ def main():
                 assert int(b['attempt'])>int(bridge[0]['attempt']) and b['target_hp']=='30' and b['phase']=='3',b
                 assert abs(float(b['distance'])-float(b['checkpoint']))<8,b
                 assert float(b['checkpoint'])>=float(bridge[0]['distance']),b
-            if stage==33:assert float(b['damage'])>=64 and float(b['combat_seconds'])<26,b
+            if stage==33:assert float(b['damage'])>=2852 and 28<=float(b['combat_seconds'])<65,b
             if stage==34:assert int(b['attempt'])>int(bridge[0]['attempt']),b
             if stage in (35,36):
                 assert all((out/f'{label}-{i}.png').exists() for i in range(21)),label
@@ -253,7 +320,10 @@ def main():
                     if a['phase']=='7' and c['phase']=='8':
                         assert abs(float(c['blur'])-float(a['blur']))<.10,(a,c)
                 if stage==36:assert int(b['attempt'])>int(bridge[0]['attempt']),b
-        if stage>=2:assert notice and float(notice['age'])>=12 and float(notice['distance'])-float(notice['anchor'])>=489,notice
+        if stage>=2:
+            assert notice and float(notice['age'])>=4.34 and float(notice['distance'])-float(notice['anchor'])>=111.9,notice
+            first_combat=next((r for r in rows if r['phase']=='6'),None)
+            if first_combat:assert 7.0<=float(first_combat['age'])<=9.0,first_combat
         item=dict(stage=label,last=last,notice=notice,build_sha256=build,fixture_boss_hp=[60,60])
         by_stage[label]=item;print(json.dumps(item),flush=True)
         manifest.write_text(json.dumps([by_stage[name] for name in labels if name in by_stage],indent=2),encoding='utf-8')

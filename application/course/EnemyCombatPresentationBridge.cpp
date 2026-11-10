@@ -1,4 +1,6 @@
 #include "RailTurretGeometry.h"
+#include "RailGroundBatteryAttack.h"
+#include "RailRouteHazards.h"
 #include "EnemyCombatPresentationBridge.h"
 #include "RailEnemyEnergyPalette.h"
 #include "RailBatteryThermalPresentation.h"
@@ -528,8 +530,8 @@ void EnemyCombatPresentationBridge::Update(
             const float age=burst.age;
             burst.age += std::isfinite(input.deltaTime) ? (std::max)(0.0f,input.deltaTime) : 0.0f;
             if(age<0 && burst.age>=-0.000001f)burst.age=0;
-            const float impactAge=burst.frozenPose.destructionImpactAge;
-            if(!burst.twinShield || impactAge<0 || burst.age<impactAge || burst.crashEmitted) continue;
+            const float impactAge=burst.groundTurret.Active()?RailGroundTurretCollapse::Slam:burst.frozenPose.destructionImpactAge;
+            if((!burst.twinShield && !burst.groundTurret.Active()) || impactAge<0 || burst.age<impactAge || burst.crashEmitted) continue;
             burst.crashEmitted=true;
             // An overdue effect must not replay after a long frame or resume.
             if(burst.age-impactAge>=0.50f) continue;
@@ -553,7 +555,7 @@ void EnemyCombatPresentationBridge::Update(
                 const float impactAge=burst.frozenPose.destructionImpactAge;
                 const float lifetime=burst.twinShield ? (impactAge>=0 ? impactAge+2.25f :
                     TwinShieldDroneSmokePuff::FallbackStop+TwinShieldDroneSmokePuff::Lifetime) : 0.65f;
-                return burst.age>=lifetime;
+                return burst.age>=(burst.groundTurret.Active()?RailGroundTurretCollapse::Lifetime:lifetime);
             });
     }
     frame_.actors.reserve(input.runtime->Enemies().size());
@@ -826,6 +828,40 @@ void EnemyCombatPresentationBridge::Update(
                             primaryKill ? -pendingPrimary->duration : 0.0f};
                         burst.twinShield=actor->desc.meshId=="twin_shield_hull" &&
                             !IsRailElitePursuer(actor->desc.actorAssetId);
+                        if(RailGroundBattery::IsBattery(actor->desc.actorAssetId) &&
+                            actor->groundPlacementResolved && RailTurret::IsMesh(actor->desc.meshId)) {
+                            auto& wreck=burst.groundTurret;
+                            wreck.meshId=actor->desc.meshId;
+                            wreck.center=mix.position;
+                            const auto rail=input.railPath->Evaluate(actor->desc.spawnDistance+actor->desc.distanceOffset);
+                            wreck.baseRotation={0,std::atan2(rail.tangent.x,rail.tangent.z),0};
+                            const auto* visual=FindActor(actor->actorId);
+                            wreck.headRotation=visual && visual->turret?visual->turretWorldRotation:wreck.baseRotation;
+                            wreck.side=rollSign;
+                            wreck.scale=actor->desc.radius;
+                            wreck.rotor=wreck.meshId=="gatling_turret"?RailTurret::RotorAngle(actor->turretMotion,actor->age):0;
+                            wreck.recoil=RailTurret::Recoil(actor->turretMotion,wreck.meshId,actor->age);
+                            wreck.contact=RailGroundTurretCollapse::Point({wreck.side*.25f,.2f,-.65f},
+                                RailGroundTurretCollapse::Evaluate(wreck,0).head);
+                            if(pendingPrimary)wreck.contact=pendingPrimary->event.worldPosition;
+                            else if(input.weaponFeedback) {
+                                const auto& recent=input.weaponFeedback->RecentEvents();
+                                const auto feedback=std::find_if(recent.begin(),recent.end(),[&](const auto& hit) {
+                                    return hit.targetActorId==actor->actorId && hit.shotId==event->shotId && hit.destroyed;
+                                });
+                                if(feedback!=recent.end())wreck.contact=feedback->worldPosition;
+                            }
+                            if(actor->desc.waveId==RailRouteHazards::ShelfBatteryWave && event->shotId!=0 &&
+                                std::any_of(input.runtime->Obstacles().begin(),input.runtime->Obstacles().end(),[&](const auto& obstacle) {
+                                    return RailRouteHazards::IsShelf(obstacle) &&
+                                        RailRouteHazards::SlabTriggerShot(obstacle)==event->shotId;
+                                })) {
+                                // The slab is already bearing down on the head at defeat.
+                                // Start at the end of the hinge travel so the chassis folds on contact.
+                                burst.age=RailGroundTurretCollapse::Slam-.04f;
+                            }
+                            burst.crashPosition=RailGroundTurretCollapse::Evaluate(wreck,RailGroundTurretCollapse::Slam).strike;
+                        }
                         if(burst.twinShield) {
                             auto& pose=burst.frozenPose;
                             if(actor->hasDefeatedPose) pose=actor->defeatedPose;
@@ -886,7 +922,9 @@ void EnemyCombatPresentationBridge::Update(
                     }
                     // The depth-tested core cut and small connection arcs own
                     // drone defeat. Keep the large particle blast for ground impact.
-                    if(primaryKill || actor->desc.meshId=="twin_shield_hull") continue;
+                    if(primaryKill || actor->desc.meshId=="twin_shield_hull" ||
+                        (RailGroundBattery::IsBattery(actor->desc.actorAssetId) &&
+                         actor->groundPlacementResolved && RailTurret::IsMesh(actor->desc.meshId)))continue;
                     // WeaponFeedback owns the contact impact. This is a larger,
                     // actor-centered destruction burst and is emitted once.
                     vfx.cueId = "enemy_combat_death";

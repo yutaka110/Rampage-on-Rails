@@ -226,7 +226,7 @@ void RailShooterHudPresentationBridge::Update(
         case PlayerHitKind::TerrainContact: cause = Utf8(u8"地形との衝突"); break;
         case PlayerHitKind::ScriptedHazard:
             cause = damage.request.sourceId == kVeilBeamSource
-                ? Utf8(u8"ヴェイル収束ビーム") : Utf8(u8"危険地帯");
+                ? Utf8(u8"ヴェイル後方ビーム") : Utf8(u8"危険地帯");
             break;
         }
         next.showDamageNotice = true;

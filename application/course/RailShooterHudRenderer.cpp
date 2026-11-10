@@ -1,7 +1,6 @@
 #include "RailShooterHudRenderer.h"
 #include "RailShortCourse.h"
 #include "RailGameOverScene.h"
-#include "EncounterPerformanceScoreSystem.h"
 #include "RailEnemyEnergyPalette.h"
 #include <cmath>
 
@@ -139,7 +138,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         text(result.endReason==GameSessionEndReason::TimeExpired?Utf8(u8"制限時間を過ぎました"):
             result.endReason==GameSessionEndReason::PlayerDestroyed?Utf8(u8"トロッコが大破しました"):Utf8(u8"任務を継続できません"),
             cx,cy-22*s,0.82f*s,{0.74f,0.68f,0.58f,a},center);
-        text("SCORE  "+std::to_string(result.score)+"    /    MAX CHAIN  "+std::to_string(result.maximumCombo),
+        if(!input.shortRun)text("SCORE  "+std::to_string(result.score)+"    /    MAX CHAIN  "+std::to_string(result.maximumCombo),
             cx,cy+20*s,0.72f*s,muted,center);
         for(int i=0;i<2;++i) {
             const auto button=GameOverButton(width,height,i);
@@ -186,11 +185,13 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         std::string reason=result.outcome==GameSessionOutcome::Victory?Utf8(u8"包囲を突破しました"):
             (result.endReason==GameSessionEndReason::TimeExpired?Utf8(u8"制限時間を過ぎました"):Utf8(u8"車体の耐久がなくなりました"));
         text(reason,cx,cy-144*s,0.78f*s,muted,center);
-        text("SCORE   "+std::to_string(result.score),cx,cy-82*s,1.18f*s,white,center);
-        text("MAX CHAIN   "+std::to_string(result.maximumCombo),cx,cy-43*s,0.86f*s,white,center);
+        if(!input.shortRun) {
+            text("SCORE   "+std::to_string(result.score),cx,cy-82*s,1.18f*s,white,center);
+            text("MAX CHAIN   "+std::to_string(result.maximumCombo),cx,cy-43*s,0.86f*s,white,center);
+        }
         const int seconds=int((std::max)(0.0f,result.gameplayElapsedSeconds));
         text("RUN TIME   "+std::to_string(seconds/60)+":"+(seconds%60<10?"0":"")+std::to_string(seconds%60)+
-            "    HP   "+std::to_string(int(std::ceil(result.playerHealth))),cx,cy-6*s,0.80f*s,muted,center);
+            "    HP   "+std::to_string(int(std::ceil(result.playerHealth))),cx,cy-(input.shortRun?62:6)*s,0.80f*s,muted,center);
         next.visible=!next.commands.empty(); frame_=std::move(next); return;
     }
 
@@ -290,52 +291,45 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const auto& guide=*input.basicTutorial;
         using Lesson=RailBasicTutorial::Lesson;using LockStep=RailBasicTutorial::LockStep;
         const auto lesson=guide.Current();const bool success=guide.Success();
-        const float w=760*scale,x=(width-w)*.5f,y=height*.19f;
         const float fade=(std::min)(1.0f,guide.Age()*7+.25f)*opacity;
         const Vector4 accent=WithOpacity(success?Vector4{.48f,1,.72f,1}:Vector4{.45f,.90f,1,1},fade);
         const Vector4 white{.94f,.98f,1,fade},muted{.62f,.73f,.80f,fade};
-        rect(x,y,w,120*scale,{.008f,.018f,.028f,.92f*fade});
-        rect(x,y,3*scale,120*scale,accent);
-        const bool mouse=lesson==Lesson::Primary || lesson==Lesson::Lock;
-        const float iconX=x+24*scale,iconY=y+23*scale;
-        if(mouse) {
+        if(lesson==Lesson::Brake || lesson==Lesson::Boost) {
+            const bool brake=lesson==Lesson::Brake;
+            const float x=safe,y=height-130*responsive;
+            rect(x,y,218*responsive,26*responsive,{.008f,.018f,.028f,.83f*fade});
+            rect(x+4*responsive,y+3*responsive,23*responsive,20*responsive,{.10f,.20f,.25f,fade});
+            text(brake?"Q":"E",x+15.5f*responsive,y+18*responsive,.68f*responsive,
+                accent,RailShooterHudTextAlignment::Center);
+            const auto instruction=brake?(success?u8"減速を確認":u8"長押しで減速"):
+                (success?u8"加速を確認":u8"長押しで加速");
+            text(Utf8(instruction),x+35*responsive,y+18*responsive,.68f*responsive,success?accent:white);
+        } else {
+            const float w=760*scale,x=(width-w)*.5f,y=height*.19f;
+            rect(x,y,w,120*scale,{.008f,.018f,.028f,.92f*fade});
+            rect(x,y,3*scale,120*scale,accent);
+            const float iconX=x+24*scale,iconY=y+23*scale;
             // A mouse silhouette with the actual left/right button highlighted.
             rect(iconX,iconY,58*scale,73*scale,{.15f,.22f,.28f,fade});
             rect(iconX+3*scale,iconY+3*scale,52*scale,67*scale,{.035f,.065f,.085f,fade});
             rect(iconX+3*scale+(lesson==Lesson::Lock?27:0)*scale,iconY+3*scale,25*scale,30*scale,accent);
             rect(iconX+27*scale,iconY+3*scale,3*scale,32*scale,{.008f,.018f,.028f,fade});
-        } else {
-            rect(iconX,iconY+6*scale,62*scale,62*scale,accent);
-            rect(iconX+2*scale,iconY+8*scale,58*scale,58*scale,{.025f,.055f,.075f,fade});
-            const char* key=lesson==Lesson::Boost?"E":"Q";
-            text(key,iconX+31*scale,iconY+53*scale,1.55f*scale,accent,RailShooterHudTextAlignment::Center);
+            const bool primary=lesson==Lesson::Primary;
+            text(Utf8(primary?u8"01 / 04   通常攻撃":u8"02 / 04   ロックオン"),x+111*scale,y+27*scale,.64f*scale,accent);
+            const auto instruction=primary?(success?u8"通常攻撃を確認":u8"左クリック長押しで連射"):
+                (success?u8"ロックオン発射！":guide.LockPhase()==LockStep::Release?u8"右クリックを離して一斉発射":
+                    guide.LockPhase()==LockStep::Sweep?u8"押したまま敵をなぞる":u8"右クリック長押しでロックオン");
+            const auto detail=primary?u8"マウスで照準を合わせる":
+                (success?u8"複数の敵をまとめて攻撃できる":u8"押したまま敵をなぞると複数ロック");
+            text(Utf8(instruction),x+111*scale,y+62*scale,1.10f*scale,white);
+            text(Utf8(detail),x+111*scale,y+90*scale,.64f*scale,muted);
+            if(!primary && !success)
+                text("LOCK "+std::to_string(guide.Locks()),x+w-92*scale,y+27*scale,.62f*scale,accent);
+            const float pulse=.42f+.16f*std::sin(guide.Age()*4);
+            rect(x+111*scale,y+106*scale,w-135*scale,2*scale,{.13f,.21f,.27f,fade});
+            rect(x+111*scale,y+106*scale,(w-135*scale)*(std::max)(success?1.0f:.015f,guide.Progress()),3*scale,
+                WithOpacity(accent,success?1.0f:pulse+.35f));
         }
-        const auto title=lesson==Lesson::Primary?u8"01 / 04   通常攻撃":lesson==Lesson::Lock?u8"02 / 04   ロックオン":
-            lesson==Lesson::Boost?u8"03 / 04   アクセル":u8"04 / 04   ブレーキ";
-        text(Utf8(title),x+111*scale,y+27*scale,.64f*scale,accent);
-        std::u8string_view instruction,detail;
-        if(lesson==Lesson::Primary) {
-            instruction=success?u8"通常攻撃を確認":u8"左クリック長押しで連射";
-            detail=u8"マウスで照準を合わせる";
-        } else if(lesson==Lesson::Lock) {
-            instruction=success?u8"ロックオン発射！":guide.LockPhase()==LockStep::Release?u8"右クリックを離して一斉発射":
-                guide.LockPhase()==LockStep::Sweep?u8"押したまま敵をなぞる":u8"右クリック長押しでロックオン";
-            detail=success?u8"複数の敵をまとめて攻撃できる":u8"押したまま敵をなぞると複数ロック";
-        } else if(lesson==Lesson::Boost) {
-            instruction=success?u8"加速を確認":u8"E 長押しで加速";
-            detail=success?u8"次はブレーキ":guide.BoostWaiting()?u8"自動加速が終わったら試そう":u8"離すと通常速度に戻る";
-        } else {
-            instruction=success?u8"減速を確認":u8"Q 長押しでブレーキ";
-            detail=u8"Qを押している間は加速より減速を優先";
-        }
-        text(Utf8(instruction),x+111*scale,y+62*scale,1.10f*scale,white);
-        text(Utf8(detail),x+111*scale,y+90*scale,.64f*scale,muted);
-        if(lesson==Lesson::Lock && !success)
-            text("LOCK "+std::to_string(guide.Locks()),x+w-92*scale,y+27*scale,.62f*scale,accent);
-        const float pulse=.42f+.16f*std::sin(guide.Age()*4);
-        rect(x+111*scale,y+106*scale,w-135*scale,2*scale,{.13f,.21f,.27f,fade});
-        rect(x+111*scale,y+106*scale,(w-135*scale)*(std::max)(success?1.0f:.015f,guide.Progress()),3*scale,
-            WithOpacity(accent,success?1.0f:pulse+.35f));
     }
     else if(input.lockIntro && input.lockIntro->Visible() && !input.bossVisible && !input.startCueActive) {
         const auto& intro=*input.lockIntro;
@@ -546,7 +540,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         bar(width*0.5f-w*0.5f,safe+31*scale,w,4*scale,
             hud.courseProgressNormalized,primary,barBackground);
     }
-    if(definition.showScore) {
+    if(definition.showScore && !input.shortRun) {
         const float x=width-safe-definition.rightPanelWidth*scale*0.5f;
         text(Utf8(u8"得点"),x,safe+16*scale,0.57f*scale,muted,center);
         const std::string digits=std::to_string(hud.score);
@@ -564,26 +558,6 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         }
         if(hud.grazeChain>0) text(hud.grazeText,x,safe+174*scale,
             0.58f*scale,primary,center);
-        if(input.shortRun && !input.startCueActive && input.resultSession &&
-            input.resultSession->phase==GameSessionPhase::Playing && input.encounterScore &&
-            input.encounterScore->showcaseSecondsRemaining>0) {
-            const auto& success=*input.encounterScore;
-            std::string label;Vector4 accent=primary;
-            switch(success.showcaseKind) {
-            case EncounterPerformanceScoreKind::LockSweep: label=Utf8(u8"一斉撃破");break;
-            case EncounterPerformanceScoreKind::BatteryBreak: label=Utf8(u8"砲台制圧");accent=warning;break;
-            case EncounterPerformanceScoreKind::ProjectileIntercept: label=Utf8(u8"連続迎撃");break;
-            default:break;
-            }
-            if(!label.empty()) {
-                const float a=opacity*(std::min)(1.0f,success.showcaseSecondsRemaining/0.25f);
-                const float y=safe+(200+4*(1-a))*scale;
-                plate(x-128*scale,y,256*scale,35*scale,{0.015f,0.025f,0.032f,a*0.82f});
-                rect(x-128*scale,y,2*scale,35*scale,{accent.x,accent.y,accent.z,a});
-                const auto message=label+"  x"+std::to_string(success.showcaseCount)+"  +"+std::to_string(success.showcaseScore);
-                ink(message,x,y+24*scale,0.73f*scale,{accent.x,accent.y,accent.z,a},center);
-            }
-        }
     }
     if(definition.showWeapon) {
         // Lock readiness is anchored below combat, separate from enemy markers.
@@ -653,11 +627,30 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     if(input.gateClearPulse>0 && !input.startCueActive)
         text("STONE GATE CLEAR",width*.5f,height*.20f,1.15f*responsive,
             {1.0f,.83f,.48f,(std::min)(1.0f,input.gateClearPulse*4)},center);
-    const bool liveCourseCombat=input.shortRun && input.resultSession &&
-        input.resultSession->courseDistance>=RailBasicTutorial::SpeedEnd;
-    if(width>=960 && !liveCourseCombat && !(input.basicTutorial && input.basicTutorial->Visible())) {
-        text(Utf8(u8"左クリック : 射撃   右クリック : ロック / 離して発射   E : 加速   Q : ブレーキ   P : 一時停止"),
-            width*0.5f,height-10*responsive,0.50f*responsive,muted,center);
+    struct ControlHint {
+        std::u8string_view key,action;
+        float width,keyWidth;
+    };
+    constexpr ControlHint controls[]{
+        {u8"左クリック",u8"通常攻撃",166,76},
+        {u8"右クリック",u8"長押しでロックオン／離して発射",334,76},
+        {u8"Q",u8"長押しでブレーキ",147,24},
+        {u8"E",u8"長押しで加速",116,24},
+    };
+    constexpr float hintPadding=8.0f;
+    float hintWidth=hintPadding*2;
+    for(const auto& control:controls)hintWidth+=control.width;
+    const float hintX=(width-hintWidth*responsive)*.5f;
+    const float hintY=height-42*responsive;
+    rect(hintX,hintY,hintWidth*responsive,29*responsive,{.008f,.018f,.028f,.86f*opacity});
+    float hintCursor=hintX+hintPadding*responsive;
+    for(const auto& control:controls) {
+        const float keyWidth=control.keyWidth*responsive;
+        rect(hintCursor,hintY+4*responsive,keyWidth,21*responsive,{.12f,.24f,.29f,opacity});
+        text(Utf8(control.key),hintCursor+keyWidth*.5f,hintY+20*responsive,.72f*responsive,
+            {.60f,.94f,1,opacity},center);
+        text(Utf8(control.action),hintCursor+keyWidth+8*responsive,hintY+20*responsive,.72f*responsive,textColor);
+        hintCursor+=control.width*responsive;
     }
     for(size_t index=0;index<next.commands.size();++index) {
         auto& command=next.commands[index];

@@ -178,6 +178,20 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
             anchor.lineOfSightOccluderActorId,
             anchor.lineOfSightBlockT);
         if(input.viewRelativeTargeting && enemy.weaponMount.ready) {
+            if(enemy.desc.actorAssetId=="rear_veil" && enemy.veilSensorExposed && enemy.veilSensorHitPoints>0) {
+                RailLockAnchor sensor;
+                sensor.target={RailLockTargetKind::VeilSensor,enemy.actorId,enemy.actorId};
+                sensor.label="VEIL SENSOR";
+                sensor.worldPosition=VeilSensorWorldCenter(enemy.weaponMount.dronePose);
+                sensor.screenRadius=17.0f;sensor.priority=2.0f;
+                const auto delta=Subtract(sensor.worldPosition,input.cameraPosition);
+                const auto& f=input.viewForward;
+                sensor.forwardDistance=delta.x*f.x+delta.y*f.y+delta.z*f.z;
+                sensor.lineOfSightBlocked=ResolveLineOfSightBlock(*input.spawnRuntime,*input.railPath,
+                    sensor.target,input.cameraPosition,sensor.worldPosition,input.settings,
+                    sensor.lineOfSightOccluderActorId,sensor.lineOfSightBlockT);
+                anchors_.push_back(std::move(sensor));
+            }
             for(size_t index=0;index<kRearPanelAnchors.size();++index) {
                 if(!enemy.rearArmor.HasPanel(index)) continue;
                 RailLockAnchor panel;
@@ -222,7 +236,7 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
         anchors_.push_back(std::move(anchor));
     }
     for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-        if (!obstacle.desc.breakable || RailRouteHazards::IsBarricade(obstacle)) {
+        if (!obstacle.desc.breakable || RailRouteHazards::IsBarricade(obstacle) || RailRouteHazards::IsSlab(obstacle)) {
             continue;
         }
         const float distance = ObstacleDistance(obstacle);

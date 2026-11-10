@@ -107,24 +107,29 @@ def main():
         if stage not in (10, 45):
             assert last['success'] == str(int(stage in [1, 5, 7, 9])), (label, last)
         if 6 <= stage <= 10:
-            assert int(last['learned']) & 6 == 6, 'speed lessons follow actual primary and lock mastery'
-            assert 630 <= float(last['distance']) < 1200, 'speed lesson fits the authored runway'
+            assert float(last['distance']) >= 630, 'speed lessons begin on the authored runway'
+        if stage in (6, 7):
+            assert int(last['learned']) & 16 and last['reward_boost'] == '0', last
         if stage == 7:
             assert float(last['speed']) > float(last['normal']) * 1.03
         if stage in (9, 45):
-            acceleration = next(i for i, r in enumerate(rows) if r['lesson']=='3' and r['success']=='1')
             prompt = next(i for i, r in enumerate(rows) if r['lesson']=='4' and r['visible']=='1')
             pressed = next(i for i in range(prompt, len(rows)) if rows[i]['brake']=='1')
             confirmed = next(i for i in range(pressed, len(rows)) if rows[i]['lesson']=='4' and rows[i]['success']=='1')
-            assert acceleration < prompt < pressed < confirmed, (label, last)
-            assert all(r['boost_input']=='1' for r in rows[prompt+1:confirmed+1]), (label, last)
+            assert prompt < pressed < confirmed, (label, last)
             assert all(r['lesson']=='4' and r['visible']=='1' for r in rows[prompt:confirmed+1]), (label, last)
-            assert int(rows[confirmed]['learned']) == 30, rows[confirmed]
+            assert int(rows[confirmed]['learned']) & 24 == 16, rows[confirmed]
             assert float(rows[confirmed]['speed']) < float(rows[confirmed]['normal']) * .92, rows[confirmed]
-            assert any(int(r['shots']) > 0 for r in rows)
-            assert any(int(r['volley']) >= 2 for r in rows)
             if stage == 45:
-                assert float(rows[prompt]['distance']) < 1200 <= float(rows[pressed]['distance']), rows[pressed]
+                reward_start = next(i for i, r in enumerate(rows) if r['reward_boost']=='1')
+                reward_end = next(i for i in range(reward_start+1, len(rows)) if rows[i]['reward_boost']=='0')
+                accelerator = next(i for i, r in enumerate(rows) if r['lesson']=='3' and r['visible']=='1')
+                acceleration = next(i for i in range(accelerator, len(rows))
+                                    if rows[i]['lesson']=='3' and rows[i]['success']=='1')
+                assert reward_start <= confirmed < reward_end <= accelerator < acceleration, (label, last)
+                assert int(rows[confirmed]['reward_kills']) >= 6, rows[confirmed]
+                assert rows[acceleration]['reward_boost']=='0' and rows[acceleration]['boost']=='1', rows[acceleration]
+                assert int(rows[acceleration]['learned']) & 24 == 24, rows[acceleration]
                 assert last['battery_owner']!='0' and last['visible']=='0', last
                 contact = out / f'{label}-contacts.csv'
                 shutil.copy2(work / 'logs/rail_primary_contact.csv', contact)

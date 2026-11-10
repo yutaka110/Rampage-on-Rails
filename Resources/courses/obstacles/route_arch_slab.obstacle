@@ -1,4 +1,4 @@
-# Visible before the attack. The route hazard animates on approach.
-obstacle|route_arch_slab|Stone arch keystone|rail_hazard_block|4.8|2.25|1.52|2.45|1|1|1|1
-placement|117|7.0|7.4|0
-breakable|false|100
+# A primary shot dislodges the overhead slab before the carrier can.
+obstacle|route_arch_slab|Stone arch keystone|rail_hazard_block|300|10.9|5.8|3.5|1|1|1|1
+placement|117|0|20|0
+breakable|true|12

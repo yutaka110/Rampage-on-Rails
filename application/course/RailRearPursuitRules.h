@@ -69,6 +69,8 @@ struct RailRearArmor {
     }
 };
 inline constexpr float kFangShotInterval = .16f;
+inline constexpr char kFangCrossfireRole[] = "fang_crossfire";
+inline constexpr float kFangCrossfireHalfWidth = .70f;
 inline constexpr float kElitePursuerModelScale = 3.0f;
 inline float RailEnemyEngagementSign(std::string_view actorAssetId) {
     return IsRailRearPursuer(actorAssetId)?-1.0f:1.0f;

@@ -19,6 +19,7 @@
 #include "course/RailHeavyAttack.h"
 #include "course/RailCartImpactEnergy.h"
 #include "course/RailBatteryThermalPresentation.h"
+#include "course/RailRearPanelMaterial.h"
 
 #include <unordered_set>
 #include <DirectXCollision.h>
@@ -425,36 +426,10 @@ Vector3 Cross(const Vector3& a, const Vector3& b) {
     };
 }
 
-struct VeilBeamWorldFrame {
-    RailPathSample sample{};
-    Vector3 mouth{}, aperture{}, target{}, direction{}, end{};
-    float charge = 0.0f;
-    float phase = 0.0f;
-    float flash = 0.0f;
-};
-
-VeilBeamWorldFrame BuildVeilBeamWorldFrame(const RailPostBossSequence::BeamFrame& beam,
-    const TwinShieldDronePose& pose, const RailPath& rail,const RailVeilAttackFrame& attack) {
-    VeilBeamWorldFrame frame;
-    frame.sample = rail.Evaluate(beam.distance);
-    frame.mouth = RailVeilModel::MuzzleWorld(pose,attack);
-    frame.target = ResolveEnemyProjectileWorldPosition(frame.sample,{beam.aim.x,beam.aim.y,beam.distance});
-    frame.direction = NormalizeOr(Subtract(frame.target,frame.mouth),frame.sample.tangent);
-    frame.aperture = frame.mouth;
-    frame.end = Add(frame.target,Scale(frame.direction,8.0f));
-    frame.charge = 1.0f-(std::clamp)(beam.secondsToFire/1.80f,0.0f,1.0f);
-    frame.phase = (std::clamp)(beam.flashAge/RailPostBossSequence::VeilBeamFlashSeconds,0.0f,1.0f);
-    if(beam.phase==RailPostBossSequence::BeamPhase::Flash) {
-        frame.flash = std::exp(-beam.flashAge*16.0f)*(1.0f-frame.phase);
-        // Continue the same ray to the bridge deck, whose authored top is -0.4.
-        const auto deck = Add(frame.sample.position,Scale(frame.sample.up,-.385f));
-        const float descent = Dot(frame.direction,frame.sample.up);
-        if(descent<-.01f) {
-            const float length = Dot(Subtract(deck,frame.mouth),frame.sample.up)/descent;
-            if(length>0 && length<120.0f) frame.end=Add(frame.mouth,Scale(frame.direction,length));
-        }
-    }
-    return frame;
+Vector3 VeilBeamRailPoint(const RailPath& rail,const RailPostBossSequence::BeamFrame& beam,float distance) {
+    const auto sample=rail.Evaluate(distance);
+    const auto center=beam.Center(distance);
+    return ResolveEnemyProjectileWorldPosition(sample,{center.x,center.y,distance});
 }
 
 Vector3 RotateAroundAxis(const Vector3& value, const Vector3& axis, float radians) {
@@ -3413,7 +3388,7 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
         0x5DE6, 0x5E2F, 0x5EA6, 0x5F3E, 0x5F62, 0x5F85, 0x5F8C, 0x5F97, 0x5FA1, 0x610F, 0x6210, 0x6212,
         0x6226, 0x6311, 0x63A5, 0x6483, 0x653B, 0x6557, 0x6575, 0x6642, 0x679C, 0x6A5F, 0x6B62, 0x6B63,
         0x6B8B, 0x6CE2, 0x6CE8, 0x6E96, 0x6EC5, 0x70B9, 0x7121, 0x71B1, 0x7269, 0x767A, 0x76F4, 0x7740,
-        0x7832, 0x7834, 0x78BA, 0x7A81, 0x7D42, 0x7D50, 0x7D9A, 0x8010, 0x8105, 0x885D, 0x88AB, 0x88C5,
+        0x77F3, 0x7832, 0x7834, 0x78BA, 0x7A81, 0x7D42, 0x7D50, 0x7D9A, 0x8010, 0x8105, 0x885D, 0x88AB, 0x88C5,
         0x89E6, 0x8A8D, 0x8B66, 0x8ECA, 0x8FCE, 0x8FD1, 0x901A, 0x901F, 0x9023, 0x9032, 0x904E, 0x907F,
         0x958B, 0x9593, 0x95D8, 0x9632, 0x963B, 0x9650, 0x967A, 0x969C, 0x9762,
         0x3057, 0x308B, 0x30A6, 0x30AA, 0x30AF, 0x30B2, 0x30B9, 0x30C3, 0x30DE, 0x30E0, 0x30EA, 0x30ED, 0x30F3, 0x4F5C, 0x52D5, 0x59CB, 0x5B9A, 0x623B, 0x629E, 0x62BC, 0x64CD, 0x6589, 0x660E, 0x6C7A, 0x7167, 0x79FB, 0x8AAC, 0x9078, 0x9577, 0x96E2,
@@ -3424,6 +3399,8 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
     for(char32_t cp:std::u32string_view(U"撃破ブースト高速完了次秒減速"))
         submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
     for(char32_t cp:std::u32string_view(U"ヴェイル収束ビーム照準固定横リーン早期センサー破壊発射阻止ファング龍砲ユニット／　"))
+        submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
+    for(char32_t cp:std::u32string_view(U"横切り射撃翼パネル後方雷柱急ミニボス敵機接近"))
         submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
     for(char32_t cp:std::u32string_view(U"複数の敵をまとめて攻撃できる右クリック長押し敵をなぞる離して一斉発射光る重砲弾を狙い合わせそのまま右クリック長押し離そう反撃チャンスダメージ通常速度で戦おうはれ！→×"))
         submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
@@ -4531,10 +4508,19 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
         addCircleLine(marker.screen,11*hudScale,1.25f*hudScale,{1,.32f,.36f,.28f*opacity},24);
     };
-    const uint32_t fangFollowupId=railPostBossSequence_.FangFollowupTarget();
+    const uint32_t fangFollowupId=railPostBossSequence_.VeilLightningFollowupTarget()?0:
+        railPostBossSequence_.FangFollowupTarget();
     const bool veilCanBeInterrupted=railPostBossSequence_.VeilCanBeInterrupted();
     const auto& veilBeam=railPostBossSequence_.VeilBeam();
+    const auto& lightning=railPostBossSequence_.VeilLightning();
+    const bool lightningVisible=railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Combat &&
+        !railTitleScreenVisible_ && !railGameOverScene_.Active() && lightning.Visible();
+    using CrossfirePhase=RailPursuerCoordination::CrossfirePhase;
+    const auto& crossfire=railPostBossSequence_.FangCrossfire();
+    const bool crossfireCombat=railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Combat;
+    const bool crossfireWarning=crossfireCombat && crossfire.phase==CrossfirePhase::Warning;
     std::string rearChoice,veilChoice;
+    bool sensorLockAvailable=false;
     if(fangFollowupId || veilCanBeInterrupted) {
         for(const auto& enemy:railShooterSpawnRuntime_.Enemies()) {
             if(enemy.actorId==fangFollowupId) {
@@ -4550,8 +4536,9 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             }
             if(!veilCanBeInterrupted || enemy.actorId!=railPostBossSequence_.ActorIds()[1]) continue;
             if(enemy.veilSensorHitPoints<=0) {
-                veilChoice=HudUtf8(u8"ヴェイル センサー破壊　照準が固定・横に回避");
+                veilChoice=HudUtf8(u8"ヴェイル センサー破壊");
             } else if(enemy.veilSensorExposed) {
+                sensorLockAvailable=true;
                 veilChoice=HudUtf8(u8"ヴェイル センサー ")+
                     std::to_string(int(std::ceil(enemy.veilSensorHitPoints)))+"/"+
                     std::to_string(int(kVeilSensorHitPoints))+HudUtf8(u8"　／　ロックで発射阻止");
@@ -4560,10 +4547,44 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             }
         }
     }
-    if(veilBeam.phase==RailPostBossSequence::BeamPhase::Locked)
-        veilChoice=veilBeam.earlyLock?HudUtf8(u8"ヴェイル センサー破壊・早期固定　／　横リーン"):
-            HudUtf8(u8"ヴェイル 収束ビーム・照準固定　／　横リーン");
+    if(veilBeam.Charging() || veilBeam.phase==RailPostBossSequence::BeamPhase::Flash)
+        veilChoice=veilBeam.Charging() && sensorLockAvailable
+            ?HudUtf8(u8"ヴェイル 後方ビーム　／　E長押しで加速・センサーロックで阻止")
+            :HudUtf8(u8"ヴェイル 後方ビーム　／　E長押しで加速");
     if(railPostBossSequence_.VeilInterrupted()) veilChoice=HudUtf8(u8"ヴェイルの発射を阻止");
+    if(lightningVisible && lightning.age<RailVeilLightning::Clearance)
+        veilChoice=HudUtf8(u8"ヴェイル 雷柱3連　／　Q長押しで急ブレーキ");
+    else if(railPostBossSequence_.VeilLightningFollowupTarget())
+        veilChoice=HudUtf8(u8"ヴェイル　反撃チャンス");
+    if(crossfireWarning) {
+        rearChoice=HudUtf8(u8"ファング 横切り射撃　／　横リーン・翼パネル破壊");
+        for(const auto& enemy:railShooterSpawnRuntime_.Enemies()) {
+            if(enemy.actorId!=railPostBossSequence_.ActorIds()[0] || !enemy.weaponMount.ready)continue;
+            const auto world=RearSubsystemWorldCenter(enemy.weaponMount.dronePose,kRearPanelAnchors[crossfire.panel]);
+            const auto marker=ProjectRailOverlayPoint(world,frameState_.viewProjectionMatrix,hudWidth,hudHeight);
+            if(marker.onscreen && !marker.behind) {
+                addCircleLine(marker.screen,15*hudScale,1.8f*hudScale,{.21f,.78f,1,.85f*opacity},24);
+            }
+            break;
+        }
+    } else if(crossfireCombat && crossfire.phase==CrossfirePhase::Stagger && crossfire.age<.90f) {
+        rearChoice=HudUtf8(u8"ファングの発射を阻止");
+    } else if(crossfire.phase==CrossfirePhase::Volley && fangFollowupId) {
+        rearChoice=HudUtf8(u8"ファング　反撃チャンス");
+    }
+    using PursuitPhase=RailPostBossSequence::Phase;
+    switch(railPostBossSequence_.CurrentPhase()) {
+    case PursuitPhase::Aftermath:
+        rearChoice=HudUtf8(u8"ミニボス撃破");
+        break;
+    case PursuitPhase::Vista:
+    case PursuitPhase::Bridge:
+    case PursuitPhase::Notice:
+    case PursuitPhase::Turning:
+        rearChoice=HudUtf8(u8"後方に敵機接近");
+        break;
+    default:break;
+    }
     const auto drawRearChoice=[&](const std::string& choice,float row) {
         if(choice.empty()) return;
         const float x=float(hudWidth)*.5f,y=float(hudHeight)*row;
@@ -4572,8 +4593,26 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     };
     drawRearChoice(rearChoice,.19f);
     drawRearChoice(veilChoice,rearChoice.empty()?.19f:.225f);
-    if(veilBeam.phase==RailPostBossSequence::BeamPhase::Locked && veilCanBeInterrupted) {
-        const float remaining=(std::clamp)(veilBeam.secondsToFire/RailPostBossSequence::VeilBeamLockSeconds,0.0f,1.0f);
+    if(lightningVisible && lightning.age<RailVeilLightning::Clearance) {
+        const float cx=float(hudWidth)*.5f, cy=float(hudHeight)*.82f;
+        const float pulse=.70f+.26f*std::sin(lightning.age*19.0f);
+        for(int i=0;i<3;++i) {
+            if(lightning.age>=RailVeilLightning::StrikeTimes[i]+RailVeilLightning::CoreEnd)continue;
+            const float x=cx+(i-1)*22.0f*hudScale;
+            const auto color=Vector4{1.0f,.23f,.14f,pulse*opacity};
+            addLine({x-6*hudScale,cy-3*hudScale},{x,cy+3*hudScale},1.9f*hudScale,color);
+            addLine({x,cy+3*hudScale},{x+6*hudScale,cy-3*hudScale},1.9f*hudScale,color);
+        }
+    }
+    if(crossfireWarning) {
+        const float x=float(hudWidth)*.5f,y=float(hudHeight)*.210f;
+        const float fill=std::clamp(crossfire.age/RailPursuerCoordination::CrossfireWarningSeconds,0.0f,1.0f);
+        addLine({x-47*hudScale,y},{x+47*hudScale,y},4*hudScale,{.13f,.06f,.04f,.9f*opacity});
+        addLine({x-47*hudScale,y},{x+std::lerp(-47.0f,47.0f,fill)*hudScale,y},
+            2*hudScale,{1,.50f,.20f,opacity});
+    }
+    if(veilBeam.phase==RailPostBossSequence::BeamPhase::Locked) {
+        const float remaining=(std::clamp)(veilBeam.secondsToFire/RailVeilRearBeam::LockSeconds,0.0f,1.0f);
         const float x=float(hudWidth)*.5f,y=float(hudHeight)*(rearChoice.empty()?.209f:.244f);
         const float half=43.0f*hudScale;
         addLine({x-half,y},{x+half,y},4*hudScale,{.12f,.08f,.25f,.8f*opacity});
@@ -4747,24 +4786,26 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 progressWidth * sessionHud.courseProgressNormalized,
                 7.0f * sessionScale, uvWhite, sessionCyan);
 
-        const std::string scoreText = HudUtf8(u8"\u5f97\u70b9 ") + std::to_string(sessionHud.score);
-        const std::string comboText = sessionHud.combo > 1
-            ? HudUtf8(u8"\u9023\u7d9a ") + std::to_string(sessionHud.combo)
-            : std::string{};
-        const float scoreWidth = (std::max)(
-            175.0f * sessionScale,
-            measureText(scoreText, 0.70f * sessionScale) + 24.0f * sessionScale);
-        const float scoreX = static_cast<float>(hudWidth) - safeArea - scoreWidth;
-        addQuad(scoreX, top, scoreWidth, comboText.empty()
-                ? 42.0f * sessionScale : 66.0f * sessionScale,
-                uvWhite, sessionPanel);
-        addText(scoreText, scoreX + 12.0f * sessionScale,
-                top + 27.0f * sessionScale, 0.70f * sessionScale,
-                Vector4{0.92f, 0.98f, 1.0f, opacity});
-        if (!comboText.empty()) {
-            addText(comboText, scoreX + 12.0f * sessionScale,
-                    top + 53.0f * sessionScale, 0.64f * sessionScale,
-                    Vector4{1.0f, 0.78f, 0.22f, opacity});
+        if(!IsRailShortCourse(railShooterCoursePath_)) {
+            const std::string scoreText = HudUtf8(u8"\u5f97\u70b9 ") + std::to_string(sessionHud.score);
+            const std::string comboText = sessionHud.combo > 1
+                ? HudUtf8(u8"\u9023\u7d9a ") + std::to_string(sessionHud.combo)
+                : std::string{};
+            const float scoreWidth = (std::max)(
+                175.0f * sessionScale,
+                measureText(scoreText, 0.70f * sessionScale) + 24.0f * sessionScale);
+            const float scoreX = static_cast<float>(hudWidth) - safeArea - scoreWidth;
+            addQuad(scoreX, top, scoreWidth, comboText.empty()
+                    ? 42.0f * sessionScale : 66.0f * sessionScale,
+                    uvWhite, sessionPanel);
+            addText(scoreText, scoreX + 12.0f * sessionScale,
+                    top + 27.0f * sessionScale, 0.70f * sessionScale,
+                    Vector4{0.92f, 0.98f, 1.0f, opacity});
+            if (!comboText.empty()) {
+                addText(comboText, scoreX + 12.0f * sessionScale,
+                        top + 53.0f * sessionScale, 0.64f * sessionScale,
+                        Vector4{1.0f, 0.78f, 0.22f, opacity});
+            }
         }
 
         if (sessionHud.showBanner) {
@@ -4858,7 +4899,6 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             (std::max)(1.0f,actor.combatDefinition.maximumHitPoints);
     for(const auto& part:railShooterSpawnRuntime_.Enemies())if(part.actorId==railMinibossCombat_.CounterOwner())
         hudRenderInput.miniBossCounterPart=RailMothership::PartIndex(part.desc.actorAssetId);
-    hudRenderInput.encounterScore=&railEncounterPerformanceScoreSystem_.State();
     hudRenderInput.viewportWidth = hudWidth;
     hudRenderInput.viewportHeight = hudHeight;
     hudRenderInput.showTitleScreen = railTitleScreenVisible_;
@@ -4954,11 +4994,15 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     if(railGameOverScene_.Active() && !railTitleScreenVisible_) railLockOnHudAtlasVertexCount_=0;
     if(!railPostBossSequence_.EscapeActive())emitHudCommands(railShooterHudRenderer_.Frame().commands);
     if(railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Combat) {
-        const unsigned damage=unsigned((std::min)(64.0f,railPostBossSequence_.DamageDealt()));
-        const unsigned seconds=unsigned(std::ceil((std::max)(0.0f,26-railPostBossSequence_.SurvivalSeconds())));
-        const bool earned=(damage>=64 && railPostBossSequence_.SurvivalSeconds()>=12) || seconds==0;
-        const auto label=earned?std::string("BREAKTHROUGH READY - WAIT FOR OPENING"):
-            "DAMAGE "+std::to_string(damage)+" / 64  OR  SURVIVE "+std::to_string(seconds)+"s";
+        const unsigned damage=unsigned((std::min)(RailPostBossSequence::DamageGoal,railPostBossSequence_.DamageDealt()));
+        const unsigned seconds=unsigned(std::ceil((std::max)(0.0f,
+            RailPostBossSequence::SurvivalGoalSeconds-railPostBossSequence_.SurvivalSeconds())));
+        const auto goal="DAMAGE "+std::to_string(damage)+" / "+std::to_string(unsigned(RailPostBossSequence::DamageGoal));
+        const auto damageWait=unsigned(std::ceil((std::max)(0.0f,
+            RailPostBossSequence::MinimumDamageExitSeconds-railPostBossSequence_.SurvivalSeconds())));
+        const auto label=railPostBossSequence_.BreakthroughEarned()?std::string("BREAKTHROUGH READY - WAIT FOR OPENING"):
+            damage>=RailPostBossSequence::DamageGoal?goal+"  HOLD "+std::to_string(damageWait)+"s":
+            goal+"  OR  SURVIVE "+std::to_string(seconds)+"s";
         addText(label,36*hudScale,float(hudHeight)*.89f,.63f*hudScale,{.85f,.94f,1,.95f});
     }
     if(railPostBossSequence_.EscapeActive()) {
@@ -5175,9 +5219,25 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const auto& courseMeshItems=scene_.CourseMeshes().Items();
     const CourseObstacleActor* routeSlab=nullptr;
     if(!railTitleScreenVisible_ && !railGameOverScene_.Active()) {
-        for(const auto& actor:railShooterSpawnRuntime_.Obstacles())
-            if(RailRouteHazards::IsSlab(actor) && railShooterDistance_>=1668 &&
-                actor.age<RailRouteHazards::GroundImpact+RailRouteHazards::LandingDustSeconds)routeSlab=&actor;
+        float nearest=186.0f;
+        for(const auto& actor:railShooterSpawnRuntime_.Obstacles()) {
+            const float gap=actor.desc.spawnDistance+actor.desc.distanceOffset-railShooterDistance_;
+            if(RailRouteHazards::IsSlab(actor) && gap>=-75.0f && gap<=(RailRouteHazards::IsShelf(actor)?185.0f:110.0f) &&
+                std::abs(gap)<nearest && actor.age<RailRouteHazards::GroundImpact+RailRouteHazards::LandingDustSeconds) {
+                nearest=std::abs(gap);
+                routeSlab=&actor;
+            }
+        }
+    }
+    if(routeSlab && !titleEntry.blockingGameplay && RailRouteHazards::SlabCanBeReleased(*routeSlab)) {
+        const auto strike=RailRouteHazards::Strike(*routeSlab);
+        const auto point=ProjectRailOverlayPoint(RailLocalPoint(railPath_,strike.z,strike.x,strike.y,0),
+            frameState_.viewProjectionMatrix,hudWidth,hudHeight);
+        if(point.onscreen && point.inDepth && !point.behind) {
+            const Vector4 ink{1.0f,.82f,.51f,.95f};
+            addBracket(point.screen,23*hudScale,7*hudScale,2*hudScale,ink);
+            addCenteredText(HudUtf8(u8"撃つと落石"),point.screen.x,point.screen.y-27*hudScale,.72f*hudScale,ink);
+        }
     }
     const auto isSiegeFlash=[](const CourseMeshRenderItem& item) {
         return item.visible && item.meshId=="siege_muzzle_flash" && item.transformData && item.materialData;
@@ -5200,9 +5260,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         [](const auto& burst){return burst.fangImpact && burst.spriteBacked;});
     const bool showVeilBeam=!railTitleScreenVisible_ && !railGameOverScene_.Active() &&
         veilBeam.phase!=RailPostBossSequence::BeamPhase::Inactive;
+    const bool showCrossfire=crossfireCombat && !railTitleScreenVisible_ && !railGameOverScene_.Active() &&
+        (crossfireWarning || (crossfire.phase==CrossfirePhase::Volley && crossfire.age<.32f));
     const auto impactMarks=railCombatImpactMarks_.Items();
     const bool impactSpall=std::any_of(impactMarks.begin(),impactMarks.end(),[](const auto& mark){return mark.age<.33f;});
-    const bool hasWorldEffects=impactSpall || routeSlab || cartEnergy.count>0 || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasSiegeFlash || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    const bool showPursuerSmoke=!railTitleScreenVisible_ && !railGameOverScene_.Active() && crossfireCombat &&
+        (railPostBossSequence_.HullSmoke(0).Stage()>0 || railPostBossSequence_.HullSmoke(1).Stage()>0);
+    const bool hasWorldEffects=impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasSiegeFlash || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     if (hasWorldEffects) {
         // Suppress every gameplay overlay, including the reticle built above.
         if (railTitleScreenVisible_) railLockOnHudAtlasVertexCount_ = 0;
@@ -5251,6 +5315,31 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         };
         std::vector<SandBillboard> billboards;
         billboards.reserve(180+RailTitleScene::CollapseGrainCount+RailTitleScene::CollapsePuffCount);
+        if(lightningVisible) for(size_t i=0;i<lightning.positions.size();++i) {
+            const float t=lightning.LocalAge(i);
+            if(t<.064f || t>1.14f)continue;
+            const float distance=lightning.positions[i];
+            const auto basis=railPath_.Evaluate(distance);
+            const auto base=RailLocalPoint(railPath_,distance,RailVeilLightning::StrikeLanes[i],
+                RailVeilLightning::DeckHeight+.10f,0);
+            const float rise=TwinShieldDestructionSmooth(t,.064f,.20f);
+            const float height=std::lerp(1.8f,17.0f,rise)+2.6f*t;
+            const float fade=1-TwinShieldDestructionSmooth(t,.30f,1.14f);
+            const float opacity=TwinShieldDestructionSmooth(t,.064f,.14f)*fade;
+            const auto center=Add(base,Add(Scale(basis.up,height*.50f),Scale(basis.right,t*.56f)));
+            const float phase=2.0f*float(unsigned(std::clamp(t/1.14f,0.0f,1.0f)*31)+32u*unsigned(i+1));
+            billboards.push_back({center,Scale(right,1.50f+1.2f*t),Scale(basis.up,height*.50f),
+                {.036f,.012f,.017f,opacity*.97f},3200,base,0,phase});
+            for(int j=0;j<6;++j) {
+                const float seed=2.39996f*float(j)+float(i)*1.7f;
+                const float lobe=.18f+.11f*float(j);
+                const auto point=Add(base,Add(Scale(basis.right,std::sin(seed)*(.38f+t*1.04f)),
+                    Add(Scale(basis.up,height*lobe),Scale(basis.tangent,std::cos(seed)*(.28f+t*.85f)))));
+                const float radius=.61f+t*.92f;
+                billboards.push_back({point,Scale(right,radius),Scale(up,radius*1.3f),
+                    {.057f,.021f,.023f,opacity*.56f},700.0f+2.0f*float(i*7+j)});
+            }
+        }
         if(routeSlab) {
             using namespace RailRouteHazards;
             for(float onset:{BoltImpact,SupportBreak}) {
@@ -5273,20 +5362,20 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             const float landingAge=routeSlab->age-GroundImpact;
             if(landingAge>LandingDustDelay && landingAge<LandingDustSeconds) {
                 const auto contact=LandingContact(*routeSlab);
-                // Let the fragments read first, then fan the dust out along
-                // the shoulder. Keep even the inside edge clear of the deck.
+                // Dust rolls outward on both sides and thins over the rail.
                 for(unsigned i=0;i<14;++i) {
                     const bool skirt=i<10;
                     const float t=landingAge-LandingDustDelay-(skirt?.013f*i:.10f+.027f*(i-10));
                     if(t<=0)continue;
                     const float angle=2.39996f*i+.59f;
                     const float travel=1-std::exp(-t*(skirt?6.8f:3.2f));
-                    const float x=contact.x+(std::cos(angle)*(skirt?3.2f:1.8f)-1.8f)*travel;
+                    const float side=i%2==0?-1.0f:1.0f;
+                    const float x=contact.x+side*(1.0f+.53f*i+2.4f*travel)+std::cos(angle)*travel;
                     const float z=contact.z-.56f+std::sin(angle)*travel*(skirt?4.0f:2.2f);
                     const float radius=(skirt?.36f:.47f)+travel*(skirt?1.69f:1.24f);
                     const float width=radius*(skirt?1.75f:1.20f);
                     const float height=skirt?.20f+.19f*travel:.29f+(.61f+.09f*(i%4))*travel;
-                    const auto center=RailLocalPoint(railPath_,z,(std::min)(x,-4.40f-width),contact.y+height,0);
+                    const auto center=RailLocalPoint(railPath_,z,x,contact.y+height,0);
                     const float opacity=Ease(t,0,.071f)*(1-Ease(landingAge,.41f,LandingDustSeconds));
                     billboards.push_back({center,Scale(right,width),
                         Scale(up,radius*(skirt?.38f:.85f)),
@@ -5362,14 +5451,16 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         };
         size_t solidDebris=0;
         for(size_t contactIndex=0;contactIndex<lockContacts.size();++contactIndex) {
+            const bool panelBreak=lockContacts[contactIndex].rearPanelIndex>=0;
             const auto& debris=lockDebris[contactIndex];
             for(size_t i=0;i<debris.count && solidDebris<160;++i,++solidDebris) {
                 const auto& chip=debris.fragments[i];
                 const float radius=debrisRadius(chip),c=std::cos(chip.rotation),s=std::sin(chip.rotation);
                 const auto h=Scale(Add(Scale(right,c),Scale(up,s)),radius*1.35f);
                 const auto v=Scale(Add(Scale(up,c),Scale(right,-s)),radius*0.70f);
-                billboards.push_back({chip.position,h,v,{0.22f+chip.heat*0.75f,0.18f+chip.heat*0.20f,
-                    0.13f,chip.opacity},4000.0f});
+                const Vector4 color=panelBreak ? Vector4{.18f+chip.heat*.60f,.35f+chip.heat*.24f,.58f,chip.opacity} :
+                    Vector4{.22f+chip.heat*.75f,.18f+chip.heat*.20f,.13f,chip.opacity};
+                billboards.push_back({chip.position,h,v,color,4000.0f});
             }
         }
         // The solid orb body shares the sorted alpha world pass with smoke.
@@ -5453,6 +5544,65 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 const float r=grain.radius*(grainIndex%7==0 ? 1.8f : 1.0f);
                 billboards.push_back({grain.position,Scale(right,r),Scale(up,r*1.3f),
                     {0.37f,0.25f,0.14f,grain.opacity*titleAlpha},-2.0f});
+            }
+        }
+        if(!railTitleScreenVisible_ && !railGameOverScene_.Active()) for(const auto& wreck:wrecks) {
+            if(!wreck.groundTurret.Active())continue;
+            const float elapsed=wreck.age-RailGroundTurretCollapse::Slam;
+            if(elapsed<0 || elapsed>=2.0f)continue;
+            for(unsigned i=0;i<7;++i) {
+                const float age=elapsed-.012f-.078f*i;
+                if(age<=0 || age>1.40f)continue;
+                const float fade=TwinShieldDestructionSmooth(age,0,.10f)*(1-TwinShieldDestructionSmooth(age,.58f,1.40f));
+                const float scale=wreck.groundTurret.scale;
+                const auto center=Add(wreck.crashPosition,Add(Scale(towardCamera,.48f*scale),
+                    Add(Scale(right,scale*.40f*age*std::sin(float(i)*2.4f)),
+                        Vector3{0,.28f+age*(2.5f+.32f*i)*std::sqrt(scale),0})));
+                const float radius=scale*(.25f+.62f*age);
+                billboards.push_back({center,Scale(right,radius),Scale(up,radius*1.22f),
+                    {.073f,.070f,.067f,.65f*fade},200.0f+2.0f*float((i*7+wreck.actorId)%47u)});
+            }
+        }
+        if(showPursuerSmoke) {
+            static constexpr std::array<std::array<Vector3,3>,2> vents{{
+                {{{-.62f,.11f,1.21f},{.66f,.13f,1.19f},{0,.44f,.62f}}},
+                {{{-1.00f,.20f,.42f},{1.00f,.22f,.44f},{0,.46f,.70f}}}
+            }};
+            const auto& ids=railPostBossSequence_.ActorIds();
+            for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
+                const auto slot=std::find(ids.begin(),ids.end(),actor.actorId);
+                if(slot==ids.end() || actor.desc.hitPoints<=0 || !actor.weaponMount.ready)continue;
+                const size_t index=size_t(slot-ids.begin());
+                const auto& smoke=railPostBossSequence_.HullSmoke(index);
+                const auto& pose=actor.weaponMount.dronePose;
+                const auto sample=railPath_.Evaluate(actor.desc.spawnDistance+actor.desc.distanceOffset);
+                const float speed=pose.hasFlightVelocity?Dot(pose.flightVelocity,sample.tangent):24.0f;
+                const float trail=(std::clamp)(speed*.39f,8.0f,16.0f);
+                for(size_t i=0;i<RailRearDamageSmoke::Vents.size();++i) {
+                    if(smoke.since[i]<0)continue;
+                    const auto& vent=RailRearDamageSmoke::Vents[i];
+                    const float elapsed=actor.age-smoke.since[i];
+                    const int newest=int(elapsed/vent.interval);
+                    const int oldest=(std::max)(0,newest-int(std::ceil(vent.lifetime/vent.interval)));
+                    const auto origin=RearSubsystemWorldCenter(pose,vents[index][i]);
+                    for(int puff=oldest;puff<=newest;++puff) {
+                        const float age=elapsed-float(puff)*vent.interval;
+                        if(age<=0 || age>=vent.lifetime)continue;
+                        const float life=age/vent.lifetime;
+                        const float noise=float((unsigned(puff)*13u+unsigned(i)*17u+actor.actorId)%47u);
+                        const float drift=(i==0?-2.1f:i==1?2.1f:0.0f)+1.2f*std::sin(noise);
+                        const auto center=Add(origin,Add(Scale(sample.tangent,-age*trail),
+                            Add(Scale(sample.right,drift*age),Scale(sample.up,age*vent.rise))));
+                        const float radius=vent.radius*std::lerp(.47f,1.80f,life);
+                        const float spin=noise*2.39996f+age*.7f;
+                        const auto horizontal=Scale(Add(Scale(right,std::cos(spin)),Scale(up,std::sin(spin))),radius);
+                        const auto vertical=Scale(Add(Scale(up,std::cos(spin)),Scale(right,-std::sin(spin))),radius*1.18f);
+                        const float opacity=vent.opacity*TwinShieldDestructionSmooth(age,0,.09f)*
+                            (1-TwinShieldDestructionSmooth(life,.39f,1.0f));
+                        billboards.push_back({center,horizontal,vertical,
+                            {vent.soot.x,vent.soot.y,vent.soot.z,opacity},200.0f+2.0f*noise});
+                    }
+                }
             }
         }
         if(!railTitleScreenVisible_) for(const auto& wreck:wrecks) {
@@ -5666,6 +5816,70 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
             dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
         };
+        if(lightningVisible) {
+            const auto packed=[](float t,size_t i) {
+                return 2.0f*float(unsigned(std::clamp(t,0.0f,1.0f)*31)+32u*unsigned(i+1));
+            };
+            if(lightning.BeforeFirstStrike()) {
+                const float pulse=(.52f+.27f*std::sin(lightning.age*24.0f))*
+                    TwinShieldDestructionSmooth(lightning.age,0,.13f);
+                for(float side:{-1.0f,1.0f})for(int segment=0;segment<4;++segment) {
+                    const float distance=railShooterDistance_+3.0f+float(segment)*2.8f;
+                    const auto basis=railPath_.Evaluate(distance);
+                    const auto point=RailLocalPoint(railPath_,distance,side*.93f,.03f,0);
+                    glowQuad(point,Scale(basis.tangent,1.2f),Scale(basis.right,.115f),32,
+                        {4.9f,.26f,.08f,pulse});
+                }
+            }
+            for(size_t i=0;i<lightning.positions.size();++i) {
+                const float t=lightning.LocalAge(i);
+                const float distance=lightning.positions[i];
+                const auto basis=railPath_.Evaluate(distance);
+                const auto base=RailLocalPoint(railPath_,distance,RailVeilLightning::StrikeLanes[i],
+                    RailVeilLightning::DeckHeight+.12f,0);
+                if(t<0) {
+                    const float charge=TwinShieldDestructionSmooth(lightning.age,0,.20f)*
+                        (.54f+.43f*TwinShieldDestructionSmooth(t,-.56f,0));
+                    glowQuad(base,Scale(basis.right,2.75f),Scale(basis.tangent,2.45f),90,
+                        {4.1f,.19f,.085f,charge},packed(1+t/1.26f,i));
+                    continue;
+                }
+                if(t<.24f) {
+                    const float flare=1-TwinShieldDestructionSmooth(t,.03f,.24f);
+                    glowQuad(base,Scale(basis.right,4.2f),Scale(basis.tangent,3.35f),60,{6.5f,.28f,.14f,flare});
+                    glowQuad(Add(base,Scale(basis.up,.42f)),Scale(right,3.7f),Scale(up,.54f),60,
+                        {5.8f,.33f,.20f,flare*.70f});
+                    glowQuad(base,Scale(basis.right,3.9f),Scale(basis.tangent,3.7f),62,
+                        {5.2f,.24f,.10f,.80f*flare},packed(t/.24f,i));
+                }
+                if(t>=.036f && t<.48f) {
+                    const float rise=TwinShieldDestructionSmooth(t,.036f,.175f);
+                    const float height=std::lerp(.64f,19.2f,rise);
+                    const auto center=Add(base,Scale(basis.up,height*.5f));
+                    const auto width=Scale(right,std::lerp(1.55f,.79f,TwinShieldDestructionSmooth(t,.20f,.43f)));
+                    const float life=.92f*(1-TwinShieldDestructionSmooth(t,.246f,.300f))+
+                        .08f*(1-TwinShieldDestructionSmooth(t,.286f,.48f));
+                    glowQuad(center,width,Scale(basis.up,height*.5f),92,{1,1,1,life},packed(t/.48f,i));
+                    glowQuad(center,Scale(basis.tangent,.93f),Scale(basis.up,height*.5f),92,
+                        {1,1,1,life*.48f},packed(t/.48f,i+4));
+                }
+                if(t>.035f && t<.57f) for(int j=0;j<15;++j) {
+                    const float age=t-.035f-.006f*float(j%5);
+                    if(age<=0)continue;
+                    const float theta=2.39996f*float(j)+float(i)*1.14f;
+                    const auto axis=Add(Scale(basis.right,std::cos(theta)),Scale(basis.tangent,std::sin(theta)));
+                    const auto velocity=Add(Scale(axis,2.7f+float(j%4)*.65f),
+                        Scale(basis.up,7.1f+float(j%6)*2.9f));
+                    const auto head=Add(base,Add(Scale(velocity,age),Scale(basis.up,-5.2f*age*age)));
+                    const auto tail=Subtract(head,Scale(velocity,.025f));
+                    const auto middle=Scale(Add(head,tail),.5f);
+                    const auto edge=NormalizeOr(Cross(Subtract(head,tail),Subtract(eye,middle)),right);
+                    const float life=1-TwinShieldDestructionSmooth(age,.17f,.51f);
+                    glowQuad(middle,Scale(Subtract(head,tail),.66f),Scale(edge,.055f),32,
+                        {5.8f,1.44f,.37f,life});
+                }
+            }
+        }
         if(routeSlab) {
             using namespace RailRouteHazards;
             const auto toWorld=[&](Vector3 rail){return RailLocalPoint(railPath_,rail.z,rail.x,rail.y,0);};
@@ -5676,14 +5890,15 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             const auto direction=NormalizeOr(ray,right);
             const auto across=NormalizeOr(Cross(direction,up),right);
             const auto ringUp=NormalizeOr(Cross(across,direction),up);
-            const float charge=HeavyCharge(railShooterDistance_,age);
+            const bool carrierShot=CarrierStrikesSlab(*routeSlab);
+            const float charge=carrierShot?HeavyCharge(railShooterDistance_,age):0;
             if(charge>0) {
                 const float r=.38f+charge*1.44f;
                 glowQuad(origin,Scale(right,r*1.5f),Scale(up,r*1.5f),16,{2.8f,.05f,1.47f,.78f*charge});
                 glowQuad(origin,Scale(right,r*.50f),Scale(up,r*.50f),16,{5.8f,2.15f,4.1f,charge});
                 glowQuad(origin,Scale(across,r*1.06f),Scale(ringUp,r*1.06f),62,{3.9f,.12f,2.6f,charge*.70f});
             }
-            if(age>=BoltLaunch && age<BoltImpact) {
+            if(carrierShot && age>=BoltLaunch && age<BoltImpact) {
                 const float progress=Ramp(age,BoltLaunch,BoltImpact);
                 const auto tip=Add(origin,Scale(ray,progress));
                 const auto width=NormalizeOr(Cross(direction,Subtract(frameState_.cameraWorldPosition,tip)),up);
@@ -5699,7 +5914,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             const auto visibleImpact=Add(impact,Scale(NormalizeOr(Subtract(frameState_.cameraWorldPosition,impact),right),.55f));
             for(float onset:{BoltLaunch,BoltImpact}) {
                 const float pulse=age-onset;
-                if(pulse<0 || pulse>.18f)continue;
+                if(!carrierShot || pulse<0 || pulse>.18f)continue;
                 const bool hit=onset==BoltImpact;
                 const auto center=hit?visibleImpact:origin;
                 const float fade=1-Ease(pulse,.025f,.18f),radius=(hit?5.0f:3.35f)+8.5f*pulse;
@@ -5709,7 +5924,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 glowQuad(center,Scale(right,core),Scale(up,core*.82f),16,{6.7f,5.1f,4.8f,hot});
             }
             const float chips=age-BoltImpact;
-            if(chips>=0 && chips<.31f) {
+            if(carrierShot && chips>=0 && chips<.31f) {
                 const float fade=1-Ease(chips,.055f,.31f);
                 const float pressure=4.5f+20*chips;
                 const float clock=2.0f*std::floor(31.0f*Ramp(chips,0,.31f));
@@ -5990,82 +6205,112 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 glowQuad(p,Scale(right,3),Scale(up,3),62,{.4f,2.2f,2.5f,pulse*.4f});
             }
         }
-        if(showVeilBeam) {
-            for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
-                if(actor.actorId!=railPostBossSequence_.ActorIds()[1] || !actor.weaponMount.ready ||
-                    actor.desc.hitPoints<=0)continue;
-                const auto visual=BuildVeilBeamWorldFrame(veilBeam,actor.weaponMount.dronePose,railPath_,railVeilModel_.Frame());
-                const auto& mouth=visual.mouth;
-                const auto& sample=visual.sample;
-                const auto& target=visual.target;
-                const auto& direction=visual.direction;
-                const auto& end=visual.end;
-                const auto middle=Scale(Add(mouth,end),.5f);
-                const auto longAxis=Scale(Subtract(end,mouth),.5f);
-                const auto side=NormalizeOr(Cross(direction,Subtract(eye,middle)),right);
-                const float radius=RailPostBossSequence::VeilBeamRadius;
-                const bool flash=veilBeam.phase==RailPostBossSequence::BeamPhase::Flash;
-                const bool locked=veilBeam.phase==RailPostBossSequence::BeamPhase::Locked;
-                if(flash) {
-                    const float life=1.0f-visual.phase;
-                    const float pulse=visual.flash;
-                    const float uvPhase=2.0f*float(unsigned(visual.phase*31));
-                    const Vector4 red{7.5f,.085f,.025f,life};
-                    glowQuad(middle,longAxis,Scale(side,radius*4.2f),42,
-                        {4.8f,.025f,.008f,pulse*.32f});
-                    glowQuad(middle,longAxis,Scale(side,radius*2.8f),58,red,uvPhase);
-                    const float bloom=3.6f+visual.phase*4.0f;
-                    glowQuad(visual.aperture,Scale(right,bloom),Scale(up,bloom),60,
-                        {8.0f,.16f,.055f,pulse},uvPhase);
-                    glowQuad(visual.aperture,Scale(right,bloom*1.8f),Scale(up,bloom*.40f),60,
-                        {4.5f,.045f,.018f,pulse*.65f},uvPhase);
-                    // The initial blue-violet edge dissipates before the red wake.
-                    glowQuad(visual.aperture,Scale(right,bloom*1.25f),Scale(up,bloom*1.25f),62,
-                        {.9f,.72f,3.5f,pulse*.72f},uvPhase);
-                    glowQuad(target,Scale(right,1.7f+visual.phase*1.8f),Scale(up,1.7f+visual.phase*1.8f),60,
-                        {6.5f,.12f,.035f,pulse*.85f},uvPhase);
-                    glowQuad(end,Scale(sample.right,2.8f+visual.phase*3.0f),Scale(sample.tangent,4.5f),60,
-                        {7.0f,.16f,.045f,pulse},uvPhase);
-                    glowQuad(Add(end,Scale(sample.up,.025f)),Scale(sample.right,4.6f),Scale(sample.tangent,6.0f),62,
-                        {5.5f,.055f,.015f,life*.70f},uvPhase);
-                    // Radial, short-lived sparks originate at the optical contact.
-                    for(unsigned spark=0;spark<12;++spark) {
-                        const float angle=float(spark)*2.399963f;
-                        const auto radial=Add(Scale(right,std::cos(angle)),Scale(up,std::sin(angle)));
-                        const float travel=veilBeam.flashAge*(12.0f+float(spark%4)*4.0f);
-                        const auto head=Add(end,Add(Scale(radial,.20f+travel),Scale(sample.up,.12f)));
-                        glowQuad(head,Scale(radial,.12f+travel*.22f),Scale(Cross(direction,radial),.045f),32,
-                            {6.0f,.20f,.055f,life*life});
-                    }
-                } else {
-                    const float urgency=locked?1.0f-(std::clamp)(veilBeam.secondsToFire/
-                        RailPostBossSequence::VeilBeamLockSeconds,0.0f,1.0f):0.0f;
-                    const Vector4 violet{.68f,.50f,2.9f,locked?.65f+urgency*.29f:.55f};
-                    glowQuad(middle,longAxis,Scale(side,locked?.15f:.095f),42,violet);
-                    const float charge=visual.charge;
-                    const float size=.55f+charge*1.2f;
-                    glowQuad(visual.aperture,Scale(right,size),Scale(up,size),60,
-                        {.40f,1.8f,4.8f,.25f+charge*.65f});
-                    glowQuad(visual.aperture,Scale(right,size*.28f),Scale(up,size*.28f),16,
-                        {2.4f,3.6f,5.0f,.35f+charge*.65f});
-                    // Inward filaments share the paused actor clock and gather at the aperture.
-                    for(unsigned filament=0;filament<6;++filament) {
-                        const float angle=float(filament)*1.047198f+actor.age*1.4f;
-                        const auto radial=Add(Scale(right,std::cos(angle)),Scale(up,std::sin(angle)));
-                        const float orbit=std::fmod(actor.age*1.8f+float(filament)*.17f,1.0f);
-                        const auto center=Add(visual.aperture,Scale(radial,size*(.35f+orbit*.9f)));
-                        glowQuad(center,Scale(radial,size*.23f),Scale(Cross(direction,radial),.025f),42,
-                            {.50f,2.0f,4.4f,charge*(1-orbit)*.75f});
-                    }
-                    // Outline the same lateral limits the occupant test uses.
-                    const auto lane=Add(target,Scale(direction,-1.8f));
-                    for(float edge:{-1.0f,1.0f}) {
-                        const auto edgeCenter=Add(lane,Scale(sample.right,edge*radius));
-                        glowQuad(edgeCenter,Scale(direction,4.0f),Scale(side,.10f),42,
-                            {.61f,.39f,2.6f,locked?.85f:.32f});
-                    }
+        if(showCrossfire) {
+            const float strength=crossfireWarning ? .48f+.42f*TwinShieldDestructionSmooth(crossfire.age,.05f,.80f) :
+                .85f*(1-TwinShieldDestructionSmooth(crossfire.age,.04f,.32f));
+            for (int i=0;i<9;++i) {
+                const float segmentStart=railShooterDistance_+3.0f-3.4f*float(i);
+                const float segmentEnd=segmentStart-2.75f;
+                const auto lanePoint=[&](float distance,float side) {
+                    return RailLocalPoint(railPath_,distance,crossfire.lane+side*kFangCrossfireHalfWidth,crossfire.height-.23f,0);
+                };
+                for(float side:{-1.0f,1.0f}) {
+                    const auto a=lanePoint(segmentStart,side),b=lanePoint(segmentEnd,side);
+                    const auto center=Scale(Add(a,b),.5f),delta=Subtract(b,a);
+                    const auto edge=NormalizeOr(Cross(delta,Subtract(eye,center)),right);
+                    glowQuad(center,Scale(delta,.60f),Scale(edge,.116f),32,{4.2f,1.13f,.22f,strength});
                 }
-                break;
+                const auto a=lanePoint(segmentStart,-1),b=lanePoint(segmentStart,1),center=Scale(Add(a,b),.5f);
+                const auto tip=lanePoint(segmentStart+1.05f,0);
+                for(const auto& foot:{a,b}) {
+                    const auto delta=Subtract(tip,foot),middle=Scale(Add(tip,foot),.5f);
+                    const auto edge=NormalizeOr(Cross(delta,Subtract(eye,middle)),up);
+                    glowQuad(middle,Scale(delta,.65f),Scale(edge,.075f),32,{3.6f,.85f,.15f,strength*.84f});
+                }
+                const auto tail=lanePoint(segmentEnd,0);
+                glowQuad(Scale(Add(center,tail),.5f),Scale(Subtract(tail,center),.50f),
+                    Scale(Subtract(b,a),.48f),38,{2.3f,.35f,.08f,strength*.16f});
+            }
+        }
+        if(showVeilBeam) {
+            const bool charging=veilBeam.Charging();
+            if(charging) {
+                const float charge=1-veilBeam.secondsToFire/RailVeilRearBeam::ChargeSeconds;
+                for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
+                    if(actor.actorId!=railPostBossSequence_.ActorIds()[1] || !actor.weaponMount.ready)continue;
+                    const auto mouth=RailVeilModel::MuzzleWorld(actor.weaponMount.dronePose,railVeilModel_.Frame());
+                    // The thin sightline previews the actual rail path and joins the live muzzle.
+                    const auto source=RailPostBossSequence::VeilMuzzleRail(actor,railPath_,railVeilModel_.Frame());
+                    const bool locked=veilBeam.phase==RailPostBossSequence::BeamPhase::Locked;
+                    const float urgency=locked?1-veilBeam.secondsToFire/RailVeilRearBeam::LockSeconds:0;
+                    const auto along=[&](float distance,float lateral=0) {
+                        const auto center=veilBeam.Center(distance,source);
+                        return RailLocalPoint(railPath_,distance,center.x+lateral,center.y,0);
+                    };
+                    auto start=mouth;
+                    for(float a=source.z;a<veilBeam.end;a+=4.0f) {
+                        const float b=(std::min)(a+4.0f,veilBeam.end);
+                        const auto end=along(b);
+                        const auto middle=Scale(Add(start,end),.5f);
+                        const auto axis=Scale(Subtract(end,start),.5f);
+                        const auto side=NormalizeOr(Cross(axis,Subtract(eye,middle)),right);
+                        glowQuad(middle,axis,Scale(side,locked?.15f:.095f),42,
+                            {.68f,.50f,2.9f,locked?.65f+urgency*.29f:.55f});
+                        start=end;
+                    }
+                    const float mark=(std::min)(railShooterDistance_-2.0f,veilBeam.end);
+                    if(mark>source.z+10.0f) {
+                        for(float edge:{-RailVeilRearBeam::HalfWidth,RailVeilRearBeam::HalfWidth}) {
+                            const auto a=along(mark-4.0f,edge);
+                            const auto b=along((std::min)(mark+4.0f,veilBeam.end),edge);
+                            const auto span=Scale(Subtract(b,a),.5f);
+                            const auto center=Scale(Add(a,b),.5f);
+                            const auto side=NormalizeOr(Cross(span,Subtract(eye,center)),up);
+                            glowQuad(center,span,Scale(side,.095f),42,{.61f,.39f,2.6f,locked?.85f:.32f});
+                        }
+                    }
+                    const float size=.62f+charge*1.06f;
+                    glowQuad(mouth,Scale(right,size),Scale(up,size),60,{.58f,1.3f,4.8f,.36f+.54f*charge});
+                    glowQuad(mouth,Scale(right,size*.37f),Scale(up,size*.37f),16,{2.2f,3.0f,5.0f,.88f});
+                    for(unsigned filament=0;filament<6;++filament) {
+                        const float angle=float(filament)*1.047198f+charge*4.0f;
+                        const auto radial=Add(Scale(right,std::cos(angle)),Scale(up,std::sin(angle)));
+                        const float orbit=std::fmod(charge*2.0f+float(filament)*.17f,1.0f);
+                        const auto center=Add(mouth,Scale(radial,size*(.45f+orbit)));
+                        glowQuad(center,Scale(radial,size*.23f),Scale(Cross(towardCamera,radial),.033f),42,
+                            {.61f,1.9f,4.4f,(.25f+.65f*charge)*(1-orbit)});
+                    }
+                    break;
+                }
+            } else {
+                const float fade=veilBeam.Fade();
+                const float first=(std::max)(veilBeam.source.z,veilBeam.front-55.0f);
+                for(float a=first;a<veilBeam.front;a+=4.0f) {
+                    const float b=(std::min)(a+4.0f,veilBeam.front);
+                    const auto start=VeilBeamRailPoint(railPath_,veilBeam,a);
+                    const auto finish=VeilBeamRailPoint(railPath_,veilBeam,b);
+                    const auto middle=Scale(Add(start,finish),.5f);
+                    const auto axis=Scale(Subtract(finish,start),.5f);
+                    const auto side=NormalizeOr(Cross(axis,Subtract(eye,middle)),right);
+                    const auto sample=railPath_.Evaluate((a+b)*.5f);
+                    const float taper=.27f+.73f*TwinShieldDestructionSmooth(a,veilBeam.source.z,veilBeam.source.z+14);
+                    const float power=fade*TwinShieldDestructionSmooth(b,first-1,first+12);
+                    glowQuad(middle,axis,Scale(side,taper*3.1f),42,{2.85f,.13f,1.85f,.46f*power});
+                    glowQuad(middle,axis,Scale(sample.right,taper*RailVeilRearBeam::HalfWidth),42,
+                        {3.0f,.24f,2.8f,.44f*power});
+                    glowQuad(middle,axis,Scale(side,taper*.80f),58,{5.4f,.85f,3.4f,power},
+                        2*float(unsigned((a-first)*.43f+veilBeam.flashAge*29)));
+                    const auto deck=RailLocalPoint(railPath_,(a+b)*.5f,0,.08f,0);
+                    glowQuad(deck,Scale(sample.tangent,(b-a)*.52f),Scale(sample.right,3.5f),
+                        42,{3.4f,.045f,1.22f,.55f*power});
+                }
+                const auto tip=VeilBeamRailPoint(railPath_,veilBeam,veilBeam.front);
+                const auto heading=railPath_.Evaluate(veilBeam.front);
+                glowQuad(tip,Scale(heading.right,3.35f),Scale(heading.up,2.15f),60,{5.6f,1.55f,4.0f,.88f*fade});
+                glowQuad(tip,Scale(right,1.25f),Scale(up,1.25f),60,{6.3f,3.15f,5.3f,.93f*fade});
+                const float ignition=std::exp(-veilBeam.flashAge*12);
+                const auto muzzle=VeilBeamRailPoint(railPath_,veilBeam,veilBeam.source.z);
+                glowQuad(muzzle,Scale(right,3.8f),Scale(up,2.6f),60,{5.6f,1.75f,4.1f,ignition});
             }
         }
         if(!railTitleScreenVisible_ && !railGameOverScene_.Active())
@@ -6255,6 +6500,59 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     RailEnemyEnergy::Alpha(burst.secondaryColor,fade*fade*.85f));
             }
         }
+        if(!railTitleScreenVisible_ && !railGameOverScene_.Active()) for(const auto& wreck:wrecks) {
+            const auto& gun=wreck.groundTurret;
+            if(!gun.Active() || wreck.age<0 || wreck.age>1.1f)continue;
+            const auto pose=RailGroundTurretCollapse::Evaluate(gun,wreck.age);
+            const float age=wreck.age;
+            const float voltage=1-TwinShieldDestructionSmooth(age,.16f,.39f);
+            const auto face=Scale(NormalizeOr(Subtract(eye,gun.center),towardCamera),.48f*gun.scale);
+            if(voltage>0) {
+                const auto junction=RailGroundTurretCollapse::Point({0,.03f,-.29f},pose.head);
+                const Vector3 ends[]{
+                    RailGroundTurretCollapse::Point({.30f,.16f,-.87f},pose.barrel),
+                    RailGroundTurretCollapse::Point({-.43f,.24f,.31f},pose.head),
+                    RailGroundTurretCollapse::Point({.52f,-.48f,-.33f},pose.base)};
+                const auto impact=Add(gun.contact,Scale(face,.53f));
+                const float flash=voltage*(.74f+.26f*std::sin(age*56));
+                glowQuad(impact,Scale(right,.40f*gun.scale),Scale(up,.31f*gun.scale),60,
+                    {.34f,2.15f,7.4f,.87f*flash});
+                const float phase=std::floor(age*52);
+                for(unsigned branch=0;branch<3;++branch) {
+                    auto start=impact;
+                    for(unsigned step=1;step<=7;++step) {
+                        const float t=float(step)/7;
+                        const auto route=t<.43f?Add(impact,Scale(Subtract(Add(junction,face),impact),t/.43f)):
+                            Add(Add(junction,face),Scale(Subtract(ends[branch],junction),(t-.43f)/.57f));
+                        const float jitter=std::sin(phase*1.9f+float(step*7+branch*3))*.16f*gun.scale*std::sin(t*3.14159f);
+                        const auto end=Add(route,Scale(up,jitter));
+                        const auto delta=Subtract(end,start),center=Scale(Add(end,start),.5f);
+                        const auto across=NormalizeOr(Cross(delta,Subtract(eye,center)),up);
+                        const float power=voltage*(1-.43f*t);
+                        glowQuad(center,Scale(delta,.62f),Scale(across,.19f),32,{.32f,1.8f,7.0f,.66f*power});
+                        glowQuad(center,Scale(delta,.58f),Scale(across,.071f),32,{2.65f,4.7f,8.0f,power});
+                        start=end;
+                    }
+                }
+            }
+            const float slamAge=age-RailGroundTurretCollapse::Slam;
+            if(slamAge<0 || slamAge>.36f)continue;
+            const float hot=1-TwinShieldDestructionSmooth(slamAge,.01f,.14f);
+            const auto impact=Add(wreck.crashPosition,face);
+            glowQuad(impact,Scale(right,.62f*gun.scale),Scale(up,.43f*gun.scale),60,
+                {6.0f,1.50f,.19f,.94f*hot});
+            for(unsigned i=0;i<12;++i) {
+                const float t=slamAge-.008f*float(i%4);
+                if(t<=0)continue;
+                const float angle=float(i)*2.39996f;
+                const Vector3 launch{std::cos(angle)*(2.8f+.30f*i),1.3f+.23f*(i%5),std::sin(angle)*(2.8f+.30f*i)};
+                const auto point=[&](float a){return Add(impact,Add(Scale(launch,a),Vector3{0,-5.0f*a*a,0}));};
+                const auto tail=point((std::max)(0.0f,t-.032f)),head=point(t);
+                const auto span=Scale(Subtract(head,tail),.58f),center=Scale(Add(tail,head),.5f);
+                const auto edge=NormalizeOr(Cross(span,Subtract(eye,center)),up);
+                glowQuad(center,span,Scale(edge,.083f),32,{5.2f,1.52f,.21f,1-t/.36f});
+            }
+        }
         if(!railTitleScreenVisible_)for(const auto& mark:impactMarks) {
             using RailCombatImpact::Kind;
             if(mark.age>=.33f)continue;
@@ -6313,17 +6611,29 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 }
             }
             const bool rupture=mark.kind==Kind::Kill || mark.kind==Kind::Heavy;
+            const auto& rearIds=railPostBossSequence_.ActorIds();
+            const bool rearSparks=mark.owner!=0 && (mark.owner==rearIds[0] || mark.owner==rearIds[1]);
             const auto tangent=NormalizeOr(Cross(mark.normal,{0,1,0}),right);
             const auto binormal=NormalizeOr(Cross(mark.normal,tangent),up);
             const auto source=Add(mark.origin,Scale(mark.normal,.16f));
-            for(unsigned i=0;i<(rupture?9u:3u);++i) {
+            const auto ray=Subtract(source,eye);
+            const float minimumSpark=rearSparks?(std::clamp)(1.7f*std::sqrt(Dot(ray,ray))/
+                ((std::max)(.001f,std::abs(frameState_.projMatrix.m[1][1]))*float(hudHeight)),.065f,.15f):0;
+            if(rearSparks && mark.age<.08f) {
+                const float flash=1-TwinShieldDestructionSmooth(mark.age,.018f,.08f);
+                const auto core=Add(source,Scale(NormalizeOr(Subtract(eye,source),towardCamera),.10f));
+                const float size=minimumSpark*4.5f;
+                glowQuad(core,Scale(right,size),Scale(up,size),60,{4.1f,1.45f,.26f,.68f*flash});
+            }
+            const unsigned sparkCount=rupture?9u:rearSparks?6u:3u;
+            for(unsigned i=0;i<sparkCount;++i) {
                 const float t=mark.age-(rupture?.017f:.009f)-.004f*i;
                 const float life=(rupture?.23f:.12f)+.017f*(i%4);
                 if(t<=0 || t>=life)continue;
                 const float angle=2.39996f*i+.37f*float(mark.seed%23);
                 const auto radial=Add(Scale(tangent,std::cos(angle)),Scale(binormal,std::sin(angle)));
                 const auto velocity=Add(Scale(mark.normal,1.8f+.44f*(i%4)),
-                    Scale(radial,(rupture?6.1f:3.3f)+.67f*(i%4)));
+                    Scale(radial,(rupture?6.1f:rearSparks?5.1f:3.3f)+.67f*(i%4)));
                 const auto position=[&](float time) {
                     return Add(Add(source,Scale(velocity,(1-std::exp(-time*3.8f))/3.8f)),
                         Vector3{0,-5.8f*time*time,0});
@@ -6332,7 +6642,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 const auto delta=Subtract(head,tail),center=Scale(Add(head,tail),.5f);
                 const auto width=NormalizeOr(Cross(delta,Subtract(eye,center)),up);
                 const float fade=1-t/life;
-                const float radius=(rupture?.059f:.034f)+.009f*(i%3);
+                const float radius=(std::max)(minimumSpark,rupture?.059f:.034f)+.009f*(i%3);
                 glowQuad(center,Scale(delta,.5f),Scale(width,radius*.72f),32,
                     {mark.tint.x,mark.tint.y,mark.tint.z,fade*.86f});
                 glowQuad(head,Scale(right,radius),Scale(up,radius),24,
@@ -6440,6 +6750,99 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             for(size_t contactIndex=0;contactIndex<contacts.size();++contactIndex) {
                 const auto& contact=contacts[contactIndex];
                 const float age=contact.age,size=contact.size;
+                if (contact.rearPanelIndex >= 0) {
+                    const auto towardEye=NormalizeOr(Subtract(eye,contact.position),contact.normal);
+                    const auto source=Add(contact.position,Scale(towardEye,.14f));
+                    const float pixel=2.0f*std::sqrt(Dot(Subtract(source,eye),Subtract(source,eye)))/
+                        ((std::max)(.001f,std::abs(frameState_.projMatrix.m[1][1]))*float(hudHeight));
+                    const float flash=1.0f-TwinShieldDestructionSmooth(age,.010f,.060f);
+                    if (flash>0) {
+                        const float radius=(std::clamp)(pixel*9.5f,.38f,1.0f);
+                        glowQuad(source,Scale(right,radius),Scale(up,radius),60,{.75f,2.7f,6.8f,flash*.84f});
+                    }
+
+                    const float arcFade=1.0f-TwinShieldDestructionSmooth(age,.112f,.220f);
+                    const auto socket=std::find_if(courseMeshItems.begin(),courseMeshItems.end(),[&](const auto& item) {
+                        return item.visible && item.sourceActorId==contact.actorId && item.transformData &&
+                            item.materialData && item.materialData->specularMode==RailRearPanelMaterial::Mode &&
+                            item.materialData->padding2[RailRearPanelMaterial::PanelIndex]==
+                                float(RailRearPanelMaterial::EncodeIndex(contact.rearPanelIndex,true));
+                    });
+                    if (arcFade>0 && socket!=courseMeshItems.end()) {
+                        const auto& matrix=socket->transformData->World;
+                        const auto across=NormalizeOr(RailCombatImpact::Transform({1,0,0},matrix,0),right);
+                        const auto vertical=NormalizeOr(RailCombatImpact::Transform({0,1,0},matrix,0),up);
+                        const auto front=NormalizeOr(RailCombatImpact::Transform({0,0,-1},matrix,0),towardEye);
+                        const auto face=RailCombatImpact::Transform({0,0,-.31f},matrix,1);
+                        const auto root=Add(face,Scale(front,.10f));
+                        const float reach=.35f+.65f*TwinShieldDestructionSmooth(age,.006f,.082f);
+                        const float jitterFrame=std::floor(age*33.0f)+float(contact.shotId%17);
+                        const float width=(std::clamp)(pixel*1.55f,.045f,.18f);
+                        // The three branches fan toward the adjacent armor, then
+                        // sample its visible face so the charge follows the bank.
+                        const float direction=contact.rearPanelIndex==0 ? -.42f :
+                            contact.rearPanelIndex==2 ? -2.72f : -1.57f;
+                        for (int branch=0;branch<3;++branch) {
+                            const float bearing=direction+(branch-1)*1.01f;
+                            const auto axis=Add(Scale(across,std::cos(bearing)),Scale(vertical,std::sin(bearing)));
+                            const auto side=Cross(front,axis);
+                            Vector3 start=Add(root,Scale(Subtract(source,root),flash*.68f));
+                            for (int step=1;step<=4;++step) {
+                                const float t=float(step)/4;
+                                const float bend=std::sin(jitterFrame*2.15f+step*2.61f+branch*4.1f);
+                                const auto guide=Add(root,Add(Scale(axis,t*reach*(3.25f-.32f*branch)),
+                                    Scale(side,bend*.20f*t)));
+                                auto end=guide;
+                                if(step>1) {
+                                    const auto ray=Add(guide,Scale(front,1.4f));
+                                    float nearest=4.4f;
+                                    bool projected=false;
+                                    for (const auto& armor:courseMeshItems) {
+                                        if (!armor.visible || armor.kind!=CourseMeshRenderKind::Enemy ||
+                                            armor.sourceActorId!=contact.actorId || !armor.transformData || !armor.materialData ||
+                                            !armor.materialData->enableLighting ||
+                                            armor.materialData->specularMode==RailRearPanelMaterial::Mode) continue;
+                                        const auto* model=scene_.FindManagedModel(armor.modelIndex);
+                                        Vector3 localPoint{},localNormal{};
+                                        if (model && ProjectPrimaryContactToMesh(model->model,armor.transformData->World,
+                                            ray,Scale(front,-1),nearest,localPoint,localNormal)) {
+                                            end=Add(RailCombatImpact::Transform(localPoint,armor.transformData->World,1),
+                                                Scale(front,.12f));
+                                            projected=true;
+                                        }
+                                    }
+                                    if(!projected && step==4) break;
+                                }
+                                const auto delta=Subtract(end,start),middle=Scale(Add(start,end),.5f);
+                                const auto edge=NormalizeOr(Cross(delta,Subtract(eye,middle)),up);
+                                const float alpha=arcFade*(1-.49f*t)*contactGain;
+                                glowQuad(middle,Scale(delta,.76f),Scale(edge,width*(2.4f-t)),32,
+                                    {.32f,1.4f,6.5f,alpha*.59f});
+                                glowQuad(middle,Scale(delta,.74f),Scale(edge,width*(1.16f-.50f*t)),32,
+                                    {2.5f,4.1f,7.4f,alpha});
+                                start=end;
+                            }
+                        }
+                    }
+                    for (unsigned i=0;i<15;++i) {
+                        const float t=age-.003f*float(i%7);
+                        const float life=.12f+.022f*float(i%6);
+                        if(t<0 || t>=life) continue;
+                        const float angle=2.399963f*float(i)+.32f*float(contact.shotId%23);
+                        const auto radial=Add(Scale(right,std::cos(angle)),Scale(up,std::sin(angle)));
+                        const auto velocity=Add(Scale(contact.drift,.45f),Add(Scale(radial,12.0f+1.30f*(i%5)),
+                            Scale(towardEye,1.5f+.65f*(i%4))));
+                        const auto head=Add(source,Add(Scale(velocity,t),{0,-5.5f*t*t,0}));
+                        const auto tail=Subtract(head,Scale(velocity,(std::min)(t,.032f)));
+                        const auto delta=Subtract(head,tail);
+                        const auto edge=NormalizeOr(Cross(delta,Subtract(eye,head)),up);
+                        const float width=(std::max)(.040f,pixel*1.18f);
+                        const float fade=(1.0f-t/life)*contactGain;
+                        glowQuad(Scale(Add(head,tail),.5f),Scale(delta,.68f),Scale(edge,width),32,
+                            {6.1f,2.35f+.40f*(i%4),.42f,fade});
+                    }
+                    continue;
+                }
                 const auto impact=contact.Presentation();
                 const auto packedPhase=[&](float phase,uint32_t variant) {
                     const auto step=uint32_t((std::clamp)(phase,0.0f,1.0f)*31+0.5f);
@@ -9665,6 +10068,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const unsigned coordinationStage=ReadEnvironmentUInt("GE3_POST_BOSS_CAPTURE_STAGE",0);
     const bool coordinationReview=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 && coordinationStage>=37 && coordinationStage<=40 &&
         GetEnvironmentVariableW(L"GE3_COURSE_FRAME_EXPORT",nullptr,0)>0;
+    const bool crossfireReview=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 &&
+        coordinationStage>=45 && coordinationStage<=48 && GetEnvironmentVariableW(L"GE3_COURSE_FRAME_EXPORT",nullptr,0)>0;
+    const bool rearBeamReview=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 &&
+        coordinationStage>=49 && coordinationStage<=53 && GetEnvironmentVariableW(L"GE3_COURSE_FRAME_EXPORT",nullptr,0)>0;
+    const bool lightningReview=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 &&
+        coordinationStage>=54 && coordinationStage<=57 && GetEnvironmentVariableW(L"GE3_COURSE_FRAME_EXPORT",nullptr,0)>0;
+    using CrossfirePhase=RailPursuerCoordination::CrossfirePhase;
     const bool rearReviewCombat=railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Combat;
     const float rearReviewAge=railPostBossSequence_.PhaseAge();
     const bool coordinationBoost=coordinationReview && coordinationStage==38 &&
@@ -9683,14 +10093,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const auto basicLesson=railBasicTutorial_.Current();
     const unsigned basicAuditStage=ReadEnvironmentUInt("GE3_BASIC_TUTORIAL_CAPTURE_STAGE",0);
     const bool speedLessonRun=basicTutorialAudit && basicAuditStage==45;
-    const bool basicAuditBoost=basicTutorialAudit &&
-        ((basicLesson==RailBasicTutorial::Lesson::Boost &&
-            (railBasicTutorial_.Success() || railBasicTutorial_.Age()>basicAuditSpeedDelay)) ||
-         (basicLesson==RailBasicTutorial::Lesson::Brake && !railBasicTutorial_.Success()));
+    const bool basicAuditBoost=basicTutorialAudit && basicLesson==RailBasicTutorial::Lesson::Boost &&
+        (railBasicTutorial_.Success() || railBasicTutorial_.Age()>basicAuditSpeedDelay);
     static const float basicAuditBrakeDelay=.001f*float(ReadEnvironmentUInt("GE3_BASIC_TUTORIAL_BRAKE_DELAY_MS",450));
     const bool basicAuditBrake=basicTutorialAudit && basicLesson==RailBasicTutorial::Lesson::Brake &&
-        (!railBasicTutorial_.Success() || basicAuditStage==10) && railBasicTutorial_.Age()>basicAuditBrakeDelay &&
-        (!speedLessonRun || railShooterDistance_>=RailBasicTutorial::SpeedEnd);
+        (!railBasicTutorial_.Success() || basicAuditStage==10) && railBasicTutorial_.Age()>basicAuditBrakeDelay;
     const unsigned routeHazardAudit=ReadEnvironmentUInt("GE3_ROUTE_HAZARD_AUDIT",0);
     float hazardAuditSlabAge=0;
     const bool landingReview=routeHazardAudit>=16 && routeHazardAudit<=19;
@@ -9735,15 +10142,31 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterDistance_<float(ReadEnvironmentUInt("GE3_ROUTE_BRAKE_UNTIL",0));
     const bool hazardAuditBrake=hazardApproach && (routeHazardAudit==4 || landingReview) &&
         hazardAuditSlabAge>=RailRouteHazards::BoltImpact+.24f;
-    const bool hazardAuditBoost=hazardApproach && routeHazardAudit==3 && hazardAuditSlabAge>=RailRouteHazards::BoltImpact;
-    const bool manualBrakeHeld=playerKeyDown('Q') || basicAuditBrake || coordinationBrake || liveAuditBrake || approachAuditBrake || hazardAuditBrake;
+    const bool barricadeBoostReview=routeHazardAudit==24 || routeHazardAudit==25;
+    const bool shelfReview=routeHazardAudit==26 || (routeHazardAudit>=30 && routeHazardAudit<=32);
+    const bool hazardAuditBoost=(hazardApproach && routeHazardAudit==3 && hazardAuditSlabAge>=RailRouteHazards::BoltImpact) ||
+        (barricadeBoostReview && railShooterDistance_<2348) || shelfReview;
+    const float lightningAge=railPostBossSequence_.VeilLightning().age;
+    constexpr float lightningReviewBrakeDelay=.70f;
+    const bool lightningBrake=lightningReview && (coordinationStage==55 || coordinationStage==57) &&
+        lightningAge>=lightningReviewBrakeDelay-.0001f && lightningAge<RailVeilLightning::Clearance+.02f;
+    const bool lightningBoost=lightningReview && coordinationStage==55 &&
+        lightningAge>=RailVeilLightning::Clearance+.02f && lightningAge<RailVeilLightning::RecoveryEnd;
+    const auto& previousVeilBeam=railPostBossSequence_.VeilBeam();
+    const bool rearBeamBoost=((rearBeamReview && (coordinationStage==50 || coordinationStage==53)) ||
+        (ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 && coordinationStage==23 && normalTravelAudit)) &&
+        (previousVeilBeam.Charging() || previousVeilBeam.phase==RailPostBossSequence::BeamPhase::Flash);
+    const bool manualBrakeHeld=playerKeyDown('Q') || basicAuditBrake || coordinationBrake || liveAuditBrake ||
+        approachAuditBrake || hazardAuditBrake || lightningBrake;
     railShooterSpeedDirector_.SetManualBrakeInput(manualBrakeHeld,
         playerInputEnabled && mountedMovementActive && !titleEntryBlocked &&
-        entryFrame.enemyFireAllowed && (playerKeyboardAllowed || basicAuditBrake || routeAuditBrake || approachAuditBrake || hazardAuditBrake));
+        entryFrame.enemyFireAllowed && (playerKeyboardAllowed || basicAuditBrake || routeAuditBrake || approachAuditBrake || hazardAuditBrake || lightningBrake));
     railShooterSpeedDirector_.SetManualBoostInput(
-        !manualBrakeHeld && (!normalTravelAudit || coordinationReview) && (playerKeyDown('E') || basicAuditBoost || coordinationBoost || liveAuditBoost || hazardAuditBoost || railAimGamepad.boostHeld || (speedFeelAudit && speedFeelAuditAge>=1.0f)),
+        !manualBrakeHeld && (!normalTravelAudit || coordinationReview || lightningBoost || rearBeamBoost) &&
+        (playerKeyDown('E') || basicAuditBoost || coordinationBoost || liveAuditBoost || hazardAuditBoost || lightningBoost || rearBeamBoost ||
+         railAimGamepad.boostHeld || (speedFeelAudit && speedFeelAuditAge>=1.0f)),
         playerInputEnabled && mountedMovementActive && !titleEntryBlocked &&
-        entryFrame.enemyFireAllowed && (playerKeyboardAllowed || basicAuditBoost || hazardAuditBoost));
+        entryFrame.enemyFireAllowed && (playerKeyboardAllowed || basicAuditBoost || hazardAuditBoost || lightningBoost || rearBeamBoost));
     speedInput.course = &railShooterCourse_;
     speedInput.railPath = &railPath_;
     speedInput.section = railShooterCourseRuntime_.CurrentSection();
@@ -9888,16 +10311,18 @@ void AppRunLoop::UpdateRailShooterFrame() {
     mountedEvasionInput.evadePressed = evasionPressed;
     mountedEvasionInput.directionX = dodgeInput.directionX*(railPostBossSequence_.CameraWeight()>.999f?-1.0f:1.0f);
     mountedEvasionInput.directionY = dodgeInput.directionY;
-    static const bool veilLeanAudit=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 &&
-        ReadEnvironmentUInt("GE3_POST_BOSS_CAPTURE_STAGE",0)==23 &&
-        ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_FRAMES",0)!=0;
-    const auto& previousVeilBeam=railPostBossSequence_.VeilBeam();
-    // Sample the frame crossing the 140 ms input deadline, including 50 ms review frames.
-    if((veilLeanAudit || coordinationReview) && previousVeilBeam.phase==RailPostBossSequence::BeamPhase::Locked &&
-        previousVeilBeam.secondsToFire<=.14f+gameplayDeltaTime) {
-        mountedEvasionInput.evadePressed=true;
-        mountedEvasionInput.directionX=previousVeilBeam.aim.x>=0?-1.0f:1.0f;
-        mountedEvasionInput.directionY=0.0f;
+    if(crossfireReview && coordinationStage==46 && railShooterMountedEvasion_.CanEvade()) {
+        const auto& bullets=railShooterSpawnRuntime_.Bullets();
+        const bool approaching=std::any_of(bullets.begin(),bullets.end(),[&](const auto& bullet) {
+            const float gap=railShooterDistance_-bullet.spawnDistance-bullet.distanceOffset;
+            return bullet.sourceRole==kFangCrossfireRole && bullet.active && !bullet.hitConsumed && gap>=0 && gap<=30.0f;
+        });
+        if(approaching) {
+            const auto& attack=railPostBossSequence_.FangCrossfire();
+            mountedEvasionInput.evadePressed=true;
+            mountedEvasionInput.directionX=attack.lane>=0?-1.0f:1.0f;
+            mountedEvasionInput.directionY=0;
+        }
     }
     float clearanceDirectionX = mountedEvasionInput.directionX;
     float clearanceDirectionY = mountedEvasionInput.directionY;
@@ -10270,8 +10695,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     const auto buildPursuerPerception=[&]() {
         RailPursuerPerception result;result.acceleration=vehicleFrame.state.acceleration;
+        result.playerLane=railShooterPlayerLateralOffset_;result.playerHeight=railShooterPlayerVerticalOffset_;
         if(!postBossEnabled || railPostBossSequence_.CurrentPhase()!=RailPostBossSequence::Phase::Combat)return result;
         const auto player=RailLocalPoint(railPath_,railShooterDistance_,railShooterPlayerLateralOffset_,railShooterPlayerVerticalOffset_,0);
+        const auto& attack=railPostBossSequence_.FangCrossfire();
         RailWorldRaycastInput context;context.railPath=&railPath_;context.spawnRuntime=&railShooterSpawnRuntime_;
         context.course=&railShooterCourse_;context.terrainSettings=&runtimeState_.terrain.settings;
         context.terrainEdits=&railShooterCourse_.terrainEditLayer;
@@ -10282,7 +10709,21 @@ void AppRunLoop::UpdateRailShooterFrame() {
             for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(actor.actorId==railPostBossSequence_.ActorIds()[i]) {
                 const auto* proxy=railEnemyEncounterReadabilityDirector_.FindActor(actor.actorId);
                 result.readable[i]=proxy && proxy->onScreen && proxy->readableExposureSeconds>=.34f;
-                result.lineClear[i]=RailPursuerHasShotLine(actor,player,context);
+                const bool fixedLine=i==0 && (attack.phase==CrossfirePhase::Warning || attack.phase==CrossfirePhase::Volley);
+                const auto target=fixedLine?RailLocalPoint(railPath_,railShooterDistance_,attack.lane,attack.height,0):player;
+                const auto& beam=railPostBossSequence_.VeilBeam();
+                const auto shotTarget=i==1 && beam.Charging()
+                    ?RailLocalPoint(railPath_,(std::min)(railShooterDistance_,beam.end),0,beam.height,0):target;
+                result.lineClear[i]=RailPursuerHasShotLine(actor,shotTarget,context);
+                if(i==0 && actor.weaponMount.ready) {
+                    const auto panelDistance=[&](int panel) {
+                        const auto point=RearSubsystemWorldCenter(actor.weaponMount.dronePose,kRearPanelAnchors[panel]);
+                        const auto delta=Subtract(point,frameState_.cameraWorldPosition);
+                        return Dot(delta,delta);
+                    };
+                    const int nearPanel=panelDistance(0)<panelDistance(2)?0:2;
+                    if(actor.rearArmor.HasPanel(nearPanel))result.fangNearPanel=nearPanel;
+                }
             }
         }
         return result;
@@ -10290,11 +10731,14 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const auto pursuerPerception=buildPursuerPerception();
     const auto previousPursuitPhase=railPostBossSequence_.CurrentPhase();
     const float previousPursuitAge=railPostBossSequence_.PhaseAge();
+    const auto previousCrossfire=railPostBossSequence_.FangCrossfire().phase;
     const float escapeAgeBefore=railPostBossSequence_.Escape().Age();
     if(postBossEnabled && !coursePreviewOwnsRail && !titleEntryBlocked)
         railPostBossSequence_.Update(gameplayDeltaTime,railShooterDistance_,
             railMothershipBattle_.Current().battleDefeated,railShooterSpawnRuntime_,railShooterEventDispatcher_,
             &runtimeState_.terrain.previewEditLayer,gameplayDeltaTime>0?sessionDeltaTime:0,vehicleFrame.state.speed,&pursuerPerception);
+    if(previousCrossfire!=CrossfirePhase::Warning && railPostBossSequence_.FangCrossfire().phase==CrossfirePhase::Warning)
+        (void)audio_.PlaySpatial(railLockFullSound_,.33f,0,.87f);
     const auto pursuitPhase=railPostBossSequence_.CurrentPhase();
     const bool rearCameraTurning=pursuitPhase==RailPostBossSequence::Phase::Turning || railPostBossSequence_.Escape().OwnsControls();
     const auto findBridgeShooter=[&]() -> const CourseEnemyActor* {
@@ -10328,9 +10772,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
             (void)audio_.PlaySpatial(railEscapeSounds_[5],.44f,0,1);
         }
     }
+    if(gameplayDeltaTime>0 && previousPursuitPhase!=pursuitPhase && pursuitPhase==RailPostBossSequence::Phase::Vista)
+        (void)audio_.PlaySpatial(railDroneFlybySound_,.29f,-.55f,1.55f);
     if(gameplayDeltaTime>0 && pursuitPhase==RailPostBossSequence::Phase::Notice) {
-        if(previousPursuitPhase!=pursuitPhase)
-            (void)audio_.PlaySpatial(railDroneFlybySound_,.29f,-.55f,1.55f);
         constexpr float wingmanCueTime=.68f;
         if(previousPursuitPhase==pursuitPhase && previousPursuitAge<wingmanCueTime &&
             railPostBossSequence_.PhaseAge()>=wingmanCueTime)
@@ -10463,9 +10907,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if(gameplayDeltaTime>0 && !coursePreviewOwnsRail && !titleEntryBlocked) {
         for(const auto& actor:railShooterSpawnRuntime_.Obstacles()) {
             if(!RailRouteHazards::IsSlab(actor))continue;
-            const auto crossed=[&](float mark){return actor.age>=mark && actor.age-gameplayDeltaTime<mark;};
-            if(crossed(RailRouteHazards::BoltLaunch))audio_.PlaySpatial(railAttackWarningSounds_[2][2],.66f,.46f,.81f);
-            if(crossed(RailRouteHazards::BoltImpact)) {
+            const float advance=RailRouteHazards::SlabAdvance(actor,railShooterDistance_,gameplayDeltaTime);
+            const auto crossed=[&](float mark){return actor.age>=mark && actor.age-advance<mark;};
+            const bool carrierShot=RailRouteHazards::CarrierStrikesSlab(actor);
+            if(carrierShot && crossed(RailRouteHazards::BoltLaunch))audio_.PlaySpatial(railAttackWarningSounds_[2][2],.66f,.46f,.81f);
+            if(carrierShot && crossed(RailRouteHazards::BoltImpact)) {
                 audio_.PlaySpatial(railEscapeSounds_[0],.70f,.38f,.91f);
                 audio_.PlaySpatial(railEscapeSounds_[5],.39f,.38f,1.19f);
                 railShooterCameraDirector_.AddFeedbackImpulse(.24f,.005f,-.004f);
@@ -10473,8 +10919,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
             if(crossed(RailRouteHazards::SupportBreak))audio_.PlaySpatial(railEscapeSounds_[5],.41f,.43f,1.07f);
             if(crossed(RailRouteHazards::SlipSound))audio_.PlaySpatial(railEscapeSounds_[5],.33f,.18f,.78f);
             if(crossed(RailRouteHazards::GroundImpact)) {
-                audio_.PlaySpatial(railEscapeSounds_[2],.71f,-.46f,.74f);
-                audio_.PlaySpatial(railEscapeSounds_[5],.32f,-.42f,.68f);
+                const float pan=RailRouteHazards::IsShelf(actor)?.46f:-.46f;
+                audio_.PlaySpatial(railEscapeSounds_[2],.71f,pan,.74f);
+                audio_.PlaySpatial(railEscapeSounds_[5],.32f,pan*.91f,.68f);
                 railShooterCameraDirector_.AddFeedbackImpulse(.32f,.009f,-.005f);
             }
         }
@@ -11091,7 +11538,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     static const bool postBossAudit=ReadEnvironmentUInt("GE3_POST_BOSS_AUDIT",0)!=0 &&
         ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_FRAMES",0)!=0;
     bool postBossAuditAiming=false,postBossAuditPrimary=false;
-    static bool postBossAuditVeilReleased=false,postBossAuditPanelReleased=false;
+    static bool postBossAuditPanelReleased=false,postBossAuditBeamSensorReleased=false;
     if(postBossAudit && !titleEntryBlocked && gameplayDeltaTime>0) {
         lockOnInput.hasLockHeldOverride=true;lockOnInput.lockHeldOverride=false;
         for(const auto& enemy:railShooterSpawnRuntime_.Enemies()) {
@@ -11099,29 +11546,43 @@ void AppRunLoop::UpdateRailShooterFrame() {
             const bool rear=IsRailRearPursuer(enemy.desc.actorAssetId);
             if((!boss && !rear) || enemy.desc.hitPoints<=0 || !enemy.combatState.canReceiveDamage)continue;
             if(rear && (railPostBossSequence_.CurrentPhase()!=RailPostBossSequence::Phase::Combat ||
-                railPostBossSequence_.PhaseAge()<3.0f))continue;
+                (coordinationStage!=12 && coordinationStage!=14 && coordinationStage!=51 &&
+                 railPostBossSequence_.PhaseAge()<3.0f)))continue;
             const unsigned requestedStage=ReadEnvironmentUInt("GE3_POST_BOSS_CAPTURE_STAGE",0);
             const unsigned auditStage=requestedStage==33?3:requestedStage;
-            if(rear && requestedStage==33 && railPostBossSequence_.DamageDealt()>=64)continue;
+            if(rear && requestedStage==33 && railPostBossSequence_.DamageDealt()>=RailPostBossSequence::DamageGoal)continue;
+            const bool hullReview=auditStage>=58 && auditStage<=61;
+            const size_t hullSlot=auditStage%2;
+            const bool chooseHull=hullReview && enemy.actorId==railPostBossSequence_.ActorIds()[hullSlot] &&
+                railPostBossSequence_.HullFraction(hullSlot)>(auditStage>=60?.25f:0.0f);
             const bool chooseSensor=auditStage==14 && enemy.veilSensorExposed && enemy.veilSensorHitPoints>0;
-            const bool choosePanel=rear && auditStage==15 && !postBossAuditPanelReleased &&
-                enemy.desc.actorAssetId=="rear_fang" && enemy.fireSequence>0 && enemy.rearArmor.HasPanel(1);
+            const bool chooseBeamSensor=(auditStage==12 || auditStage==51) && !postBossAuditBeamSensorReleased &&
+                enemy.actorId==railPostBossSequence_.ActorIds()[1] && enemy.veilSensorHitPoints>0 &&
+                railPostBossSequence_.VeilBeam().Charging();
+            const auto& lastHit=railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
+            const bool chooseLightningCounter=auditStage==55 && enemy.actorId==railPostBossSequence_.VeilLightningFollowupTarget() &&
+                !(lastHit.targetActorId==enemy.actorId && lastHit.appliedDamage>0 && !lastHit.lockOnContact);
+            const auto& attack=railPostBossSequence_.FangCrossfire();
+            const bool crossfirePanel=auditStage==47 && attack.phase==CrossfirePhase::Warning;
+            const int panel=crossfirePanel?attack.panel:1;
+            const bool crossfireCounter=auditStage==46 && attack.phase==CrossfirePhase::Volley;
+            const bool choosePanel=rear && (auditStage==15 || (auditStage>=41 && auditStage<=44) || crossfirePanel) &&
+                !postBossAuditPanelReleased &&
+                enemy.desc.actorAssetId=="rear_fang" && enemy.fireSequence>0 && enemy.rearArmor.HasPanel(panel);
             if(rear && auditStage>=8) {
                 const auto& ids=railPostBossSequence_.ActorIds();
-                const bool chooseFang=(auditStage==11 || (auditStage==13 && enemy.fangCannonHitPoints>0)) &&
+                const bool chooseFang=(auditStage==11 || (auditStage==13 && enemy.fangCannonHitPoints>0) || crossfireCounter) &&
                     enemy.actorId==railPostBossSequence_.FangFollowupTarget();
-                const bool chooseVeil=auditStage==12 && !postBossAuditVeilReleased &&
-                    enemy.actorId==ids[1] && railPostBossSequence_.VeilCanBeInterrupted();
-                if(railPostBossSequence_.CompletedCycles()>0 || (!chooseFang && !chooseVeil && !chooseSensor && !choosePanel))continue;
+                if(!chooseFang && !chooseSensor && !choosePanel && !chooseBeamSensor && !chooseLightningCounter && !chooseHull)continue;
             }
             const auto* proxy=railEnemyEncounterReadabilityDirector_.FindActor(enemy.actorId);
             if(!proxy || !proxy->onScreen || !proxy->targetable)continue;
             lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=proxy->screenPosition;
-            if(rear && (auditStage==13 || chooseSensor || choosePanel)) {
+            if(rear && (auditStage==13 || crossfireCounter || chooseSensor || choosePanel || chooseBeamSensor)) {
                 if(!enemy.weaponMount.ready) continue;
                 const auto& pose=enemy.weaponMount.dronePose;
-                const Vector3 subsystem=choosePanel?RearSubsystemWorldCenter(pose,kRearPanelAnchors[1]):
-                    (chooseSensor?VeilSensorWorldCenter(pose):FangCannonWorldCenter(pose));
+                const Vector3 subsystem=choosePanel?RearSubsystemWorldCenter(pose,kRearPanelAnchors[panel]):
+                    ((chooseSensor || chooseBeamSensor)?VeilSensorWorldCenter(pose):FangCannonWorldCenter(pose));
                 const auto marker=ProjectRailOverlayPoint(subsystem,
                     frameState_.viewProjectionMatrix,metrics.width,metrics.height);
                 if(!marker.onscreen) continue;
@@ -11129,16 +11590,22 @@ void AppRunLoop::UpdateRailShooterFrame() {
             }
             lockOnInput.gamepadConnected=false;postBossAuditAiming=true;
             // Exercise both normal fire and travelling locks in the real scene.
-            if(choosePanel) {
+            if(chooseBeamSensor) {
+                const auto& tokens=railShooterLockOnSystem_.Tokens();
+                postBossAuditBeamSensorReleased=std::any_of(tokens.begin(),tokens.end(),[&](const auto& token) {
+                    return token.target.kind==RailLockTargetKind::VeilSensor && token.target.actorId==enemy.actorId;
+                });
+                lockOnInput.lockHeldOverride=!postBossAuditBeamSensorReleased;
+            } else if(choosePanel) {
                 const auto tokens=railShooterLockOnSystem_.Tokens();
-                postBossAuditPanelReleased=std::any_of(tokens.begin(),tokens.end(),[](const auto& token){
-                    return token.target.kind==RailLockTargetKind::RearPanel && token.target.panelIndex==1;
+                postBossAuditPanelReleased=std::any_of(tokens.begin(),tokens.end(),[&](const auto& token){
+                    return token.target.kind==RailLockTargetKind::RearPanel && token.target.actorId==enemy.actorId &&
+                        token.target.panelIndex==panel;
                 });
                 lockOnInput.lockHeldOverride=!postBossAuditPanelReleased;
-            } else if(boss || chooseSensor || enemy.actorId==railPostBossSequence_.ActorIds()[0])postBossAuditPrimary=true;
+            } else if(boss || chooseSensor || chooseLightningCounter || chooseHull || enemy.actorId==railPostBossSequence_.ActorIds()[0])postBossAuditPrimary=true;
             else {
                 lockOnInput.lockHeldOverride=railShooterLockOnSystem_.Tokens().empty();
-                if(auditStage==12 && !lockOnInput.lockHeldOverride)postBossAuditVeilReleased=true;
             }
             break;
         }
@@ -11266,7 +11733,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
             if(primary) {lockOnInput.lockHeldOverride=false;lockAge=0;}
             break;
         }
-    } else if(speedLessonRun && railBasicTutorial_.Learned(RailBasicTutorial::Lesson::Brake) &&
+    } else if(speedLessonRun && railBasicTutorial_.Learned(RailBasicTutorial::Lesson::Boost) &&
         !railBasicTutorial_.Visible() && !titleEntryBlocked && gameplayDeltaTime>0) {
         for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
             if(!RailGroundBattery::IsFirstLiveBattery(actor.desc.waveId) || actor.desc.hitPoints<=0)continue;
@@ -11297,7 +11764,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
             break;
         }
     }
-    if((routeHazardAudit==1 || routeHazardAudit==9) && !titleEntryBlocked && gameplayDeltaTime>0) {
+    const bool barricadeShotReview=(routeHazardAudit==1 || routeHazardAudit==9 || routeHazardAudit==24) &&
+        railShooterDistance_>=float(ReadEnvironmentUInt("GE3_BARRICADE_REVIEW_FIRE_DISTANCE",2254));
+    if(barricadeShotReview && !titleEntryBlocked && gameplayDeltaTime>0) {
         for(const auto& actor:railShooterSpawnRuntime_.Obstacles()) {
             if(!RailRouteHazards::IsBarricade(actor) || actor.desc.hitPoints<=0)continue;
             const auto p=ProjectRailOverlayPoint(RailLocalPoint(railPath_,actor.desc.spawnDistance+actor.desc.distanceOffset,
@@ -11307,6 +11776,54 @@ void AppRunLoop::UpdateRailShooterFrame() {
             lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=p.screen;
             lockOnInput.gamepadConnected=false;basicAuditAiming=basicAuditPrimary=true;
             break;
+        }
+    }
+    if((routeHazardAudit==21 || routeHazardAudit==22) && railShooterDistance_>=1660 &&
+        !titleEntryBlocked && gameplayDeltaTime>0) {
+        for(const auto& obstacle:railShooterSpawnRuntime_.Obstacles()) {
+            if(!RailRouteHazards::IsSlab(obstacle) || !RailRouteHazards::SlabCanBeReleased(obstacle))continue;
+            const auto strike=RailRouteHazards::Strike(obstacle);
+            const auto point=ProjectRailOverlayPoint(RailLocalPoint(railPath_,strike.z,strike.x,strike.y,0),
+                gameplayViewProjectionMatrix,metrics.width,metrics.height);
+            if(!point.onscreen || !point.inDepth || point.behind)continue;
+            lockOnInput.hasLockHeldOverride=true;lockOnInput.lockHeldOverride=false;
+            lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=point.screen;
+            lockOnInput.gamepadConnected=false;basicAuditAiming=basicAuditPrimary=true;
+            break;
+        }
+    }
+    if(routeHazardAudit>=26 && routeHazardAudit<=29 && !titleEntryBlocked && gameplayDeltaTime>0) {
+        const auto aimAt=[&](Vector3 world) {
+            const auto target=ProjectRailOverlayPoint(world,gameplayViewProjectionMatrix,metrics.width,metrics.height);
+            if(!target.onscreen || !target.inDepth || target.behind)return;
+            lockOnInput.hasLockHeldOverride=true;lockOnInput.lockHeldOverride=false;
+            lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=target.screen;
+            lockOnInput.gamepadConnected=false;basicAuditAiming=basicAuditPrimary=true;
+        };
+        if(routeHazardAudit<=27) {
+            for(const auto& obstacle:railShooterSpawnRuntime_.Obstacles()) {
+                const auto& desc=obstacle.desc;
+                const float distance=desc.spawnDistance+desc.distanceOffset;
+                const float gap=distance-railShooterDistance_;
+                if(gap<18 || gap>(routeHazardAudit==26?70.0f:79.0f))continue;
+                if(routeHazardAudit==26 && RailRouteHazards::IsShelf(obstacle) &&
+                    RailRouteHazards::SlabCanBeReleased(obstacle) &&
+                    std::any_of(railShooterSpawnRuntime_.Enemies().begin(),railShooterSpawnRuntime_.Enemies().end(),[](const auto& enemy) {
+                        return enemy.desc.waveId==RailRouteHazards::ShelfBatteryWave && enemy.fireSequence>0;
+                    })) {
+                    const auto rock=RailRouteHazards::Strike(obstacle);
+                    aimAt(RailLocalPoint(railPath_,rock.z,rock.x,rock.y,0));
+                }
+                if(routeHazardAudit==27 && desc.spawnDistance>2800 && RailRouteHazards::IsBarricade(obstacle) && desc.hitPoints>0)
+                    aimAt(RailLocalPoint(railPath_,distance,desc.lateralOffset,desc.verticalOffset,0));
+            }
+        } else {
+            for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
+                const auto& desc=actor.desc;
+                if(!RailGroundBattery::IsFirstLiveBattery(desc.waveId) || !actor.groundPlacementResolved ||
+                    !actor.combatState.canBeTargeted || desc.hitPoints<=0)continue;
+                aimAt(RailLocalPoint(railPath_,desc.spawnDistance+desc.distanceOffset,desc.lateralOffset,desc.verticalOffset,0));
+            }
         }
     }
     static Vector2 auditPointer{};
@@ -11393,6 +11910,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterCameraDirector_.AddFeedbackImpulse(.16f,-.004f,0);
     }
     const bool panelBoostIgnited=railPostBossSequence_.OnPanelBreaks(railLockVolley_.Hits());
+    for(const auto& contact:railLockVolley_.Contacts()) {
+        if(gameplayDeltaTime>0 && contact.age==0 && contact.rearPanelIndex>=0 &&
+            railPostBossSequence_.InterruptFangCrossfire(contact.actorId,contact.rearPanelIndex)) {
+            (void)audio_.PlaySpatial(railDefenseInterruptSound_,.39f,0,1.12f);
+        }
+    }
     if(panelBoostIgnited) {
         (void)audio_.PlaySpatial(railBoostIgnitionSound_,.32f,0.0f,1.15f);
         railShooterCameraDirector_.AddFeedbackImpulse(.22f,-.0022f,0.0f);
@@ -11518,24 +12041,56 @@ void AppRunLoop::UpdateRailShooterFrame() {
     collisionInput.primaryTerrainPreview=&railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer);
     collisionInput.bonusTargetActorId=railMinibossCombat_.CounterOwner();
     collisionInput.bonusDamageMultiplier=railMinibossCombat_.DamageMultiplier(collisionInput.bonusTargetActorId,false);
+    const auto currentPursuerSight=buildPursuerPerception();
+    if(postBossEnabled && !coursePreviewOwnsRail && gameplayDeltaTime>0)
+        railPostBossSequence_.AdvanceFangCrossfire(railShooterSpawnRuntime_,railShooterDistance_,vehicleFrame.state.speed,
+            fireSafetyInput.cameraAllowsEnemyFire && currentPursuerSight.lineClear[0] && currentPursuerSight.readable[0]);
     const uint32_t fangFollowup=railPostBossSequence_.FangFollowupTarget();
-    if(fangFollowup) {
-        collisionInput.bonusTargetActorId=fangFollowup;
+    const uint32_t veilFollowup=railPostBossSequence_.VeilLightningFollowupTarget();
+    if(fangFollowup || veilFollowup) {
+        collisionInput.bonusTargetActorId=veilFollowup?veilFollowup:fangFollowup;
         collisionInput.bonusDamageMultiplier=1.5f;
     }
     const auto collisionStart = RailPerfClock::now();
     CourseCollisionFrameStats collisionStats =
         railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
-    const auto currentPursuerSight=buildPursuerPerception();
     const auto veilBeamEvents=postBossEnabled && !coursePreviewOwnsRail?
         railPostBossSequence_.AdvanceVeilBeam(gameplayDeltaTime,railShooterSpawnRuntime_,
-            railShooterCollisionSystem_.PlayerHitbox().State(),&currentPursuerSight):RailPostBossSequence::BeamEvents{};
+            railPath_,railShooterCollisionSystem_.PlayerHitbox().State(),railVeilModel_.Frame(),
+            currentPursuerSight.lineClear[1]):RailPostBossSequence::BeamEvents{};
     const auto& veilModelBeam=railPostBossSequence_.VeilBeam();
+    const auto& lightning=railPostBossSequence_.VeilLightning();
+    const bool lightningActive=pursuitPhase==RailPostBossSequence::Phase::Combat && lightning.Visible();
+    const bool lightningCharging=lightningActive && lightning.age<RailVeilLightning::StrikeTimes.back()+.09f;
     const bool bridgeWarning=railPostBossSequence_.EscapeActive() && railPostBossSequence_.Escape().Current()==RailBridgeEscape::Phase::Warning;
     if(!bridgeModelActive)
-        railVeilModel_.Update(gameplayDeltaTime,railPostBossSequence_.VeilSensorExposed() || veilModelBeam.phase!=RailPostBossSequence::BeamPhase::Inactive,
+        railVeilModel_.Update(gameplayDeltaTime,lightningCharging || veilModelBeam.Charging(),
             veilModelBeam.phase==RailPostBossSequence::BeamPhase::Flash,
-            veilModelBeam.phase==RailPostBossSequence::BeamPhase::Inactive?2.2f:veilModelBeam.secondsToFire);
+            lightningCharging?RailVeilLightning::StrikeTimes.back()-lightning.age:veilModelBeam.secondsToFire);
+    if(lightningActive && gameplayDeltaTime>0) {
+        if(lightning.age==0)
+            (void)audio_.PlaySpatial(railLockFullSound_,.40f,0,.66f);
+        for(size_t i=0;i<lightning.positions.size();++i) {
+            if(!(lightning.flashNow&(1u<<i)))continue;
+            (void)audio_.PlaySpatial(railEnemyProjectileImpactSound_,.56f,0,.56f+.10f*float(i));
+            (void)audio_.PlaySpatial(railAttackWarningSounds_[2][2],.23f,0,1.19f+.07f*float(i));
+            const float proximity=1-TwinShieldDestructionSmooth(std::abs(lightning.positions[i]-railShooterDistance_),6,29);
+            railShooterCameraDirector_.AddFeedbackImpulse((i==2?.27f:.15f)*proximity,-.0018f*proximity,0);
+        }
+        if(lightning.hitNow) {
+            const auto& player=railShooterCollisionSystem_.PlayerHitbox().State();
+            PlayerHitRequest request{};
+            request.kind=PlayerHitKind::ScriptedHazard;
+            request.sourceActorId=railPostBossSequence_.ActorIds()[1];
+            request.sourceId=RailVeilLightning::Source;
+            request.rawDamage=8.0f;
+            request.postHitInvulnerabilitySeconds=.65f;
+            request.railDistance=player.distance;
+            request.lateralOffset=player.lateralOffset;
+            request.verticalOffset=player.verticalOffset;
+            railShooterCollisionSystem_.ApplyPlayerHit(request);
+        }
+    }
     if(veilBeamEvents.locked)
         (void)audio_.PlaySpatial(railLockFullSound_,.27f,.28f,.71f);
     if(veilBeamEvents.hit) {
@@ -11551,7 +12106,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         request.verticalOffset=player.verticalOffset;
         railShooterCollisionSystem_.ApplyPlayerHit(request);
     }
-    if(!fangFollowup && collisionInput.bonusDamageMultiplier>1)for(const auto& shot:railShooterCollisionSystem_.LastWeaponFireResult().shots)
+    if(!fangFollowup && !veilFollowup && collisionInput.bonusDamageMultiplier>1)for(const auto& shot:railShooterCollisionSystem_.LastWeaponFireResult().shots)
         railMinibossCombat_.CreditShot(shot.shotId,collisionInput.bonusTargetActorId,false);
     for(const auto& hit:railShooterCollisionSystem_.WeaponFeedback().RecentEvents()) {
         if(!railMinibossCombat_.NotifyCounterDamage(hit))continue;
@@ -11577,17 +12132,61 @@ void AppRunLoop::UpdateRailShooterFrame() {
     collisionStats = railShooterCollisionSystem_.LastFrameStats();
     if(routeHazardAudit && gameplayDeltaTime>0) {
         static std::ofstream audit("logs/route_hazard_audit.csv");
-        static const bool header=bool(audit<<"frame,distance,speed,hp,boost,brake,slab_age,slab_x,barricade_hp,shots,barricade_hits,contact,damage\n");
-        float age=-1,x=0,hp=-1;
+        static const bool header=bool(audit<<"frame,distance,speed,hp,boost,brake,slab_age,slab_x,barricade_hp,shots,barricade_hits,contact,damage,slab_y,trigger_shot,arch_turrets_alive\n");
+        float age=-1,x=0,y=0,hp=-1;
+        uint64_t triggerShot=0;
         for(const auto& actor:railShooterSpawnRuntime_.Obstacles()) {
-            if(RailRouteHazards::IsSlab(actor)) { age=actor.age;x=RailRouteHazards::Stone(actor,age).rail.x; }
+            if(RailRouteHazards::IsSlab(actor)) {
+                age=actor.age;
+                const auto rock=RailRouteHazards::Stone(actor,age).rail;
+                x=rock.x;y=rock.y;triggerShot=RailRouteHazards::SlabTriggerShot(actor);
+            }
             if(RailRouteHazards::IsBarricade(actor))hp=actor.desc.hitPoints;
         }
         if(header)audit<<railShooterFrameIndex_<<','<<railShooterDistance_<<','<<railShooterVehicleMovement_.State().speed
             <<','<<railShooterCollisionSystem_.Player().hitPoints<<','<<hazardAuditBoost<<','<<hazardAuditBrake<<','<<age<<','<<x<<','<<hp
             <<','<<railShooterCollisionSystem_.LastWeaponFireResult().shots.size()<<','<<collisionStats.playerShotObstacleHits
             <<','<<(vehicleBodyCollisionFrame.beganContactThisFrame?vehicleBodyCollisionFrame.hitStableId:"")
-            <<','<<(vehicleDamage.acceptedContactDamage?vehicleDamage.damageResult.appliedDamage:0)<<std::endl;
+            <<','<<(vehicleDamage.acceptedContactDamage?vehicleDamage.damageResult.appliedDamage:0)
+            <<','<<y<<','<<triggerShot<<','<<std::count_if(railShooterSpawnRuntime_.Enemies().begin(),
+                railShooterSpawnRuntime_.Enemies().end(),[](const auto& actor) {
+                    return actor.desc.waveId==RailRouteHazards::ArchBatteryWave && actor.desc.hitPoints>0;
+                })<<std::endl;
+    }
+    if(shelfReview && gameplayDeltaTime>0) {
+        static std::ofstream audit("logs/rock_shelf_audit.csv");
+        static float time=0;
+        static bool header=bool(audit<<"time,distance,speed,boost,gap,visible,age,shot,battery_hp,volleys,first_round_x,first_round_gap\n");
+        time+=gameplayDeltaTime;
+        const auto& obstacles=railShooterSpawnRuntime_.Obstacles();
+        const auto shelf=std::find_if(obstacles.begin(),obstacles.end(),RailRouteHazards::IsShelf);
+        const auto& enemies=railShooterSpawnRuntime_.Enemies();
+        const auto battery=std::find_if(enemies.begin(),enemies.end(),[](const auto& actor) {
+            return actor.desc.waveId==RailRouteHazards::ShelfBatteryWave;
+        });
+        Vector3 rock{};
+        bool visible=false;
+        if(shelf!=obstacles.end()) {
+            rock=RailRouteHazards::Stone(*shelf,shelf->age).rail;
+            const auto p=ProjectRailOverlayPoint(RailLocalPoint(railPath_,rock.z,rock.x,rock.y,0),
+                gameplayViewProjectionMatrix,metrics.width,metrics.height);
+            visible=p.onscreen && p.inDepth && !p.behind;
+        }
+        const auto& rounds=railShooterSpawnRuntime_.Bullets();
+        static uint64_t firstRound=0;
+        const auto shot=std::find_if(rounds.begin(),rounds.end(),[&](const auto& round) {
+            return firstRound?round.projectileId==firstRound:
+                battery!=enemies.end() && round.ownerActorId==battery->actorId && round.active;
+        });
+        if(shot!=rounds.end())firstRound=shot->projectileId;
+        if(header)audit<<time<<','<<railShooterDistance_<<','<<railShooterVehicleMovement_.State().speed
+            <<','<<hazardAuditBoost<<','<<(shelf!=obstacles.end()?rock.z-railShooterDistance_:0)<<','<<visible
+            <<','<<(shelf!=obstacles.end()?shelf->age:-1)
+            <<','<<(shelf!=obstacles.end()?RailRouteHazards::SlabTriggerShot(*shelf):0)
+            <<','<<(battery!=enemies.end()?battery->desc.hitPoints:-1)
+            <<','<<(battery!=enemies.end()?battery->fireSequence:0)
+            <<','<<(shot!=rounds.end()?shot->lateralOffset:1000)
+            <<','<<(shot!=rounds.end()?shot->spawnDistance+shot->distanceOffset-railShooterDistance_:0)<<std::endl;
     }
     RailVehicleCollisionFeedbackInput collisionFeedbackInput{};
     collisionFeedbackInput.damageResults =
@@ -11818,16 +12417,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     for(const auto& result:railShooterCollisionSystem_.PlayerNearMissResults())if(result.accepted)
         railEliteFire_.FangContact(result.request.projectileId,result.request.closeness,false);
-    if(veilBeamEvents.fired)for(const auto& actor:railShooterSpawnRuntime_.Enemies())
-        if(actor.actorId==railPostBossSequence_.ActorIds()[1] && actor.weaponMount.ready) {
-            const auto visual=BuildVeilBeamWorldFrame(veilModelBeam,actor.weaponMount.dronePose,railPath_,railVeilModel_.Frame());
-            const auto delta=Subtract(elitePlayer,visual.mouth);
-            const float along=(std::max)(0.0f,Dot(delta,visual.direction));
-            const auto nearest=Add(visual.mouth,Scale(visual.direction,along));
-            const auto gap=Subtract(elitePlayer,nearest);
-            railEliteFire_.VeilLaunch(railPostBossSequence_.VeilBeamShots(),actor.actorId,visual.mouth,visual.direction,
-                visual.end,1-std::sqrt(Dot(gap,gap))/3.0f);
-        }
+    if(veilBeamEvents.fired) {
+        const auto muzzle=VeilBeamRailPoint(railPath_,veilModelBeam,veilModelBeam.source.z);
+        const auto end=VeilBeamRailPoint(railPath_,veilModelBeam,veilModelBeam.end);
+        const auto direction=railPath_.Evaluate(veilModelBeam.source.z).tangent;
+        railEliteFire_.VeilLaunch(railPostBossSequence_.VeilBeamShots(),railPostBossSequence_.ActorIds()[1],
+            muzzle,direction,end,.76f);
+    }
     if(railEliteFire_.FangFired())(void)audio_.PlaySpatial(railEliteSounds_[0],.36f,-.16f,1.0f);
     if(railEliteFire_.VeilFired())(void)audio_.PlaySpatial(railEliteSounds_[1],.50f,.20f,1.0f);
     if(railEliteFire_.ShockSound())(void)audio_.PlaySpatial(railEliteSounds_[2],.32f,0,1.0f);
@@ -11964,12 +12560,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if(postBossAudit) {
         static std::ofstream log("logs/post_boss_audit.csv");
         static bool header=false;
-        if(!header){log<<"time,distance,phase,age,phase_age,anchor,camera_weight,alive,rear_min,rear_max,rear_primary,rear_lock,player_hp,fang_rounds,veil_beams,cycles,fang_bonus_damage,veil_interrupted,fang_hull_hp,fang_cannon_hp,veil_hull_hp,veil_sensor_hp,veil_descent_lane,veil_shot_lane,player_speed,panel_boost,fang_panels,fang_gap,veil_projectiles,veil_beam_phase,veil_beam_early,veil_beam_remaining,veil_beam_contact,occupant_lateral,elite_fang_fire,elite_veil_fire,elite_shake,elite_lens,fang_recoil,veil_recoil,wing_kick,elite_charge_loop\n";header=true;}
-        float fangHullHp=0,fangCannonHp=0,veilHullHp=0,veilSensorHp=0,veilDescentLane=0;
+        if(!header){log<<"time,distance,phase,age,phase_age,anchor,camera_weight,alive,rear_min,rear_max,rear_primary,rear_lock,player_hp,fang_rounds,veil_beams,cycles,fang_bonus_damage,veil_interrupted,fang_hull_hp,fang_cannon_hp,veil_hull_hp,veil_sensor_hp,player_speed,panel_boost,fang_panels,fang_gap,veil_projectiles,veil_beam_phase,veil_beam_remaining,veil_beam_contact,occupant_lateral,elite_fang_fire,elite_veil_fire,elite_shake,elite_lens,fang_recoil,veil_recoil,wing_kick,elite_charge_loop,crossfire_phase,crossfire_age,crossfire_panel,crossfire_rounds,crossfire_bank,crossfire_x,crossfire_lane,fang_followup,evasion_count,beam_front,beam_end,boost_held,fang_reserved,veil_reserved,fang_threat,veil_threat,lightning_age,lightning_fired,lightning_hits,lightning_nearest,brake_held,lightning_bonus_damage,fang_smoke_stage,veil_smoke_stage\n";header=true;}
+        float fangHullHp=0,fangCannonHp=0,veilHullHp=0,veilSensorHp=0;
         float fangGap=1000;
         unsigned fangPanels=0;
         unsigned alive=0;float lo=0,hi=-10000;static unsigned primary=0,locks=0;static uint64_t last=0;
         static float fangBonusDamage=0;
+        static float lightningBonusDamage=0;
         static std::array<std::unordered_set<uint64_t>,2> firedRounds;
         for(const auto& round:railShooterSpawnRuntime_.Bullets()) {
             if(round.launchDelayRemaining>0 || !round.active)continue;
@@ -11988,7 +12585,6 @@ void AppRunLoop::UpdateRailShooterFrame() {
             } else if(actor.desc.actorAssetId=="rear_veil") {
                 veilHullHp=actor.desc.hitPoints;
                 veilSensorHp=actor.veilSensorHitPoints;
-                veilDescentLane=actor.veilDescentAim.x;
             }
         }
         const auto& hit=railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
@@ -11996,6 +12592,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
             last=hit.sequence;
             if(fangFollowup && hit.targetActorId==fangFollowup && !hit.lockOnContact)
                 fangBonusDamage=hit.requestedDamage;
+            if(veilFollowup && hit.targetActorId==veilFollowup && !hit.lockOnContact)
+                lightningBonusDamage=hit.requestedDamage;
             for(auto id:railPostBossSequence_.ActorIds())if(id!=0 && id==hit.targetActorId) {
                 if(hit.lockOnContact)++locks;else ++primary;
             }
@@ -12007,21 +12605,36 @@ void AppRunLoop::UpdateRailShooterFrame() {
             <<','<<railShooterGameSession_.State().playerHealth<<','<<firedRounds[0].size()
             <<','<<railPostBossSequence_.VeilBeamShots()<<','<<railPostBossSequence_.CompletedCycles()
             <<','<<fangBonusDamage<<','<<railPostBossSequence_.VeilInterrupted()<<','<<fangHullHp<<','<<fangCannonHp
-            <<','<<veilHullHp<<','<<veilSensorHp<<','<<veilDescentLane<<','<<railPostBossSequence_.VeilLastBeamAim().x
+            <<','<<veilHullHp<<','<<veilSensorHp
             <<','<<vehicleFrame.state.speed<<','<<railPostBossSequence_.PanelBoostRemaining()<<','<<fangPanels<<','<<fangGap
-            <<','<<firedRounds[1].size()<<','<<int(beam.phase)<<','<<beam.earlyLock<<','<<beam.secondsToFire
+            <<','<<firedRounds[1].size()<<','<<int(beam.phase)<<','<<beam.secondsToFire
             <<','<<veilBeamEvents.hit<<','<<railShooterCollisionSystem_.PlayerHitbox().State().lateralOffset
             <<','<<railEliteFire_.FangFired()<<','<<railEliteFire_.VeilFired()<<','<<railEliteFire_.Shake()<<','<<(railEliteFire_.LensPulse()!=nullptr)
             <<','<<railEliteFire_.FangRecoil(railPostBossSequence_.ActorIds()[0])<<','<<railVeilModel_.Frame().recoil
-            <<','<<railVeilModel_.Frame().wingKick<<','<<railEliteChargePlaying_<<'\n';log.flush();
+            <<','<<railVeilModel_.Frame().wingKick<<','<<railEliteChargePlaying_
+            <<','<<int(railPostBossSequence_.FangCrossfire().phase)<<','<<railPostBossSequence_.FangCrossfire().age
+            <<','<<railPostBossSequence_.FangCrossfire().panel<<','<<railPostBossSequence_.FangCrossfire().rounds
+            <<','<<railPostBossSequence_.Coordination().AircraftState(0).bank
+            <<','<<railPostBossSequence_.Coordination().AircraftState(0).formation.y
+            <<','<<railPostBossSequence_.FangCrossfire().lane<<','<<(fangFollowup!=0)
+            <<','<<railShooterMountedEvasion_.State().evasionCount
+            <<','<<beam.front<<','<<beam.end<<','<<railShooterSpeedDirector_.ManualBoost().Held()
+            <<','<<railPostBossSequence_.Coordination().AircraftState(0).reserved
+            <<','<<railPostBossSequence_.Coordination().AircraftState(1).reserved
+            <<','<<railPostBossSequence_.Coordination().Perception().fangThreat
+            <<','<<railPostBossSequence_.Coordination().Perception().veilThreat
+            <<','<<lightning.age<<','<<int(lightning.fired)<<','<<int(lightning.hits)
+            <<','<<lightning.positions.back()<<','<<railShooterSpeedDirector_.ManualBrake().Held()
+            <<','<<lightningBonusDamage<<','<<railPostBossSequence_.HullSmoke(0).Stage()
+            <<','<<railPostBossSequence_.HullSmoke(1).Stage()<<'\n';log.flush();
     }
     if(coordinationReview && rearReviewCombat) {
         static std::ofstream coordinationLog("logs/pursuer_coordination.csv");static bool coordinationHeader=false;
-        if(!coordinationHeader){coordinationLog<<"age,owner,committed,lease_age,grants,fang_flight,veil_flight,fang_gap,veil_gap,fang_x,veil_x,speed,acceleration,fang_los,veil_los,fang_readable,veil_readable,fang_shots,veil_shots,fang_threats,beam_phase,beam_seconds,beam_fired,beam_hit,player_lateral,hp\n";coordinationHeader=true;}
+        if(!coordinationHeader){coordinationLog<<"age,fang_reserved,veil_reserved,fang_grants,veil_grants,fang_flight,veil_flight,fang_gap,veil_gap,fang_x,veil_x,speed,acceleration,fang_los,veil_los,fang_readable,veil_readable,fang_shots,veil_shots,fang_threats,beam_phase,beam_seconds,beam_fired,beam_hit,player_lateral,hp\n";coordinationHeader=true;}
         const auto& c=railPostBossSequence_.Coordination();const auto& seen=c.Perception();unsigned threats=0;uint64_t shots=0;
         for(const auto& p:railShooterSpawnRuntime_.Bullets())if(p.ownerActorId==railPostBossSequence_.ActorIds()[0] && !p.hitConsumed && p.age<p.lifetime && (p.active || p.launchDelayRemaining>0))++threats;
         for(const auto& a:railShooterSpawnRuntime_.Enemies())if(a.actorId==railPostBossSequence_.ActorIds()[0])shots=a.fireSequence;
-        coordinationLog<<railPostBossSequence_.PhaseAge()<<','<<int(c.Reservation())<<','<<c.Committed()<<','<<c.LeaseAge()<<','<<c.GrantSerial()
+        coordinationLog<<railPostBossSequence_.PhaseAge()<<','<<c.AircraftState(0).reserved<<','<<c.AircraftState(1).reserved<<','<<c.AircraftState(0).grants<<','<<c.AircraftState(1).grants
             <<','<<int(c.AircraftState(0).flight)<<','<<int(c.AircraftState(1).flight)
             <<','<<seen.aircraft[0].gap<<','<<seen.aircraft[1].gap<<','<<seen.aircraft[0].lateral<<','<<seen.aircraft[1].lateral
             <<','<<vehicleFrame.state.speed<<','<<vehicleFrame.state.acceleration
@@ -12184,6 +12797,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         ++shieldSounds;
     }
     const auto& primaryWrecks=railEnemyCombatPresentationBridge_.Frame().destructionBursts;
+    const auto rearImpact=[&](uint32_t actorId) {
+        const auto& ids=railPostBossSequence_.ActorIds();
+        return actorId!=0 && (actorId==ids[0] || actorId==ids[1]);
+    };
     const auto isTurretImpact=[&](uint32_t actorId) {
         const auto& enemies=railShooterSpawnRuntime_.Enemies();
         return std::any_of(enemies.begin(),enemies.end(),[&](const auto& actor) {
@@ -12193,9 +12810,21 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if(gameplayDeltaTime>0 && !railLockVolley_.Contacts().empty()) {
         unsigned audible=0;
         bool rupturePlayed=false;
+        bool panelCrackPlayed=false;
         for(const auto& contact:railLockVolley_.Contacts()) {
             if(contact.age>0)continue;
             const float pan=(std::clamp)(Dot(Subtract(contact.position,cameraPosition),projectileCameraRight)/35.0f,-.55f,.55f);
+            if (contact.rearPanelIndex>=0) {
+                if (audible<2) {
+                    const bool played=audio_.PlaySpatial(railLockContactSound_,.43f/std::sqrt(float(++audible)),pan,1.13f);
+                    logLockPhase("panel_break",contact.shotId,1.0f,1.13f,played);
+                }
+                if (!panelCrackPlayed) {
+                    audio_.PlaySpatial(railPrimaryKillSound_,.19f,pan,1.21f);
+                    panelCrackPlayed=true;
+                }
+                continue;
+            }
             if(!contact.enemyHull) {
                 const auto lasers=railLockVolley_.Lasers();
                 const auto laser=std::find_if(lasers.begin(),lasers.end(),[&](const auto& candidate) {
@@ -12207,14 +12836,18 @@ void AppRunLoop::UpdateRailShooterFrame() {
                 }
                 continue;
             }
-            if(isTurretImpact(contact.actorId)) {
+            if(isTurretImpact(contact.actorId) || rearImpact(contact.actorId)) {
                 using namespace RailCombatImpact;
                 const auto normal=NormalizeOr(contact.normal,{0,0,-1});
                 Mark mark{contact.actorId,contact.shotId,{},{},contact.position,normal,
                     {.30f,2.35f,1.15f},Kind::Hull,0,1.28f};
                 mark.needsSurfaceBinding=true;
                 mark.incoming=Scale(normal,-1);
-                mark.arc=Arc::Green;
+                if(rearImpact(contact.actorId)) {
+                    mark.incoming=NormalizeOr(contact.incoming,Scale(normal,-1));
+                    mark.tint={2.4f,1.72f,.85f};
+                    mark.arc=Arc::Blue;
+                } else mark.arc=Arc::Green;
                 railCombatImpactMarks_.Add(std::move(mark));
             }
             bool played=false;
@@ -12261,6 +12894,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         }
         if(feedback.hitKind==RailAimHitKind::Obstacle && feedback.appliedDamage>0) {
             const auto& obstacles=railShooterSpawnRuntime_.Obstacles();
+            if(feedback.destroyed && std::any_of(obstacles.begin(),obstacles.end(),[&](const auto& o) {
+                return o.actorId==feedback.targetActorId && RailRouteHazards::IsSlab(o);
+            }))audio_.PlaySpatial(railEscapeSounds_[5],.40f,0,.92f);
             if(std::any_of(obstacles.begin(),obstacles.end(),[&](const auto& o) {
                 return o.actorId==feedback.targetActorId && RailRouteHazards::IsBarricade(o);
             })) {
@@ -12336,7 +12972,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if(basicTutorialAudit && gameplayDeltaTime>0) {
         static std::ofstream audit("logs/basic_tutorial_audit.csv");
         static bool header=false;
-        if(!header){audit<<"frame,dt,distance,lesson,visible,success,age,learned,locks,lock_step,shots,volley,speed,normal,boost,brake,threat,hp,sparks,bounces,flash,spark_births,boost_input,brake_pitch,brake_compression,bite,release,loop_gain,pass_duck,battery_recoil,live_shot_age,battery_onscreen,live_crossing_gap,lock_hits,brake_mix,pass_projectile,battery_owner,battery_shell,shell_age,shell_speed,battery_damage\n";header=true;}
+        if(!header){audit<<"frame,dt,distance,lesson,visible,success,age,learned,locks,lock_step,shots,volley,speed,normal,boost,brake,threat,hp,sparks,bounces,flash,spark_births,boost_input,brake_pitch,brake_compression,bite,release,loop_gain,pass_duck,battery_recoil,live_shot_age,battery_onscreen,live_crossing_gap,lock_hits,brake_mix,pass_projectile,battery_owner,battery_shell,shell_age,shell_speed,battery_damage,reward_boost,reward_serial,reward_kills\n";header=true;}
         float batteryRecoil=0,liveCrossingGap=0;
         float shellAge=-1,shellSpeed=0,batteryDamage=0;
         uint32_t batteryOwner=0;
@@ -12397,7 +13033,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
             <<','<<railBrakeLoopGain_<<','<<railBrakePassDuck_<<','<<batteryRecoil
             <<','<<liveAuditShotAge<<','<<batteryOnscreen<<','<<liveCrossingGap<<','<<railLockVolley_.Hits().size()
             <<','<<RailBrakePresentation::PassFrictionGain(railBrakePassDuck_)<<','<<railBrakePassProjectile_
-            <<','<<batteryOwner<<','<<batteryShell<<','<<shellAge<<','<<shellSpeed<<','<<batteryDamage<<std::endl;
+            <<','<<batteryOwner<<','<<batteryShell<<','<<shellAge<<','<<shellSpeed<<','<<batteryDamage
+            <<','<<tutorialInput.rewardBoost<<','<<railShooterSpeedDirector_.KillBoost().Serial()
+            <<','<<railShooterSpeedDirector_.KillBoost().TotalKills()<<std::endl;
     }
     if(heavyAudit && gameplayDeltaTime>0) {
         static std::ofstream audit("logs/heavy_tutorial_audit.csv");
@@ -12430,29 +13068,32 @@ void AppRunLoop::UpdateRailShooterFrame() {
             <<','<<int(heavy.phase)<<','<<heavy.charge<<','<<shutter<<std::endl;
     }
     if (!coursePreviewOwnsRail && railShooterGameSession_.IsInitialized()) {
-        uint64_t grazeScoreThisFrame = 0;
-        for (const GrazeScoreResult& result :
-             railGrazeScoreSystem_.ResultsThisFrame()) {
-            if (!result.accepted || result.scoreAwarded == 0) continue;
-            grazeScoreThisFrame += result.scoreAwarded;
-        }
-        const EnemyAttackDefenseResolutionFrame& defenseResults =
-            railEnemyAttackDefenseResolutionSystem_.Frame();
-        railShooterGameSession_.SetCombo(
-            railEncounterPerformanceScoreSystem_.State().chain,
-            !railEncounterPerformanceScoreSystem_.ResultsThisFrame().empty()
-                ? "encounter_performance_chain"
-                : (defenseResults.successes > 0
-                    ? "enemy_attack_defense_chain" : "graze_chain"));
-        if (grazeScoreThisFrame > 0) {
-            railShooterGameSession_.AddScore(
-                grazeScoreThisFrame,
-                "near_miss_graze");
-        }
-        if (defenseResults.scoreAwarded > 0) {
-            railShooterGameSession_.AddScore(
-                defenseResults.scoreAwarded,
-                "enemy_attack_defense");
+        const bool trackScore=!IsRailShortCourse(railShooterCoursePath_);
+        if(trackScore) {
+            uint64_t grazeScoreThisFrame = 0;
+            for (const GrazeScoreResult& result :
+                 railGrazeScoreSystem_.ResultsThisFrame()) {
+                if (!result.accepted || result.scoreAwarded == 0) continue;
+                grazeScoreThisFrame += result.scoreAwarded;
+            }
+            const EnemyAttackDefenseResolutionFrame& defenseResults =
+                railEnemyAttackDefenseResolutionSystem_.Frame();
+            railShooterGameSession_.SetCombo(
+                railEncounterPerformanceScoreSystem_.State().chain,
+                !railEncounterPerformanceScoreSystem_.ResultsThisFrame().empty()
+                    ? "encounter_performance_chain"
+                    : (defenseResults.successes > 0
+                        ? "enemy_attack_defense_chain" : "graze_chain"));
+            if (grazeScoreThisFrame > 0) {
+                railShooterGameSession_.AddScore(
+                    grazeScoreThisFrame,
+                    "near_miss_graze");
+            }
+            if (defenseResults.scoreAwarded > 0) {
+                railShooterGameSession_.AddScore(
+                    defenseResults.scoreAwarded,
+                    "enemy_attack_defense");
+            }
         }
         for (const EncounterPerformanceScoreResult& result :
              railEncounterPerformanceScoreSystem_.ResultsThisFrame()) {
@@ -12475,7 +13116,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
                     ? "encounter_clear_full_sweep"
                     : "encounter_clear";
             }
-            railShooterGameSession_.AddScore(result.scoreAwarded, source);
+            if(trackScore)railShooterGameSession_.AddScore(result.scoreAwarded, source);
         }
         for (const PlayerDamageResult& result :
              railShooterCollisionSystem_.PlayerDamageResults()) {
@@ -12781,14 +13422,28 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
 
     if(!coursePreviewOwnsRail && !coursePreviewFrozen && !entryFrame.blockingGameplay &&
-        !railTransitionDemo_.Returning() && railShooterRetryCoordinator_.IsBound() &&
-        (railFirstPlayableCheckpointPending_ || checkpointStats.enteredSectionThisFrame)) {
-        (void)CaptureRailCheckpoint(railFirstPlayableCheckpointPending_?"gameplay_start":checkpointStats.currentSectionName);
-    }
-
-    if(postBossEnabled && !coursePreviewOwnsRail && gameplayDeltaTime>0 && railPostBossSequence_.CheckpointPending()) {
-        railPostBossSequence_.MarkCheckpointCaptured(true);
-        if(!CaptureRailCheckpoint(railPostBossSequence_.EscapeActive()?"BRIDGE ESCAPE":"WHITE BRIDGE"))railPostBossSequence_.MarkCheckpointCaptured(false);
+        !railTransitionDemo_.Returning() && railShooterRetryCoordinator_.IsBound()) {
+        const char* checkpoint=nullptr;
+        const auto bossWave=std::find_if(railShooterCourse_.waveDefinitions.begin(),
+            railShooterCourse_.waveDefinitions.end(),[](const auto& wave) {
+                return wave.enabled && wave.editorGuid==RailPostBossSequence::MinibossWaveId;
+            });
+        const bool bossApproach=postBossEnabled && bossWave!=railShooterCourse_.waveDefinitions.end() &&
+            railShooterDistance_>=bossWave->triggerRailDistance-RailPostBossSequence::MinibossApproachDistance;
+        if(bossApproach && gameplayDeltaTime>0 && railShooterDistance_<bossWave->triggerRailDistance &&
+            railShooterRetryCoordinator_.Checkpoint().checkpointId!=RailPostBossSequence::MinibossCheckpointId)
+            checkpoint=RailPostBossSequence::MinibossCheckpointId;
+        if(postBossEnabled && gameplayDeltaTime>0) {
+            if(const char* pursuit=railPostBossSequence_.PendingCheckpointId()) {
+                railPostBossSequence_.MarkCheckpointCaptured(true);
+                if(!CaptureRailCheckpoint(pursuit))railPostBossSequence_.MarkCheckpointCaptured(false);
+                checkpoint=nullptr;
+            }
+        }
+        if(!checkpoint && railFirstPlayableCheckpointPending_)checkpoint="gameplay_start";
+        if(checkpoint) (void)CaptureRailCheckpoint(checkpoint);
+        else if(!bossApproach && checkpointStats.enteredSectionThisFrame)
+            (void)CaptureRailCheckpoint(checkpointStats.currentSectionName);
     }
     if(railPostBossSequence_.Escape().TakeRetry()) {
         railShooterGameSession_.Abort("Bridge release missed");
@@ -14204,6 +14859,7 @@ void AppRunLoop::DispatchEnemyCombatPresentation(
     input.railPath = &railPath_;
     input.events = events;
     input.primaryContacts=railPrimaryKills_.Contacts();
+    input.weaponFeedback=&railShooterCollisionSystem_.WeaponFeedback();
     input.primaryPresentation=&railPrimaryKills_;
     input.listenerPosition = frameState_.cameraWorldPosition;
     input.listenerRight = railPath_.Length() > 0.0f
@@ -17233,7 +17889,39 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             size_t slots=0;
             const auto& cart=scene_.RailVehicleObject();
             const auto meshes=scene_.CourseMeshes().Items();
+            const auto& lightning=railPostBossSequence_.VeilLightning();
+            if(railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Combat && lightning.Visible()) {
+                for(size_t i=0;i<lightning.positions.size();++i) {
+                    const float age=lightning.LocalAge(i);
+                    if(age<0 || age>.31f)continue;
+                    const float strength=8.4f*(1-TwinShieldDestructionSmooth(age,.030f,.31f));
+                    if(strength<=camera.combatImpactLight.w)continue;
+                    const auto point=RailLocalPoint(railPath_,lightning.positions[i],RailVeilLightning::StrikeLanes[i],.9f,0);
+                    camera.combatImpactLight={point.x,point.y,point.z,strength};
+                    camera.combatImpactTint={4.4f,.34f,.16f,12.5f};
+                }
+            }
+            for(const auto& wreck:railEnemyCombatPresentationBridge_.Frame().destructionBursts) {
+                if(!wreck.groundTurret.Active() || wreck.age<0)continue;
+                const float slamAge=wreck.age-RailGroundTurretCollapse::Slam;
+                const bool blue=wreck.age<RailGroundTurretCollapse::Slam;
+                const float strength=blue?5.6f*(1-TwinShieldDestructionSmooth(wreck.age,.028f,.26f)):
+                    4.8f*(1-TwinShieldDestructionSmooth(slamAge,.012f,.16f));
+                if(strength<=camera.combatImpactLight.w)continue;
+                const auto point=blue?wreck.groundTurret.contact:wreck.crashPosition;
+                camera.combatImpactLight={point.x,point.y,point.z,strength};
+                camera.combatImpactTint=blue?Vector4{.18f,1.6f,5.4f,6.7f}:Vector4{5.2f,1.04f,.18f,4.8f};
+            }
             for(const auto& contact:railLockVolley_.Contacts()) {
+                if (contact.rearPanelIndex>=0) {
+                    const float strength=4.8f*(1.0f-TwinShieldDestructionSmooth(contact.age,.012f,.114f));
+                    if (strength>camera.combatImpactLight.w) {
+                        const auto point=Add(contact.position,Scale(contact.normal,.25f));
+                        camera.combatImpactLight={point.x,point.y,point.z,strength};
+                        camera.combatImpactTint={.27f,1.65f,5.1f,5.5f};
+                    }
+                    continue;
+                }
                 const auto blast=contact.ScoutBlast();
                 const float intensity=blast.lighting*6.8f;
                 if(intensity<=camera.combatImpactLight.w)continue;
@@ -17241,9 +17929,29 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 camera.combatImpactLight={point.x,point.y,point.z,intensity};
                 camera.combatImpactTint={.24f,2.8f,1.25f,27.0f};
             }
-            for(const auto& item:meshes)
-                if(item.visible && item.kind==CourseMeshRenderKind::Enemy && item.materialData)
-                    item.materialData->padding[1]=0;
+            const auto& lockFrame = railShooterLockOnSystem_.DebugFrame();
+            for (const auto& item : meshes) {
+                if (!item.visible || item.kind != CourseMeshRenderKind::Enemy || !item.materialData) continue;
+                auto& material = *item.materialData;
+                material.padding[1] = 0;
+                if (material.specularMode != RailRearPanelMaterial::Mode) continue;
+                const int panel = static_cast<int>(material.padding2[RailRearPanelMaterial::PanelIndex]);
+                if (panel<0) continue;
+                const float phaseOffset = .63f * panel + .48f * material.padding2[RailRearPanelMaterial::VeilShape];
+                material.padding2[RailRearPanelMaterial::Time] = lockFrame.elapsedTime + phaseOffset;
+                auto& flash = material.padding2[RailRearPanelMaterial::LockFlash];
+                flash = 0.0f;
+                const auto applyLockFlash = [&](const RailLockToken& token) {
+                    const auto& target = token.target;
+                    if (target.kind == RailLockTargetKind::RearPanel &&
+                        target.actorId == item.sourceActorId && target.panelIndex == panel) {
+                        const float age = lockFrame.elapsedTime - token.acquiredTime;
+                        flash = (std::max)(flash, 1.0f - TwinShieldDestructionSmooth(age, 0.0f, .19f));
+                    }
+                };
+                for (const auto& token : lockFrame.tokens) applyLockFlash(token);
+                for (const auto& token : lockFrame.releasedTokens) applyLockFlash(token);
+            }
             for(auto it=railCombatImpactMarks_.Items().rbegin();it!=railCombatImpactMarks_.Items().rend();++it) {
                 auto& mark=*it;
                 if(mark.kind==Kind::Heavy || mark.kind==Kind::Kill) {
@@ -17317,6 +18025,13 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                                 mark.localPoint=RailCombatImpact::Transform(mark.origin,Inverse(worldAtImpact),1);
                                 mark.localNormal=NormalizeOr(RailCombatImpact::Transform(mark.normal,Transpose(*world),0),{0,0,-1});
                             }
+                            if(surfaceProjected && mark.arc==Arc::Blue) {
+                                const auto& rearIds=railPostBossSequence_.ActorIds();
+                                if(mark.owner==rearIds[0] || mark.owner==rearIds[1]) {
+                                    mark.origin=RailCombatImpact::Transform(mark.localPoint,*world,1);
+                                    mark.normal=NormalizeOr(RailCombatImpact::Transform(mark.localNormal,*normalToWorld,0),mark.normal);
+                                }
+                            }
                             mark.receiverMesh=part->meshId;
                             mark.surfaceProjected=surfaceProjected;
                             mark.needsSurfaceBinding=false;
@@ -17374,22 +18089,22 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         const auto& beam=railPostBossSequence_.VeilBeam();
         if(IsRailShooterSceneActive() && !railGameOverScene_.Active() &&
             beam.phase!=RailPostBossSequence::BeamPhase::Inactive) {
-            for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
-                if(actor.actorId!=railPostBossSequence_.ActorIds()[1] || !actor.weaponMount.ready ||
-                    actor.desc.hitPoints<=0)continue;
-                const auto visual=BuildVeilBeamWorldFrame(beam,actor.weaponMount.dronePose,railPath_,railVeilModel_.Frame());
-                auto& camera=*scene_.mappedCamera;
-                float muzzleIntensity=.35f+visual.charge*visual.charge*1.6f;
-                camera.veilBeamLightColor={.25f,1.2f,4.0f,9.0f};
-                if(beam.phase==RailPostBossSequence::BeamPhase::Flash) {
-                    muzzleIntensity=visual.flash*7.0f;
-                    const float white=std::exp(-beam.flashAge*65.0f);
-                    camera.veilBeamLightColor={8.0f,.10f+white*2.5f,.035f+white*2.2f,18.0f};
-                    const auto contact=Add(visual.end,Scale(visual.sample.up,.8f));
-                    camera.veilBeamLights[1]={contact.x,contact.y,contact.z,visual.flash*6.0f};
+            auto& camera=*scene_.mappedCamera;
+            if(beam.phase==RailPostBossSequence::BeamPhase::Flash) {
+                const auto tip=VeilBeamRailPoint(railPath_,beam,beam.front);
+                const auto tail=VeilBeamRailPoint(railPath_,beam,(std::max)(beam.source.z,beam.front-12));
+                camera.veilBeamLightColor={4.8f,.42f,3.4f,15.0f};
+                camera.veilBeamLights[0]={tip.x,tip.y,tip.z,beam.Fade()*4.7f};
+                camera.veilBeamLights[1]={tail.x,tail.y,tail.z,beam.Fade()*2.5f};
+            } else {
+                for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
+                    if(actor.actorId!=railPostBossSequence_.ActorIds()[1] || !actor.weaponMount.ready)continue;
+                    const auto mouth=RailVeilModel::MuzzleWorld(actor.weaponMount.dronePose,railVeilModel_.Frame());
+                    const float charge=1-beam.secondsToFire/RailVeilRearBeam::ChargeSeconds;
+                    camera.veilBeamLightColor={.45f,1.1f,4.2f,9.0f};
+                    camera.veilBeamLights[0]={mouth.x,mouth.y,mouth.z,.45f+1.65f*charge*charge};
+                    break;
                 }
-                camera.veilBeamLights[0]={visual.aperture.x,visual.aperture.y,visual.aperture.z,muzzleIntensity};
-                break;
             }
         }
         if(railPostBossSequence_.EscapeActive()) {
@@ -17796,9 +18511,83 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         const auto base=std::filesystem::path(frameExportPath);
         frameExportPath=(base.parent_path()/(base.stem().wstring()+(captureDefeatedDamage?L"-damage.png":L"-charge.png"))).wstring();
     }
+    bool rearPanelReviewReady = false;
+    if (postBossCapture && postStage >= 41 && postStage <= 44 &&
+        postPhase == RailPostBossSequence::Phase::Combat) {
+        const auto enemies = railShooterSpawnRuntime_.Enemies();
+        const auto fang = std::find_if(enemies.begin(), enemies.end(), [](const auto& enemy) {
+            return enemy.desc.actorAssetId == "rear_fang" && enemy.desc.hitPoints > 0;
+        });
+        if (fang != enemies.end() && fang->fireSequence > 0) {
+            const auto& lock = railShooterLockOnSystem_.DebugFrame();
+            const bool acquired = std::any_of(lock.acquiredTokens.begin(), lock.acquiredTokens.end(), [&](const auto& token) {
+                return token.target.kind == RailLockTargetKind::RearPanel &&
+                    token.target.actorId == fang->actorId && token.target.panelIndex == 1;
+            });
+            const bool intact = fang->rearArmor.HasPanel(1);
+            const auto contacts=railLockVolley_.Contacts();
+            const bool breakFrame=std::any_of(contacts.begin(),contacts.end(),[&](const auto& contact) {
+                if (contact.actorId!=fang->actorId || contact.rearPanelIndex!=1) return false;
+                return postStage==43 ? contact.age>=.078f && contact.age<.16f : contact.age>=.25f;
+            });
+            rearPanelReviewReady = (postStage == 41 && intact && lock.tokens.empty() && !acquired) ||
+                (postStage == 42 && intact && acquired) || (postStage>=43 && !intact && breakFrame);
+        }
+    }
+    const auto& crossfire=railPostBossSequence_.FangCrossfire();
+    using CrossfirePhase=RailPursuerCoordination::CrossfirePhase;
+    const auto& crossfireHit=railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
+    const bool crossfireReviewReady=postBossCapture && postPhase==RailPostBossSequence::Phase::Combat &&
+        ((postStage==45 && crossfire.phase==CrossfirePhase::Warning && crossfire.age>=.42f) ||
+         (postStage==46 && crossfire.phase==CrossfirePhase::Volley && railPostBossSequence_.FangFollowupTarget()!=0 &&
+          crossfireHit.targetActorId==railPostBossSequence_.FangFollowupTarget() && !crossfireHit.lockOnContact &&
+          crossfireHit.appliedDamage>0) ||
+         (postStage==47 && crossfire.phase==CrossfirePhase::Stagger && crossfire.age>=.19f) ||
+         (postStage==48 && crossfire.phase==CrossfirePhase::Volley && crossfire.age>=.36f));
+    const auto& lightning=railPostBossSequence_.VeilLightning();
+    const auto& counterHit=railShooterCollisionSystem_.WeaponFeedback().LastAcceptedEvent();
+    const uint32_t veilFollowup=railPostBossSequence_.VeilLightningFollowupTarget();
+    const bool lightningReviewReady=postBossCapture && postPhase==RailPostBossSequence::Phase::Combat &&
+        lightning.Visible() && ((postStage==54 && lightning.BeforeFirstStrike() && lightning.age>=.50f) ||
+         (postStage==55 && veilFollowup && lightning.age>=1.88f && counterHit.targetActorId==veilFollowup &&
+            !counterHit.lockOnContact && counterHit.appliedDamage>0) ||
+         (postStage==56 && lightning.age>=RailVeilLightning::Clearance+.10f) ||
+         (postStage==57 && lightning.LocalAge(2)>=.15f));
+    const bool rearBeamReviewReady=postBossCapture && postPhase==RailPostBossSequence::Phase::Combat &&
+        ((postStage==49 && veilCapture.Charging() && veilCapture.secondsToFire<.61f) ||
+         ((postStage==22 || postStage==23 || postStage==50 || postStage==52) &&
+          veilCapture.phase==RailPostBossSequence::BeamPhase::Flash && veilCapture.fadeAge>.09f) ||
+         ((postStage==12 || postStage==51) && railPostBossSequence_.VeilInterrupted() &&
+          railPostBossSequence_.Coordination().AircraftState(1).age>.10f) ||
+         (postStage==53 && railPostBossSequence_.Coordination().Perception().fangThreat &&
+          railPostBossSequence_.Coordination().Perception().veilThreat && veilCapture.flashAge>0));
+    bool rearHullReviewReady=false;
+    if(postBossCapture && postPhase==RailPostBossSequence::Phase::Combat && postStage>=58 && postStage<=61) {
+        const size_t index=postStage%2;
+        const auto id=railPostBossSequence_.ActorIds()[index];
+        if(postStage<60) {
+            const auto marks=railCombatImpactMarks_.Items();
+            rearHullReviewReady=std::any_of(marks.begin(),marks.end(),[&](const auto& mark) {
+                return mark.owner==id && mark.arc==RailCombatImpact::Arc::Blue &&
+                    mark.surfaceProjected && mark.age>=.025f && mark.age<.12f;
+            });
+        } else {
+            const auto& smoke=railPostBossSequence_.HullSmoke(index);
+            for(const auto& actor:railShooterSpawnRuntime_.Enemies())
+                if(actor.actorId==id && actor.desc.hitPoints>0 && smoke.Stage()==3 && actor.age-smoke.since.back()>=.72f)
+                    rearHullReviewReady=true;
+        }
+    }
+    const auto subsystemDestroyed=[&](bool veil) {
+        const auto id=railPostBossSequence_.ActorIds()[veil?1:0];
+        return std::any_of(railShooterSpawnRuntime_.Enemies().begin(),railShooterSpawnRuntime_.Enemies().end(),
+            [&](const auto& actor){return actor.actorId==id &&
+                (veil?actor.veilSensorHitPoints:actor.fangCannonHitPoints)<=0;});
+    };
     const bool postBossCaptureReady=!postBossCapture || captureDefeatedWreck || (structureReview && structureShot>=0) ||
+        rearPanelReviewReady || crossfireReviewReady || rearBeamReviewReady || lightningReviewReady || rearHullReviewReady ||
         (postStage>=37 && postStage<=40 && postPhase==RailPostBossSequence::Phase::Combat && railPostBossSequence_.PhaseAge()>=20) ||
-        (postStage==0 && postPhase==RailPostBossSequence::Phase::Vista && railPostBossSequence_.Age()>=6) ||
+        (postStage==0 && postPhase==RailPostBossSequence::Phase::Vista && railPostBossSequence_.PhaseAge()>=.26f) ||
         (postStage==1 && postPhase==RailPostBossSequence::Phase::Bridge) ||
         (postStage==2 && postPhase==RailPostBossSequence::Phase::Combat && railPostBossSequence_.PhaseAge()>=2) ||
         (postStage==3 && railPostBossSequence_.Complete()) ||
@@ -17809,9 +18598,11 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         (postStage==8 && postPhase==RailPostBossSequence::Phase::Combat && railPostBossSequence_.PhaseAge()>=3.35f) ||
         (postStage==9 && railPostBossSequence_.CompletedCycles()>0) ||
         (postStage==10 && railPostBossSequence_.InPursuitHandoff()) ||
-        ((postStage==11 || postStage==12) && railPostBossSequence_.CompletedCycles()>0) ||
-        (postStage==13 && railPostBossSequence_.CompletedCycles()>=2) ||
-        ((postStage==14 || postStage==15) && railPostBossSequence_.CompletedCycles()>0) ||
+        (postStage==11 && railPostBossSequence_.FangFollowupTarget()!=0 &&
+            crossfireHit.targetActorId==railPostBossSequence_.FangFollowupTarget() && crossfireHit.requestedDamage>=18) ||
+        (postStage==13 && crossfire.rounds>=2 && subsystemDestroyed(false)) ||
+        (postStage==14 && railPostBossSequence_.VeilBeamShots()>0 && subsystemDestroyed(true)) ||
+        (postStage==15 && railPostBossSequence_.PanelBoostRemaining()>0 && railShooterVehicleMovement_.State().speed>58) ||
         (postStage==16 && std::any_of(railShooterSpawnRuntime_.Bullets().begin(),railShooterSpawnRuntime_.Bullets().end(),
             [](const auto& round){return round.definitionId=="enemy_fang_chase" && round.active &&
                 round.age>=.045f && round.age<=.11f;})) ||
@@ -17823,7 +18614,6 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 return burst.fangImpact && burst.surfaceImpact==(postStage==19) && burst.normalizedAge>=.10f && burst.normalizedAge<.36f;})) ||
         (postStage==20 && veilCapture.phase==RailPostBossSequence::BeamPhase::Tracking) ||
         (postStage==21 && veilCapture.phase==RailPostBossSequence::BeamPhase::Locked && veilCapture.secondsToFire<.33f) ||
-        ((postStage==22 || postStage==23) && veilCapture.phase==RailPostBossSequence::BeamPhase::Flash && veilCapture.flashAge>=.025f) ||
         (postStage==24 && railEliteFire_.FangFired()) ||
         (postStage==25 && veilCapture.phase==RailPostBossSequence::BeamPhase::Flash && veilCapture.flashAge>=.065f && railEliteFire_.LensPulse()) ||
         (postStage==26 && escapeCapture.Current()==RailBridgeEscape::Phase::Turn && RailBridgeStructure::CollapseAge(escapeCapture)>=.05f) ||
@@ -17872,14 +18662,15 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const unsigned basicStage=ReadEnvironmentUInt("GE3_BASIC_TUTORIAL_CAPTURE_STAGE",0);
     const unsigned hazardStage=ReadEnvironmentUInt("GE3_ROUTE_HAZARD_AUDIT",0);
     bool hazardCaptureReady=hazardStage==0;
-    if(hazardStage==1 || hazardStage==2)hazardCaptureReady=railShooterDistance_>=2348;
+    if(hazardStage==1 || hazardStage==2 || hazardStage==24)hazardCaptureReady=railShooterDistance_>=2348;
     if(hazardStage>=3 && hazardStage<=5)hazardCaptureReady=railShooterDistance_>=1780;
     if(hazardStage==8)hazardCaptureReady=railShooterDistance_>=2294;
+    if(hazardStage==23 || hazardStage==25)hazardCaptureReady=railShooterDistance_>=2246;
     if(hazardStage==13)hazardCaptureReady=railShooterDistance_>=1683 && railShooterDistance_<RailRouteHazards::SlabTrigger;
     for(const auto& actor:railShooterSpawnRuntime_.Obstacles()) {
         if(hazardStage==6 && RailRouteHazards::IsSlab(actor) && actor.age>=.29f && actor.age<.39f)
             hazardCaptureReady=true;
-        if(hazardStage==7 && RailRouteHazards::IsSlab(actor) && actor.age>=1.99f && actor.age<2.13f)
+        if(hazardStage==7 && RailRouteHazards::IsSlab(actor) && actor.age>=1.20f && actor.age<1.34f)
             hazardCaptureReady=true;
         if(hazardStage==9 && RailRouteHazards::IsBarricade(actor) && actor.desc.hitPoints<=0 && actor.age>=.10f)
             hazardCaptureReady=true;
@@ -17896,6 +18687,41 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             if(hazardStage==18 && actor.age>=1.98f && actor.age<2.13f)hazardCaptureReady=true;
             if(hazardStage==19 && actor.age>=RailRouteHazards::GroundImpact+.23f &&
                 actor.age<RailRouteHazards::GroundImpact+.32f)hazardCaptureReady=true;
+            if(hazardStage==20 && railShooterDistance_>=1662 && actor.age==0)hazardCaptureReady=true;
+            if(RailRouteHazards::SlabTriggerShot(actor)) {
+                if(hazardStage==21 && actor.age>=1.18f && actor.age<1.38f)hazardCaptureReady=true;
+                if(hazardStage==22 && actor.age>=RailRouteHazards::GroundImpact+.24f)hazardCaptureReady=true;
+            }
+        }
+    }
+    if(hazardStage==26 || hazardStage==27) {
+        for(const auto& actor:railShooterSpawnRuntime_.Obstacles()) {
+            if(hazardStage==26 && RailRouteHazards::IsShelf(actor) && RailRouteHazards::SlabTriggerShot(actor)!=0 &&
+                actor.age>=1.24f)hazardCaptureReady=true;
+            if(hazardStage==27 && actor.desc.spawnDistance>2800 && RailRouteHazards::IsBarricade(actor) &&
+                actor.desc.hitPoints<=0 && actor.age>=.15f)hazardCaptureReady=true;
+        }
+    }
+    if(hazardStage>=30 && hazardStage<=32) {
+        for(const auto& actor:railShooterSpawnRuntime_.Obstacles())if(RailRouteHazards::IsShelf(actor)) {
+            const auto rock=RailRouteHazards::Stone(actor,actor.age).rail;
+            const float gap=rock.z-railShooterDistance_;
+            if(hazardStage==30)hazardCaptureReady=gap<=179 && gap>=150;
+            if(hazardStage==31)hazardCaptureReady=gap<=0;
+            if(hazardStage==32)for(const auto& enemy:railShooterSpawnRuntime_.Enemies()) {
+                if(enemy.desc.waveId!=RailRouteHazards::ShelfBatteryWave)continue;
+                const auto& rounds=railShooterSpawnRuntime_.Bullets();
+                hazardCaptureReady=std::any_of(rounds.begin(),rounds.end(),[&](const auto& round) {
+                    return round.ownerActorId==enemy.actorId && round.previousLateralOffset>0 &&
+                        round.lateralOffset<=0 && round.spawnDistance+round.distanceOffset>railShooterDistance_;
+                });
+            }
+        }
+    }
+    if(hazardStage==28 || hazardStage==29) {
+        for(const auto& wreck:railEnemyCombatPresentationBridge_.Frame().destructionBursts) {
+            if(wreck.groundTurret.Active() && wreck.age>=(hazardStage==28?.12f:.56f) &&
+                wreck.age<(hazardStage==28?.29f:1.20f))hazardCaptureReady=true;
         }
     }
     const unsigned routeBatteryEvent=basicStage>=23 && basicStage<=27?ReadEnvironmentUInt("GE3_ROUTE_BATTERY_EVENT",0):0;
@@ -17958,7 +18784,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         cartDamage.lastDamage.request.sourceId=="enemy_turret_predictive" &&
         (basicStage==19?cartImpactAge<.053f:cartImpactAge>=.04f && cartImpactAge<.12f);
     const auto kills=railPrimaryKills_.Kills();
-    const bool speedLessonRunCapture=basicStage==45 && railBasicTutorial_.Learned(BasicLesson::Brake) &&
+    const bool speedLessonRunCapture=basicStage==45 && railBasicTutorial_.Learned(BasicLesson::Boost) &&
         std::any_of(railShooterSpawnRuntime_.Enemies().begin(),railShooterSpawnRuntime_.Enemies().end(),[&](const auto& actor) {
             return RailGroundBattery::IsFirstLiveBattery(actor.desc.waveId) &&
                 std::any_of(kills.begin(),kills.end(),[&](const auto& kill) {return kill.actorId==actor.actorId;});
@@ -18035,7 +18861,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     if(!frameExportPath.empty() && !frameExportDone && ++frameExportWait>=frameExportMinimum &&
         killBoostCaptureReady && shieldCaptureReady && postBossCaptureReady && heavyCaptureReady && basicCaptureReady && hazardCaptureReady &&
         railShooterDistance_>=float(speedFeelCaptureDistance) &&
-        (cartImpactCapture || energyCapture || primaryContactCapture || primaryFlightCapture || primaryPresentationCapture || lockStageCapture || lockContactCapture || scoutContactCapture ||
+        (cartImpactCapture || energyCapture || primaryContactCapture || primaryFlightCapture || primaryPresentationCapture || lockStageCapture || lockContactCapture || scoutContactCapture || rearPanelReviewReady || crossfireReviewReady || rearBeamReviewReady || lightningReviewReady || rearHullReviewReady ||
             terrainChunkManager_.RenderChunks().size()==terrainChunkManager_.Chunks().size())) {
         frameExportDone=!captureDefeatedWreck && (!structureReview || structureShot==structureFrameCount);
         if(captureDefeatedDamage)defeatedDamageCaptured=true;
