@@ -22,6 +22,24 @@ def main():
     box(panel, (0, -.87, 0), (1.94, .24, 1.96), 5)
     panel.save(ROOT/'Resources/course_meshes'/panel.name)
 
+    directory = ROOT/'Resources/course_meshes'/panel.name
+    post = Mesh('RouteBarricadePost', [(25, 30, 38), (51, 61, 72), (233, 237, 241), (137, 80, 31)])
+    box(post, (0, .18, 0), (1.22, .65, 1.08), 1)
+    box(post, (0, 2.46, 0), (.72, 5.0, .72), 0)
+    box(post, (0, 1.58, 0), (.84, .38, .84), 2)
+    box(post, (0, 3.24, 0), (.84, .55, .84), 2)
+    box(post, (0, 4.65, 0), (1.55, .49, 1.22), 1)
+    box(post, (0, 5.71, 0), (1.46, .19, 1.15), 0)
+    box(post, (0, 5.16, 0), (1.15, .91, .93), 3)
+    post.save(directory)
+
+    lamp = Mesh('RouteBarricadeLamp', [(255, 148, 27), (255, 216, 96), (255, 242, 172)])
+    box(lamp, (0, 0, 0), (1.38, 1.04, 1.03), 0)
+    for z in (-.52, .52):
+        box(lamp, (0, 0, z), (1.12, .80, .07), 1)
+        box(lamp, (0, .05, z*1.085), (.92, .30, .06), 2)
+    lamp.save(directory)
+
 
 if __name__ == '__main__':
     main()

@@ -546,7 +546,7 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                 part->sortDistance=rail.z;part->visible=part->transformData!=nullptr;
                 if(part->materialData) {
                     part->materialData->color=ink;
-                    const bool barricade=std::string_view(mesh)=="route_barricade_panel";
+                    const bool barricade=std::string_view(mesh).starts_with("route_barricade_");
                     part->materialData->enableLighting=!unlit && !barricade;
                     // Painted safety colors should remain distinct against both shaded and sunlit rock.
                     if(barricade)part->materialData->environmentCoefficient=0;
@@ -595,6 +595,14 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                         {extents.x*.5f,extents.y,extents.z},
                         {open?u*.48f:0,side*(open?.32f+1.4f*u:damage*.055f),side*(open?.17f+1.6f*u:damage*.045f)},
                         {.95f-.14f*damage,.95f-.14f*damage,.95f-.14f*damage,1});
+                    const float postX=side*(extents.x+BarricadePostOffset+4.0f*u);
+                    draw("route_barricade_post",{postX,-6.5f*u*u,distance},
+                        {1,1,1},{u*.4f,0,-side*u*.5f},{1,1,1,1});
+                    if(!open) {
+                        const float pulse=.80f+.20f*std::sin(age*4.4f);
+                        draw("route_barricade_lamp",{postX,BarricadeBeaconHeight,distance},
+                            {1,1,1},{},{1.62f*pulse,.85f*pulse,.22f*pulse,1},true);
+                    }
                 }
                 if(!open && damage<.55f)
                     draw("route_barricade_panel",{0,obstacle.desc.verticalOffset+.43f,distance-.66f},

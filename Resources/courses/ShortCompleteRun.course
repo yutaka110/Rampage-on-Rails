@@ -135,13 +135,13 @@ terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|
 event|390.000|enemy_wave|route_patrol_left|route:single|short-route-0390|1|0
 event|1165.000|enemy_wave|short_turret_left|route:turret|short-ground-battery-left|1|0
 event|1455.000|enemy_wave|short_turret_right|route:turret|short-ground-battery-right|1|0
+event|1615.000|obstacle|route_break_barricade||short-route-fence-bridge-exit|1|0
 event|1638.000|obstacle|route_arch_slab||short-route-arch-collapse|1|0
 event|1638.000|enemy_wave|arch_inner_batteries|route:turret|short-arch-inner-batteries|1|0
-event|1895.000|obstacle|route_break_barricade||short-route-fence-bridge-exit|1|0
+event|1895.000|obstacle|route_break_barricade||short-route-break-barricade|1|0
 event|2060.000|enemy_wave|route_turret_left|route:turret|short-route-2060|1|0
-event|2218.000|obstacle|route_break_barricade||short-route-break-barricade|1|0
+event|2530.000|obstacle|route_break_barricade||short-route-fence-dive|1|0
 event|2840.000|enemy_wave|route_turret_left|route:turret|short-route-2840|1|0
-event|2910.000|obstacle|route_break_barricade||short-route-fence-dive|1|0
 event|3065.000|enemy_wave|route_scout_sniper_pair|route:pair|short-route-3100|1|0
 
 # First-class encounter waves referenced by persistent enemy placements.

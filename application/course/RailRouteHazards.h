@@ -24,6 +24,7 @@ inline constexpr float SupportBreak=.64f, SlipSound=.85f, GroundImpact=1.63f;
 inline constexpr float LandingDustDelay=.16f, LandingDustSeconds=1.40f;
 inline constexpr float BarricadeHealth=72.0f;
 inline constexpr float BarricadeDebrisSeconds=.78f;
+inline constexpr float BarricadeBeaconHeight=5.16f, BarricadePostOffset=.46f;
 
 inline bool IsBarricade(const CourseObstacleActor& actor) { return actor.desc.id==BarricadeId; }
 inline bool IsShelf(const CourseObstacleActor& actor) { return actor.desc.id==ShelfSlabId; }

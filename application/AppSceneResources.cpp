@@ -3240,6 +3240,8 @@ bool AppSceneResources::Initialize(
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("route_barricade_panel", "Resources/course_meshes/RouteBarricadePanel", "RouteBarricadePanel.obj", "animatedCube");
+    registerCourseMesh("route_barricade_post", "Resources/course_meshes/RouteBarricadePanel", "RouteBarricadePost.obj", "animatedCube");
+    registerCourseMesh("route_barricade_lamp", "Resources/course_meshes/RouteBarricadePanel", "RouteBarricadeLamp.obj", "animatedCube");
     registerCourseMesh("course_blockout_bridge", "Resources/course_meshes/CourseBlockoutBridge", "CourseBlockoutBridge.obj", "courseBlockoutSteel");
     registerCourseMesh("bridge_escape_clamp", "Resources/enemies/ElitePursuers", "BridgeEscapeClamp.obj", "elitePursuerPalette");
     registerCourseMesh("bridge_escape_ramp", "Resources/enemies/ElitePursuers", "BridgeEscapeRamp.obj", "elitePursuerPalette");

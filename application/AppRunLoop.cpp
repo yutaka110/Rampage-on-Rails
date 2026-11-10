@@ -5266,7 +5266,14 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const bool impactSpall=std::any_of(impactMarks.begin(),impactMarks.end(),[](const auto& mark){return mark.age<.33f;});
     const bool showPursuerSmoke=!railTitleScreenVisible_ && !railGameOverScene_.Active() && crossfireCombat &&
         (railPostBossSequence_.HullSmoke(0).Stage()>0 || railPostBossSequence_.HullSmoke(1).Stage()>0);
-    const bool hasWorldEffects=impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasSiegeFlash || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    const auto& routeObstacles=railShooterSpawnRuntime_.Obstacles();
+    const auto showsBarricadeLamps=[&](const auto& actor) {
+        const float gap=actor.desc.spawnDistance+actor.desc.distanceOffset-railShooterDistance_;
+        return RailRouteHazards::IsBarricade(actor) && actor.desc.hitPoints>0 && gap>0 && gap<=400;
+    };
+    const bool barricadeLamps=!railTitleScreenVisible_ && !railGameOverScene_.Active() &&
+        std::any_of(routeObstacles.begin(),routeObstacles.end(),showsBarricadeLamps);
+    const bool hasWorldEffects=barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasSiegeFlash || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     if (hasWorldEffects) {
         // Suppress every gameplay overlay, including the reticle built above.
         if (railTitleScreenVisible_) railLockOnHudAtlasVertexCount_ = 0;
@@ -5816,6 +5823,22 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
             dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
         };
+        if(barricadeLamps)for(const auto& actor:routeObstacles) {
+            if(!showsBarricadeLamps(actor))continue;
+            const float distance=actor.desc.spawnDistance+actor.desc.distanceOffset;
+            const float gap=distance-railShooterDistance_;
+            const float pulse=.80f+.20f*std::sin(actor.age*4.4f);
+            const float radius=(std::clamp)(gap*.011f,1.35f,4.1f);
+            for(float side:{-1.0f,1.0f}) {
+                const float x=side*(actor.desc.halfExtents.x+RailRouteHazards::BarricadePostOffset);
+                const auto lamp=RailLocalPoint(railPath_,distance,x,RailRouteHazards::BarricadeBeaconHeight,0);
+                const auto front=Add(lamp,Scale(towardCamera,.78f));
+                glowQuad(front,Scale(right,radius),Scale(up,radius),60,
+                    {3.2f,1.18f,.12f,.67f*pulse});
+                glowQuad(front,Scale(right,radius*.42f),Scale(up,radius*.42f),60,
+                    {3.9f,2.07f,.37f,.95f});
+            }
+        }
         if(lightningVisible) {
             const auto packed=[](float t,size_t i) {
                 return 2.0f*float(unsigned(std::clamp(t,0.0f,1.0f)*31)+32u*unsigned(i+1));
@@ -10143,9 +10166,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool hazardAuditBrake=hazardApproach && (routeHazardAudit==4 || landingReview) &&
         hazardAuditSlabAge>=RailRouteHazards::BoltImpact+.24f;
     const bool barricadeBoostReview=routeHazardAudit==24 || routeHazardAudit==25;
+    const bool barricadeDistanceReview=routeHazardAudit==34 || routeHazardAudit==35;
     const bool shelfReview=routeHazardAudit==26 || (routeHazardAudit>=30 && routeHazardAudit<=32);
     const bool hazardAuditBoost=(hazardApproach && routeHazardAudit==3 && hazardAuditSlabAge>=RailRouteHazards::BoltImpact) ||
-        (barricadeBoostReview && railShooterDistance_<2348) || shelfReview;
+        (barricadeBoostReview && railShooterDistance_<2348) || shelfReview || barricadeDistanceReview;
     const float lightningAge=railPostBossSequence_.VeilLightning().age;
     constexpr float lightningReviewBrakeDelay=.70f;
     const bool lightningBrake=lightningReview && (coordinationStage==55 || coordinationStage==57) &&
@@ -11777,6 +11801,63 @@ void AppRunLoop::UpdateRailShooterFrame() {
             lockOnInput.gamepadConnected=false;basicAuditAiming=basicAuditPrimary=true;
             break;
         }
+    }
+    if(barricadeDistanceReview && !titleEntryBlocked && gameplayDeltaTime>0) {
+        using namespace RailRouteHazards;
+        static const float targetDistance=float(ReadEnvironmentUInt("GE3_BARRICADE_REVIEW_DISTANCE",0));
+        static float elapsed=0, readableFor=0, aimingFor=0;
+        elapsed+=gameplayDeltaTime;
+        const auto& obstacles=railShooterSpawnRuntime_.Obstacles();
+        const auto target=std::find_if(obstacles.begin(),obstacles.end(),[&](const auto& actor) {
+            return IsBarricade(actor) &&
+                std::abs(actor.desc.spawnDistance+actor.desc.distanceOffset-targetDistance)<.5f;
+        });
+        const float gap=targetDistance-railShooterDistance_;
+        const Vector2 neutral{metrics.width*.22f,metrics.height*.70f};
+        lockOnInput.hasLockHeldOverride=true;lockOnInput.lockHeldOverride=false;
+        lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=neutral;
+        lockOnInput.gamepadConnected=false;basicAuditAiming=true;
+        bool readable=false;
+        if(target!=obstacles.end() && target->desc.hitPoints>0 && gap>0) {
+            const auto& desc=target->desc;
+            const auto world=RailLocalPoint(railPath_,targetDistance,0,desc.verticalOffset,0);
+            const auto face=ProjectRailOverlayPoint(world,gameplayViewProjectionMatrix,metrics.width,metrics.height);
+            const auto canSee=[&](Vector3 point) {
+                const auto delta=Subtract(point,frameState_.cameraWorldPosition);
+                const float length=std::hypot(delta.x,delta.y,delta.z);
+                if(length<.5f)return false;
+                RailAimState aim;
+                aim.valid=true;aim.worldRayOrigin=frameState_.cameraWorldPosition;
+                aim.worldRayDirection=Scale(delta,1/length);aim.maxDistance=length-.25f;
+                RailWorldRaycastInput query;
+                query.aim=&aim;query.railPath=&railPath_;query.course=&railShooterCourse_;
+                query.terrainSettings=&runtimeState_.terrain.settings;
+                query.terrainEdits=&railShooterCourse_.terrainEditLayer;
+                query.terrainCollision=&terrainCollisionWorld_;query.playerDistance=railShooterDistance_;
+                query.includeVisualColumns=true;
+                return !RailWorldRaycast::Query(query).hit;
+            };
+            const auto left=RailLocalPoint(railPath_,targetDistance,-desc.halfExtents.x-BarricadePostOffset,BarricadeBeaconHeight,0);
+            const auto right=RailLocalPoint(railPath_,targetDistance,desc.halfExtents.x+BarricadePostOffset,BarricadeBeaconHeight,0);
+            const auto l=ProjectRailOverlayPoint(left,gameplayViewProjectionMatrix,metrics.width,metrics.height);
+            const auto r=ProjectRailOverlayPoint(right,gameplayViewProjectionMatrix,metrics.width,metrics.height);
+            readable=face.onscreen && face.inDepth && l.onscreen && l.inDepth && r.onscreen && r.inDepth &&
+                std::hypot(l.screen.x-r.screen.x,l.screen.y-r.screen.y)>=metrics.height*.014f &&
+                canSee(world) && canSee(left) && canSee(right);
+            if(readable)readableFor+=gameplayDeltaTime;
+            else if(readableFor<.18f)readableFor=0;
+            if(routeHazardAudit==35 && readableFor>=.18f && gap<=135 && face.onscreen && face.inDepth) {
+                aimingFor+=gameplayDeltaTime;
+                const float aim=Ease(aimingFor,.40f,.78f);
+                lockOnInput.cursorPosition={std::lerp(neutral.x,face.screen.x,aim),std::lerp(neutral.y,face.screen.y,aim)};
+                basicAuditPrimary=aim>=1;
+            }
+        }
+        static std::ofstream audit("logs/barricade_readability.csv");
+        static const bool header=bool(audit<<"time,distance,gap,speed,boost,readable,readable_for,aiming_for,fire,hp\n");
+        if(header)audit<<elapsed<<','<<railShooterDistance_<<','<<gap<<','<<vehicleFrame.state.speed<<','
+            <<railShooterSpeedDirector_.ManualBoost().Held()<<','<<readable<<','<<readableFor<<','<<aimingFor<<','
+            <<basicAuditPrimary<<','<<(target!=obstacles.end()?target->desc.hitPoints:-1)<<std::endl;
     }
     if((routeHazardAudit==21 || routeHazardAudit==22) && railShooterDistance_>=1660 &&
         !titleEntryBlocked && gameplayDeltaTime>0) {
@@ -18666,6 +18747,11 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     if(hazardStage>=3 && hazardStage<=5)hazardCaptureReady=railShooterDistance_>=1780;
     if(hazardStage==8)hazardCaptureReady=railShooterDistance_>=2294;
     if(hazardStage==23 || hazardStage==25)hazardCaptureReady=railShooterDistance_>=2246;
+    if(hazardStage==34 || hazardStage==35) {
+        const float target=float(ReadEnvironmentUInt("GE3_BARRICADE_REVIEW_DISTANCE",0));
+        const float gap=float(ReadEnvironmentUInt("GE3_BARRICADE_REVIEW_CAPTURE_GAP",300));
+        hazardCaptureReady=railShooterDistance_>=(hazardStage==34?target-gap:target+6);
+    }
     if(hazardStage==13)hazardCaptureReady=railShooterDistance_>=1683 && railShooterDistance_<RailRouteHazards::SlabTrigger;
     for(const auto& actor:railShooterSpawnRuntime_.Obstacles()) {
         if(hazardStage==6 && RailRouteHazards::IsSlab(actor) && actor.age>=.29f && actor.age<.39f)
