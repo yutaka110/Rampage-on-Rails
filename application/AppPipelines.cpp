@@ -1,4 +1,5 @@
 #include "AppPipelines.h"
+#include "SunfallAtmosphere.h"
 #include "utils/math/Vector.h"
 
 #include <cassert>
@@ -1527,10 +1528,9 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         IID_PPV_ARGS(&compositeRootSignature_));
     if (FAILED(hr)) return FailHr("CreateRootSignature(Composite)", hr);
 
-    // Two SRVs (scene depth, local sunlight shadow) and 52 frame constants.
-    // 54 root DWORDs stay below D3D12's 64-DWORD limit.
+    // Two SRVs (scene depth, local sunlight shadow) and the atmosphere constants.
     D3D12_ROOT_PARAMETER sunfallParams[3] = {compositeParams[0],compositeParams[1],compositeParams[3]};
-    sunfallParams[2].Constants.Num32BitValues=52;
+    sunfallParams[2].Constants.Num32BitValues=kSunfallFrameDwords;
     D3D12_ROOT_SIGNATURE_DESC sunfallDesc=compositeRootDesc;
     sunfallDesc.NumParameters=3;
     sunfallDesc.pParameters=sunfallParams;

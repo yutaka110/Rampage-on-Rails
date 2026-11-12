@@ -6,14 +6,20 @@ from generate_siege_turret import box
 
 
 def bridge():
-    palette = [(63, 79, 85), (104, 119, 122), (153, 121, 65), (33, 43, 48)]
+    palette = [(63, 79, 85), (104, 119, 122), (153, 121, 65), (33, 43, 48),
+               (64, 54, 44), (123, 111, 91)]
     mesh = Mesh('CourseBlockoutBridge', palette)
     box(mesh, (0, -.65, 0), (8, .5, 20), 0)
     for side in (-1, 1):
         box(mesh, (side*3.55, -1.65, 0), (.7, 1.8, 20), 3)
+        # The sleeper ends sit in the raised stringers. The rim angle and
+        # brackets connect the walkway and its guard posts to the deck beam.
+        box(mesh, (side*1.95, -.336, 0), (1.0, .17, 20), 4)
+        box(mesh, (side*3.79, -.38, 0), (.29, .12, 20), 5)
         box(mesh, (side*4.0, 1.1, 0), (.18, .18, 20), 2)
         for z in (-9, -3, 3, 9):
             box(mesh, (side*4, .35, z), (.18, 1.6, .18), 1)
+            box(mesh, (side*3.91, -.38, z), (.41, .16, .47), 3)
         for z in (-7, 7):
             box(mesh, (side*3.0, -44, z), (.9, 86, .9), 0)
     for z in (-7, 0, 7):

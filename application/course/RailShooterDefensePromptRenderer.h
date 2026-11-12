@@ -21,6 +21,7 @@ struct RailShooterDefensePromptRenderInput final {
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
     RailShooterDefensePromptRendererSettings settings{};
+    bool compactOutcome = false;
 };
 
 struct RailShooterDefensePromptRenderFrame final {

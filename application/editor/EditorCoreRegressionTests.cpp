@@ -40993,6 +40993,15 @@ void TestCarrierFeedbackHudSeparation(RegressionRunner& runner) {
         runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& c){
             return c.kind==RailShooterHudDrawCommandKind::Rectangle && std::abs(c.x-(barX+250*scale*.7f))<.01f &&
                 c.width>0 && std::abs(c.color.y-.72f)<.001f;}),"actual counter damage leaves a visible loss segment on the correct health bar");
+        input.miniBossCounterFeedbackOnscreen=true;
+        input.miniBossCounterFeedbackScreen={size.first*.60f,size.second*.34f};
+        hud.Update(input);check("anchored-contact");
+        runner.Expect(has(u8"反撃命中  72") && !has(u8"72 DAMAGE") && has(u8"で反撃") &&
+            std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& c){
+                return c.kind==RailShooterHudDrawCommandKind::Text && c.text==Utf8ForTest(u8"反撃命中  72") &&
+                    c.y>input.miniBossCounterFeedbackScreen.y && c.x>input.miniBossCounterFeedbackScreen.x;
+            }),"onscreen counter damage uses one local callout below and outside the aim marker");
+        input.miniBossCounterFeedbackOnscreen=false;
         input.miniBossCounterRemaining=0;hud.Update(input);check("late-contact");
         runner.Expect(has(u8"反撃命中") && !has(u8"で反撃"),"a credited laser arriving after closure remains a hit without reopening the counter");
         input.miniBossCounterFeedbackRemaining=0;hud.Update(input);check("expired");

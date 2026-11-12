@@ -6,6 +6,7 @@ SamplerState gSampler : register(s0);
 cbuffer Params : register(b0) {
     float gStrength; float gNear; float gFar; float gOutdoor;
     float3 gSunColor; float gSunIntensity;
+    float4 gSkyPalette;
 };
 struct PSInput { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
 float LinearDepth(float d) {return gNear*gFar/max(gFar-d*(gFar-gNear),1e-5f);}
@@ -45,9 +46,9 @@ float4 main(PSInput input) : SV_TARGET {
     float haze=SunfallDistanceHaze(reference,gOutdoor);
     // Distance-limited haze leaves the close combat space clear. Distant
     // silhouettes converge toward the same sunlit horizon as the sky.
-    float3 air=SunfallBackdropHorizon(gSunColor);
+    float3 air=SunfallCourseHorizon(gSkyPalette.rgb,gSunColor);
     float distant=smoothstep(300.0f,1250.0f,reference);
-    air=lerp(lerp(SunfallZenith(gSunColor)*.55f,air,0.70f),air,distant);
+    air=lerp(lerp(SunfallCourseZenith(gSkyPalette.rgb),air,0.70f),air,distant);
     if(reference<gFar*0.98f) color=lerp(color,air,haze);
     return float4(color,scene.a);
 }

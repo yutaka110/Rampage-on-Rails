@@ -408,8 +408,8 @@ PixelShaderOutput main(VertexShaderOutput input)
         float recess = 1.0f - smoothstep(.45f, .84f, length(p) + .13f * (grain - .5f));
         base *= float3(.65f, .76f, .88f);
         if (broken) {
-            base = lerp(float3(.19f, .11f, .078f), float3(.022f, .025f, .031f),
-                recess) * (.78f + .32f * grain);
+            base = lerp(float3(.24f, .14f, .091f), float3(.014f, .017f, .022f),
+                recess) * (.80f + .31f * grain);
         }
         float roughness = broken ? .68f : .48f;
         float3 impact = CombatScorch(gMaterial.primaryImpactReceiver, input.worldPosition, N, base, roughness);
@@ -420,7 +420,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         if (broken) {
             // The sheared rim catches light while the empty middle stays dark.
             float rim = smoothstep(.04f, .34f, recess) * (1.0f - smoothstep(.51f, .86f, recess));
-            lit += rim * facing * float3(.11f, .064f, .035f);
+            lit += rim * facing * float3(.24f, .121f, .056f) * lerp(.52f,1.f,grain);
             output.color = float4(lit + impact, gMaterial.color.a);
             return output;
         }
@@ -460,34 +460,48 @@ PixelShaderOutput main(VertexShaderOutput input)
         float3 p=float3(dot(rel,axisX),dot(rel,axisY),dot(rel,axisZ));
         float3 localN=float3(dot(N,axisX),dot(N,axisY),dot(N,axisZ));
         bool arch=gMaterial.caveResponse.w>=1;
-        if(gMaterial.caveSurface.w>1.5f)p+=float3(4.8f,5.9f,-.70f);
+        if(gMaterial.caveSurface.w>2.5f)p+=float3(8.5f,17,0);
+        else if(gMaterial.caveSurface.w>1.5f)p+=float3(0,20,0);
         float3 weights=pow(abs(localN),4);
         weights/=max(dot(weights,float3(1,1,1)),.001f);
         float broad=dot(weights,float3(CartSurfaceNoise(p.yz*.62f+3),CartSurfaceNoise(p.xz*.62f+8),CartSurfaceNoise(p.xy*.62f+13)));
-        float grain=dot(weights,float3(CartSurfaceNoise(p.yz*5.2f+12),CartSurfaceNoise(p.xz*5.2f+21),CartSurfaceNoise(p.xy*5.2f+32)));
+        float3 grains=p+float3(p.z*.23f,p.x*.31f,p.y*.19f);
+        float grain=dot(weights,float3(CartSurfaceNoise(grains.yz*5.2f+12),
+            CartSurfaceNoise(grains.xz*5.2f+21),CartSurfaceNoise(grains.xy*5.2f+32)));
         float bed=CartSurfaceNoise(float2(p.y*.88f+p.x*.17f,p.z*.22f)+float2(broad*.52f,19));
         float seam=CartSurfaceNoise(float2(p.y*2.35f+p.x*.31f,p.z*.48f)+float2(broad*.84f,27));
-        float vein=smoothstep(.58f,.81f,seam)*smoothstep(.24f,.59f,broad);
-        float pores=smoothstep(.48f,.77f,grain)*(1-smoothstep(.16f,.78f,length(fwidth(p*5.2f))));
+        float footprint=length(fwidth(p));
+        float vein=smoothstep(.58f,.81f,seam)*smoothstep(.24f,.59f,broad)*
+            (1-smoothstep(.10f,.37f,footprint));
+        float fineGrain=1-smoothstep(.032f,.15f,footprint);
+        float pores=smoothstep(.48f,.77f,grain)*fineGrain;
         float fresh=arch?smoothstep(.58f,.74f,uv.x):gMaterial.caveSurface.w*smoothstep(.43f,.83f,-localN.y);
-        float height=-vein*.076f+(bed-.5f)*.066f+(broad-.5f)*.145f-pores*.034f;
-        float3 dpdx=ddx(input.worldPosition),dpdy=ddy(input.worldPosition);
+        float cutRim=fresh*(1-smoothstep(.018f,.15f,uv.y));
+        float bedding=p.y+.095f*p.x+.16f*p.z+(broad-.5f)*.68f;
+        float coarseLamina=CartSurfaceNoise(float2(p.z*.48f+p.x*.30f,bedding*2.8f)+37.1f);
+        float lamina=smoothstep(.57f,.81f,coarseLamina)*(1-smoothstep(.12f,.32f,footprint));
+        float splitRelief=lamina*fresh;
+        float height=-vein*.026f+(bed-.5f)*.022f+(broad-.5f)*.060f-pores*.005f-splitRelief*.024f;
+        float3 dpdx=ddx_fine(input.worldPosition),dpdy=ddy_fine(input.worldPosition);
         float3 u=cross(dpdy,N),v=cross(N,dpdx);
         float determinant=dot(dpdx,u);
         float3 bumped=SafeNormalize(N*max(abs(determinant),.00001f)-
-            sign(determinant)*(ddx(height)*u+ddy(height)*v));
-        float3 base=gMaterial.color.rgb*(.29f+.36f*broad+.29f*bed-.18f*vein-.16f*pores);
+            sign(determinant)*(ddx_fine(height)*u+ddy_fine(height)*v));
+        float3 base=gMaterial.color.rgb*(.32f+.33f*broad+.28f*bed-.14f*vein-.045f*pores);
         if(arch) {
-            float layerY=p.y+.095f*p.x+.16f*p.z+(broad-.5f)*.68f;
-            float bands=CartSurfaceNoise(float2(p.x*.105f+p.z*.18f,layerY*1.17f)+27);
+            float bands=CartSurfaceNoise(float2(p.x*.105f+p.z*.18f,bedding*1.17f)+27);
             float worn=smoothstep(.22f,.78f,bands);
             base*=lerp(float3(.74f,.78f,.84f),float3(1.16f,1.10f,1.02f),worn);
         }
-        base=lerp(base,float3(.61f,.53f,.42f)*(.58f+.24f*broad+.35f*grain),fresh*.85f);
+        float3 exposed=lerp(float3(.42f,.33f,.25f),float3(.68f,.59f,.47f),broad);
+        exposed*=.91f+.20f*bed+.16f*(grain-.5f)*fineGrain-.24f*splitRelief;
+        base=lerp(base,exposed,fresh*.88f);
+        base*=1-.24f*cutRim;
         float3 V=SafeNormalize(cameraWorldPosition-input.worldPosition);
-        float3 lit=RailSurfaceLighting(base,0,.86f,bumped,V,input.worldPosition,.92f,
+        float contact=1-.22f*cutRim-.17f*splitRelief;
+        float3 lit=RailSurfaceLighting(base,0,lerp(.89f,.81f,fresh),bumped,V,input.worldPosition,contact,
             GameplayCaveWeight(input.worldPosition));
-        lit=max(lit,base*.52f);
+        lit=max(lit,base*lerp(.52f,.28f,sunfallSky.w));
         float3 hit=gMaterial.railLightingAxis-input.worldPosition;
         float distanceToHit=length(hit);
         if(arch && gMaterial.caveResponse.w>1.001f) {
@@ -575,10 +589,10 @@ PixelShaderOutput main(VertexShaderOutput input)
                 float2 face=float2(uv.x-(bevel?2:0),uv.y);
                 float grain=CartSurfaceNoise(face*float2(8,15)+3.2f);
                 float rim=min(min(face.x,1-face.x),min(face.y,1-face.y));
-                float wear=(bevel?.82f:1.0f-smoothstep(.015f,.08f,rim))*smoothstep(.48f,.82f,grain);
-                float dirt=smoothstep(.42f,.96f,face.y)*smoothstep(.27f,.83f,grain);
-                base*=1.0f-.18f*dirt;
-                base=lerp(base,float3(.31f,.33f,.34f),wear*(profile==2?.16f:.27f));
+                float wear=(bevel?.88f:1.0f-smoothstep(.012f,.055f,rim))*smoothstep(.36f,.76f,grain);
+                float dirt=smoothstep(.38f,.94f,face.y)*smoothstep(.24f,.80f,grain);
+                base*=.92f+.15f*grain-.28f*dirt;
+                base=lerp(base,float3(.30f,.32f,.33f),wear*(profile==2?.19f:.34f));
                 metal=lerp(metal,.78f,wear*.42f);
                 rough=saturate(rough+.12f*dirt-.16f*wear);
             } else if(profile<=6) {

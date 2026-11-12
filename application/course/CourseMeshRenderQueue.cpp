@@ -179,7 +179,7 @@ bool IsTitleLandscapeMesh(std::string_view meshId) {
 }
 
 bool IsGameplayLandscapeMesh(std::string_view meshId) {
-    return meshId == "root_spire_column" || meshId == "organic_arch_large" ||
+    return meshId == "root_spire_column" || meshId == "canyon_mesa" || meshId == "organic_arch_large" || meshId == "rear_boulder" ||
         meshId == "startup_rear_tunnel" || meshId == "startup_rear_floor" || meshId == "startup_rear_cap" ||
         meshId == "rib_tunnel_wall" || meshId == "rib_tunnel_inner" || meshId == "curved_canyon_wall" ||
         meshId == "vista_hole_wall" || meshId == "spire_broken_bridge_arc";
@@ -197,7 +197,8 @@ Material BuildGameplayLandscapePbrMaterial(std::string_view meshId) {
     material.padding2[0]=0.06f;
     material.padding2[1]=0.35f;
     material.padding2[9]=0.40f;
-    if (meshId == "organic_arch_large" || meshId == "rib_tunnel_wall" || meshId == "rib_tunnel_inner") {
+    if (meshId == "organic_arch_large" || meshId == "rib_tunnel_wall" || meshId == "rib_tunnel_inner" ||
+        meshId == "rear_boulder" || meshId == "canyon_mesa") {
         // Match adjacent cliff strata/detail in world space, including the
         // buried aprons and fracture rocks baked into the same solid mesh.
         material.color = {0.90f, 0.84f, 0.77f, 0.55f};
@@ -586,8 +587,8 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                     auto& material=*part->materialData;
                     material.specularMode=18;
                     material.padding2[1]=x.x;material.padding2[2]=x.y;material.padding2[3]=x.z;
-                    material.padding2[4]=(meshId=="route_arch_shoulder" || meshId=="route_shelf_tip")?
-                        2.0f:(meshId=="rail_hazard_block"?1.0f:0.0f);
+                    material.padding2[4]=meshId=="route_arch_shoulder"?2.0f:
+                        meshId=="route_shelf_tip"?3.0f:(meshId=="rail_hazard_block"?1.0f:0.0f);
                     material.padding2[5]=y.x;material.padding2[6]=y.y;material.padding2[7]=y.z;
                     material.padding2[8]=naturalArch ? 1+Ramp(obstacle.age,FractureStart,FractureEnd)*
                         (1-Ease(obstacle.age,SupportBreak,1.49f)) : 0.0f;
@@ -623,6 +624,9 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                         {.37f,.24f,.12f},{0,0,.16f*damage},{1.0f,.64f,.20f,1});
             } else {
                 const Vector4 bedrock{.58f,.47f,.35f,1};
+                const auto shoulderHeight=[shelf](float x) {
+                    return shelf?0.0f:(std::abs(x)<4.0f?-.40f:ArchPlatformTop);
+                };
                 draw(shelf?"route_shelf_root":"route_arch_roots",{0,0,distance},{1,1,1},{},bedrock);
                 for(float side:{-1.0f,1.0f}) {
                     if(shelf && side<0)continue;
@@ -631,14 +635,18 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                     draw("rail_hazard_solid",{side*12.2f,ArchPlatformTop-4.5f,distance+.55f},
                         {3.4f,2.4f,3.25f},{0,0,side*.25f},bedrock);
                 }
-                const auto slab=VisibleStone(obstacle,age);
+                auto slab=VisibleStone(obstacle,age);
+                // The visible arch crown reaches the deck as the rubble takes
+                // over. The existing hazard volume still governs traversal.
+                if(!shelf)slab.rail.y-=2.75f*Ease(age,GroundImpact-.28f,GroundImpact);
                 if(age<GroundImpact)draw(shelf?"route_shelf_tip":"route_arch_shoulder",slab.rail,{1,1,1},{},bedrock);
                 if(age>=GroundImpact)for(float side:{-1.0f,1.0f})for(int i=0;i<3;++i) {
                     const float spread=Ease(age,GroundImpact,GroundImpact+.35f);
-                    const float size=1.3f+.4f*i;
+                    const float size=1.3f+.32f*i;
                     const float x=slab.rail.x+side*((shelf?1.7f:4.9f)+2.1f*i+1.5f*spread);
-                    draw("rail_hazard_block",{x,size*.52f,distance+(i-1)*1.8f},
-                        {size,size*.78f,size*.94f},{.17f*i,side*(.35f+.4f*i),side*.24f},bedrock);
+                    const float y=shelf?size*.52f:shoulderHeight(x)+size*.50f;
+                    draw("rail_hazard_block",{x,y,distance+(i-1)*1.8f},
+                        {size,size*.67f,size*.94f},{.17f*i,side*(.35f+.4f*i),side*.24f},bedrock);
                 }
                 if(age>=SupportBreak && age<GroundImpact)for(unsigned i=0;i<5;++i) {
                     const float t=age-SupportBreak-.031f*i;
@@ -668,7 +676,7 @@ void CourseMeshRenderQueue::AddObstacleInstances(
                     const float x=landing.x+(i%2==0?-1.0f:1.0f)*(1.3f+.68f*i)+std::cos(angle)*travel;
                     const float z=landing.z-1.10f-.10f*(i%4)+(std::sin(angle)-.20f)*travel*.58f;
                     const float spin=first+.66f*second+.35f*rollOut;
-                    draw("rail_hazard_block",{x,landing.y+size+height,z},{size,size*.78f,size*.88f},
+                    draw("rail_hazard_block",{x,shoulderHeight(x)+size*.68f+height,z},{size,size*.78f,size*.88f},
                         {spin*(1.85f+.51f*(i%4)),angle+spin*1.57f,spin*(i%2?2.4f:-2.85f)},
                         {.79f,.68f,.53f,1});
                 }
@@ -1795,16 +1803,22 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
     const float dying=carrier.battleDestruction;
     const float distance=cartRail.z;
     part("carrier_hull","carrier/blockout-hull",{},{1,1,1},
-        {0.92f+dying*.08f,.98f-dying*.45f,1.08f-dying*.62f,1},true);
+        {.96f+dying*.04f,.99f-dying*.45f,1.04f-dying*.62f,1},true);
     if(carrier.partsBattle || (!carrier.battleActive && !carrier.battleDefeated)) {
-        part("carrier_box","carrier/reactor-armour",{0,-10,-65},{12,9,6},{.10f,.14f,.18f,1},true);
+        part("carrier_box","carrier/reactor-armour",{0,-10,-65},{10,5,5},{.07f,.095f,.12f,1},true);
         for(int i=0;i<2;++i) {
             const auto mount=RailMothership::WeaponMount(i);
             if(carrier.partsBattle && carrier.partHealth[i]<=0)continue;
             const bool heavy=i==1;
             const float glow=.54f+carrier.partCharge[i]*1.35f;
+            if(heavy) for(float side:{-1.f,1.f}) {
+                const float routeCharge=routeShotAge>=0?RailRouteHazards::HeavyCharge(distance,routeShotAge):0;
+                const float power=.65f+.55f*(std::max)(routeCharge,carrier.partCharge[i]);
+                part("carrier_box","carrier/heavy-identification",{mount.x+side*3.9f,-5.1f,-71.98f},
+                    {.94f,1.48f,.36f},{1.10f*power,.23f*power,1.22f*power,1},false);
+            }
             part("carrier_box","carrier/weapon-guide",{mount.x,mount.y-3.0f,mount.z+1.7f},{4.6f,.42f,.48f},
-                heavy?Vector4{1.4f*glow,.25f*glow,.62f*glow,1}:Vector4{.20f*glow,.72f*glow,1.25f*glow,1},false);
+                heavy?Vector4{1.15f*glow,.24f*glow,1.24f*glow,1}:Vector4{.20f*glow,.72f*glow,1.25f*glow,1},false);
             // The same weapon meshes take over as damageable actors at the
             // encounter boundary. The hull itself owns the permanent sockets.
             if(carrier.partsBattle)continue;
@@ -1859,8 +1873,9 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
                 {0.7f,0.4f,29},amber,false);
         part("carrier_box","carrier/bay-threshold",{x,-9.2f,-14},
             {18.7f,0.4f,0.7f},amber,false);
-        part("carrier_box","carrier/aft-engine",{float(side)*58,0,-48.5f},
-            {18,3,0.7f},{0.12f,0.75f,1.3f,1},false);
+        for(int slot=0;slot<3;++slot)
+            part("carrier_box","carrier/aft-engine",{float(side)*(61.6f+3.0f*slot),-1.67f,-50.66f},
+                {1.15f,.28f,.35f},{.10f,.42f,.56f,1},false);
         part("carrier_box","carrier/identification-stripe",{float(side)*65,-8.6f,16},
             {10,0.4f,3},{0.72f,0.47f,0.16f,1},true);
     }

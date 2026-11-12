@@ -1155,7 +1155,9 @@ PixelShaderOutput main(VertexShaderOutput input)
         SampleCascadeShadow(input.worldPosition, normal, lightDir);
     // Reuse the dust volume's local shadow map inside the cave. Preserve the
     // existing outdoor presentation when full cascades are disabled.
-    if (gCascadeShadow.parameters.z > 1.5f) shadowVisibility = lerp(1.0f, shadowVisibility, caveAmount);
+    float valleyLight=sunfallSky.x>0.5f ? sunfallSky.w*(1.0f-caveAmount) : 0.0f;
+    if (gCascadeShadow.parameters.z > 1.5f)
+        shadowVisibility = lerp(1.0f, shadowVisibility, saturate(caveAmount + .72f*valleyLight));
 
     float wetSurface = saturate(
         wetCanyonMask * 0.78f +
@@ -1240,7 +1242,8 @@ PixelShaderOutput main(VertexShaderOutput input)
         // Procedural dark crevices already tint rockColor; do not bake those
         // directional shadows a second time into the broad sky bounce.
         float3 bounceAlbedo=lerp(rockColor,sandstone,0.40f);
-        float shadowFill=lerp(1.10f,0.75f,saturate(nDotL*shadowVisibility));
+        float sunWeight=saturate(nDotL*shadowVisibility);
+        float shadowFill=lerp(lerp(1.10f,.75f,sunWeight),lerp(.53f,.80f,sunWeight),valleyLight);
         lit+=bounceAlbedo*(1.0f-metallic)*sky*lerp(0.65f,1.0f,ao)*sunfallSky.y*sunfallSky.z*shadowFill;
         float3 reflectedSky=SunfallSkyRadiance(reflect(-viewDir,normal),lightDir,
             gDirectionalLight.color.rgb,gDirectionalLight.intensity);

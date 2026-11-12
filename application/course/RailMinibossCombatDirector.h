@@ -27,6 +27,7 @@ class RailMinibossCombatDirector final {
 public:
     static constexpr float RapidCounterSeconds=1.15f,HeavyCounterSeconds=1.80f;
     static constexpr float CounterDamageMultiplier=RailBatteryDamage::CounterMultiplier;
+    static constexpr float CounterFeedbackSeconds=.90f;
     void Reset(uint32_t seed=0x6d2b79f5u){*this={};random_=seed?seed:0x6d2b79f5u;}
     bool Active()const{return active_;}
     int Turn()const{return turn_;}
@@ -38,6 +39,7 @@ public:
     int CounterPart()const{return counterPart_;}
     float FeedbackDamage()const{return feedbackDamage_;}
     float FeedbackRemaining()const{return feedbackRemaining_;}
+    float FeedbackAge()const{return feedbackRemaining_>0?CounterFeedbackSeconds-feedbackRemaining_:-1;}
     uint32_t FeedbackOwner()const{return feedbackOwner_;}
     int FeedbackPart()const{return feedbackPart_;}
     float UnlockPulse()const {
@@ -74,7 +76,7 @@ public:
             if(first)feedbackDamage_=0;
             feedbackCycle_=credit.cycle;feedbackOwner_=credit.owner;
             feedbackPart_=credit.part;
-            feedbackDamage_+=hit.appliedDamage;feedbackRemaining_=.9f;credit.owner=0;
+            feedbackDamage_+=hit.appliedDamage;feedbackRemaining_=CounterFeedbackSeconds;credit.owner=0;
             return first;
         }
         return false;

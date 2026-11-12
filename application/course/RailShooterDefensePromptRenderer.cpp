@@ -173,19 +173,20 @@ void RailShooterDefensePromptRenderer::Update(
         secondary.w = alpha;
 
         if (compact) {
-            const float panelWidth = 290.0f * scale;
-            const float panelHeight = 54.0f * scale;
+            const float panelWidth = (input.compactOutcome ? 202.0f : 290.0f) * scale;
+            const float panelHeight = (input.compactOutcome ? 37.0f : 54.0f) * scale;
             const float margin = 28.0f * scale;
             const float panelX = promptOnLeft
                 ? width - margin - panelWidth : margin;
-            const float panelY = height * 0.36f;
+            const float panelY = height * (input.compactOutcome ? 0.55f : 0.36f);
             plate(panelX, panelY, panelWidth, panelHeight,
                  {0.008f, 0.018f, 0.028f, alpha * 0.86f});
             rect(panelX, panelY, 5.0f * scale, panelHeight, color);
             text(input.outcome->headline, panelX + panelWidth * 0.5f,
                  panelY + 27.0f * scale, 0.76f * scale, color);
-            text(input.outcome->detail, panelX + panelWidth * 0.5f,
-                 panelY + 46.0f * scale, 0.42f * scale, secondary);
+            if (!input.compactOutcome)
+                text(input.outcome->detail, panelX + panelWidth * 0.5f,
+                     panelY + 46.0f * scale, 0.42f * scale, secondary);
             return;
         }
 
@@ -287,7 +288,7 @@ void RailShooterDefensePromptRenderer::Update(
     };
 
     if (hasOutcome && !next.outcomeDemoted) {
-        drawOutcome(false);
+        drawOutcome(input.compactOutcome);
         next.visiblePrompts = 0;
         next.visible = !next.commands.empty();
         frame_ = std::move(next);

@@ -280,13 +280,15 @@ void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sce
             constants.windAndShadow={settings.windSpeed*0.8f,settings.windSpeed*0.35f,
                 ctx.scene->mappedCascadeShadow->parameters.x,
                 ctx.terrainChunkManager && !ctx.terrainChunkManager->RenderChunks().empty() ? 1.0f : 0.0f};
+            const auto& palette=ctx.runtimeState->clearColor;
+            constants.skyPalette={palette[0],palette[1],palette[2],0};
             ID3D12DescriptorHeap* heaps[]={ctx.srvDescriptorHeap};
             pass.commandList->SetDescriptorHeaps(1,heaps);
             pass.commandList->SetGraphicsRootSignature(ctx.appPipelines->GetSunfallRootSignature());
             pass.commandList->SetPipelineState(ctx.appPipelines->GetSunfallVolumePSO());
             pass.commandList->SetGraphicsRootDescriptorTable(0,ctx.depthTextureHandle);
             pass.commandList->SetGraphicsRootDescriptorTable(1,ctx.scene->cascadeShadowSrvGpuHandles[0]);
-            pass.commandList->SetGraphicsRoot32BitConstants(2,52,&constants,0);
+            pass.commandList->SetGraphicsRoot32BitConstants(2,kSunfallFrameDwords,&constants,0);
             pass.commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             pass.commandList->DrawInstanced(3,1,0,0);
         }});
@@ -301,8 +303,10 @@ void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sce
             const float nearPlane=-p[3][2]/p[2][2];
             const float farPlane=-p[3][2]/(p[2][2]-1.0f);
             const auto& sun=ctx.runtimeState->directionalLightData;
+            const auto& palette=ctx.runtimeState->clearColor;
             const float params[16]={(std::clamp)(ctx.runtimeState->sunfall.strength,0.0f,1.0f),nearPlane,farPlane,
-                ctx.sunfallOutdoorBlend,sun.color.x,sun.color.y,sun.color.z,sun.intensity};
+                ctx.sunfallOutdoorBlend,sun.color.x,sun.color.y,sun.color.z,sun.intensity,
+                palette[0],palette[1],palette[2],0};
             ctx.vfxRenderTargets->ExecuteDebugPreviewPass(pass.commandList,"SunfallColor",
                 ctx.appPipelines->GetCompositeRootSignature(),ctx.appPipelines->GetSunfallCompositePSO(),
                 ctx.vfxRenderTargets->GetSrvHandle(sceneInput),ctx.vfxRenderTargets->GetSrvHandle("SunfallVolume"),

@@ -31,8 +31,11 @@ struct SunfallFrameConstants {
     Vector4 sunColorAndDensity{};
     Vector4 rangeHeightAndGround{};
     Vector4 windAndShadow{};
+    Vector4 skyPalette{};
 };
-static_assert(sizeof(SunfallFrameConstants) == 52 * sizeof(float));
+static_assert(sizeof(SunfallFrameConstants) == 56 * sizeof(float));
+inline constexpr unsigned kSunfallFrameDwords=sizeof(SunfallFrameConstants)/sizeof(float);
+static_assert(kSunfallFrameDwords+2<=64); // Two descriptor tables.
 
 class SunfallExposure final {
 public:

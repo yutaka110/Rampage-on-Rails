@@ -411,8 +411,19 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         }
         if(input.miniBossCounterFeedbackRemaining>0 && input.miniBossCounterDamage>0) {
             const float alpha=(std::clamp)(input.miniBossCounterFeedbackRemaining/.22f,0.0f,1.0f)*opacity;
-            text(Utf8(u8"反撃命中  ")+std::to_string(int(std::round(input.miniBossCounterDamage)))+" DAMAGE",
-                width*.5f,y-103*scale,.82f*scale,{1,.95f,.76f,alpha},center);
+            const auto label=Utf8(u8"反撃命中  ")+std::to_string(int(std::round(input.miniBossCounterDamage)));
+            if(input.miniBossCounterFeedbackOnscreen) {
+                const auto target=input.miniBossCounterFeedbackScreen;
+                const float cardWidth=158*scale,cardHeight=28*scale;
+                const float gap=58*scale;
+                const float preferred=target.x+gap+cardWidth<=width-safe ? target.x+gap : target.x-gap-cardWidth;
+                const float cardX=(std::clamp)(preferred,safe,(std::max)(safe,width-safe-cardWidth));
+                const float cardY=(std::clamp)(target.y+20*scale,safe,(std::max)(safe,y-cardHeight-10*scale));
+                rect(cardX,cardY,cardWidth,cardHeight,{.035f,.024f,.012f,.88f*alpha});
+                text(label,cardX+cardWidth*.5f,cardY+20*scale,.80f*scale,{1,.95f,.76f,alpha},center);
+            } else {
+                text(label+" DAMAGE",width*.5f,y-103*scale,.82f*scale,{1,.95f,.76f,alpha},center);
+            }
         }
         for(int i=0;i<2;++i) {
             const float px=x+i*280*scale;

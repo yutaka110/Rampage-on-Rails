@@ -89,6 +89,31 @@ inline std::vector<RailWarningSprite> BuildRailBatteryThermalSprites(const Cours
         const auto from=point(a),to=point(b);const Vector3 half{(to.x-from.x)*.5f,(to.y-from.y)*.5f,(to.z-from.z)*.5f};
         const Vector3 middle{(to.x+from.x)*.5f,(to.y+from.y)*.5f,(to.z+from.z)*.5f};
         if(alpha>.001f)sprites.push_back({middle,half,{up.x*width*size,up.y*width*size,up.z*width*size},RailEnemyEnergy::Alpha(color,alpha),32});};
+    if(frame.counterHitAge>=0) {
+        const float age=frame.counterHitAge;
+        const auto fade=[&](float end){return 1-(std::clamp)(age/end,0.0f,1.0f);};
+        const Vector3 bore{0,.32f,-RailTurret::ForMesh(actor.desc.meshId).muzzleForward};
+        glow(bore,.54f,fade(.13f),{5.0f,3.3f,1.50f,1});
+        for(float side:{-1.f,1.f}) {
+            const Vector3 vent{side*.78f,.66f,-.94f};
+            for(int i=0;i<3;++i) {
+                const float travel=age*(3.4f+.74f*float(i));
+                const auto tip=[&](float d){return Vector3{vent.x+side*d*.92f,
+                    vent.y+d*(.68f-.39f*float(i))-.22f*d*d,vent.z-d*.38f};};
+                streak(tip((std::max)(0.f,travel-.42f)),tip(travel),.027f,fade(.31f),{3.6f,1.85f,.47f,1});
+            }
+            for(int i=0;i<3;++i) {
+                const float t=age-.075f*float(i);
+                const float alpha=.57f*(std::clamp)(t/.10f,0.f,1.f)*fade(.9f);
+                const float radius=.29f+t*.61f;
+                if(alpha<=0)continue;
+                const auto center=point({vent.x+side*t*.58f,vent.y+t*2.20f,vent.z+t*.12f});
+                sprites.push_back({center,{right.x*radius*size,right.y*radius*size,right.z*radius*size},
+                    {up.x*radius*size*1.5f,up.y*radius*size*1.5f,up.z*radius*size*1.5f},
+                    {.14f,.13f,.15f,alpha},52});
+            }
+        }
+    }
     if(frame.heavy && charging) {
         const float opening=HeavyMuzzleArmorOpen(frame,-1);
         const Vector3 bore{0,.32f,-RailTurret::ForMesh(actor.desc.meshId).muzzleForward-.035f};

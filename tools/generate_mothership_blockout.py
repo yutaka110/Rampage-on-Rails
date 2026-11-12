@@ -1,17 +1,26 @@
 """Carrier hull and fittings. Units match RailMothershipPresentation.h."""
 from pathlib import Path
 import math
+from generate_submission_hazards import save_palette
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "Resources/enemies/MothershipBlockout"
+HULL_PALETTE = [(47, 60, 69), (131, 147, 154), (187, 197, 199), (19, 25, 30),
+                (139, 113, 62), (78, 93, 102), (37, 47, 54), (112, 129, 141),
+                (194, 204, 210), (104, 119, 130), (26, 33, 41), (180, 189, 181)]
 
 
 class Obj:
-    def __init__(self):
+    def __init__(self, runtime_coordinates=False):
         self.lines = ["# Original carrier blockout; front +Z; dimensions in game world units."]
         self.count = 0
+        self.runtime_coordinates = runtime_coordinates
 
     def face(self, points, band=None):
+        if self.runtime_coordinates:
+            # Assimp reflects OBJ Z. Author the hull on the same axes as the
+            # runtime sockets and correct winding before exporting the face.
+            points = [(x,y,-z) for x,y,z in reversed(points)]
         a, b, c = points[:3]
         u = [b[i]-a[i] for i in range(3)]
         v = [c[i]-a[i] for i in range(3)]
@@ -43,14 +52,27 @@ class Obj:
     def box(self, x,y,z,w,h,d,band=None):
         self.prism([(x-w/2,z-d/2),(x+w/2,z-d/2),(x+w/2,z+d/2),(x-w/2,z+d/2)],y-h/2,y+h/2,band)
 
+    def plating(self, x, y, z, width, height, depth, band):
+        # Recessed seams between chamfered panels facing the chase camera.
+        w, h = width / 2, height / 2
+        cut = min(w, h) * .24
+        outline = [(-w+cut,-h), (w-cut,-h), (w,-h+cut), (w,h-cut),
+                   (w-cut,h), (-w+cut,h), (-w,h-cut), (-w,-h+cut)]
+        rear = [(x+a, y+b, z+depth) for a,b in outline]
+        front = [(x+a*.89, y+b*.76, z) for a,b in outline]
+        self.face(list(reversed(front)), band)
+        for i in range(len(outline)):
+            j = (i+1) % len(outline)
+            self.face([front[i], front[j], rear[j], rear[i]], 5)
+
     def save(self, name):
         (DEST/name).write_text("\n".join(self.lines)+"\n", encoding="utf-8")
 
 
 def main():
     DEST.mkdir(parents=True, exist_ok=True)
-    hull = Obj()
-    hull.prism([(-22,-66),(22,-66),(27,32),(16,66),(-16,66),(-27,32)],-8,9,1,5)
+    hull = Obj(runtime_coordinates=True)
+    hull.prism([(-17,-67),(17,-67),(25,-54),(27,32),(16,66),(-16,66),(-27,32),(-25,-54)],-8,9,9,5)
     hull.prism([(-13,-56),(13,-56),(18,30),(9,57),(-9,57),(-18,30)],-11,-7.7,0)
     hull.prism([(-5,-54),(5,-54),(7,36),(3,56),(-3,56),(-7,36)],-13,-10.7,2)
     for side in (-1,1):
@@ -74,6 +96,16 @@ def main():
         hull.box(side*58,-7.0,-46,20,4,3,0)
         hull.box(side*58,-7.0,-47.2,15,2.2,1.3,3)
         hull.box(side*47,-5.3,31,16,1.7,12,2)
+        # Alloy plating over dark launch cavities, with substantial vents at
+        # the outer roots. Their spacing survives the normal gameplay lens.
+        for x, y, z, w, h, band in [(48,2.8,-49.8,25,5.1,1), (57,-1.3,-49.4,22,2.9,9),
+                                     (65,8,-43.0,15,4.0,1), (37,-3,-48.8,11,2.0,5)]:
+            hull.plating(side*x,y,z,w,h,2.0,band)
+        hull.plating(side*65,-1.7,-50.2,10,2.4,2.1,3)
+        for x in (62,64,66,68):
+            hull.box(side*x,-1.7,-50.25,.50,1.22,.60,5)
+        for x in (34,45,56,67):
+            hull.box(side*x,4.0,-50.0,.52,.76,.9,11)
     hull.box(0,13,-28,25,8,30,5)
     hull.box(0,21,-35,15,8,12,1)
     # Recessed weapon bays. The shoulders overlap the wing roots, and the
@@ -88,7 +120,19 @@ def main():
         for outline,bottom,top,band,underside in shoulders:
             points=[(side*x,z) for x,z in outline]
             hull.prism(points if side>0 else list(reversed(points)),bottom,top,band,underside)
+        hull.plating(side*19,4.7,-65.0,8.3,5.3,9.0,1)
+        hull.plating(side*14,-3.0,-68.0,5.3,5.0,2.4,9)
+        hull.plating(side*30,-4.8,-67.0,6.2,2.9,7.0,1)
+    hull.plating(0,5.3,-69.8,28,6.2,3.1,1)
+    hull.plating(0,-2.0,-69.2,24,6.8,2.8,0)
+    hull.plating(0,-2.0,-70.1,15,3.4,1.4,3)
+    for x in (-5.4,-3.6,-1.8,0,1.8,3.6,5.4):
+        hull.box(x,-2.0,-70.15,.46,2.0,.62,5)
+    # Two dark anchor plates for the permanent heavy-weapon marker lights.
+    for x in (16.1,23.9):
+        hull.plating(x,-5.1,-71.7,2.0,2.7,1.0,10)
     hull.save("MothershipHull.obj")
+    save_palette(DEST / "CarrierHullSurface.bmp", HULL_PALETTE)
     unit = Obj()
     unit.box(0,0,0,1,1,1)
     unit.save("MothershipBox.obj")

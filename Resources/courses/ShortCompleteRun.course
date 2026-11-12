@@ -213,18 +213,21 @@ camera|2360|21.500|8.400|0|80|0|12|59|0|blockout-camera-13|1|0
 camera|2460|21.500|10.920|-5|115|-2|10|61|0|blockout-camera-14|1|0
 camera|2540|21.500|10.920|-5|115|-2|10|61|0|blockout-camera-15|1|0
 camera|2630|22.360|8.400|0|80|1|12|60|0|blockout-camera-16|1|0
-camera|2800|21.500|7.560|0|68|1|13|59|0|blockout-camera-17|1|0
+camera|2705|22.000|16.500|0|42|-4|8|61|0|ridge-valley-camera-in|1|0
+camera|2800|22.000|17.500|0|40|-4|8|61|0|blockout-camera-17|1|0
+camera|2890|21.950|8.200|0|68|1|13|59|0|ridge-valley-camera-out|1|0
 camera|3150|23.220|7.560|0|70|5|13|57|0|blockout-camera-18|1|0
 camera|3350|23.220|6.720|0|72|7|13|56|0|blockout-camera-19|1|0
 camera|3800|23.220|6.720|0|72|7|13|56|0|blockout-camera-20|1|0
 terrain|575|hero_landmark|blockout-exit-portal|organic_arch_large|0|29|0|42|31|8|0|0|0|none|14|120|260|blockout-terrain-exit-portal|1|0
 terrain|680|hero_landmark|blockout-spire-left|root_spire_column|-30|17|0|12|35|12|0|0|0|none|14|120|400|blockout-terrain-spire-left|1|0
 terrain|790|hero_landmark|blockout-spire-right|root_spire_column|32|25|0|14|43|14|0|0|0|none|14|120|400|blockout-terrain-spire-right|1|0
-terrain|900|hero_landmark|blockout-spire-far-left|root_spire_column|-38|31|0|15|49|15|0|0|0|none|14|120|400|blockout-terrain-spire-far-left|1|0
-terrain|960|hero_landmark|blockout-spire-far-right|root_spire_column|42|36|0|16|54|16|0|0|0|none|14|120|400|blockout-terrain-spire-far-right|1|0
-terrain|1450|hero_landmark|blockout-stone-gate|organic_arch_large|0|23|0|32|24|8|0|0|0|none|14|120|360|blockout-terrain-stone-gate|1|0
-terrain|1490|hero_landmark|blockout-gate-shoulder-left|root_spire_column|-44|20|0|18|40|16|0|0|0|none|14|120|400|blockout-terrain-gate-shoulder-left|1|0
-terrain|1505|hero_landmark|blockout-gate-shoulder-right|root_spire_column|45|23|0|19|43|17|0|0|0|none|14|120|400|blockout-terrain-gate-shoulder-right|1|0
+# Admit the distant silhouettes before the cave opening comes into view.
+terrain|900|hero_landmark|blockout-spire-far-left|root_spire_column|-38|31|0|15|49|15|0|0|0|none|14|120|500|blockout-terrain-spire-far-left|1|0
+terrain|960|hero_landmark|blockout-spire-far-right|root_spire_column|42|36|0|16|54|16|0|0|0|none|14|120|560|blockout-terrain-spire-far-right|1|0
+terrain|1450|hero_landmark|blockout-stone-gate|organic_arch_large|0|23|0|32|24|8|0|0|0|none|14|120|1050|blockout-terrain-stone-gate|1|0
+terrain|1490|hero_landmark|blockout-gate-shoulder-left|root_spire_column|-44|20|0|18|40|16|0|0|0|none|14|120|1090|blockout-terrain-gate-shoulder-left|1|0
+terrain|1505|hero_landmark|blockout-gate-shoulder-right|root_spire_column|45|23|0|19|43|17|0|0|0|none|14|120|1105|blockout-terrain-gate-shoulder-right|1|0
 terrain|1650|hero_landmark|blockout-bridge-1650|course_blockout_bridge|0|0|0|1|1|1|0|0|0|none|14|180|420|blockout-terrain-bridge-1650|1|0
 terrain|1670|hero_landmark|blockout-bridge-1670|course_blockout_bridge|0|0|0|1|1|1|0|0|0|none|14|180|420|blockout-terrain-bridge-1670|1|0
 terrain|1690|hero_landmark|blockout-bridge-1690|course_blockout_bridge|0|0|0|1|1|1|0|0|0|none|14|180|420|blockout-terrain-bridge-1690|1|0
@@ -245,17 +248,39 @@ terrain_brush|blockout-bridge-valley|blockout-valley-1|Sculpt|1820|4.712389|110|
 terrain|2780|hero_landmark|blockout-ridge-beacon|root_spire_column|-55|18|0|16|38|14|0|0|0|none|14|120|480|blockout-terrain-ridge-beacon|1|0
 terrain|3680|hero_landmark|blockout-arena-left|root_spire_column|-75|24|0|24|48|22|0|0|0|none|14|120|500|blockout-terrain-arena-left|1|0
 terrain|3730|hero_landmark|blockout-arena-right|root_spire_column|78|27|0|25|51|22|0|0|0|none|14|120|500|blockout-terrain-arena-right|1|0
-lighting|620|blockout-light-columns|100|1|0.79|0.58|2.45|-0.55|-0.58|0.60|0.105|0.145|0.205|0.32|0.39|0.48|0.25|240|1500|0.082|0.18|0.23|0.61|0.08|0.17
-lighting|950|blockout-light-gate|100|1|0.81|0.61|2.55|-0.76|-0.53|0.38|0.105|0.145|0.205|0.31|0.38|0.48|0.24|250|1500|0.080|0.18|0.24|0.60|0.08|0.18
-lighting|1530|blockout-light-bridge|130|1|0.78|0.60|2.4|-0.50|-0.62|0.60|0.12|0.13|0.16|0.32|0.36|0.41|0.28|220|1500|0.09|0.18|0.22|0.65|0.08|0.12
-lighting|1950|blockout-light-ridge|140|1|0.69|0.46|2.65|-0.56|-0.48|0.68|0.12|0.13|0.16|0.32|0.36|0.41|0.28|220|1500|0.09|0.18|0.22|0.65|0.08|0.12
-lighting|3100|blockout-light-arena|180|1|0.72|0.50|2.6|-0.52|-0.52|0.68|0.12|0.13|0.16|0.32|0.36|0.41|0.28|220|1500|0.09|0.18|0.22|0.65|0.08|0.12
+# Distant silhouettes sit outside the rail and target lanes, with long cull ranges.
+terrain|965|vista_background|needle-ridge-left|root_spire_column|-88|40|0|18|61|22|0|12|-8|none|4|340|565|needle-ridge-left|1|0
+terrain|1058|vista_background|needle-ridge-right|root_spire_column|104|51|0|21|65|25|0|-21|6|none|4|400|658|needle-ridge-right|1|0
+terrain|1970|vista_background|trestle-cut-mesa|canyon_mesa|-116|34|0|57|71|47|0|22|0|none|5|520|1570|trestle-cut-mesa|1|0
+terrain|2170|vista_background|trestle-far-shelf|canyon_mesa|181|49|0|78|90|63|0|-15|0|none|4|520|1770|trestle-far-shelf|1|0
+terrain|2460|vista_background|ridge-mesa-west|canyon_mesa|-145|44|0|66|94|56|0|18|0|none|5|680|2060|ridge-mesa-west|1|0
+terrain|2740|vista_background|ridge-mesa-east|canyon_mesa|224|55|0|68|94|64|0|53|0|none|5|720|920|ridge-mesa-east|1|0
+terrain|2970|vista_background|ridge-far-crown|canyon_mesa|120|28|0|63|84|55|0|-24|0|none|4|550|880|ridge-far-crown|1|0
+terrain|3680|vista_background|arena-buttress-west|canyon_mesa|-143|44|0|71|90|63|0|40|0|none|4|920|650|arena-buttress-west|1|0
+terrain|3765|vista_background|arena-buttress-east|canyon_mesa|170|48|0|93|91|64|0|12|0|none|4|950|680|arena-buttress-east|1|0
+terrain|4375|vista_background|pursuit-west-shelves|canyon_mesa|-132|33|0|83|82|83|0|-31|0|none|4|880|430|pursuit-west-shelves|1|0
+terrain|5185|vista_background|pursuit-east-shelves|canyon_mesa|136|38|0|79|91|78|0|28|0|none|4|920|420|pursuit-east-shelves|1|0
+lighting|500|cave-mouth-daylight|160|1|0.84|0.68|2.35|-0.57|-0.49|0.66|0.13|0.28|0.48|0.32|0.39|0.50|0.27|230|1550|0.09|0.18|0.24|0.66|0.08|0.16
+lighting|620|blockout-light-columns|100|1|0.76|0.52|2.58|-0.62|-0.54|0.57|0.12|0.28|0.50|0.36|0.41|0.52|0.23|240|1580|0.08|0.18|0.23|0.61|0.08|0.17
+lighting|950|blockout-light-gate|145|0.83|0.91|1|2.35|-0.81|-0.43|0.40|0.14|0.25|0.40|0.29|0.38|0.49|0.21|250|1560|0.075|0.14|0.20|0.60|0.06|0.18
+lighting|1530|blockout-light-bridge|185|1|0.91|0.75|3.08|-0.77|-0.50|0.40|0.16|0.36|0.58|0.30|0.41|0.53|0.24|265|1500|0.08|0.15|0.20|0.67|0.055|0.13
+lighting|2040|blockout-light-ridge|220|1|0.84|0.65|3.10|-0.59|-0.69|0.40|0.09|0.30|0.57|0.31|0.42|0.56|0.20|330|1880|0.07|0.13|0.17|0.65|0.05|0.13
+lighting|3100|blockout-light-arena|320|0.92|0.96|1|2.74|-0.76|-0.50|0.41|0.14|0.25|0.42|0.26|0.35|0.48|0.22|280|1620|0.07|0.14|0.18|0.64|0.05|0.12
+lighting|3860|rear-sunlit-cut|310|1|0.82|0.65|3.08|-0.81|-0.49|-0.31|0.19|0.31|0.48|0.29|0.38|0.49|0.22|230|1460|0.085|0.16|0.19|0.64|0.06|0.16
+lighting|4930|rear-open-ravine|420|1|0.79|0.61|2.82|-0.69|-0.58|-0.43|0.26|0.33|0.48|0.34|0.39|0.50|0.25|260|1670|0.082|0.17|0.22|0.62|0.055|0.17
+terrain_material|620|needle-ochre|130|.91|.73|.58|.77|.79|1.12|.95|.086|.84|.48|.50|1.08|1.01|1.00|.21
+terrain_material|950|gate-blue-limestone|155|.69|.77|.86|.75|.68|1.15|.94|.075|.86|.49|.57|1.18|1.06|1.10|.23
+terrain_material|1530|trestle-pale-strata|190|.90|.83|.71|.77|.70|.97|1.02|.078|.81|.49|.48|1.06|1.02|1.05|.22
+terrain_material|2080|ridge-red-sandstone|220|.92|.69|.53|.80|.74|1.19|1.10|.072|.76|.44|.47|1.08|.98|1.04|.21
+terrain_material|3100|arena-weathered-slate|305|.66|.75|.83|.76|.67|1.13|.95|.075|.87|.48|.51|1.09|1.02|1.09|.22
+terrain_material|3860|pursuit-split-strata|290|.84|.76|.65|.76|.72|1.09|1.02|.077|.84|.49|.50|1.08|1.02|1.04|.21
+terrain_material|4930|ravine-rose-stone|400|.87|.71|.61|.76|.73|1.16|1.03|.075|.82|.48|.52|1.06|1.01|1.04|.22
 cinematic_shot_set|0|620|blockout-shot-cave|CAVE EXIT|blockout-exit-portal|-|intro_backlit_mist|-|first_contact_readable_strata|clear-combat|Exit aperture ahead; cart and rail retained.
-cinematic_shot_set|620|950|blockout-shot-columns|STONE NEEDLES|blockout-spire-left,blockout-spire-right|-|blockout-light-columns|-|first_contact_readable_strata|clear-combat|Alternating rooted silhouettes; clear central fire lane.
-cinematic_shot_set|950|1640|blockout-shot-gate|STONE GATE|blockout-stone-gate|-|blockout-light-gate|-|first_contact_readable_strata|clear-combat|Turret in front of the gate; fixed combat lens.
-cinematic_shot_set|1640|1950|blockout-shot-bridge|CLIFF TRESTLE|blockout-bridge-1750|-|blockout-light-bridge|-|first_contact_readable_strata|clear-combat|Rail support and exposed valley; gentle left camera offset.
-cinematic_shot_set|1950|3350|blockout-shot-ridge|RIDGE DIVE|blockout-ridge-beacon|-|blockout-light-ridge|-|first_contact_readable_strata|clear-combat|Crest anticipation and descending rail visible.
-cinematic_shot_set|3350|11300|blockout-shot-carrier|CARRIER ASSAULT|blockout-arena-left,blockout-arena-right|-|blockout-light-arena|-|first_contact_readable_strata|clear-combat|Broad stable combat framing; mother ship ahead.
+cinematic_shot_set|620|950|blockout-shot-columns|STONE NEEDLES|blockout-spire-left,blockout-spire-right|needle-ridge-left,needle-ridge-right|blockout-light-columns|-|needle-ochre|clear-combat|Ochre needles against blue daylight, clear central firing lane.
+cinematic_shot_set|950|1640|blockout-shot-gate|STONE GATE|blockout-stone-gate|-|blockout-light-gate|-|gate-blue-limestone|clear-combat|Cool limestone cut with the turret framed by the gate.
+cinematic_shot_set|1640|1950|blockout-shot-bridge|CLIFF TRESTLE|blockout-bridge-1750|trestle-cut-mesa,trestle-far-shelf|blockout-light-bridge|-|trestle-pale-strata|clear-combat|Pale exposed stone and distant shelves flank the elevated railway.
+cinematic_shot_set|1950|3350|blockout-shot-ridge|RIDGE DIVE|blockout-ridge-beacon|ridge-mesa-west,ridge-mesa-east,ridge-far-crown|blockout-light-ridge|-|ridge-red-sandstone|clear-combat|Open blue sky and sandstone mesas frame the descent.
+cinematic_shot_set|3350|11300|blockout-shot-carrier|CARRIER ASSAULT|blockout-arena-left,blockout-arena-right|arena-buttress-west,arena-buttress-east|blockout-light-arena|-|arena-weathered-slate|clear-combat|Cool slate at the carrier entrance, with layered shelves along the pursuit.
 ride_profile|short-ride-bridge|1480.000|1950.000|BRIDGE RUN|Combat|1.000|26.666667|1.000|1.000|120.000|48.000|1.000|30.000|0.850|14.000|0.000|0.000|-|1|1|0
 # Near-field trackside markers: visual only, clear central fire lane.
 terrain|640|hero_landmark|speed-feel-marker-640|rail_speed_marker|6.6|0|0|1|1|1|0|0|0|none|14|70|140|speed-feel-marker-640|1|0
@@ -341,5 +366,48 @@ terrain|3242|hero_landmark|speed-feel-marker-3242|rail_speed_marker|6.6|0|0|1|1|
 terrain|3270|hero_landmark|speed-feel-marker-3270|rail_speed_marker|-6.6|0|0|1|1|1|0|180|0|none|14|70|140|speed-feel-marker-3270|1|0
 terrain|3298|hero_landmark|speed-feel-marker-3298|rail_speed_marker|6.6|0|0|1|1|1|0|0|0|none|14|70|140|speed-feel-marker-3298|1|0
 
-# Boss-relative prototype: withdrawal, valley vista, white bridge, rear pair.
+# Rear pursuit. Trackside maintenance fixtures carry motion in the foreground;
+# irregular rock shoulders keep the two firing lanes clear.
+terrain|3758|hero_landmark|rear-rail-marker-3758|rail_speed_marker|9.8|0|0|1|0.82|1|0|0|0|none|10|125|85|rear-rail-marker-3758|1|0
+terrain|3809|hero_landmark|rear-rail-marker-3809|rail_speed_marker|-9.2|0|0|1|1|1|0|180|0|none|10|125|85|rear-rail-marker-3809|1|0
+terrain|3854|hero_landmark|rear-rock-3854|rear_boulder|27|-7|0|9|9|10|0|26|0|none|8|245|150|rear-rock-3854|1|0
+terrain|3876|hero_landmark|rear-rail-marker-3876|rail_speed_marker|9.4|0|0|1|1.08|1|0|0|0|none|10|125|85|rear-rail-marker-3876|1|0
+terrain|3940|hero_landmark|rear-rail-marker-3940|rail_speed_marker|-9.7|0|0|1|.84|1|0|180|0|none|10|125|85|rear-rail-marker-3940|1|0
+terrain|3982|hero_landmark|rear-rock-3982|rear_boulder|-34|-8|0|12|11|12|0|-31|0|none|8|245|150|rear-rock-3982|1|0
+terrain|4017|hero_landmark|rear-rail-marker-4017|rail_speed_marker|9.4|0|0|1|.94|1|0|0|0|none|10|125|85|rear-rail-marker-4017|1|0
+terrain|4084|hero_landmark|rear-rail-marker-4084|rail_speed_marker|10.3|0|0|1|1.12|1|0|0|0|none|10|125|85|rear-rail-marker-4084|1|0
+terrain|4160|hero_landmark|rear-rail-marker-4160|rail_speed_marker|-10|0|0|1|1|1|0|180|0|none|10|125|85|rear-rail-marker-4160|1|0
+terrain|4192|hero_landmark|rear-rock-4192|rear_boulder|31|-7|0|11|10|11|0|48|0|none|8|245|150|rear-rock-4192|1|0
+terrain|4239|hero_landmark|rear-rail-marker-4239|rail_speed_marker|9.2|0|0|1|.85|1|0|0|0|none|10|125|85|rear-rail-marker-4239|1|0
+terrain|4310|hero_landmark|rear-rail-marker-4310|rail_speed_marker|-10.1|0|0|1|.94|1|0|180|0|none|10|125|85|rear-rail-marker-4310|1|0
+terrain|4374|hero_landmark|rear-rail-marker-4374|rail_speed_marker|9.7|0|0|1|1.05|1|0|0|0|none|10|125|85|rear-rail-marker-4374|1|0
+terrain|4412|hero_landmark|rear-rock-4412|rear_boulder|-31|-8|0|12|10|14|0|53|0|none|8|245|150|rear-rock-4412|1|0
+terrain|4466|hero_landmark|rear-rail-marker-4466|rail_speed_marker|-9.6|0|0|1|.9|1|0|180|0|none|10|125|85|rear-rail-marker-4466|1|0
+terrain|4549|hero_landmark|rear-rail-marker-4549|rail_speed_marker|10.2|0|0|1|1.03|1|0|0|0|none|10|125|85|rear-rail-marker-4549|1|0
+terrain|4640|hero_landmark|rear-rail-marker-4640|rail_speed_marker|-9.8|0|0|1|1.08|1|0|180|0|none|10|125|85|rear-rail-marker-4640|1|0
+terrain|4698|hero_landmark|rear-rock-4698|rear_boulder|29|-7|0|11|10|14|0|-52|0|none|8|245|150|rear-rock-4698|1|0
+terrain|4741|hero_landmark|rear-rail-marker-4741|rail_speed_marker|-9.7|0|0|1|.85|1|0|180|0|none|10|125|85|rear-rail-marker-4741|1|0
+terrain|4833|hero_landmark|rear-rail-marker-4833|rail_speed_marker|9.3|0|0|1|.92|1|0|0|0|none|10|125|85|rear-rail-marker-4833|1|0
+terrain|4928|hero_landmark|rear-rail-marker-4928|rail_speed_marker|-9.5|0|0|1|1.10|1|0|180|0|none|10|125|85|rear-rail-marker-4928|1|0
+terrain|4996|hero_landmark|rear-rock-4996|rear_boulder|-33|-8|0|13|12|13|0|32|0|none|8|245|150|rear-rock-4996|1|0
+terrain|5029|hero_landmark|rear-rail-marker-5029|rail_speed_marker|10.4|0|0|1|.94|1|0|0|0|none|10|125|85|rear-rail-marker-5029|1|0
+terrain|5154|hero_landmark|rear-rail-marker-5154|rail_speed_marker|-10.1|0|0|1|1.03|1|0|180|0|none|10|125|85|rear-rail-marker-5154|1|0
+terrain|5256|hero_landmark|rear-rail-marker-5256|rail_speed_marker|9.6|0|0|1|.91|1|0|0|0|none|10|125|85|rear-rail-marker-5256|1|0
+terrain|5327|hero_landmark|rear-rock-5327|rear_boulder|32|-8|0|12|11|14|0|14|0|none|8|245|150|rear-rock-5327|1|0
+terrain|5386|hero_landmark|rear-rail-marker-5386|rail_speed_marker|-10|0|0|1|.92|1|0|180|0|none|10|125|85|rear-rail-marker-5386|1|0
+terrain|5525|hero_landmark|rear-rail-marker-5525|rail_speed_marker|9.4|0|0|1|1.06|1|0|0|0|none|10|125|85|rear-rail-marker-5525|1|0
+terrain|5630|hero_landmark|rear-rail-marker-5630|rail_speed_marker|-10.1|0|0|1|1.05|1|0|180|0|none|10|125|85|rear-rail-marker-5630|1|0
+terrain|5749|hero_landmark|rear-rail-marker-5749|rail_speed_marker|9.9|0|0|1|.88|1|0|0|0|none|10|125|85|rear-rail-marker-5749|1|0
+terrain|5825|hero_landmark|rear-rock-5825|rear_boulder|-32|-8|0|11|10|12|0|-36|0|none|8|245|150|rear-rock-5825|1|0
+terrain|5872|hero_landmark|rear-rail-marker-5872|rail_speed_marker|-10.3|0|0|1|1.04|1|0|180|0|none|10|125|85|rear-rail-marker-5872|1|0
+terrain|5991|hero_landmark|rear-rail-marker-5991|rail_speed_marker|10.5|0|0|1|.94|1|0|0|0|none|10|125|85|rear-rail-marker-5991|1|0
+terrain|6106|hero_landmark|rear-rock-6106|rear_boulder|32|-7|0|13|10|12|0|45|0|none|8|245|150|rear-rock-6106|1|0
+terrain|6159|hero_landmark|rear-rail-marker-6159|rail_speed_marker|-9.7|0|0|1|1.09|1|0|180|0|none|10|125|85|rear-rail-marker-6159|1|0
+terrain|6294|hero_landmark|rear-rail-marker-6294|rail_speed_marker|9.6|0|0|1|.89|1|0|0|0|none|10|125|85|rear-rail-marker-6294|1|0
+terrain|6410|hero_landmark|rear-rail-marker-6410|rail_speed_marker|-10.2|0|0|1|1.02|1|0|180|0|none|10|125|85|rear-rail-marker-6410|1|0
+terrain|6478|hero_landmark|rear-rock-6478|rear_boulder|-32|-7|0|10|10|14|0|-38|0|none|8|245|150|rear-rock-6478|1|0
+terrain|6576|hero_landmark|rear-rail-marker-6576|rail_speed_marker|9.9|0|0|1|1.05|1|0|0|0|none|10|125|85|rear-rail-marker-6576|1|0
+terrain|6705|hero_landmark|rear-rail-marker-6705|rail_speed_marker|-9.9|0|0|1|.92|1|0|180|0|none|10|125|85|rear-rail-marker-6705|1|0
+
+# Boss-relative withdrawal, valley vista, white bridge, rear pair.
 event|3350|setpiece|post-boss-white-bridge|boss_relative|post-boss-white-bridge|1|0

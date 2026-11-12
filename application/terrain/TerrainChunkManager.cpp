@@ -1843,29 +1843,42 @@ void AppendRockOutcrop(
     uint32_t seed,
     float side,
     bool ceiling,
-    float distanceT) {
+    float distanceT,
+    const TerrainVolumeField* volumeField=nullptr) {
     constexpr uint32_t kSides = 8;
     const float floorY = -settings.corridorRadius * 0.82f;
     const float wallY = floorY + settings.wallHeight * (0.20f + Hash01(seed + 13u) * 0.72f);
     const float lateral = side * settings.canyonHalfWidth * (0.92f + Hash01(seed + 17u) * 0.18f);
     const float ceilingY = settings.wallHeight * (0.72f + Hash01(seed + 19u) * 0.36f);
 
-    const Vector3 inward = ceiling
+    Vector3 inward = ceiling
         ? Scale(sample.up, -1.0f)
         : Scale(sample.right, -side);
     const Vector3 axisA = ceiling ? sample.right : sample.tangent;
     const Vector3 axisB = ceiling ? sample.tangent : sample.up;
-    const Vector3 baseCenter = Add(
+    Vector3 baseCenter = Add(
         sample.position,
         ceiling
             ? Add(
                 Scale(sample.right, side * settings.canyonHalfWidth * (0.18f + Hash01(seed + 23u) * 0.62f)),
                 Scale(sample.up, ceilingY))
             : Add(Scale(sample.right, lateral), Scale(sample.up, wallY)));
-    const float length = settings.corridorRadius * (0.18f + Hash01(seed + 29u) * 0.34f);
-    const Vector3 tipCenter = Add(baseCenter, Scale(inward, length));
     const float baseA = 2.2f + Hash01(seed + 31u) * 4.6f;
     const float baseB = 1.8f + Hash01(seed + 37u) * 4.0f;
+    if (!ceiling && volumeField != nullptr && volumeField->OpenCanyonBlend(sample.distance) > .35f) {
+        const float verticalRadius = wallY >= 0.0f ? settings.wallHeight : settings.corridorRadius;
+        const float angle = std::atan2(wallY / (std::max)(verticalRadius, 1.0f),
+            lateral / (std::max)(settings.canyonHalfWidth, 1.0f));
+        if (volumeField->OpeningMask(sample.distance, angle) > .40f) return;
+        Vector3 outward{};
+        const auto wall = volumeField->SurfacePoint(sample.distance, angle, &outward);
+        // A widened wall or a hill crest can leave the old nominal anchor
+        // in midair. Embed the broad end in the same wall as the canyon mesh.
+        inward = NormalizeOr(Scale(outward, -1.0f), inward);
+        baseCenter = Add(wall, Scale(inward, -(1.8f + .30f * baseB)));
+    }
+    const float length = settings.corridorRadius * (0.18f + Hash01(seed + 29u) * 0.34f);
+    const Vector3 tipCenter = Add(baseCenter, Scale(inward, length));
     const float tipScale = 0.28f + Hash01(seed + 41u) * 0.34f;
 
     std::vector<uint32_t> base;
@@ -3750,7 +3763,7 @@ TerrainCpuMesh BuildChunkMesh(
         const float side = Hash01(seed + 11u) < 0.5f ? -1.0f : 1.0f;
         const bool ceiling = Hash01(seed + 17u) < 0.42f;
         if(ceiling && volumeField.OpeningMask(distance,1.57079632679f)>0.40f) continue;
-        AppendRockOutcrop(mesh, sample, settings, seed, side, ceiling, t);
+        AppendRockOutcrop(mesh, sample, settings, seed, side, ceiling, t,&volumeField);
     }
 
     const std::vector<RockScatterPlacement> scatterPlacements =

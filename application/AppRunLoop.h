@@ -908,6 +908,10 @@ private:
     RailEliteFirePresentation railEliteFire_{};
     std::array<audio::SoundHandle,4> railEliteSounds_{};
     std::array<audio::SoundHandle,6> railEscapeSounds_{};
+    audio::SoundHandle railArchCrackSound_{};
+    audio::SoundHandle railArchLandSound_{};
+    audio::SoundHandle railCarrierInterceptSound_{};
+    audio::SoundHandle railCarrierBatteryHitSound_{};
     bool railEliteChargePlaying_=false;
     CaveOpeningLighting caveOpeningLighting_{};
     float railTitleDustTimer_ = 0.0f;

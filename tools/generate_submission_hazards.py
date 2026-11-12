@@ -6,6 +6,16 @@ from pathlib import Path
 import math, struct, uuid
 ROOT = Path(__file__).resolve().parents[1]
 
+def save_palette(path, palette):
+    # Eight pixels per swatch keep sampling in the center of each band.
+    width, height = len(palette)*8, 8
+    stride = (width*3+3)//4*4
+    row = b''.join(bytes(reversed(color))*8 for color in palette) + bytes(stride-width*3)
+    pixels = row*height
+    header = struct.pack('<2sIHHI',b'BM',54+len(pixels),0,0,54)
+    info = struct.pack('<IiiHHIIiiII',40,width,height,1,24,0,len(pixels),2835,2835,0,0)
+    path.write_bytes(header+info+pixels)
+
 class Mesh:
     def __init__(self, name, palette):
         self.name, self.palette, self.faces = name, palette, []
@@ -18,14 +28,7 @@ class Mesh:
         self.faces.append((points,colour,tuple(x/size for x in n)))
     def save(self, directory):
         directory.mkdir(parents=True,exist_ok=True)
-        # Each palette band has a 4-pixel guard against linear filtering.
-        w,h=len(self.palette)*8,8;stride=(w*3+3)//4*4
-        pixels=bytearray()
-        for y in range(h):
-            for x in range(w):pixels.extend(reversed(self.palette[x//8]))
-            pixels.extend(bytes(stride-w*3))
-        bmp=struct.pack('<2sIHHI',b'BM',54+len(pixels),0,0,54)+struct.pack('<IiiHHIIiiII',40,w,h,1,24,0,len(pixels),2835,2835,0,0)+pixels
-        (directory/(self.name+'.bmp')).write_bytes(bmp)
+        save_palette(directory/(self.name+'.bmp'), self.palette)
         (directory/(self.name+'.mtl')).write_text('newmtl surface\nKd 1 1 1\nKs 0 0 0\nNs 1\nmap_Kd '+self.name+'.bmp\n',encoding='ascii')
         lines=['# Bounded authored geometry; flat face normals; explicit palette material.','mtllib '+self.name+'.mtl','o '+self.name,'usemtl surface'];index=1
         for points,colour,n in self.faces:

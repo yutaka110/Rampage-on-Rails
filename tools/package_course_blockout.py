@@ -60,6 +60,8 @@ def main():
                          'audio/rail_brake_release.wav','audio/rail_brake_round_pass.wav',
                          'audio/rail_siege_turret_fire.wav','audio/rail_siege_turret_latch.wav',
                          'audio/rail_energy_shield_hit.wav','audio/rail_energy_shield_break.wav',
+                         'audio/rail_arch_crack.wav','audio/rail_arch_land.wav',
+                         'audio/rail_carrier_intercept.wav','audio/rail_carrier_battery_hit.wav',
                          'courses/actors/short_shield_scout.actor',
                          'courses/actors/short_rear_pursuer.actor',
                          'courses/actors/rear_fang.actor',

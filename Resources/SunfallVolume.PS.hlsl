@@ -13,6 +13,7 @@ cbuffer SunfallFrame : register(b0) {
     float4 gSunColorAndDensity;
     float4 gRangeHeightAndGround;
     float4 gWindAndShadow;
+    float4 gSkyPalette;
 };
 struct PSInput { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
 
@@ -67,8 +68,8 @@ float4 main(PSInput input) : SV_TARGET {
     if(depth>0.99999f && gRangeHeightAndGround.w>0) {
         // Own the uncovered sky in HDR too. Depending on an earlier UNORM
         // background loses both its colour gradient and the sun's radiance.
-        return float4(SunfallSkyRadiance(ray,toSun,gSunColorAndDensity.rgb,
-            gSunDirectionAndStrength.w),0);
+        return float4(SunfallCourseSky(ray,toSun,gSunColorAndDensity.rgb,
+            gSunDirectionAndStrength.w,gSkyPalette.rgb),0);
     }
     float phase=0.32f+0.68f*pow(saturate(dot(ray,toSun)),8);
     float3 scatter=0;

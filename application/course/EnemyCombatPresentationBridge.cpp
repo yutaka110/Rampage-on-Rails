@@ -660,6 +660,17 @@ void EnemyCombatPresentationBridge::Update(
             const float angle=impulse*(output.turret?.031f:hit->plated?.050f:.102f);
             output.primaryImpactRotation={angle*(.26f+high),angle*side,-angle*side*.75f};
         }
+        if(output.batteryThermal.valid && output.batteryThermal.phase!=RailBatteryThermalPhase::Destroyed &&
+            actor.actorId==input.counterHitActorId && input.counterHitAge>=0) {
+            auto& thermal=output.batteryThermal;
+            const float age=input.counterHitAge;
+            thermal.counterHitAge=age;
+            const float sag=1-SmoothStep(Saturate((age-.18f)/.59f));
+            const float kick=1-SmoothStep(Saturate(age/.19f));
+            output.primaryImpactRotation.x-=.19f*sag+.09f*kick;
+            output.primaryImpactRotation.y+=(thermal.heavy?.075f:-.075f)*sag;
+            thermal.ventOpen=(std::max)(thermal.ventOpen,.96f*sag);
+        }
         frame_.actors.push_back(output);
     }
 

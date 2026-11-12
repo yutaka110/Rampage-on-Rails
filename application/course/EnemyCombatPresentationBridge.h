@@ -159,6 +159,7 @@ struct EnemyCombatPresentationInput final {
     std::function<bool(Vector3,Vector3,float,Vector3&,Vector3&)> traceDestructionGround;
     uint32_t counterActorId=0;
     float counterAmount=0,counterHitPulse=0;
+    float counterHitAge=-1;
     uint32_t counterHitActorId=0;
     const RailMinibossCombatDirector* minibossCombat=nullptr;
     const RailAttackWarningPresentation* attackWarnings=nullptr;
