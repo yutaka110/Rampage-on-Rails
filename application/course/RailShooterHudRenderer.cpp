@@ -294,36 +294,57 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const float fade=(std::min)(1.0f,guide.Age()*7+.25f)*opacity;
         const Vector4 accent=WithOpacity(success?Vector4{.48f,1,.72f,1}:Vector4{.45f,.90f,1,1},fade);
         const Vector4 white{.94f,.98f,1,fade},muted{.62f,.73f,.80f,fade};
-        if(lesson==Lesson::Brake || lesson==Lesson::Boost) {
-            const bool brake=lesson==Lesson::Brake;
+        if(guide.WaitingForRewardBoost()) {
             const float x=safe,y=height-130*responsive;
-            rect(x,y,218*responsive,26*responsive,{.008f,.018f,.028f,.83f*fade});
-            rect(x+4*responsive,y+3*responsive,23*responsive,20*responsive,{.10f,.20f,.25f,fade});
-            text(brake?"Q":"E",x+15.5f*responsive,y+18*responsive,.68f*responsive,
-                accent,RailShooterHudTextAlignment::Center);
-            const auto instruction=brake?(success?u8"減速を確認":u8"長押しで減速"):
-                (success?u8"加速を確認":u8"長押しで加速");
-            text(Utf8(instruction),x+35*responsive,y+18*responsive,.68f*responsive,success?accent:white);
+            rect(x,y,315*responsive,26*responsive,{.008f,.018f,.028f,.83f*fade});
+            text(Utf8(u8"撃破ブースト終了後に加速を練習"),x+10*responsive,y+18*responsive,.68f*responsive,muted);
         } else {
             const float w=760*scale,x=(width-w)*.5f,y=height*.19f;
             rect(x,y,w,120*scale,{.008f,.018f,.028f,.92f*fade});
             rect(x,y,3*scale,120*scale,accent);
             const float iconX=x+24*scale,iconY=y+23*scale;
-            // A mouse silhouette with the actual left/right button highlighted.
-            rect(iconX,iconY,58*scale,73*scale,{.15f,.22f,.28f,fade});
-            rect(iconX+3*scale,iconY+3*scale,52*scale,67*scale,{.035f,.065f,.085f,fade});
-            rect(iconX+3*scale+(lesson==Lesson::Lock?27:0)*scale,iconY+3*scale,25*scale,30*scale,accent);
-            rect(iconX+27*scale,iconY+3*scale,3*scale,32*scale,{.008f,.018f,.028f,fade});
-            const bool primary=lesson==Lesson::Primary;
-            text(Utf8(primary?u8"01 / 04   通常攻撃":u8"02 / 04   ロックオン"),x+111*scale,y+27*scale,.64f*scale,accent);
-            const auto instruction=primary?(success?u8"通常攻撃を確認":u8"左クリック長押しで連射"):
-                (success?u8"ロックオン発射！":guide.LockPhase()==LockStep::Release?u8"右クリックを離して一斉発射":
-                    guide.LockPhase()==LockStep::Sweep?u8"押したまま敵をなぞる":u8"右クリック長押しでロックオン");
-            const auto detail=primary?u8"マウスで照準を合わせる":
-                (success?u8"複数の敵をまとめて攻撃できる":u8"押したまま敵をなぞると複数ロック");
+            const bool brake=lesson==Lesson::Brake,boost=lesson==Lesson::Boost;
+            if(brake || boost) {
+                rect(iconX,iconY+7*scale,58*scale,58*scale,accent);
+                rect(iconX+3*scale,iconY+10*scale,52*scale,52*scale,{.035f,.065f,.085f,fade});
+                text(brake?"Q":"E",iconX+29*scale,iconY+47*scale,1.6f*scale,accent,RailShooterHudTextAlignment::Center);
+            } else {
+                // A mouse silhouette with the actual left/right button highlighted.
+                rect(iconX,iconY,58*scale,73*scale,{.15f,.22f,.28f,fade});
+                rect(iconX+3*scale,iconY+3*scale,52*scale,67*scale,{.035f,.065f,.085f,fade});
+                rect(iconX+3*scale+(lesson==Lesson::Lock?27:0)*scale,iconY+3*scale,25*scale,30*scale,accent);
+                rect(iconX+27*scale,iconY+3*scale,3*scale,32*scale,{.008f,.018f,.028f,fade});
+            }
+            const char8_t* title;
+            const char8_t* instruction;
+            const char8_t* detail;
+            switch(lesson) {
+            case Lesson::Brake:
+                title=u8"03 / 04   ブレーキ";
+                instruction=success?u8"減速を確認":u8"Q 長押しで減速";
+                detail=u8"狙う時間を作る";
+                break;
+            case Lesson::Boost:
+                title=u8"04 / 04   アクセル";
+                instruction=success?u8"加速を確認":u8"E 長押しで加速";
+                detail=u8"危険区間を早く抜ける";
+                break;
+            case Lesson::Lock:
+                title=u8"02 / 04   ロックオン";
+                instruction=success?u8"ロックオン発射！":guide.LockPhase()==LockStep::Release?u8"右クリックを離して一斉発射":
+                    guide.LockPhase()==LockStep::Sweep?u8"押したまま敵をなぞる":u8"右クリック長押しでロックオン";
+                detail=success?u8"複数の敵をまとめて攻撃できる":u8"押したまま敵をなぞると複数ロック";
+                break;
+            default:
+                title=u8"01 / 04   通常攻撃";
+                instruction=success?u8"通常攻撃を確認":u8"左クリック長押しで連射";
+                detail=u8"マウスで照準を合わせる";
+                break;
+            }
+            text(Utf8(title),x+111*scale,y+27*scale,.64f*scale,accent);
             text(Utf8(instruction),x+111*scale,y+62*scale,1.10f*scale,white);
             text(Utf8(detail),x+111*scale,y+90*scale,.64f*scale,muted);
-            if(!primary && !success)
+            if(lesson==Lesson::Lock && !success)
                 text("LOCK "+std::to_string(guide.Locks()),x+w-92*scale,y+27*scale,.62f*scale,accent);
             const float pulse=.42f+.16f*std::sin(guide.Age()*4);
             rect(x+111*scale,y+106*scale,w-135*scale,2*scale,{.13f,.21f,.27f,fade});
@@ -349,39 +370,44 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const int left=int(input.miniBossPartHealth[0]>0)+int(input.miniBossPartHealth[1]>0);
         text(Utf8(u8"母艦の武装を破壊  残り ")+std::to_string(left)+"/2",width*0.5f,y,
             0.70f*scale,{1,0.88f,0.62f,opacity},center);
-        const bool counter=input.miniBossCounterRemaining>0 && input.miniBossCounterDuration>0;
-        const bool defending=!counter && (input.miniBossGatlingFiring || input.miniBossHeavyFiring);
-        if((counter && input.miniBossCounterPart!=1) || (defending && input.miniBossGatlingFiring)) {
-            // The gatling status stays off the cart while incoming rounds and
-            // body-bound impacts are visible in the middle of the view.
-            const float cardWidth=(counter?540:370)*scale;
-            const float cardY=y-87*scale,cardX=counter?(width-cardWidth)*.5f:safe;
+        const bool counter=input.miniBossCounterRemaining>0 && input.miniBossCounterDuration>0 &&
+            input.miniBossCounterPart>=0 && input.miniBossCounterPart<2 &&
+            input.miniBossPartHealth[input.miniBossCounterPart]>0;
+        if(counter) {
+            const bool gatling=input.miniBossCounterPart==0;
+            const float cardWidth=(std::min)(224*scale,width-2*safe),cardHeight=40*scale;
+            const auto target=input.miniBossCounterScreen;
+            const float radius=input.miniBossCounterMarkerRadius;
+            const bool anchored=radius>0;
+            const float cx=anchored?(std::clamp)(target.x,safe+cardWidth*.5f,width-safe-cardWidth*.5f):width*.5f;
+            const float gap=8*scale;
+            const bool above=target.y-radius-gap-cardHeight>=safe;
+            const float nearY=above?target.y-radius-gap-cardHeight:target.y+radius+gap;
+            const float cardY=anchored?(std::clamp)(nearY,safe,height-safe-cardHeight):y-cardHeight-11*scale;
+            const float cardX=cx-cardWidth*.5f;
+            const Vector4 gold{1,.86f,.36f,opacity};
+            rect(cardX,cardY,cardWidth,cardHeight,{.025f,.019f,.010f,.93f*opacity});
+            rect(cardX,cardY,cardWidth,(2+input.miniBossCounterUnlockPulse)*scale,gold);
+            if(anchored && target.x>=cardX && target.x<=cardX+cardWidth && cardY==nearY)
+                rect(target.x-scale,above?cardY+cardHeight:target.y+radius,2*scale,gap,gold);
+            text(Utf8(gatling?u8"通常弾で反撃":u8"ロックオンで反撃"),
+                cx,cardY+25*scale,.98f*scale,gold,center);
+            bar(cardX+12*scale,cardY+33*scale,cardWidth-24*scale,3*scale,
+                input.miniBossCounterRemaining/input.miniBossCounterDuration,gold,{.16f,.12f,.06f,opacity});
+        } else if(input.miniBossGatlingFiring) {
+            const float cardWidth=370*scale;
+            const float cardY=y-87*scale,cardX=safe;
             const float cardCenter=cardX+cardWidth*.5f;
-            const Vector4 accent=counter?Vector4{1,.84f,.32f,opacity}:Vector4{.30f,.92f,1,opacity};
+            const Vector4 accent{.30f,.92f,1,opacity};
             rect(cardX,cardY,cardWidth,76*scale,{.012f,.025f,.032f,.90f*opacity});
-            rect(cardX,cardY,cardWidth,(counter?3+2*input.miniBossCounterUnlockPulse:2)*scale,accent);
-            if(counter) {
-                text(Utf8(u8"反撃解放"),width*.5f,cardY+26*scale,1.04f*scale,accent,center);
-                auto remaining=std::to_string(int(std::ceil(input.miniBossCounterRemaining*10)));
-                if(remaining.size()==1)remaining="0"+remaining;
-                remaining.insert(remaining.size()-1,".");
-                text((input.miniBossCounterPart==0 ? Utf8(u8"砲台へ戻して主砲で反撃 x2") :
-                    Utf8(u8"砲台へ戻してロックオンで反撃 x2"))+"   "+remaining+"s",
-                    width*.5f,cardY+50*scale,.66f*scale,accent,center);
-                bar(cardX+30*scale,cardY+63*scale,480*scale,4*scale,
-                    (std::clamp)(input.miniBossCounterRemaining/input.miniBossCounterDuration,0.0f,1.0f),accent,{.13f,.10f,.05f,opacity});
-            } else if(input.miniBossGatlingFiring) {
-                text(Utf8(u8"弾の相殺  ")+std::to_string(input.miniBossGatlingIntercepts)+" / 24",
-                    cardCenter,cardY+25*scale,.80f*scale,accent,center);
-                text(Utf8(u8"通常弾を撃ち続けて相殺"),cardCenter,cardY+48*scale,.62f*scale,{.82f,.94f,1,opacity},center);
-                const float cell=(cardWidth-40*scale)/24;
-                for(unsigned round=0;round<24;++round)
-                    rect(cardX+20*scale+round*cell,cardY+62*scale,cell*.84f,4*scale,
-                        round<input.miniBossGatlingIntercepts?accent:Vector4{.09f,.18f,.22f,opacity});
-            } else {
-                text(Utf8(u8"重砲弾を迎撃"),width*.5f,cardY+25*scale,.80f*scale,accent,center);
-                text(Utf8(u8"重砲弾を2ロックして迎撃"),width*.5f,cardY+49*scale,.62f*scale,{.82f,.94f,1,opacity},center);
-            }
+            rect(cardX,cardY,cardWidth,2*scale,accent);
+            text(Utf8(u8"弾の相殺  ")+std::to_string(input.miniBossGatlingIntercepts)+" / 24",
+                cardCenter,cardY+25*scale,.80f*scale,accent,center);
+            text(Utf8(u8"通常弾を撃ち続けて相殺"),cardCenter,cardY+48*scale,.62f*scale,{.82f,.94f,1,opacity},center);
+            const float cell=(cardWidth-40*scale)/24;
+            for(unsigned round=0;round<24;++round)
+                rect(cardX+20*scale+round*cell,cardY+62*scale,cell*.84f,4*scale,
+                    round<input.miniBossGatlingIntercepts?accent:Vector4{.09f,.18f,.22f,opacity});
         }
         if(input.miniBossCounterFeedbackRemaining>0 && input.miniBossCounterDamage>0) {
             const float alpha=(std::clamp)(input.miniBossCounterFeedbackRemaining/.22f,0.0f,1.0f)*opacity;

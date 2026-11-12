@@ -203,6 +203,9 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
             } else {
                 ApplyHitPoints(enemy.desc.hitPoints, result);
             }
+            result.preserveEnemyAttack = result.damageApplied && !result.destroyed &&
+                enemy.desc.actorAssetId == "rear_fang" &&
+                request.damageType == WeaponDamageType::Energy && !request.lockOnContact;
             return result;
         }
         result.rejectReason = DamageRejectReason::TargetNotFound;

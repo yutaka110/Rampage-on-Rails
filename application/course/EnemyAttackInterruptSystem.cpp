@@ -49,7 +49,7 @@ EnemyAttackInterruptResult EnemyAttackInterruptSystem::SubmitActors(std::span<Co
     result.shotId = damageResult.shotId;
     if (!damageResult.requestAccepted || !damageResult.targetResolved ||
         damageResult.hitKind != RailAimHitKind::Enemy ||
-        !damageResult.damageApplied || damageResult.targetActorId == 0) {
+        !damageResult.damageApplied || damageResult.preserveEnemyAttack || damageResult.targetActorId == 0) {
         return result;
     }
     for (CourseEnemyActor& actor : actors) {

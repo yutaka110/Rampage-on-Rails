@@ -76,6 +76,18 @@ def main():
         hull.box(side*47,-5.3,31,16,1.7,12,2)
     hull.box(0,13,-28,25,8,30,5)
     hull.box(0,21,-35,15,8,12,1)
+    # Recessed weapon bays. The shoulders overlap the wing roots, and the
+    # open rear/underside clears the traversing heads and moving barrels.
+    shoulders = [
+        ([(9.5,-71),(28.5,-71),(47.5,-47),(47.5,-36),(28,-32),(9.5,-48)], -9.4,-2.8,1,6),
+        ([(25.2,-71.2),(28.7,-69.8),(37.3,-52),(34.8,-48),(27,-58),(25.2,-65)], -13.4,-7.7,0,6),
+        ([(10.9,-69.3),(14.4,-71.2),(14.4,-58.5),(12,-54),(9.4,-59)], -12.6,-7.8,6,6),
+        ([(14.4,-63),(25.2,-63),(26.6,-53),(13.4,-53)], -13.1,-8.6,6,3),
+    ]
+    for side in (-1,1):
+        for outline,bottom,top,band,underside in shoulders:
+            points=[(side*x,z) for x,z in outline]
+            hull.prism(points if side>0 else list(reversed(points)),bottom,top,band,underside)
     hull.save("MothershipHull.obj")
     unit = Obj()
     unit.box(0,0,0,1,1,1)

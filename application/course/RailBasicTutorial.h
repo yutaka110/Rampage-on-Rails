@@ -8,9 +8,9 @@
 // fires a shot, changes travel speed or teaches an enemy's solution.
 struct RailBasicTutorialInput {
     float dt=0, distance=0, speed=0, normalSpeed=0;
-    bool active=false, boss=false, targetVisible=false, lockFormation=false;
+    bool active=false, boss=false, targetVisible=false, lockTargetAvailable=false;
     bool primaryHeld=false, lockHeld=false, boostHeld=false, brakeHeld=false, rewardBoost=false;
-    bool threat=false, volleyAccepted=false;
+    bool volleyAccepted=false;
     unsigned primaryShots=0;
     std::span<const RailLockToken> locks{}, release{};
 };
@@ -23,10 +23,11 @@ public:
     void Reset(){*this={};}
     // Checkpoint retries preserve knowledge, but discard transient input and
     // success feedback. Returning to the title / starting a new run resets it.
-    void ResetAttempt(){const auto learned=learned_;const bool offered=brakeOffered_;Reset();learned_=learned;brakeOffered_=offered;}
+    void ResetAttempt(){const auto learned=learned_;Reset();learned_=learned;}
     Lesson Current()const{return lesson_;}
     bool Visible()const{return visible_;}
     bool Success()const{return success_;}
+    bool WaitingForRewardBoost()const{return waitingForRewardBoost_;}
     bool Learned(Lesson lesson)const{return lesson!=Lesson::None && (learned_ & Bit(lesson))!=0;}
     unsigned LearnedMask()const{return learned_;}
     unsigned Locks()const{return locks_;}
@@ -36,11 +37,9 @@ public:
     void Update(const RailBasicTutorialInput& in) {
         if(!std::isfinite(in.dt) || in.dt<=0)return;
         visible_=false;
+        const bool wasWaitingForRewardBoost=waitingForRewardBoost_;
+        waitingForRewardBoost_=false;
         if(!in.active || in.boss)return;
-        // Travel can leave the practice stretch while the reward is still active.
-        const bool speedPending=(brakeOffered_ && !Learned(Lesson::Brake)) || lesson_==Lesson::Brake ||
-            (Learned(Lesson::Brake) && !Learned(Lesson::Boost)) || (lesson_==Lesson::Boost && success_);
-        if(in.distance>=SpeedEnd && !speedPending)return;
         const float dt=(std::min)(in.dt,.1f);
         const auto enemyLocks=[](std::span<const RailLockToken> tokens) {
             return unsigned(std::count_if(tokens.begin(),tokens.end(),[](const auto& t){return t.target.kind==RailLockTargetKind::Enemy;}));
@@ -49,7 +48,7 @@ public:
         if(in.targetVisible && in.primaryHeld) {primaryHold_+=dt;shots_+=in.primaryShots;}
         else if(!Learned(Lesson::Primary)){primaryHold_=0;shots_=0;}
         boostHold_=lesson_==Lesson::Boost && in.boostHeld && !in.brakeHeld && !in.rewardBoost &&
-            !in.threat && in.normalSpeed>1 && in.speed>in.normalSpeed*1.03f?boostHold_+dt:0;
+            in.normalSpeed>1 && in.speed>in.normalSpeed*1.03f?boostHold_+dt:0;
         brakeHold_=lesson_==Lesson::Brake && in.brakeHeld && in.normalSpeed>1 &&
             in.speed<in.normalSpeed*.92f?brakeHold_+dt:0;
         const auto learn=[&](Lesson lesson,bool accepted) {
@@ -68,19 +67,23 @@ public:
             success_=false;lesson_=Lesson::None;age_=0;
         }
         Lesson desired=Lesson::None;
-        if(Learned(Lesson::Brake) && !Learned(Lesson::Boost) && in.distance>=BoostGuideStart) {
-            if(!in.rewardBoost && !in.threat)desired=Lesson::Boost;
+        // Let the current lock exercise finish before showing a speed lesson.
+        // A short loss of sight on a curve should not dismiss the card.
+        lockTargetAbsent_=lesson_==Lesson::Lock && !in.lockTargetAvailable?lockTargetAbsent_+dt:0;
+        if(lesson_==Lesson::Lock && !Learned(Lesson::Lock) && lockTargetAbsent_<.45f) {
+            desired=Lesson::Lock;
+        } else if(in.distance>=BoostGuideStart && !Learned(Lesson::Brake)) {
+            desired=Lesson::Brake;
+        } else if(in.distance>=BoostGuideStart && !Learned(Lesson::Boost)) {
+            waitingForRewardBoost_=in.rewardBoost;
+            if(!waitingForRewardBoost_)desired=Lesson::Boost;
+        } else if(in.distance<SpeedEnd && in.targetVisible && !Learned(Lesson::Primary)) {
+            desired=Lesson::Primary;
+        } else if(in.lockTargetAvailable && !Learned(Lesson::Lock)) {
+            desired=Lesson::Lock;
         }
-        else if(brakeOffered_ && !Learned(Lesson::Brake) && in.distance>=BoostGuideStart)desired=Lesson::Brake;
-        else if(in.distance<SpeedEnd) {
-            if(in.targetVisible && !Learned(Lesson::Primary))desired=Lesson::Primary;
-            else if(in.targetVisible && !Learned(Lesson::Lock) && in.lockFormation)desired=Lesson::Lock;
-            else if((!in.threat || in.rewardBoost) && in.distance>=BoostGuideStart && !Learned(Lesson::Brake))
-                desired=Lesson::Brake;
-        }
-        if(desired!=lesson_){lesson_=desired;age_=0;}
-        brakeOffered_|=lesson_==Lesson::Brake;
-        visible_=lesson_!=Lesson::None;
+        if(desired!=lesson_ || waitingForRewardBoost_!=wasWaitingForRewardBoost){lesson_=desired;age_=0;}
+        visible_=lesson_!=Lesson::None || waitingForRewardBoost_;
         if(visible_)age_+=dt;
         progress_=lesson_==Lesson::Primary?(std::min)(1.0f,primaryHold_/.35f):
             lesson_==Lesson::Lock?(locks_>0?1.0f:0.0f):
@@ -91,6 +94,7 @@ private:
     static unsigned Bit(Lesson lesson){return 1u<<unsigned(lesson);}
     Lesson lesson_=Lesson::None;
     unsigned learned_=0,locks_=0,shots_=0;
-    bool visible_=false,success_=false,held_=false,brakeOffered_=false;
+    bool visible_=false,success_=false,held_=false,waitingForRewardBoost_=false;
     float age_=0,progress_=0,primaryHold_=0,boostHold_=0,brakeHold_=0;
+    float lockTargetAbsent_=0;
 };

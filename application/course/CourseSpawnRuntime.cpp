@@ -273,6 +273,17 @@ bool CourseSpawnRuntime::SynchronizePreviewEnemy(uint32_t actorId, CourseEnemyAc
     return false;
 }
 
+void CourseSpawnRuntime::DisengagePursuingWave(std::string_view waveId) {
+    for(auto& actor:enemies_) {
+        if(actor.desc.waveId!=waveId || actor.desc.hitPoints<=0 || !actor.behaviorDefinition.maintainForwardEngagementBand)continue;
+        // End this wave's pursuit so the ordinary staged exit can play.
+        actor.behaviorDefinition.maintainForwardEngagementBand=false;
+        actor.entranceExitState.exitRequested=true;
+        actor.entranceExitState.attackSuppressed=true;
+        actor.entranceExitState.targetable=false;
+    }
+}
+
 void CourseSpawnRuntime::RetireEnemies(std::span<const uint32_t> actorIds, bool playAuthoredExit) {
     const std::unordered_set<uint32_t> ids(actorIds.begin(), actorIds.end());
     std::erase_if(enemies_, [&](CourseEnemyActor& actor) {

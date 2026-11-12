@@ -332,9 +332,8 @@ bool EnemyCombatSystem::SubmitDamageResultActors(std::span<CourseEnemyActor> act
                 damageResult.shotId, damageResult.appliedDamage, feedbackKind);
             state.defeatEventPublished = true;
         }
-    } else if (RailMothership::IsCombatActor(actor->desc.actorAssetId)) {
-        // Armour flashes on impact, but rapid primary hits never reset its
-        // warning or cooldown. Damage and the defeat event remain authoritative.
+    } else if (damageResult.preserveEnemyAttack || RailMothership::IsCombatActor(actor->desc.actorAssetId)) {
+        // Publish the impact while the active warning or cooldown keeps its clock.
         QueueEvent(*actor, EnemyCombatEventKind::HitReacted,
             damageResult.shotId, damageResult.appliedDamage, feedbackKind);
     } else {

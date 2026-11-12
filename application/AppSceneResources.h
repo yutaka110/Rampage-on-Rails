@@ -330,7 +330,8 @@ public:
         const RailMothership::Frame* mothership = nullptr,
         std::span<const CourseTerrainPlacement> sequenceScenery = {},
         const RailVeilAttackFrame* veilAttack = nullptr,
-        const RailEliteFirePresentation* eliteFire = nullptr);
+        const RailEliteFirePresentation* eliteFire = nullptr,
+        Vector2 cartAimOffsets = {});
     void SyncRailVehicleRenderFrame(
         const RailVehicleRenderFrame& frame,
         const Matrix4x4& viewMatrix,

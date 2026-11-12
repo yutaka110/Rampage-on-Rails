@@ -37306,6 +37306,21 @@ void TestGateBridgeEarnedRelease(RegressionRunner& runner) {
     const auto afterBridge=bridgeCarrier.Update(1.0f/60,2050,600,bridgeRail,true,true);
     runner.Expect(afterBridge.railVertical<bridgeShip.railVertical,
         "escort returns smoothly after the vista rather than remaining hidden");
+    RailMothership::Reveal archCarrier;
+    const float arch=RailRouteHazards::ArchDistance;
+    const auto firing=RailMothership::ArchFiringFrame(bridgeRail,arch);
+    auto previous=archCarrier.Update(1.0f/60,1459,600,bridgeRail,true,true,arch);
+    float maximumDrop=0;
+    for(float distance=1460;distance<=1990;++distance) {
+        const auto frame=archCarrier.Update(1.0f/60,distance,600,bridgeRail,true,true,arch);
+        maximumDrop=(std::max)(maximumDrop,previous.center.y-frame.center.y);
+        if(distance>=1660 && distance<=1740)
+            runner.Expect(std::hypot(frame.center.x-firing.center.x,frame.center.y-firing.center.y,
+                frame.center.z-firing.center.z)<.001f,
+                "the shared ship pose holds through heavy charge, launch and impact");
+        previous=frame;
+    }
+    runner.Expect(maximumDrop<.50f,"the long arch approach limits descent per unit of cart travel");
     std::ofstream log("logs/gate_bridge_release.csv");
     log<<"fps,speed,release_seconds,lookout_distance,lookout_count\n";
     for(int fps:{30,60,120}) for(float speed:{16.0f,30.0f,64.0f}) {
@@ -39751,7 +39766,9 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
             for(const auto& actor:spawn.Enemies()) {
                 if(actor.desc.hitPoints<=0)continue;
                 const int i=RailMothership::PartIndex(actor.desc.actorAssetId);if(i<0)continue;
-                const auto socket=ship.World({RailMothership::PartLateral[i],-11,-70});
+                const auto socket=ship.World(RailMothership::WeaponMount(i));
+                if(step==0)runner.Expect(actor.desc.radius==RailMothership::PartRadius[i],
+                    "preview and damageable weapons use the same authored model scale");
                 const auto s=rail.Evaluate(actor.desc.spawnDistance+actor.desc.distanceOffset);
                 const auto anchor=RailMothership::Add(s.position,RailMothership::Add(
                     RailMothership::Scale(s.right,actor.desc.lateralOffset),RailMothership::Scale(s.up,actor.desc.verticalOffset)));
@@ -40960,28 +40977,28 @@ void TestCarrierFeedbackHudSeparation(RegressionRunner& runner) {
                 c.x<=size.first && c.y<=size.second,"carrier action and contact feedback stay inside the supported viewport");
         };
         input.miniBossGatlingFiring=true;input.miniBossGatlingIntercepts=7;hud.Update(input);check("partial");
-        runner.Expect(has(u8"弾の相殺  7 / 24") && !has(u8"反撃解放") && !has(u8"反撃命中") && !has(u8"迎撃成功"),
+        runner.Expect(has(u8"弾の相殺  7 / 24") && !has(u8"で反撃") && !has(u8"反撃命中") && !has(u8"迎撃成功"),
             "partial gatling defense reports progress without promising counter eligibility or counter damage");
         input.miniBossGatlingFiring=false;input.miniBossHeavyFiring=true;hud.Update(input);check("heavy-defense");
-        runner.Expect(!has(u8"重砲弾を2ロックして迎撃") && !has(u8"反撃解放") && !has(u8"反撃命中"),
+        runner.Expect(!has(u8"重砲弾を2ロックして迎撃") && !has(u8"で反撃") && !has(u8"反撃命中"),
             "heavy defense leaves the compact projectile marker to the world overlay and never announces a false counter contact");
         input.miniBossHeavyFiring=false;input.miniBossCounterRemaining=input.miniBossCounterDuration=1.15f;
         input.miniBossCounterPart=0;input.miniBossCounterUnlockPulse=1;hud.Update(input);check("unlock");
-        runner.Expect(has(u8"反撃解放") && has(u8"主砲で反撃 x2") && !has(u8"反撃命中") && !has(u8"弾の相殺"),
+        runner.Expect(has(u8"通常弾で反撃") && !has(u8"反撃命中") && !has(u8"弾の相殺"),
             "an open counter window has a distinct gold callout and action, not a false damage confirmation");
         input.miniBossCounterDamage=72;input.miniBossCounterFeedbackRemaining=.9f;input.miniBossCounterDamageRatio=72.0f/420;
         input.miniBossCounterFeedbackPart=0;input.miniBossCounterHitPulse=1;hud.Update(input);check("counter-contact");
-        runner.Expect(has(u8"反撃命中  72 DAMAGE") && has(u8"反撃解放"),"accepted contact and still-open opportunity remain distinct messages");
+        runner.Expect(has(u8"反撃命中  72 DAMAGE") && has(u8"で反撃"),"accepted contact and still-open opportunity remain distinct messages");
         const float scale=float(size.first)/1600,barX=float(size.first)*.5f-270*scale;
         runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& c){
             return c.kind==RailShooterHudDrawCommandKind::Rectangle && std::abs(c.x-(barX+250*scale*.7f))<.01f &&
                 c.width>0 && std::abs(c.color.y-.72f)<.001f;}),"actual counter damage leaves a visible loss segment on the correct health bar");
         input.miniBossCounterRemaining=0;hud.Update(input);check("late-contact");
-        runner.Expect(has(u8"反撃命中") && !has(u8"反撃解放"),"a credited laser arriving after closure remains a hit without reopening the counter");
+        runner.Expect(has(u8"反撃命中") && !has(u8"で反撃"),"a credited laser arriving after closure remains a hit without reopening the counter");
         input.miniBossCounterFeedbackRemaining=0;hud.Update(input);check("expired");
-        runner.Expect(!has(u8"反撃命中") && !has(u8"反撃解放"),"expired contact and opportunity cannot linger into the next attack");
+        runner.Expect(!has(u8"反撃命中") && !has(u8"で反撃"),"expired contact and opportunity cannot linger into the next attack");
         input.miniBossCounterRemaining=1;input.startCueActive=true;hud.Update(input);
-        runner.Expect(!has(u8"反撃命中") && !has(u8"反撃解放"),"startup never inherits an old carrier reward");
+        runner.Expect(!has(u8"反撃命中") && !has(u8"で反撃"),"startup never inherits an old carrier reward");
     }
 }
 
@@ -41145,14 +41162,29 @@ void TestCarrierIntroAndCounterCycle(RegressionRunner& runner) {
     RailShooterHudRenderer hud;auto definition=RailShooterHudDefinitionAsset::Defaults();
     RailShooterHudPresentationFrame presentation;presentation.visible=true;
     RailShooterHudRenderInput hi;hi.definition=&definition;hi.presentation=&presentation;hi.viewportWidth=1600;hi.viewportHeight=900;
-    hi.bossVisible=hi.miniBossParts=true;hi.miniBossPartHealth={1,1};hi.miniBossCounterRemaining=1;hi.miniBossCounterDuration=1.35f;hi.miniBossCounterPart=1;
-    hud.Update(hi);
-    runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[](const auto& c){return c.text.find(Utf8ForTest(u8"ロックオンで反撃"))!=std::string::npos;}),
-        "counter HUD makes the successful defense and retaliation opportunity explicit");
-    hi.miniBossCounterPart=0;hi.miniBossCounterDamage=72;hi.miniBossCounterFeedbackRemaining=.5f;hud.Update(hi);
-    runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[](const auto& c){return c.text.find(Utf8ForTest(u8"主砲で反撃 x2"))!=std::string::npos;}) &&
-        std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[](const auto& c){return c.text.find("72 DAMAGE")!=std::string::npos;}),
-        "rapid retaliation has its own primary instruction and accepted damage total");
+    hi.bossVisible=hi.miniBossParts=true;hi.miniBossPartHealth={1,1};hi.miniBossCounterRemaining=1;
+    hi.miniBossCounterMarkerRadius=42;
+    for(int part=0;part<2;++part) {
+        const bool gatling=part==0;
+        hi.miniBossCounterPart=part;
+        hi.miniBossCounterDuration=gatling?RailMinibossCombatDirector::RapidCounterSeconds:RailMinibossCombatDirector::HeavyCounterSeconds;
+        hi.miniBossCounterScreen={gatling?560.0f:1040.0f,340};
+        hud.Update(hi);
+        const auto& commands=hud.Frame().commands;
+        const auto title=Utf8ForTest(gatling?u8"通常弾で反撃":u8"ロックオンで反撃");
+        const auto overTarget=[&](const auto& command) {
+            return command.x==hi.miniBossCounterScreen.x && command.y<hi.miniBossCounterScreen.y-hi.miniBossCounterMarkerRadius;
+        };
+        runner.Expect(std::count_if(commands.begin(),commands.end(),[&](const auto& command) {
+            return command.text==title && overTarget(command);
+        })==1 && std::count_if(commands.begin(),commands.end(),[&](const auto& command) {
+            return !command.text.empty() && overTarget(command);
+        })==1,"the exposed battery gets one short counter weapon label above the target");
+    }
+    hi.miniBossCounterMarkerRadius=0;hud.Update(hi);
+    runner.Expect(std::any_of(hud.Frame().commands.begin(),hud.Frame().commands.end(),[](const auto& command) {
+        return command.text==Utf8ForTest(u8"ロックオンで反撃") && command.x==800;
+    }),"an off-screen battery keeps its labeled counter instruction in the HUD");
 }
 
 void TestCarrierPursuitReachability(RegressionRunner& runner) {

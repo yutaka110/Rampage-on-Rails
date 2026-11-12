@@ -520,6 +520,13 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
             actor.veilDescentAimCaptured=true;
         }
         const bool turret = RailTurret::IsMesh(actor.desc.meshId);
+        const int carrierPart=RailMothership::PartIndex(actor.desc.actorAssetId);
+        if(carrierPart>=0 && dt>0 && actor.age<=dt+.0001f) {
+            actor.targetingState.turretAimDirection=Unit({
+                input.playerLateralOffset-actor.desc.lateralOffset,
+                input.playerVerticalOffset-actor.desc.verticalOffset-RailMothership::PartMuzzleHeight*actor.desc.radius,
+                input.playerDistance-actor.desc.spawnDistance-actor.desc.distanceOffset});
+        }
         const Vector3 previousAim = actor.targetingState.turretAimDirection;
         if (turret && actor.combatState.canBeTargeted) {
             if (!actor.attackState.tokenReserved || !actor.targetingState.solutionLocked) {
@@ -528,7 +535,8 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
                 actor.targetingState.targetVerticalOffset = input.playerVerticalOffset;
             }
             const Vector3 desired = ResolveTurretAimDirection(actor);
-            const float blend = 1.0f-std::exp(-8.0f*dt);
+            const float response=carrierPart==0?12.0f:carrierPart==1?4.8f:8.0f;
+            const float blend = 1.0f-std::exp(-response*dt);
             actor.targetingState.turretAimDirection = Unit({
                 previousAim.x+(desired.x-previousAim.x)*blend,
                 previousAim.y+(desired.y-previousAim.y)*blend,

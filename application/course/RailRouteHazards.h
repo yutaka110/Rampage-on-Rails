@@ -92,24 +92,6 @@ inline Vector3 Strike(const CourseObstacleActor& actor) {
 }
 
 inline constexpr float ArchDistance=1755.0f;
-inline constexpr Vector3 HeavyMount{20.0f,-11.8f,-62.0f};
-inline constexpr float HeavyGunScale=3.85f;
-
-inline RailMothership::Frame CollapseCarrier(const RailPath& path) {
-    RailMothership::Frame carrier;
-    carrier.visible=true;
-    carrier.railDistance=ArchDistance+133.0f;
-    carrier.railVertical=50.0f;
-    const auto sample=path.EvaluateExtended(carrier.railDistance);
-    carrier.right=sample.right;carrier.up=sample.up;carrier.forward=sample.tangent;
-    carrier.center=RailMothership::Add(sample.position,
-        RailMothership::Add(RailMothership::Scale(sample.right,21.0f),RailMothership::Scale(sample.up,carrier.railVertical)));
-    return carrier;
-}
-
-inline float HeavyPassWeight(float distance) {
-    return Ease(distance,1638,1681)*(1-Ease(distance,1771,1865));
-}
 
 inline float HeavyCharge(float distance,float age) {
     if(age>BoltLaunch)return 0;
@@ -117,22 +99,27 @@ inline float HeavyCharge(float distance,float age) {
 }
 
 inline Vector3 HeavyGunRotation(const RailMothership::Frame& carrier,Vector3 target) {
-    const auto mount=carrier.World(HeavyMount);
-    const Vector3 delta{target.x-mount.x,target.y-mount.y,target.z-mount.z};
-    const auto dot=[&](Vector3 axis){return delta.x*axis.x+delta.y*axis.y+delta.z*axis.z;};
-    const float x=dot(carrier.right),y=dot(carrier.up),z=dot(carrier.forward);
-    return {std::atan2(y,std::hypot(x,z)),std::atan2(-x,-z),0};
+    return RailMothership::WeaponLookRotation(RailMothership::WeaponLocalDirection(carrier,1,target));
+}
+
+inline Vector3 HeavyPassRotation(const RailMothership::Frame& carrier,const RailPath& path,Vector3 cartRail,
+    Vector3 target,float age) {
+    const auto archRotation=RailMothership::Scale(HeavyGunRotation(carrier,target),Ease(cartRail.z,1638,1666));
+    const auto cartRotation=RailMothership::WeaponCartRotation(carrier,path,1,cartRail);
+    return RailMothership::Mix(archRotation,cartRotation,Ease(age,BoltImpact+.16f,2.14f));
 }
 
 inline Vector3 HeavyGunLocal(Vector3 rotation,Vector3 point) {
-    const auto gun=MakeAffineMatrix(Vector3{HeavyGunScale,HeavyGunScale,HeavyGunScale},rotation,HeavyMount);
+    constexpr float scale=RailMothership::PartRadius[1];
+    const auto gun=MakeAffineMatrix(Vector3{scale,scale,scale},rotation,RailMothership::WeaponMount(1));
     return {point.x*gun.m[0][0]+point.y*gun.m[1][0]+point.z*gun.m[2][0]+gun.m[3][0],
         point.x*gun.m[0][1]+point.y*gun.m[1][1]+point.z*gun.m[2][1]+gun.m[3][1],
         point.x*gun.m[0][2]+point.y*gun.m[1][2]+point.z*gun.m[2][2]+gun.m[3][2]};
 }
 
-inline Vector3 HeavyMuzzle(const RailMothership::Frame& carrier,Vector3 target) {
-    return carrier.World(HeavyGunLocal(HeavyGunRotation(carrier,target),{0,.32f,-2.10f}));
+inline Vector3 HeavyMuzzle(const RailMothership::Frame& carrier,Vector3 rotation,float recoil=0) {
+    return carrier.World(HeavyGunLocal(rotation,
+        RailTurret::MuzzleLocalAtPhase("carrier_heavy_turret",0,0,recoil)));
 }
 
 inline constexpr float FractureStart=.40f, FractureEnd=SupportBreak;

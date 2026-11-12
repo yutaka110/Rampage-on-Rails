@@ -25,6 +25,10 @@ LABELS = ['primary-prompt', 'primary-confirmed', 'lock-hold', 'lock-sweep',
           'route-battery-coast', 'route-battery-brake', 'route-battery-overview']
 STAGES = dict(enumerate(LABELS))
 STAGES[45] = 'speed-lessons-through-battery'
+STAGES[47] = 'speed-lessons-after-runway'
+STAGES[48] = 'lock-then-speed-lessons'
+STAGES[49] = 'primary-clear-then-speed-lessons'
+STAGES[50] = 'pass-then-speed-lessons'
 
 
 def first_battery_fixture(course):
@@ -83,6 +87,8 @@ def main():
         course = battery_hash if stage == 11 else production_hash
         env = {k: v for k, v in os.environ.items() if not k.startswith('GE3_')}
         start = 1200 if 11 <= stage <= 27 else 210
+        if stage == 47:
+            start = 1210
         if 23 <= stage <= 27:
             start = args.battery_start or args.battery_event - 20
             env['GE3_ROUTE_BATTERY_EVENT'] = str(args.battery_event)
@@ -105,13 +111,41 @@ def main():
         assert result.returncode == 0 and screenshot.exists(), (label, last)
         assert float(last['hp']) > 0 and (stage >= 11 or last['visible'] == '1'), (label, last)
         if stage not in (10, 45):
-            assert last['success'] == str(int(stage in [1, 5, 7, 9])), (label, last)
+            assert last['success'] == str(int(stage in [1, 5, 7, 9, 47, 48, 49, 50])), (label, last)
         if 6 <= stage <= 10:
             assert float(last['distance']) >= 630, 'speed lessons begin on the authored runway'
         if stage in (6, 7):
             assert int(last['learned']) & 16 and last['reward_boost'] == '0', last
         if stage == 7:
             assert float(last['speed']) > float(last['normal']) * 1.03
+        if stage == 47:
+            brake = next(r for r in rows if r['lesson']=='4' and r['success']=='1')
+            assert float(brake['distance']) >= 1200 and int(brake['learned']) & 24 == 16, brake
+            assert any(r['lesson']=='3' and r['visible']=='1' and r['threat']=='1' for r in rows), last
+            assert last['lesson']=='3' and int(last['learned']) & 24 == 24, last
+        if 48 <= stage <= 50:
+            brake = next(i for i, r in enumerate(rows) if r['lesson']=='4' and r['visible']=='1')
+            assert any(r['lesson']=='2' and r['visible']=='1' and r['success']=='0' for r in rows[:brake]), label
+            assert rows[brake]['lock_target_available']=='0' or stage==48, rows[brake]
+            assert last['lesson']=='3' and int(last['learned']) & 24 == 24 and last['reward_boost']=='0', last
+            assert any(r['lesson']=='4' and r['success']=='1' for r in rows[brake:]), label
+            if stage == 48:
+                launch = next(i for i, r in enumerate(rows) if r['lesson']=='2' and r['success']=='1')
+                assert float(rows[launch]['distance']) >= 630 and int(rows[launch]['volley']) > 0, rows[launch]
+                assert all(r['lesson']=='2' and r['visible']=='1' and r['success']=='1' for r in rows[launch:brake])
+                elapsed = sum(float(r['dt']) for r in rows[launch:brake])
+                assert 1.18 <= elapsed <= 1.30, elapsed
+            else:
+                assert all(r['volley']=='0' for r in rows) and int(last['learned']) & 4 == 0, last
+                formation = [r for r in rows[:brake] if int(r['lock_formation_alive'])>0]
+                assert formation, label
+                if stage == 49:
+                    assert any(r['lesson']=='2' and int(r['shots'])>0 for r in formation), label
+                    assert int(formation[-1]['reward_kills']) > int(formation[0]['reward_kills']), label
+                else:
+                    assert any(r['lesson']=='2' and r['lock_target_available']=='1' and
+                               float(r['distance'])>=630 for r in formation), label
+                    assert all(r['shots']=='0' for r in formation if r['lesson']=='2'), label
         if stage in (9, 45):
             prompt = next(i for i, r in enumerate(rows) if r['lesson']=='4' and r['visible']=='1')
             pressed = next(i for i in range(prompt, len(rows)) if rows[i]['brake']=='1')

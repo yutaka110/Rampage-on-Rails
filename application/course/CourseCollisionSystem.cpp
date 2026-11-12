@@ -703,6 +703,7 @@ void CourseCollisionSystem::FirePlayerShot(
         shootDownRequest.damage = shot.damage;
         shootDownRequest.primaryRadius = weapon_.radius;
         shootDownRequest.focusedGatlingClash=focusedGatlingClash;
+        shootDownRequest.firstGatlingDefense=input.firstGatlingDefense;
         const auto destroyedBefore=projectileShootDownSystem_.Frame().projectilesDestroyed;
         const EnemyProjectileShootDownResult shootDown =
             runtime.ShootDownPrimaryProjectile(

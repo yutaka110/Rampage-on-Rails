@@ -5,6 +5,7 @@
 #include "CourseGameplayWaveRuntimeBridge.h"
 
 inline constexpr const char* RailShortCoursePath="Resources/courses/ShortCompleteRun.course";
+inline constexpr float ShortRunLockPracticeEnd=810.0f;
 inline bool IsRailShortCourse(std::string_view path) { return path==RailShortCoursePath; }
 inline bool UsesCanyonPresentation(std::string_view path) {
     return IsRailShortCourse(path) || path=="Resources/courses/CanyonAssaultRoute01.course";

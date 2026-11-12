@@ -79,6 +79,7 @@ struct CourseCollisionFrameInput {
     float rearBridgeStart = 0;
     float rearBridgeEnd = 0;
     const TerrainEditLayer* primaryTerrainPreview = nullptr;
+    bool firstGatlingDefense = false;
 };
 
 struct CourseCollisionFrameStats {

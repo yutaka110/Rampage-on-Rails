@@ -76,6 +76,20 @@ def main():
             assert last['alive']=='0' and int(last['rear_primary'])>=6 and int(last['rear_lock'])>=2,last
             escape_start=next(r for r in rows if r['phase']=='9')
             assert float(escape_start['veil_hull_hp'])==0,escape_start
+            warning_start = None
+            for previous, row in zip(rows, rows[1:]):
+                if row['phase']!='6' or row['fang_reserved']!='1' or row['crossfire_phase']!='0':
+                    warning_start = None
+                    continue
+                if warning_start is None:
+                    warning_start = row
+                if (previous['fang_rounds'] == warning_start['fang_rounds'] and
+                    int(row['fang_rounds']) > int(warning_start['fang_rounds']) and
+                    int(previous['rear_primary']) - int(warning_start['rear_primary']) >= 6 and
+                    0 < float(row['fang_hull_hp']) < float(warning_start['fang_hull_hp'])):
+                    break
+            else:
+                raise AssertionError('Fang did not fire during sustained primary hull hits')
         if stage in (4,5):assert last['phase']=='4' and last['alive']=='0' and float(last['camera_weight'])==0,last
         if stage==6:assert last['phase']=='5' and last['alive']=='1',last
         if stage==7:assert last['phase']=='6' and last['alive']=='2' and float(last['camera_weight'])==1,last

@@ -3991,7 +3991,7 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
     const TwinShieldDronePose* titlePursuer,
     bool includeStartupRearScenery,
     const RailMothership::Frame* mothership,std::span<const CourseTerrainPlacement> sequenceScenery,
-    const RailVeilAttackFrame* veilAttack,const RailEliteFirePresentation* eliteFire) {
+    const RailVeilAttackFrame* veilAttack,const RailEliteFirePresentation* eliteFire,Vector2 cartAimOffsets) {
     std::vector<CourseMeshModelBinding> bindings;
     bindings.reserve(vfxModelLibrary.size());
     for (const AppManagedModelResource& model : vfxModelLibrary) {
@@ -4018,27 +4018,21 @@ void AppSceneResources::SyncCourseMeshRenderQueue(
         includeStartupRearScenery,veilAttack,eliteFire);
     courseMeshRenderQueue.AppendTerrain(sequenceScenery,currentDistance,railPath,bindings,viewMatrix,projMatrix);
     if(mothership) {
-        auto carrier=*mothership;
+        const auto& carrier=*mothership;
         float shotAge=-1;
         Vector3 shotTarget{};
-        const float weight=RailRouteHazards::HeavyPassWeight(currentDistance);
-        if(carrier.visible && weight>0 && course &&
-            std::any_of(course->events.begin(),course->events.end(),[](const auto& event) {
-                return event.id==RailRouteHazards::SlabId;
-            })) {
-            const auto pass=RailRouteHazards::CollapseCarrier(railPath);
-            carrier.center=RailMothership::Mix(carrier.center,pass.center,weight);
-            carrier.right=RailMothership::Mix(carrier.right,pass.right,weight);
-            carrier.up=RailMothership::Mix(carrier.up,pass.up,weight);
-            carrier.forward=RailMothership::Mix(carrier.forward,pass.forward,weight);
-            for(const auto& obstacle:courseRuntime.Obstacles())if(RailRouteHazards::IsSlab(obstacle)) {
+        if(carrier.visible && currentDistance>=RailRouteHazards::ArchDistance-130.0f &&
+            currentDistance<RailRouteHazards::ArchDistance+110.0f) {
+            for(const auto& obstacle:courseRuntime.Obstacles())if(RailRouteHazards::IsSlab(obstacle) &&
+                RailRouteHazards::CarrierStrikesSlab(obstacle)) {
                 const auto hit=RailRouteHazards::Strike(obstacle);
                 shotTarget=ResolveEnemyProjectileWorldPosition(railPath,hit);
-                if(!RailRouteHazards::SlabTriggerShot(obstacle))shotAge=obstacle.age;
+                shotAge=obstacle.age;
                 break;
             }
         }
-        courseMeshRenderQueue.AppendMothership(carrier,bindings,viewMatrix,projMatrix,shotAge,shotTarget);
+        courseMeshRenderQueue.AppendMothership(carrier,bindings,viewMatrix,projMatrix,railPath,
+            {cartAimOffsets.x,cartAimOffsets.y,currentDistance},shotAge,shotTarget);
     }
     if (titlePursuer) courseMeshRenderQueue.AppendTwinShieldDrone(*titlePursuer,bindings,viewMatrix,projMatrix);
 }

@@ -81,6 +81,21 @@ public:
     }
     bool InFlight()const{return count_>0;}
     bool GatlingInFlight()const{return InFlight() && volleyPart_==0;}
+    bool FirstVolley(int part)const{return InFlight() && volleyPart_==part && observed_[part]==1;}
+    int FirstDefensePart()const{return firstDefensePart_;}
+    float FirstDefenseAge()const{return firstDefenseAge_;}
+    void AdvanceFirstDefense(float realDt) {
+        if(firstDefensePart_<0 || !std::isfinite(realDt) || realDt<=0)return;
+        firstDefenseAge_+=realDt;
+        if(firstDefenseAge_>=FirstDefenseDuration())firstDefensePart_=-1;
+    }
+    float FirstDefenseWeight()const {
+        if(firstDefensePart_<0)return 0;
+        const float t=(std::clamp)((std::min)(firstDefenseAge_/.10f,
+            (FirstDefenseDuration()-firstDefenseAge_)/.18f),0.0f,1.0f);
+        return t*t*(3-2*t);
+    }
+    float FirstDefenseTimeScale()const{return 1-.55f*FirstDefenseWeight();}
     uint32_t VolleyOwner()const{return volleyOwner_;}
     bool GatlingGuardPoint(float playerDistance,Vector3& railPoint)const {
         if(!GatlingInFlight() || !guardValid_)return false;
@@ -104,7 +119,7 @@ public:
         if(!enabled){Reset();return;}
         Bind(runtime);
         active_=Living(runtime,0) || Living(runtime,1);
-        if(!active_){counterRemaining_=0;gatlingInterceptFeedback_.remaining=0;ClearVolley();return;}
+        if(!active_){counterRemaining_=0;gatlingInterceptFeedback_.remaining=0;ClearVolley();firstDefensePart_=-1;return;}
         if(!gameplayActive){ApplyGate(runtime,false);return;}
         const float dt=gameplayActive && std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,.25f):0;
         elapsed_+=dt;
@@ -136,6 +151,7 @@ public:
         for(int part=0;part<2;++part) {
             const auto* actor=FindLiving(runtime,ids_[part]);
             if(!actor || actor->fireSequence<=observed_[part])continue;
+            const bool firstLaunch=(introduced_&(1u<<part))==0;
             observed_[part]=actor->fireSequence;introduced_|=1u<<part;
             if(InFlight())continue;
             cooldown_[part]=CooldownDuration(runtime,part);
@@ -168,6 +184,7 @@ public:
                 guardOffset_={guardSum.x*inv,guardSum.y*inv,guardSum.z*inv};guardValid_=true;
             }
             if(!count_)FinishTurn(.35f);
+            else if(firstLaunch){firstDefensePart_=part;firstDefenseAge_=0;}
         }
         // A fired volley owns its complete flight, even if another actor was
         // already queued. Existing reservation and visibility checks remain.
@@ -202,6 +219,7 @@ public:
         return true;
     }
 private:
+    float FirstDefenseDuration()const{return firstDefensePart_==0?.80f:1.12f;}
     static const CourseEnemyActor* FindLiving(const CourseSpawnRuntime& runtime,uint32_t id) {
         for(const auto& actor:runtime.Enemies())if(actor.actorId==id && actor.desc.hitPoints>0 &&
             (!actor.combatState.initialized || (actor.combatState.phase!=EnemyCombatPhase::Dying &&
@@ -254,6 +272,8 @@ private:
     size_t count_=0;
     unsigned introduced_=0,intercepted_=0;
     int turn_=0,volleyPart_=-1;
+    int firstDefensePart_=-1;
+    float firstDefenseAge_=0;
     uint32_t volleyOwner_=0,counterOwner_=0;
     uint64_t volleyIntent_=0;
     float counterRemaining_=0,counterDuration_=0,gapRemaining_=0;

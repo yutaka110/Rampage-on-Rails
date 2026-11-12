@@ -28,6 +28,14 @@ bool Finite(Vector3 value) noexcept {
     return std::isfinite(value.x) && std::isfinite(value.y) &&
         std::isfinite(value.z);
 }
+
+float GatlingClashRadius(const EnemyProjectileShootDownRequest& request) {
+    return request.firstGatlingDefense ? 5.5f : RailGatling::ClashRadius;
+}
+
+float GatlingClashArmTime(const EnemyProjectileShootDownRequest& request) {
+    return request.firstGatlingDefense ? .16f : RailGatling::ClashArmSeconds;
+}
 }
 
 void EnemyProjectileShootDownSystem::Reset() {
@@ -60,10 +68,11 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitPrimary(
     if(anchor!=projectiles.end() && first.clashRadius>0) {
         const auto sample=railPath.Evaluate(anchor->spawnDistance+anchor->distanceOffset);
         first.clashCenter=Add(sample.position,Add(Scale(sample.right,anchor->lateralOffset),Scale(sample.up,anchor->verticalOffset)));
-        first.clashRadius=RailGatling::ClashRadius;
         frame_.results.back()=first;
-        const auto second=SubmitRay(projectiles,railPath,request,true,&*anchor);
-        if(second.accepted) {
+        const int nearbyRounds=request.firstGatlingDefense?2:1;
+        for(int i=0;i<nearbyRounds;++i) {
+            const auto adjacent=SubmitRay(projectiles,railPath,request,true,&*anchor);
+            if(!adjacent.accepted)break;
             frame_.results.back().clashCenter=first.clashCenter;
             frame_.results.back().secondaryClash=true;
         }
@@ -120,7 +129,7 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitRay(
                 Scale(sample.right, projectile.lateralOffset)),
             Scale(sample.up, projectile.verticalOffset));
         if(adjacentTo) {
-            if(projectile.age+.0001f<RailGatling::ClashArmSeconds)continue;
+            if(projectile.age+.0001f<GatlingClashArmTime(request))continue;
             if(projectile.ownerActorId!=adjacentTo->ownerActorId ||
                 projectile.attackIntentSequence!=adjacentTo->attackIntentSequence ||
                 projectile.attackTokenId!=adjacentTo->attackTokenId ||
@@ -129,7 +138,8 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitRay(
             const auto anchorCenter=Add(anchorSample.position,Add(Scale(anchorSample.right,adjacentTo->lateralOffset),
                 Scale(anchorSample.up,adjacentTo->verticalOffset)));
             const auto separation=Subtract(center,anchorCenter);
-            if(Dot(separation,separation)>RailGatling::ClashRadius*RailGatling::ClashRadius)continue;
+            const float clashRadius=GatlingClashRadius(request);
+            if(Dot(separation,separation)>clashRadius*clashRadius)continue;
         }
         const Vector3 relative = Subtract(center, request.rayOrigin);
         const float projection = Dot(relative, direction);
@@ -142,7 +152,7 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitRay(
             (primaryPulse ? (request.primaryRadius>0 && std::isfinite(request.primaryRadius) ?
                 request.primaryRadius : RailPulseShot::ContactRadius) : 0.0f);
         // The first contact is a pulse/round collision. Its compact energy
-        // burst may disperse one adjacent round, including a slight sideways
+        // burst may disperse adjacent rounds, including a slight sideways
         // offset between rotating barrels; it is not a second piercing ray.
         if (!adjacentTo && Dot(delta, delta) > radius * radius) continue;
         const float perpendicularSquared = Dot(delta, delta);
@@ -180,8 +190,8 @@ EnemyProjectileShootDownResult EnemyProjectileShootDownSystem::SubmitRay(
     lastResult_.primaryRadius=primaryPulse && !adjacentTo ?
         (request.primaryRadius>0 && std::isfinite(request.primaryRadius)?request.primaryRadius:RailPulseShot::ContactRadius) : 0.0f;
     if(primaryPulse && !adjacentTo && request.focusedGatlingClash &&
-        RailGatling::IsProjectile(best->definitionId) && best->age+.0001f>=RailGatling::ClashArmSeconds)
-        lastResult_.clashRadius=RailGatling::ClashRadius;
+        RailGatling::IsProjectile(best->definitionId) && best->age+.0001f>=GatlingClashArmTime(request))
+        lastResult_.clashRadius=GatlingClashRadius(request);
     // The heavy shell stops an energy pulse, but only lock lasers damage it.
     lastResult_.appliedDamage = primaryPulse && RailHeavy::IsProjectile(best->definitionId) ? 0.0f :
         (std::min)(request.damage, best->shootDownHitPoints);

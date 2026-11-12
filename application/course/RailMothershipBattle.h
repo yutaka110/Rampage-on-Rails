@@ -9,11 +9,11 @@ inline constexpr const char* BossWaveId="short-mothership";
 // Render/socket contract: reactor sits outside the rear armour at local (0,-11,-70).
 inline Frame AtReactor(const RailPath& rail,float distance,float lateral,float vertical) {
     const auto sample=rail.Evaluate(distance);
-    Frame result;result.visible=true;result.railDistance=distance+70;
+    Frame result;result.visible=true;result.railDistance=distance-ReactorMount.z;
     result.right=sample.right;result.up=sample.up;result.forward=sample.tangent;
     const auto reactor=Add(sample.position,Add(Scale(sample.right,lateral),Scale(sample.up,vertical)));
-    result.center=Add(reactor,Add(Scale(sample.up,11),Scale(sample.tangent,70)));
-    result.railVertical=vertical+11;result.launchGlow=0.1f;
+    result.center=Add(reactor,Add(Scale(sample.up,-ReactorMount.y),Scale(sample.tangent,-ReactorMount.z)));
+    result.railVertical=vertical-ReactorMount.y;result.launchGlow=0.1f;
     return result;
 }
 class Battle final {
@@ -103,9 +103,11 @@ public:
                 frame_.center.y += (altitude-frame_.center.y)*Smooth(distance,1950,2250);
             }
             if(distance>=3100) {
-                const auto approach=AtReactor(rail,distance+82,0,18);
-                const float t=Smooth(distance,3100,3350);
+                const auto approach=AtReactor(rail,distance+PartForwardDistance,0,PartHeight);
+                const float t=Smooth(distance,3100,BattleStart);
                 frame_.center=Mix(frame_.center,approach.center,t);
+                frame_.railDistance=std::lerp(escort.railDistance,approach.railDistance,t);
+                frame_.railVertical=std::lerp(frame_.railVertical,approach.railVertical,t);
                 const auto normalize=[](Vector3 v) { const float length=std::sqrt(v.x*v.x+v.y*v.y+v.z*v.z);
                     return length>0.0001f ? Scale(v,1.0f/length) : Vector3{0,0,1}; };
                 frame_.forward=normalize(Mix(escort.forward,approach.forward,t));

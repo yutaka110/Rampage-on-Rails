@@ -36,6 +36,20 @@ Vector3 TransformTurretPoint(Vector3 point,const Matrix4x4& world) {
         point.x*world.m[0][2]+point.y*world.m[1][2]+point.z*world.m[2][2]+world.m[3][2]};
 }
 
+template<class Draw>
+void DrawHeavyTurretArmor(const Matrix4x4& head,const Matrix4x4& moving,float opening,float ventOpen,Draw draw) {
+    for(float side:{-1.0f,1.0f}) {
+        const auto offset=MakeAffineMatrix(Vector3{1,1,1},Vector3{},Vector3{side*.18f,0,0});
+        const auto hinge=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,side*ventOpen*1.05f},
+            Vector3{side*.68f,.76f,.12f});
+        draw("carrier_heavy_turret_vent",Multiply(offset,Multiply(hinge,head)));
+        const auto flip=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,side<0?3.14159265f:0},Vector3{});
+        const auto shutter=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,side*1.28f*opening,0},
+            Vector3{side*(.86f+.38f*opening),0,-2.06f});
+        draw("carrier_heavy_turret_shutter",Multiply(flip,Multiply(shutter,moving)));
+    }
+}
+
 Vector3 ResolveRailLocal(
     const RailPath& railPath,
     float spawnDistance,
@@ -1333,7 +1347,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 movingWorld.m[3][2]+=(launch.z-restMouth.z)*blend;
             }
             const uint32_t baseIndex = ResolveModelIndex(models,geometry.baseMesh,nullptr);
-            if (model.name == geometry.headMesh && models[baseIndex].name == geometry.baseMesh) {
+            if (RailMothership::PartIndex(enemy.desc.actorAssetId)<0 &&
+                model.name == geometry.headMesh && models[baseIndex].name == geometry.baseMesh) {
                 if (CourseMeshRenderItem* base = AllocateItem()) {
                     base->kind = CourseMeshRenderKind::Enemy;
                     base->sourceActorId = enemy.actorId;
@@ -1402,19 +1417,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                     }
                 };
                 const float opening=HeavyMuzzleArmorOpen(presentation->batteryThermal,shotAge);
-                for(float side:{-1.0f,1.0f}) {
-                    const auto offset=MakeAffineMatrix(Vector3{1,1,1},Vector3{},Vector3{side*.18f,0,0});
-                    const auto hinge=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,side*presentation->batteryThermal.ventOpen*1.05f},
-                        Vector3{side*.68f,.76f,.12f});
-                    drawPart("carrier_heavy_turret_vent",Multiply(offset,Multiply(hinge,head)));
-
-                    // Both plates use the same inward-facing mesh. They hinge
-                    // outward from the moving barrel without relocating the bore.
-                    const auto flip=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,side<0?3.14159265f:0},Vector3{});
-                    const auto shutter=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,side*1.28f*opening,0},
-                        Vector3{side*(.86f+.38f*opening),0,-2.06f});
-                    drawPart("carrier_heavy_turret_shutter",Multiply(flip,Multiply(shutter,movingWorld)));
-                }
+                DrawHeavyTurretArmor(head,movingWorld,opening,presentation->batteryThermal.ventOpen,drawPart);
             }
             if (presentation && (singleSiege?(siegeFlash || siegeWarning):presentation->turretMuzzleActive)) {
                 const uint32_t glowIndex = ResolveModelIndex(models,"ball",nullptr);
@@ -1746,7 +1749,8 @@ void CourseMeshRenderQueue::WriteItemTransform(
 
 void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrier,
     std::span<const CourseMeshModelBinding> models,
-    const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix,float routeShotAge,Vector3 routeShotTarget) {
+    const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix,const RailPath& railPath,Vector3 cartRail,
+    float routeShotAge,Vector3 routeShotTarget) {
     if(!carrier.visible || models.empty()) return;
     Matrix4x4 ship=MakeIdentity4x4();
     ship.m[0][0]=carrier.right.x; ship.m[0][1]=carrier.right.y; ship.m[0][2]=carrier.right.z;
@@ -1754,7 +1758,7 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
     ship.m[2][0]=carrier.forward.x; ship.m[2][1]=carrier.forward.y; ship.m[2][2]=carrier.forward.z;
     ship.m[3][0]=carrier.center.x; ship.m[3][1]=carrier.center.y; ship.m[3][2]=carrier.center.z;
     const auto vp=Multiply(viewMatrix,projMatrix);
-    auto part=[&](const char* mesh,const char* name,Vector3 center,Vector3 scale,Vector4 color,bool lit,Vector3 rotation={}) {
+    const auto append=[&](const char* mesh,const char* name,const Matrix4x4& local,Vector4 color,bool lit) {
         const uint32_t model=ResolveModelIndex(models,mesh,nullptr);
         if(models[model].name!=mesh || !models[model].loaded) return;
         auto* item=AllocateItem(); if(!item) return;
@@ -1780,40 +1784,59 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
         if(IsCarrierBatterySurfaceMesh(mesh))
             *item->materialData=BuildCarrierBatterySurfaceMaterial(mesh,color,0,0);
         item->useMaterialOverride=true;
-        auto world=Multiply(models[model].rootLocal,
-            Multiply(MakeAffineMatrix(scale,rotation,center),ship));
+        auto world=Multiply(models[model].rootLocal,Multiply(local,ship));
         item->transformData->World=world;
         item->transformData->WVP=Multiply(world,vp);
         item->transformData->WorldInverseTranspose=Transpose(Inverse(world));
     };
+    const auto part=[&](const char* mesh,const char* name,Vector3 center,Vector3 scale,Vector4 color,bool lit) {
+        append(mesh,name,MakeAffineMatrix(scale,Vector3{},center),color,lit);
+    };
     const float dying=carrier.battleDestruction;
+    const float distance=cartRail.z;
     part("carrier_hull","carrier/blockout-hull",{},{1,1,1},
         {0.92f+dying*.08f,.98f-dying*.45f,1.08f-dying*.62f,1},true);
-    if(routeShotAge>=0) {
-        using namespace RailRouteHazards;
-        const auto rotation=HeavyGunRotation(carrier,routeShotTarget);
-        const float scale=HeavyGunScale;
-        const float recoil=RailTurret::RecoilAtAge("carrier_heavy_turret",routeShotAge-BoltLaunch);
-        part("carrier_box","carrier/route-heavy-yoke",{HeavyMount.x,-9.1f,HeavyMount.z+1.8f},
-            {4.8f,3.6f,5.1f},{.23f,.27f,.30f,1},true);
-        part("carrier_heavy_turret_head","carrier/route-heavy-head",HeavyMount,
-            {scale,scale,scale},{.82f,.88f,.94f,1},true,rotation);
-        part("carrier_heavy_turret_barrel","carrier/route-heavy-barrel",HeavyGunLocal(rotation,{0,.32f,recoil}),
-            {scale,scale,scale},{.92f,.92f,.98f,1},true,rotation);
-    }
-    if(carrier.partsBattle) {
-        // Intact hull and independently destructible weapon pods. Their live
-        // meshes are Enemy actors, so aim, damage and rendering share anchors.
-        part("carrier_box","carrier/reactor-armour",{0,-11,-69},{14,15,5},{0.10f,0.14f,0.18f,1},true);
+    if(carrier.partsBattle || (!carrier.battleActive && !carrier.battleDefeated)) {
+        part("carrier_box","carrier/reactor-armour",{0,-10,-65},{12,9,6},{.10f,.14f,.18f,1},true);
         for(int i=0;i<2;++i) {
-            const float x=RailMothership::PartLateral[i];
-            const bool alive=carrier.partHealth[i]>0;
-            part("carrier_box",i==0?"carrier/rapid-mount":"carrier/heavy-mount",
-                {x,-11,-65},{11,11,8},alive?Vector4{0.14f,0.18f,0.22f,1}:Vector4{0.06f,0.05f,0.04f,1},true);
-            if(alive) {
-                const float glow=0.7f+carrier.partCharge[i]*1.6f;
-                part("carrier_box","carrier/weapon-guide",{x,-18,-69},{10,0.7f,0.7f},
-                    i==0?Vector4{0.12f*glow,0.7f*glow,1.2f*glow,1}:Vector4{1.4f*glow,0.45f*glow,0.06f,1},false);
+            const auto mount=RailMothership::WeaponMount(i);
+            if(carrier.partsBattle && carrier.partHealth[i]<=0)continue;
+            const bool heavy=i==1;
+            const float glow=.54f+carrier.partCharge[i]*1.35f;
+            part("carrier_box","carrier/weapon-guide",{mount.x,mount.y-3.0f,mount.z+1.7f},{4.6f,.42f,.48f},
+                heavy?Vector4{1.4f*glow,.25f*glow,.62f*glow,1}:Vector4{.20f*glow,.72f*glow,1.25f*glow,1},false);
+            // The same weapon meshes take over as damageable actors at the
+            // encounter boundary. The hull itself owns the permanent sockets.
+            if(carrier.partsBattle)continue;
+            using namespace RailRouteHazards;
+            const std::string_view mesh=heavy?"carrier_heavy_turret":"gatling_turret";
+            const auto geometry=RailTurret::ForMesh(mesh);
+            const float scale=RailMothership::PartRadius[i];
+            const bool routeShot=heavy && routeShotAge>=0;
+            const float shotAge=routeShot?routeShotAge-BoltLaunch:-1;
+            const float traverse=heavy?RailMothership::Smooth(distance,1725,1815):RailMothership::GatlingPreviewTraverse(distance);
+            const auto rotation=routeShot?HeavyPassRotation(carrier,railPath,cartRail,routeShotTarget,routeShotAge):
+                Scale(RailMothership::WeaponCartRotation(carrier,railPath,i,cartRail),traverse);
+            const auto head=MakeAffineMatrix(Vector3{scale,scale,scale},rotation,mount);
+            const float angle=heavy?0:RailMothership::GatlingPreviewAngle(distance);
+            const auto motion=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,angle},
+                Vector3{0,geometry.muzzleHeight,RailTurret::RecoilAtAge(mesh,shotAge)});
+            const auto moving=Multiply(motion,head);
+            const Vector4 tint{.88f,.92f,.97f,1};
+            append(geometry.headMesh,heavy?"carrier/heavy-head":"carrier/gatling-head",head,tint,true);
+            append(geometry.movingMesh,heavy?"carrier/heavy-barrel":"carrier/gatling-rotor",moving,tint,true);
+            if(heavy) {
+                RailBatteryThermalFrame thermal;
+                thermal.valid=thermal.heavy=true;
+                if(routeShot && shotAge<0) {
+                    thermal.phase=RailBatteryThermalPhase::Charging;
+                    thermal.charge=HeavyCharge(distance,routeShotAge);
+                }
+                const float vent=Ease(shotAge,.10f,.32f)*(1-Ease(shotAge,.55f,1.18f));
+                DrawHeavyTurretArmor(head,moving,HeavyMuzzleArmorOpen(thermal,shotAge),vent,
+                    [&](const char* meshId,const Matrix4x4& pose) {
+                        append(meshId,"carrier/heavy-armor",pose,tint,true);
+                    });
             }
         }
     } else if(carrier.battleActive || carrier.battleDefeated) {

@@ -542,7 +542,33 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
                 runner.Expect(runtime.Enemies().front().rearArmor.intact==7,"repeat break rearms again");
             } else runner.Expect(false,"rearm registers new lock targets");
         } else runner.Expect(false,"Fang registers three panel locks");
-        runner.Expect(runtime.RestoreCheckpoint(armorCheckpoint,true,&error),"restore the original fight before hull tests");
+        auto warningCheckpoint=armorCheckpoint;
+        auto& warningActor=warningCheckpoint.enemies.front();
+        warningActor.combatState.phase=EnemyCombatPhase::Telegraphing;
+        warningActor.combatState.canFire=true;
+        warningActor.combatState.phaseElapsedSeconds=.27f;
+        warningActor.behaviorState.attackIntentActive=true;
+        warningActor.behaviorState.telegraphPresented=true;
+        warningActor.behaviorState.attackTimeRemaining=.4f;
+        warningActor.attackState.phase=EnemyAttackRuntimePhase::Telegraphing;
+        warningActor.attackState.tokenReserved=true;
+        warningActor.attackState.tokenId=1;
+        warningActor.attackState.emittedVolleys=0;
+        runner.Expect(runtime.RestoreCheckpoint(warningCheckpoint,true,&error),"restore a live Fang warning");
+        CourseCollisionSystem warningCollision;
+        WeaponHitRequest warningHit;
+        warningHit.hitKind=RailAimHitKind::Enemy;warningHit.targetActorId=ids[0];
+        warningHit.baseDamage=12;warningHit.damageType=WeaponDamageType::Energy;
+        warningHit.shotId=1;warningHit.hitDistance=60;warningHit.hitNormal={0,0,1};
+        warningHit.rayDirection={0,0,-1};warningHit.hitPoint={0,0,-60};
+        const auto warningDamage=warningCollision.ApplyWeaponHit(runtime,&course,warningHit);
+        const auto& afterHit=runtime.Enemies().front();
+        runner.Expect(warningDamage.damageApplied && afterHit.combatState.hitFlash>0 &&
+            afterHit.combatState.phase==EnemyCombatPhase::Telegraphing && afterHit.combatState.canFire &&
+            afterHit.combatState.phaseElapsedSeconds==.27f && afterHit.attackState.tokenReserved &&
+            afterHit.behaviorState.telegraphPresented && afterHit.behaviorState.attackTimeRemaining==.4f,
+            "a primary hull hit publishes impact feedback and preserves the active warning");
+        runner.Expect(runtime.RestoreCheckpoint(armorCheckpoint,true,&error),"restore the original fight before hull shots");
         const auto primaryShots=uint64_t(std::ceil(runtime.Enemies()[0].desc.hitPoints/12.0f));
         for(uint64_t i=1;i<=primaryShots;++i) {
             CourseEnemyFireSafetyFrameInput settle;settle.playerDistance=distance;settle.playerSpeed=0;

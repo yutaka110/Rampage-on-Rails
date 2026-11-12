@@ -85,6 +85,8 @@ struct RailShooterHudRenderInput final {
     bool unlimitedCheckpointRetries=false;
     float miniBossCounterRemaining=0,miniBossCounterDuration=0;
     int miniBossCounterPart=-1;
+    Vector2 miniBossCounterScreen{};
+    float miniBossCounterMarkerRadius=0;
     bool miniBossGatlingFiring=false;
     unsigned miniBossGatlingIntercepts=0;
     float miniBossCounterDamage=0,miniBossCounterFeedbackRemaining=0;

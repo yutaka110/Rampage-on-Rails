@@ -1,8 +1,8 @@
 """Exercise the compact local cue, real interception and early lock teaching.
 
-Only skips preceding course waves. Boss health, projectile speed, lock rules,
-damage and normal combat time are unchanged. The executable audit drives
-aim/hold/release, and never injects a successful contact.
+Skips preceding course waves and drives aim/hold/release through the native
+input path. The first-defense stages include an off-target start, reaction
+delay and an aim sweep. All lock and collision results come from gameplay.
 """
 from pathlib import Path
 import argparse
@@ -18,19 +18,23 @@ ROOT = Path(__file__).resolve().parents[1]
 LABELS = ['aim', 'hold-one-lock', 'release-two-locks', 'lasers-in-flight',
           'interception-success', 'counter-hit', 'second-heavy-normal-speed', 'miss-retry', 'early-lock-guide',
           'first-heavy-charge', 'gatling-spin-start', 'gatling-spin-ready', 'heavy-armor-start', 'heavy-armor-open', 'heavy-hit-settle',
-          'gatling-cart-energy', 'heavy-cart-energy']
+          'gatling-cart-energy', 'heavy-cart-energy', 'first-gatling-cue',
+          'first-heavy-cue', 'first-heavy-release', 'first-defense-success',
+          'gatling-counter-open', 'heavy-counter-open', 'gatling-counter-hit']
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--stages', type=int, nargs='+', choices=range(len(LABELS)), default=list(range(len(LABELS))))
     parser.add_argument('--output', type=Path, default=ROOT / 'generated/heavy-intercept-review')
+    parser.add_argument('--exe', type=Path, default=ROOT / 'generated/attack-warning/Release/GE3.exe')
     args = parser.parse_args()
     out = args.output.resolve()
     work = out / 'native'
     work.mkdir(parents=True, exist_ok=True)
     shutil.copytree(ROOT / 'Resources', work / 'Resources', dirs_exist_ok=True)
-    for name in ['GE3.exe', 'dxcompiler.dll', 'dxil.dll']:
+    shutil.copy2(args.exe, work / 'GE3.exe')
+    for name in ['dxcompiler.dll', 'dxil.dll']:
         shutil.copy2(ROOT / 'generated/attack-warning/Release' / name, work / name)
     original_course = (ROOT / 'Resources/courses/ShortCompleteRun.course').read_text(encoding='utf-8-sig')
     boss_lines = []
@@ -59,6 +63,7 @@ def main():
                 env.pop(key)
         env.update(GE3_SUNFALL_PREVIEW_DISTANCE='390' if stage == 8 else '3290', GE3_SUNFALL_PREVIEW_FREEZE='0',
                    GE3_HEAVY_TUTORIAL_AUDIT='1', GE3_HEAVY_TUTORIAL_CAPTURE_STAGE=str(stage),
+                   GE3_FIRST_DEFENSE_AUDIT=str(int(stage >= 17)),
                    GE3_HEAVY_TUTORIAL_AUDIT_MISS=str(int(stage in (7,14,16))),
                    GE3_CARRIER_WEAPON_REVIEW=str(int(10<=stage<=13)),
                    GE3_CART_DAMAGE_AUDIT=str(int(stage in (7,14))),
@@ -76,7 +81,40 @@ def main():
         assert result.returncode == 0 and (out / f'{label}.png').exists(), (label, last)
         assert float(last['hp']) > 0, last
         if stage < 4:
-            assert last['learned'] == '0' and float(last['scale']) == 1, last
+            assert last['learned'] == '0' and last['focus_part'] == '1', last
+        if stage in (17,18):
+            assert int(last['focus_part']) == stage-17 and float(last['focus_weight']) > .95, last
+            assert last['aim_progress'] == last['primary_held'] == last['lock_held'] == '0', last
+        if stage == 19:
+            assert last['step'] == '3' and last['locks'] == '2' and last['learned'] == '0', last
+        if stage == 20:
+            gatling = [r for r in rows if r['focus_part'] == '0']
+            heavy = [r for r in rows if r['focus_part'] == '1']
+            assert gatling and heavy
+            for focus, fire, expected in [(gatling,'rapid_fires',.80), (heavy,'heavy_fires',1.12)]:
+                assert {r[fire] for r in focus} == {'1'}
+                assert abs(float(focus[-1]['focus_age']) - expected) < .10, focus[-1]
+                assert .44 < min(float(r['scale']) for r in focus) < .46
+                assert .04 < float(focus[0]['camera_fov']) - min(float(r['camera_fov']) for r in focus) < .07
+            primary = next(r for r in rows if r['focus_part']=='0' and r['primary_held']=='1')
+            lock = next(r for r in rows if r['focus_part']=='1' and r['lock_held']=='1')
+            assert float(primary['focus_age']) >= .53 and float(lock['age']) >= .53
+            assert int(last['gatling_intercepts']) == 24, 'Gatling defense must intercept the whole burst'
+            assert any(r['counter_part']=='0' and float(r['counter'])>=1.14 for r in rows)
+            assert any(r['step']=='4' and r['locks']=='2' for r in rows)
+            assert last['learned']=='1' and last['counter_part']=='1' and float(last['scale'])==1, last
+            assert float(last['hp']) == float(rows[0]['hp']), last
+        if stage in (21,22,23):
+            assert last['counter_part'] == str(int(stage == 22)), last
+            assert int(last['gatling_intercepts']) == 24 and float(last['hp']) == float(rows[0]['hp']), last
+        if stage in (21,22):
+            duration = 1.15 if stage == 21 else 1.80
+            assert duration - .06 <= float(last['counter']) <= duration + .001, last
+            assert float(last['counter_damage']) == 0, last
+            if stage == 22:
+                assert last['learned'] == '1' and last['locks'] == '2', last
+        if stage == 23:
+            assert float(last['counter_damage']) > 0 and float(last['counter']) > 0, last
         if stage == 1:
             assert last['locks'] == '1', last
         if stage in (2, 3):
@@ -91,6 +129,7 @@ def main():
             assert float(last['counter_damage']) > 0 and float(last['scale']) == 1, last
         if stage == 6:
             assert int(last['heavy_fires']) >= 2 and float(last['scale']) == 1 and last['step'] in ('1', '2'), last
+            assert last['focus_part'] == '-1' and last['focus_weight'] == '0', last
             assert any(r['heavy_fires']=='1' and r['heavy_charging']=='1' for r in rows)
             assert all(r['first_heavy_charge']=='0' for r in rows if r['heavy_fires']!='0')
         if stage in (7,14):

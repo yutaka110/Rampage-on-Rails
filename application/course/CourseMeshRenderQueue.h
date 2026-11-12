@@ -97,7 +97,7 @@ public:
     void AppendMothership(const RailMothership::Frame& carrier,
         std::span<const CourseMeshModelBinding> models,
         const Matrix4x4& viewMatrix,const Matrix4x4& projMatrix,
-        float routeShotAge=-1.0f,Vector3 routeShotTarget={});
+        const RailPath& railPath,Vector3 cartRail,float routeShotAge=-1.0f,Vector3 routeShotTarget={});
     void SyncFromCourseRuntime(
         const CourseSpawnRuntime& runtime,
         const CourseAsset* course,

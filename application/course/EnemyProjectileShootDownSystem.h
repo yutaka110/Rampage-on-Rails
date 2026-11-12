@@ -25,6 +25,7 @@ struct EnemyProjectileShootDownRequest final {
     // Incidental rounds crossing a shot at the gun can still be cancelled.
     bool focusedGatlingClash = true;
     uint64_t targetProjectileId = 0;
+    bool firstGatlingDefense = false;
 };
 
 struct EnemyProjectileShootDownResult final {
@@ -65,7 +66,7 @@ public:
         std::vector<EnemyProjectileRuntimeState>& projectiles,
         const RailPath& railPath,
         const EnemyProjectileShootDownRequest& request);
-    // One real primary pulse may disperse two nearby, already launched rounds
+    // A real primary pulse can also disperse nearby, already launched rounds
     // from the same gatling burst. Every contact enters the normal result frame.
     EnemyProjectileShootDownResult SubmitPrimary(
         std::vector<EnemyProjectileRuntimeState>& projectiles,
