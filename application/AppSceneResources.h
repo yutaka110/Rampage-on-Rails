@@ -9,6 +9,7 @@
 
 #include "../../externals/DirectXTex/DirectXTex.h"
 #include "AppRuntimeState.h"
+#include "CaveLighting.h"
 #include "AnimationClip.h"
 #include "course/CourseMeshRenderQueue.h"
 #include "course/CourseRailTrackRenderer.h"
@@ -177,8 +178,14 @@ struct CameraForGPU {
     std::array<Vector4,6> combatMarkNormalAge{};
     std::array<Vector4,6> combatMarkTintRadius{};
     Vector4 combatImpactLight{},combatImpactTint{};
+    Vector4 railBounceControl{}; // active patch count and distance fade
+    std::array<RailBouncePatch, 5> railBouncePatches{};
+    Vector4 railCanyonGrade{}; // bridge blend, carrier arena blend, near-shadow receiver tagging
 };
-static_assert(sizeof(CameraForGPU) == 784);
+static_assert(sizeof(RailBouncePatch) == 48);
+static_assert(offsetof(CameraForGPU, railBounceControl) == 784);
+static_assert(offsetof(CameraForGPU, railCanyonGrade) == 1040);
+static_assert(sizeof(CameraForGPU) == 1056);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};

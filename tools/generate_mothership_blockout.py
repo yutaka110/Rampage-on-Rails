@@ -5,9 +5,9 @@ from generate_submission_hazards import save_palette
 
 ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "Resources/enemies/MothershipBlockout"
-HULL_PALETTE = [(47, 60, 69), (131, 147, 154), (187, 197, 199), (19, 25, 30),
-                (139, 113, 62), (78, 93, 102), (37, 47, 54), (112, 129, 141),
-                (194, 204, 210), (104, 119, 130), (26, 33, 41), (180, 189, 181)]
+HULL_PALETTE = [(52, 64, 72), (135, 151, 156), (163, 178, 180), (22, 29, 34),
+                (139, 113, 62), (92, 110, 118), (39, 50, 58), (118, 134, 146),
+                (177, 190, 197), (95, 113, 125), (27, 35, 42), (164, 177, 169)]
 
 
 class Obj:
@@ -52,7 +52,7 @@ class Obj:
     def box(self, x,y,z,w,h,d,band=None):
         self.prism([(x-w/2,z-d/2),(x+w/2,z-d/2),(x+w/2,z+d/2),(x-w/2,z+d/2)],y-h/2,y+h/2,band)
 
-    def plating(self, x, y, z, width, height, depth, band):
+    def plating(self, x, y, z, width, height, depth, band, bevel=5):
         # Recessed seams between chamfered panels facing the chase camera.
         w, h = width / 2, height / 2
         cut = min(w, h) * .24
@@ -63,7 +63,7 @@ class Obj:
         self.face(list(reversed(front)), band)
         for i in range(len(outline)):
             j = (i+1) % len(outline)
-            self.face([front[i], front[j], rear[j], rear[i]], 5)
+            self.face([front[i], front[j], rear[j], rear[i]], bevel)
 
     def save(self, name):
         (DEST/name).write_text("\n".join(self.lines)+"\n", encoding="utf-8")
@@ -92,7 +92,7 @@ def main():
             hull.box(side*55,-6.2,z,26,3.2,8,0)
             hull.box(side*55,-8.0,z,20,.8,6.1,3)
             for x in (47,51,55,59,63):
-                hull.box(side*x,-8.55,z,1.8,1.15,6.1,2)
+                hull.box(side*x,-8.55,z,1.8,1.15,5.70,2)
         hull.box(side*58,-7.0,-46,20,4,3,0)
         hull.box(side*58,-7.0,-47.2,15,2.2,1.3,3)
         hull.box(side*47,-5.3,31,16,1.7,12,2)
@@ -106,8 +106,10 @@ def main():
             hull.box(side*x,-1.7,-50.25,.50,1.22,.60,5)
         for x in (34,45,56,67):
             hull.box(side*x,4.0,-50.0,.52,.76,.9,11)
-    hull.box(0,13,-28,25,8,30,5)
-    hull.box(0,21,-35,15,8,12,1)
+    hull.box(0,13,-27.5,25,8,29,5)
+    hull.plating(0,13,-43.9,26.3,7.9,2.8,9,7)
+    hull.box(0,21,-34.8,15,8,11.6,1)
+    hull.plating(0,21,-41.9,15.8,6.5,2.0,1)
     # Recessed weapon bays. The shoulders overlap the wing roots, and the
     # open rear/underside clears the traversing heads and moving barrels.
     shoulders = [
@@ -120,17 +122,21 @@ def main():
         for outline,bottom,top,band,underside in shoulders:
             points=[(side*x,z) for x,z in outline]
             hull.prism(points if side>0 else list(reversed(points)),bottom,top,band,underside)
-        hull.plating(side*19,4.7,-65.0,8.3,5.3,9.0,1)
+        hull.plating(side*19,4.7,-65.0,8.3,5.3,9.0,9)
         hull.plating(side*14,-3.0,-68.0,5.3,5.0,2.4,9)
         hull.plating(side*30,-4.8,-67.0,6.2,2.9,7.0,1)
-    hull.plating(0,5.3,-69.8,28,6.2,3.1,1)
+    # Stepped central plates reveal a narrow seam and a continuous dark bed.
+    hull.plating(0,5.3,-68.3,29,6.4,2.1,0)
+    hull.plating(0,5.65,-70.1,13.2,6.0,2.2,1,7)
+    for side in (-1,1):
+        hull.plating(side*10.65,5.25,-69.65,7.4,5.4,1.9,2)
     hull.plating(0,-2.0,-69.2,24,6.8,2.8,0)
     hull.plating(0,-2.0,-70.1,15,3.4,1.4,3)
     for x in (-5.4,-3.6,-1.8,0,1.8,3.6,5.4):
         hull.box(x,-2.0,-70.15,.46,2.0,.62,5)
-    # Two dark anchor plates for the permanent heavy-weapon marker lights.
+    # Recessed carriers for the two permanent heavy-weapon markers.
     for x in (16.1,23.9):
-        hull.plating(x,-5.1,-71.7,2.0,2.7,1.0,10)
+        hull.plating(x,-5.1,-71.7,2.55,3.45,1.0,10)
     hull.save("MothershipHull.obj")
     save_palette(DEST / "CarrierHullSurface.bmp", HULL_PALETTE)
     unit = Obj()

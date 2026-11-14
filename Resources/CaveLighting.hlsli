@@ -30,4 +30,27 @@ float3 CaveOpeningIrradiance(float3 worldPosition, float3 normal, out float prox
     // Warm, diffuse bounce from openings, with a finite energy budget.
     return float3(0.90f, 0.70f, 0.45f) * min(amount, 1.15f);
 }
+
+float3 RailBounceIrradiance(float3 worldPosition, float3 normal) {
+    [branch] if (railBounceControl.x == 0.0f) return 0.0f;
+    float3 irradiance = 0.0f;
+    float coverage = 0.0f;
+    [loop] for (uint i = 0; i < (uint)railBounceControl.x; ++i) {
+        RailBouncePatch patch = railBouncePatches[i];
+        float3 delta = patch.positionRadius.xyz - worldPosition;
+        float distanceSquared = dot(delta, delta);
+        float radiusSquared = max(1.0f, patch.positionRadius.w * patch.positionRadius.w);
+        if (distanceSquared >= radiusSquared) continue;
+        float edge = saturate(1.0f - distanceSquared / radiusSquared);
+        float3 toPatch = delta * rsqrt(max(distanceSquared, 0.01f));
+        // The virtual patch radiates into its inward hemisphere. Material
+        // normals only receive energy on the side that can see that patch.
+        float emitter = saturate(dot(patch.normal.xyz, -toPatch));
+        float receiver = saturate(dot(normal, toPatch));
+        float weight = edge * edge * emitter;
+        irradiance += patch.radiance.rgb * weight * receiver;
+        coverage += weight;
+    }
+    return irradiance * (railBounceControl.y / max(1.0f, coverage));
+}
 #endif

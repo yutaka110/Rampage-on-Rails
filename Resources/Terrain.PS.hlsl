@@ -1245,6 +1245,9 @@ PixelShaderOutput main(VertexShaderOutput input)
         float sunWeight=saturate(nDotL*shadowVisibility);
         float shadowFill=lerp(lerp(1.10f,.75f,sunWeight),lerp(.53f,.80f,sunWeight),valleyLight);
         lit+=bounceAlbedo*(1.0f-metallic)*sky*lerp(0.65f,1.0f,ao)*sunfallSky.y*sunfallSky.z*shadowFill;
+        float3 localBounce = RailBounceIrradiance(input.worldPosition, SafeNormalize(input.normal));
+        lit += bounceAlbedo * (1.0f - metallic) * localBounce * caveSurfaceVisibility *
+            lerp(0.62f, 0.22f, sunWeight * (1.0f - caveAmount));
         float3 reflectedSky=SunfallSkyRadiance(reflect(-viewDir,normal),lightDir,
             gDirectionalLight.color.rgb,gDirectionalLight.intensity);
         float2 envBrdf=EnvironmentBrdfApprox(roughness,nDotV);
@@ -1273,6 +1276,15 @@ PixelShaderOutput main(VertexShaderOutput input)
     rim *= lerp(1.0f, 0.04f * shadowVisibility, caveAmount);
     float3 rimTint = lerp(float3(1.08f, 0.94f, 0.78f), float3(0.72f, 0.84f, 1.02f), saturate(wetCanyonMask * 0.72f + backlightRimBoost * 0.18f));
     lit += gDirectionalLight.color.rgb * rimTint * rim * gDirectionalLight.intensity;
+
+    // Keep rock behind the carrier quieter than its pale steel. This grade
+    // follows terrain geometry and leaves the gameplay lighting on the track.
+    float cliff = smoothstep(.28f,.76f,1.0f-abs(SafeNormalize(input.normal).y));
+    float backdrop = smoothstep(55.0f,132.0f,cameraDistance) *
+        (1.0f-smoothstep(450.0f,1050.0f,cameraDistance));
+    float backdropGrade = cliff*backdrop*(1.0f-caveAmount)*
+        (railCanyonGrade.x*.35f+railCanyonGrade.y*.88f);
+    lit *= lerp(1.0f,float3(.71f,.63f,.57f),backdropGrade);
 
     [unroll] for(int source=0;source<2;++source) {
         float3 boostDirection;

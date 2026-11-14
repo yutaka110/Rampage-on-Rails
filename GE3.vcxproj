@@ -545,6 +545,7 @@
     <ClCompile Include="application\AppRenderResources.cpp" />
     <ClCompile Include="application\AppRailGameOver.cpp" />
     <ClCompile Include="application\AppRunLoop.cpp" />
+    <ClCompile Include="application\RailNearShadow.cpp" />
     <ClCompile Include="application\AppSceneControlsPanel.cpp">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild>
     </ClCompile>
@@ -1378,6 +1379,7 @@
     <ClInclude Include="application\runtime\AppFrameCoordinator.h" />
     <ClInclude Include="application\AppPostProcessPipeline.h" />
     <ClInclude Include="application\SunfallAtmosphere.h" />
+    <ClInclude Include="application\RailNearShadow.h" />
     <ClInclude Include="application\CaveLighting.h" />
     <ClInclude Include="application\CaveSubjectMaterial.h" />
     <ClInclude Include="application\AppSceneRenderPipeline.h" />
@@ -1688,6 +1690,9 @@
     <None Include="Resources\Skybox.hlsli" />
     <None Include="Resources\SunfallVolume.PS.hlsl" />
     <None Include="Resources\SunfallComposite.PS.hlsl" />
+    <None Include="Resources\RailNearShadow.PS.hlsl" />
+    <None Include="Resources\RailNearShadowDXR.PS.hlsl" />
+    <None Include="Resources\RailShadowReceiver.hlsli" />
     <None Include="Resources\SunfallLighting.hlsli" />
     <None Include="Resources\RailBoostMask.PS.hlsl" />
     <None Include="Resources\TerrainDebrisCull.CS.hlsl" />

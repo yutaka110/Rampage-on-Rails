@@ -418,6 +418,15 @@ float Dot(const Vector3& a, const Vector3& b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
+RailBouncePatch MakeRailBouncePatch(const Vector3& position, const Vector3& normal,
+    float radius, const CourseLightingPreset& light, const Vector3& reflectance, float strength) {
+    const auto toSun = NormalizeOr(Scale(light.sunDirection, -1.0f), {0, 1, 0});
+    const float energy = std::clamp(Dot(normal, toSun) * light.sunIntensity * strength, 0.0f, 1.4f);
+    return {{position.x, position.y, position.z, radius}, {normal.x, normal.y, normal.z, 0.0f},
+        {reflectance.x * light.sunColor.x * energy, reflectance.y * light.sunColor.y * energy,
+            reflectance.z * light.sunColor.z * energy, 0.0f}};
+}
+
 Vector3 Cross(const Vector3& a, const Vector3& b) {
     return {
         a.y * b.z - a.z * b.y,
@@ -1715,6 +1724,7 @@ AppRunLoop::AppRunLoop(
     }
     editor::EditorFramePacingSettings framePacingSettings{};
     runtimeState_.sunfall.enabled=ReadEnvironmentUInt("GE3_SUNFALL",1)!=0;
+    railRayShadowRequested_=ReadEnvironmentUInt("GE3_RAY_SHADOWS",0)!=0;
     framePacingSettings.enabled =
         ReadEnvironmentUInt("GE3_EDITOR_FRAME_PACING", 1) != 0;
     framePacingSettings.playFps =
@@ -2050,6 +2060,42 @@ void AppRunLoop::ApplyRailShooterCourse() {
         railShooterCourse_.BuildFallbackCanyon(runtimeState_.terrain.settings.corridorRadius);
     }
     railShooterCourse_.ApplyToRailPath(railPath_);
+    caveWallBounce_ = {};
+    bridgeDeckBounce_ = {};
+    if (IsRailShortCourse(railShooterCoursePath_)) {
+        const auto& settings = runtimeState_.terrain.settings;
+        const TerrainVolumeField terrain(railPath_, settings, &railShooterCourse_.terrainEditLayer);
+        // Sample the lower sun-facing wall from the cave mouth into the ochre spires.
+        constexpr std::array wallDistances{488.0f, 532.0f, 577.0f, 632.0f, 693.0f};
+        constexpr std::array daylight{0.40f, 0.76f, 1.0f, 0.95f, 0.74f};
+        for (size_t i = 0; i < wallDistances.size(); ++i) {
+            const float distance = wallDistances[i];
+            const auto sample = railPath_.Evaluate(distance);
+            const auto light = railShooterCourse_.EvaluateLightingPreset(distance);
+            const float side = Dot(sample.right, light.sunDirection) <= 0.0f ? 1.0f : -1.0f;
+            const auto inward = NormalizeOr(Add(Scale(sample.right, side), Scale(sample.up, -0.18f)), sample.right);
+            const auto wall = terrain.SurfacePoint(distance, side > 0.0f ? 2.91f : 0.23f, nullptr);
+            caveWallBounce_[i] = MakeRailBouncePatch(Add(wall, Scale(inward, 1.25f)), inward,
+                112.0f, light, {0.96f, 0.66f, 0.40f}, 1.10f * daylight[i]);
+        }
+        // The emitting strip follows the actual bridge deck as its rail pitches.
+        // Each source represents several of the adjoining 20 m deck pieces.
+        constexpr std::array deckDistances{1670.0f, 1730.0f, 1790.0f, 1850.0f, 1910.0f};
+        for (size_t i = 0; i < deckDistances.size(); ++i) {
+            const auto deck = std::find_if(railShooterCourse_.terrainPlacements.begin(),
+                railShooterCourse_.terrainPlacements.end(), [&](const CourseTerrainPlacement& placement) {
+                    return placement.meshId == "course_blockout_bridge" &&
+                        std::abs(placement.distance - deckDistances[i]) < 1.0f;
+                });
+            if (deck == railShooterCourse_.terrainPlacements.end()) continue;
+            const auto sample = railPath_.Evaluate(deck->distance);
+            const auto surface = RailLocalPoint(railPath_, deck->distance, deck->lateralOffset,
+                deck->verticalOffset - 0.40f * deck->scale.y, deck->forwardOffset);
+            const auto light = railShooterCourse_.EvaluateLightingPreset(deck->distance);
+            bridgeDeckBounce_[i] = MakeRailBouncePatch(surface, sample.up, 115.0f, light,
+                {0.64f, 0.72f, 0.81f}, 0.49f);
+        }
+    }
     railEnemyIngressRoutes_.clear();
     if(IsRailShortCourse(railShooterCoursePath_))
         railEnemyIngressRoutes_=BuildRailEnemyIngressRoutes(railShooterCourse_,railPath_,runtimeState_.terrain.settings);
@@ -9582,6 +9628,15 @@ void AppRunLoop::EnterRailShooterScene() {
 
 bool AppRunLoop::HandleTitleScreenMessage(
     UINT message, WPARAM wParam, LPARAM lParam) {
+    if(message==WM_KEYDOWN && wParam==VK_F8 && IsRailShooterSceneActive()) {
+        if((lParam & (LPARAM{1}<<30))==0) {
+            const bool supported=appPipelines_.GetRailNearShadowPSO(true)!=nullptr;
+            railRayShadowRequested_=supported && !railRayShadowRequested_;
+            SetWindowTextW(hwnd_,!supported ? L"Rail Shooter | Shadow map (DXR unavailable)" :
+                railRayShadowRequested_ ? L"Rail Shooter | DXR near shadows" : L"Rail Shooter | Shadow map");
+        }
+        return true;
+    }
     if (message == WM_KILLFOCUS) inputEdges_.Reset();
     if (!railTitleScreenVisible_ && !railTitleGameplayEntry_.Frame().blockingGameplay &&
         !railTransitionDemo_.Returning()) {
@@ -14197,6 +14252,13 @@ void AppRunLoop::ResolveCompletedRailGpuTiming(uint32_t backBufferIndex) {
             ? (static_cast<double>(ticks) * 1000.0 / static_cast<double>(railGpuTimestampFrequency_))
             : 0.0;
     const double pacingWaitMs = timingSlot.waitFrameSlotMs + timingSlot.presentMs;
+    static const bool shadowAudit=ReadEnvironmentUInt("GE3_RAIL_SHADOW_AUDIT",0)!=0;
+    if(shadowAudit) {
+        static std::ofstream audit("logs/rail_shadow_frames.csv");
+        static const bool header=bool(audit<<"frame,distance,dxr,gpu_ms,interval_ms,cpu_ms\n");
+        if(header) audit<<timingSlot.frame<<','<<timingSlot.distance<<','<<timingSlot.rayShadow<<','
+            <<gpuMs<<','<<timingSlot.frameIntervalMs<<','<<timingSlot.cpuNoPresentMs<<'\n';
+    }
     const bool shouldLog =
         gpuMs >= kRailGpuTimingLogThresholdMs ||
         timingSlot.cpuNoPresentMs >= 18.0 ||
@@ -14277,6 +14339,14 @@ void AppRunLoop::CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex) {
     timingSlot.renderGraphExecuteMs = gRailPerfFrame.renderGraphExecuteMs;
     timingSlot.endAndExecuteMs = gRailPerfFrame.endAndExecuteMs;
     timingSlot.presentMs = gRailPerfFrame.presentMs;
+    timingSlot.rayShadow=railShadowAcceleration_!=0;
+    static const bool shadowAudit=ReadEnvironmentUInt("GE3_RAIL_SHADOW_AUDIT",0)!=0;
+    if(shadowAudit) {
+        const auto now=RailPerfClock::now();
+        if(railShadowAuditLastPresent_!=RailPerfClock::time_point{})
+            timingSlot.frameIntervalMs=ElapsedMs(railShadowAuditLastPresent_,now);
+        railShadowAuditLastPresent_=now;
+    }
 }
 
 void AppRunLoop::RenderFrame() {
@@ -14687,6 +14757,87 @@ void AppRunLoop::RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList)
         ID3D12DescriptorHeap* descriptorHeaps[] = { srvDescriptorHeap_.Get() };
         commandList->SetDescriptorHeaps(1, descriptorHeaps);
     }
+}
+
+std::vector<RailShadowCaster> AppRunLoop::CollectRailShadowCasters() const {
+    std::vector<RailShadowCaster> casters;
+    casters.reserve(RailNearShadow::MaxCasters);
+    const auto eye=frameState_.cameraWorldPosition;
+    const auto add=[&](uint32_t index,const TransformationMatrix* transform,
+        ID3D12Resource* constants,float range) {
+        if(!transform || !constants || casters.size()==RailNearShadow::MaxCasters) return;
+        const auto& world=transform->World;
+        const Vector3 offset{world.m[3][0]-eye.x,world.m[3][1]-eye.y,world.m[3][2]-eye.z};
+        if(Dot(offset,offset)>range*range) return;
+        const auto* model=scene_.FindManagedModel(index);
+        if(!model || model->mesh.indexCount==0) return;
+        casters.push_back({index,&model->mesh,constants->GetGPUVirtualAddress(),world});
+    };
+    for(const auto& item:scene_.CourseMeshes().Items()) {
+        if(!item.visible) continue;
+        const bool carrier=item.meshId=="carrier_hull" ||
+            (item.name.starts_with("carrier/") && IsCarrierBatterySurfaceMesh(item.meshId)) ||
+            (item.kind==CourseMeshRenderKind::Enemy &&
+                (IsCarrierBatterySurfaceMesh(item.meshId) || item.meshId=="gatling_turret" ||
+                 item.meshId=="carrier_heavy_turret"));
+        const bool rock=item.meshId.starts_with("route_arch_") ||
+            (item.name==RailRouteHazards::SlabId &&
+                (item.meshId=="rail_hazard_block" || item.meshId=="rail_hazard_solid"));
+        if(carrier || rock) add(item.modelIndex,item.transformData,item.transformResource.Get(),carrier?220.0f:145.0f);
+    }
+    if(!casters.empty()) {
+        const auto& cart=scene_.RailVehicleObject();
+        if(cart.visible) add(cart.modelIndex,cart.transformData,cart.transformResource.Get(),55.0f);
+    }
+    return casters;
+}
+
+void AppRunLoop::RenderRailCasterShadow(ID3D12GraphicsCommandList* list,
+    std::span<const RailShadowCaster> casters) {
+    constexpr uint32_t slot=1;
+    constexpr float depth=kRailCasterShadowDepth;
+    constexpr float size=static_cast<float>(AppSceneResources::kCascadeShadowMapSize);
+    const auto anchor=railPath_.EvaluateExtended(railShooterDistance_+30.0f).position;
+    const auto direction=runtimeState_.directionalLightData.direction;
+    const auto center=XMVectorSet(anchor.x,anchor.y,anchor.z,1);
+    const auto light=XMVectorSet(direction.x,direction.y,direction.z,0);
+    const auto up=std::abs(direction.y)>.92f?XMVectorSet(1,0,0,0):XMVectorSet(0,1,0,0);
+    auto view=XMMatrixLookAtLH(center-light*(depth*.5f),center,up);
+    constexpr float width=166.0f;
+    // Snap the origin in light space so the moving camera does not move the
+    // texel grid underneath the bridge deck.
+    const float texel=width/size;
+    view.r[3]=XMVectorSet(std::round(XMVectorGetX(view.r[3])/texel)*texel,
+        std::round(XMVectorGetY(view.r[3])/texel)*texel,XMVectorGetZ(view.r[3]),1);
+    scene_.mappedCascadeShadow->lightViewProjection[slot]=ToMatrix4x4(view*XMMatrixOrthographicLH(width,width,0,depth));
+    *scene_.mappedCascadeShadowDraw[slot]=*scene_.mappedCascadeShadow;
+    scene_.mappedCascadeShadowDraw[slot]->parameters.w=static_cast<float>(slot);
+    auto& state=scene_.cascadeShadowStates[slot];
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type=D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition={scene_.cascadeShadowMaps[slot].Get(),D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES,
+        state,D3D12_RESOURCE_STATE_DEPTH_WRITE};
+    if(state!=D3D12_RESOURCE_STATE_DEPTH_WRITE) list->ResourceBarrier(1,&barrier);
+    const D3D12_VIEWPORT viewport{0,0,size,size,0,1};
+    const D3D12_RECT scissor{0,0,static_cast<LONG>(size),static_cast<LONG>(size)};
+    list->RSSetViewports(1,&viewport);
+    list->RSSetScissorRects(1,&scissor);
+    list->OMSetRenderTargets(0,nullptr,FALSE,&scene_.cascadeShadowDsvCpu[slot]);
+    list->ClearDepthStencilView(scene_.cascadeShadowDsvCpu[slot],D3D12_CLEAR_FLAG_DEPTH,1,0,0,nullptr);
+    list->SetGraphicsRootSignature(appPipelines_.GetMainRootSignature());
+    list->SetPipelineState(appPipelines_.GetRailCasterShadowPSO());
+    list->SetGraphicsRootConstantBufferView(10,scene_.cascadeShadowDrawResources[slot]->GetGPUVirtualAddress());
+    list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    for(const auto& caster:casters) {
+        list->SetGraphicsRootConstantBufferView(1,caster.transform);
+        list->IASetVertexBuffers(0,1,&caster.mesh->vbv);
+        list->IASetIndexBuffer(&caster.mesh->ibv);
+        list->DrawIndexedInstanced(caster.mesh->indexCount,1,0,0,0);
+    }
+    barrier.Transition.StateBefore=D3D12_RESOURCE_STATE_DEPTH_WRITE;
+    barrier.Transition.StateAfter=D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    list->ResourceBarrier(1,&barrier);
+    state=barrier.Transition.StateAfter;
 }
 
 bool AppRunLoop::WasKeyPressed(int virtualKey) {
@@ -18113,11 +18264,35 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.frameState = &frameState_;
     graphContext.sunfallActive=IsRailShooterSceneActive() && !railTitleScreenVisible_ &&
         runtimeState_.sunfall.enabled && runtimeState_.sunfall.strength>0.0f;
+    railShadowAcceleration_=0;
+    const bool nearShadowAvailable=graphContext.sunfallActive && runtimeState_.terrain.enabled &&
+        !railGameOverScene_.Active() &&
+        !runtimeState_.terrain.cascadeShadowEnabled && IsRailShortCourse(railShooterCoursePath_) &&
+        !postExecutionPlan.passes.empty() && scene_.mappedCascadeShadow && scene_.mappedCascadeShadowDraw[1] &&
+        scene_.cascadeShadowMaps[1] && appPipelines_.GetRailNearShadowPSO(false);
+    const auto nearShadowCasters=nearShadowAvailable?CollectRailShadowCasters():std::vector<RailShadowCaster>{};
+    graphContext.railNearShadowActive=!nearShadowCasters.empty();
+    graphContext.railShadowAcceleration=&railShadowAcceleration_;
     graphContext.sunfallGroundHeight=railPath_.Evaluate(railShooterDistance_).position.y-1.0f;
     const auto& atmosphereTerrain=runtimeState_.terrain.settings;
     graphContext.sunfallOutdoorBlend=SunfallOutdoorBlend(railShooterDistance_,
         atmosphereTerrain.openCanyonStartDistance,atmosphereTerrain.openCanyonTransitionLength,
         atmosphereTerrain.openCanyonStrength);
+    static const bool canyonGradeEnabled = ReadEnvironmentUInt("GE3_RAIL_CANYON_GRADE", 1) != 0;
+    if (canyonGradeEnabled && graphContext.sunfallActive && !railGameOverScene_.Active() &&
+        IsRailShortCourse(railShooterCoursePath_)) {
+        const float distance = railShooterDistance_;
+        const float bridge = RailMothership::Smooth(distance, 1440, 1620) *
+            (1.0f - RailMothership::Smooth(distance, 1930, 2160));
+        const float arenaEntry = RailMothership::Smooth(distance,
+            RailMothership::BattleStart - 460.0f, RailMothership::BattleStart - 50.0f);
+        // Keep the same lighting if the player brakes, misses an intercept,
+        // or takes longer to finish the fight. Blend out after it resolves.
+        const float arenaExit = railPostBossSequence_.Started()
+            ? RailMothership::Smooth(distance - railPostBossSequence_.Anchor(), 0, 140)
+            : 0.0f;
+        graphContext.sunfallCanyonGrade = {bridge, arenaEntry * (1.0f - arenaExit)};
+    }
     const float valleyLight=IsRailShortCourse(railShooterCoursePath_) ?
         RailMothership::Smooth(railShooterDistance_,1450,1590)*
         (1-.58f*RailMothership::Smooth(railShooterDistance_,5570,6080)) : 0;
@@ -18386,7 +18561,30 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     }
     if (scene_.mappedCamera) {
         const bool caveLighting = IsRailShooterSceneActive() && !railTitleScreenVisible_ && runtimeState_.terrain.enabled;
-        scene_.mappedCamera->caveRange = {atmosphereTerrain.openCanyonStartDistance,
+        auto& camera = *scene_.mappedCamera;
+        camera.railCanyonGrade = {graphContext.sunfallCanyonGrade.x, graphContext.sunfallCanyonGrade.y,
+            graphContext.railNearShadowActive ? 1.0f : 0.0f, 0};
+        camera.railBounceControl = {};
+        static const bool indirectLightEnabled = ReadEnvironmentUInt("GE3_RAIL_INDIRECT_LIGHT", 1) != 0;
+        if (indirectLightEnabled && caveLighting && graphContext.sunfallActive && IsRailShortCourse(railShooterCoursePath_)) {
+            const float distance = railShooterDistance_;
+            // Keep the patch sets available before they enter the camera view.
+            // These outer fades also cover unusually wide editor camera shots.
+            const auto fade = [](float t) {
+                t = std::clamp(t, 0.0f, 1.0f);
+                return t * t * (3.0f - 2.0f * t);
+            };
+            const float wallFade = fade((distance - 180.0f) / 110.0f) *
+                fade((1050.0f - distance) / 130.0f);
+            const float bridgeFade = fade((distance - 1090.0f) / 160.0f) *
+                fade((2280.0f - distance) / 170.0f);
+            if (wallFade > 0.0f || bridgeFade > 0.0f) {
+                const auto& patches = wallFade > 0.0f ? caveWallBounce_ : bridgeDeckBounce_;
+                camera.railBouncePatches = patches;
+                camera.railBounceControl = {static_cast<float>(patches.size()), wallFade + bridgeFade, 0, 0};
+            }
+        }
+        camera.caveRange = {atmosphereTerrain.openCanyonStartDistance,
             atmosphereTerrain.openCanyonTransitionLength, atmosphereTerrain.openCanyonStrength, caveLighting ? 1.0f : 0.0f};
         if (caveLighting) {
             const auto sample = railPath_.Evaluate(railShooterDistance_);
@@ -18578,6 +18776,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         renderGraph_.RegisterResource("SunfallShadow",scene_.cascadeShadowMaps[0].Get(),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
+    if(graphContext.railNearShadowActive)
+        renderGraph_.RegisterResource("RailCasterShadow",scene_.cascadeShadowMaps[1].Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE|D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     renderGraph_.RegisterResource(
         "SceneDepth",
         engineContext_.GetDepthStencil(),
@@ -18622,6 +18823,13 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     terrainChunkManager_.ResetDebrisCullingStats();
     const auto cascadeShadowStart = RailPerfClock::now();
     RenderCascadeShadowMaps(commandList.Get());
+    if(graphContext.railNearShadowActive) {
+        if(railRayShadowRequested_ && appPipelines_.GetRailNearShadowPSO(true))
+            railShadowAcceleration_=railNearShadow_.Build(dev_.GetDevice(),commandList.Get(),
+                backBufferIndex,swapChain_.BufferCount(),nearShadowCasters);
+        // Keep the declared map in a sampleable state in either mode.
+        RenderRailCasterShadow(commandList.Get(),railShadowAcceleration_?std::span<const RailShadowCaster>{}:nearShadowCasters);
+    }
     gRailPerfFrame.cascadeShadowMs = ElapsedMs(cascadeShadowStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterCascadeShadow");
     const auto renderGraphExecuteStart = RailPerfClock::now();

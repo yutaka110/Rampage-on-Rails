@@ -2,6 +2,12 @@
 #define GE3_TITLE_LIGHTING
 
 // Shared b2 layout matches CameraForGPU; the first 16 bytes are the camera ABI.
+struct RailBouncePatch {
+    float4 positionRadius;
+    float4 normal;
+    float4 radiance;
+};
+
 cbuffer Camera : register(b2)
 {
     float3 cameraWorldPosition;
@@ -29,6 +35,9 @@ cbuffer Camera : register(b2)
     float4 combatMarkTintRadius[6];
     float4 combatImpactLight;
     float4 combatImpactTint;
+    float4 railBounceControl; // active patch count and distance fade
+    RailBouncePatch railBouncePatches[5];
+    float4 railCanyonGrade; // bridge blend, carrier arena blend, near-shadow receiver tagging
 }
 
 static float3 CombatImpactRadiance(float3 worldPosition,out float3 direction)

@@ -8,6 +8,7 @@
 #include "course/RailBoostPresentation.h"
 #include "course/RailBrakePresentation.h"
 #include "SunfallAtmosphere.h"
+#include "RailNearShadow.h"
 #include "course/RailMothershipPresentation.h"
 #include "course/RailMothershipBattle.h"
 #include "course/RailPostBossSequence.h"
@@ -250,6 +251,9 @@ private:
     void UpdateShowcaseWindowTitle();
     void UpdateTerrainAuthoring(float deltaTime);
     void RenderCascadeShadowMaps(ID3D12GraphicsCommandList* commandList);
+    std::vector<RailShadowCaster> CollectRailShadowCasters() const;
+    void RenderRailCasterShadow(ID3D12GraphicsCommandList* commandList,
+        std::span<const RailShadowCaster> casters);
     void ConfigureRenderGraphDebugDump();
     void DumpRenderGraphDebugFrame();
     void LoadRailShooterCourse();
@@ -637,6 +641,7 @@ private:
     uint32_t vfxTelemetryFrameIndex_ = 0;
     struct RailGpuTimingSlot {
         bool pending = false;
+        bool rayShadow = false;
         uint32_t frame = 0;
         float distance = 0.0f;
         std::string section;
@@ -645,7 +650,12 @@ private:
         double renderGraphExecuteMs = 0.0;
         double endAndExecuteMs = 0.0;
         double presentMs = 0.0;
+        double frameIntervalMs = 0.0;
     };
+    RailNearShadow railNearShadow_;
+    D3D12_GPU_VIRTUAL_ADDRESS railShadowAcceleration_ = 0;
+    bool railRayShadowRequested_ = false;
+    std::chrono::steady_clock::time_point railShadowAuditLastPresent_{};
     Microsoft::WRL::ComPtr<ID3D12QueryHeap> railGpuTimingQueryHeap_;
     Microsoft::WRL::ComPtr<ID3D12Resource> railGpuTimingReadback_;
     std::vector<RailGpuTimingSlot> railGpuTimingSlots_;
@@ -914,6 +924,8 @@ private:
     audio::SoundHandle railCarrierBatteryHitSound_{};
     bool railEliteChargePlaying_=false;
     CaveOpeningLighting caveOpeningLighting_{};
+    std::array<RailBouncePatch, 5> caveWallBounce_{};
+    std::array<RailBouncePatch, 5> bridgeDeckBounce_{};
     float railTitleDustTimer_ = 0.0f;
     std::vector<uint32_t> railTitleDustIds_;
     RailTitleScene railTitleScene_;

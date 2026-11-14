@@ -9,12 +9,12 @@ from generate_siege_turret import Mesh as PaletteMesh, ROOT, box, tube
 
 # Paint, frame, steel, ceramic bore, safety paint, fasteners, grille,
 # tempered steel, hydraulic chrome, armor, rubber gasket, stencil paint.
-PALETTE = [(46, 60, 73), (111, 130, 141), (187, 201, 211), (30, 34, 39),
-           (177, 130, 54), (75, 91, 103), (41, 51, 61), (111, 121, 135),
-           (224, 233, 239), (104, 120, 128), (25, 30, 33), (191, 197, 184)]
-HEAVY_PALETTE = [(50, 61, 71), (116, 129, 136), (191, 204, 215), (37, 39, 42),
-                 (165, 98, 170), (83, 94, 98), (41, 48, 50), (111, 111, 124),
-                 (226, 235, 241), (96, 112, 124), (28, 31, 32), (203, 202, 185)]
+PALETTE = [(41, 56, 69), (95, 121, 135), (179, 205, 214), (20, 26, 32),
+           (74, 184, 197), (75, 91, 103), (31, 43, 52), (100, 119, 132),
+           (195, 216, 222), (91, 111, 124), (24, 29, 33), (181, 202, 200)]
+HEAVY_PALETTE = [(48, 51, 60), (105, 111, 119), (178, 192, 202), (21, 24, 29),
+                 (171, 101, 156), (83, 90, 97), (38, 43, 50), (114, 101, 112),
+                 (207, 201, 193), (99, 103, 115), (25, 28, 33), (198, 182, 164)]
 
 
 class Mesh(PaletteMesh):
@@ -118,7 +118,8 @@ def generate_gatling():
         a = i * math.tau / 6
         x, y = .40*math.cos(a), .40*math.sin(a)
         tube(rotor, x, y, [(.48, .115), (1.83, .115)], 2)
-        tube(rotor, x, y, [(1.83, .115), (1.96, .13), (2.06, .184), (2.25, .184)], 7)
+        tube(rotor, x, y, [(1.83, .115), (1.96, .13), (2.06, .184)], 7)
+        tube(rotor, x, y, [(2.06, .184), (2.25, .184)], 2)
         for z in (.65, .85):
             tube(rotor, x, y, [(z, .15), (z+.045, .15)], 1)
         tube(rotor, x, y, [(2.25, .184), (2.25, .148)], 8)
@@ -129,7 +130,7 @@ def generate_gatling():
     # spins with the group and breaks the sixfold symmetry at game distance.
     tube(rotor, 0, 0, [(1.03, .53), (1.14, .53)], 1, n=18)
     tube(rotor, 0, 0, [(1.14, .53), (1.14, .48)], 2, n=18)
-    bevel_box(rotor, (.52, 0, 1.09), (.22, .25, .32), 4, 11)
+    bevel_box(rotor, (.57, 0, 1.10), (.27, .31, .36), 4, 11)
     for i in range(6):
         a = i*math.tau/6 + math.pi/6
         bolt(rotor, .505*math.cos(a), .505*math.sin(a), 1.145, .025)
@@ -166,7 +167,7 @@ def generate_heavy():
                 bolt(head, side*.87+dx, y, .822, .032)
     barrel = Mesh('CarrierHeavyTurretBarrel', PALETTE)
     tube(barrel, 0, 0, [(-.40, .46), (.48, .46), (.66, .52), (1.52, .52)], 2, n=16)
-    tube(barrel, 0, 0, [(1.52, .52), (1.70, .78), (1.98, .78), (2.10, .76)], 9, n=16)
+    tube(barrel, 0, 0, [(1.52, .52), (1.70, .82), (1.96, .82), (2.10, .76)], 9, n=16)
     tube(barrel, 0, 0, [(1.38, .525), (1.49, .525)], 7, n=16)
     tube(barrel, 0, 0, [(.50, .56), (.68, .56)], 1, n=16)
     tube(barrel, 0, 0, [(2.10, .76), (2.10, .66)], 8, n=16)
@@ -187,10 +188,10 @@ def generate_heavy():
     shutter = Mesh('CarrierHeavyTurretShutter', PALETTE)
     # Local origin is the outer hinge. At rest the inward edges nearly meet
     # over the bore. The second plate is the same part rolled by half a turn.
-    bevel_box(shutter, (-.385, 0, .04), (.82, 1.46, .24), 9, 2)
-    bevel_box(shutter, (-.38, 0, .165), (.64, 1.15, .065), 0, 1)
-    box(shutter, (-.68, 0, .20), (.055, .87, .025), 11)
-    box(shutter, (-.50, 0, .204), (.22, .48, .04), 4)
+    bevel_box(shutter, (-.397, 0, .04), (.84, 1.56, .24), 9, 2)
+    bevel_box(shutter, (-.39, 0, .165), (.68, 1.24, .065), 0, 1)
+    box(shutter, (-.70, 0, .208), (.075, 1.00, .025), 11)
+    box(shutter, (-.46, 0, .207), (.36, .61, .044), 4)
     box(shutter, (-.15, 0, -.10), (.19, .95, .11), 6)
     for y in (-.54, .54):
         bolt(shutter, -.18, y, .203, .05)

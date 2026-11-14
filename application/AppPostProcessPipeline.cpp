@@ -9,6 +9,7 @@
 #include "AppFrameGraphBuilder.h"
 #include "AppImGuiLayer.h"
 #include "AppPipelines.h"
+#include "RailNearShadow.h"
 #include "AppVfxRenderTargets.h"
 #include "AppSceneResources.h"
 #include "AppRuntimeState.h"
@@ -251,6 +252,35 @@ void BuildPassParams(const PostProcessPass& postPass, float passParams[kPostProc
     }
 }
 
+void RegisterRailNearShadow(const AppFrameGraphBuildContext& ctx) {
+    using Access=ge3::graphics::RenderResourceAccessType;
+    ctx.renderGraph->DeclareTransientRenderTarget("RailNearShadowColor",1.0f,DXGI_FORMAT_R16G16B16A16_FLOAT);
+    ctx.renderGraph->AddPass({"Lighting.RailNearShadow",ge3::graphics::RenderPassLayer::Lighting,
+        {{"SceneColor",Access::ReadSrv},{"SceneDepth",Access::ReadDepth},{"RailCasterShadow",Access::ReadSrv},
+         {"RailNearShadowColor",Access::WriteRtv}},"",[ctx](ge3::graphics::RenderPassContext& pass) {
+        const auto acceleration=ctx.railShadowAcceleration?*ctx.railShadowAcceleration:0;
+        const auto* shadow=ctx.scene->mappedCascadeShadow;
+        const auto eye=ctx.frameState->cameraWorldPosition;
+        const auto sun=ctx.runtimeState->directionalLightData.direction;
+        auto vp=ctx.frameState->viewProjectionMatrix;
+        const RailNearShadowConstants constants{Inverse(vp),shadow->lightViewProjection[1],
+            {eye.x,eye.y,eye.z,kRailNearShadowRange},{-sun.x,-sun.y,-sun.z,.83f},
+            {1.0f/AppSceneResources::kCascadeShadowMapSize,1.0f/kRailCasterShadowDepth,0,0}};
+        auto* list=pass.commandList;
+        ID3D12DescriptorHeap* heaps[]={ctx.srvDescriptorHeap};
+        list->SetDescriptorHeaps(1,heaps);
+        list->SetGraphicsRootSignature(ctx.appPipelines->GetRailNearShadowRootSignature());
+        list->SetPipelineState(ctx.appPipelines->GetRailNearShadowPSO(acceleration!=0));
+        list->SetGraphicsRootDescriptorTable(0,ctx.vfxRenderTargets->GetSrvHandle("SceneColor"));
+        list->SetGraphicsRootDescriptorTable(1,ctx.depthTextureHandle);
+        list->SetGraphicsRootDescriptorTable(2,ctx.scene->cascadeShadowSrvGpuHandles[1]);
+        list->SetGraphicsRoot32BitConstants(3,kRailNearShadowDwords,&constants,0);
+        if(acceleration) list->SetGraphicsRootShaderResourceView(4,acceleration);
+        list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        list->DrawInstanced(3,1,0,0);
+    }});
+}
+
 void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sceneInput) {
     ctx.renderGraph->DeclareTransientRenderTarget("SunfallVolume",0.5f,DXGI_FORMAT_R16G16B16A16_FLOAT);
     ctx.renderGraph->DeclareTransientRenderTarget("SunfallColor",1.0f,DXGI_FORMAT_R16G16B16A16_FLOAT);
@@ -281,7 +311,7 @@ void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sce
                 ctx.scene->mappedCascadeShadow->parameters.x,
                 ctx.terrainChunkManager && !ctx.terrainChunkManager->RenderChunks().empty() ? 1.0f : 0.0f};
             const auto& palette=ctx.runtimeState->clearColor;
-            constants.skyPalette={palette[0],palette[1],palette[2],0};
+            constants.skyPalette={palette[0],palette[1],palette[2],ctx.sunfallCanyonGrade.x};
             ID3D12DescriptorHeap* heaps[]={ctx.srvDescriptorHeap};
             pass.commandList->SetDescriptorHeaps(1,heaps);
             pass.commandList->SetGraphicsRootSignature(ctx.appPipelines->GetSunfallRootSignature());
@@ -306,7 +336,7 @@ void RegisterSunfall(const AppFrameGraphBuildContext& ctx,const std::string& sce
             const auto& palette=ctx.runtimeState->clearColor;
             const float params[16]={(std::clamp)(ctx.runtimeState->sunfall.strength,0.0f,1.0f),nearPlane,farPlane,
                 ctx.sunfallOutdoorBlend,sun.color.x,sun.color.y,sun.color.z,sun.intensity,
-                palette[0],palette[1],palette[2],0};
+                palette[0],palette[1],palette[2],ctx.sunfallCanyonGrade.x,ctx.sunfallCanyonGrade.y};
             ctx.vfxRenderTargets->ExecuteDebugPreviewPass(pass.commandList,"SunfallColor",
                 ctx.appPipelines->GetCompositeRootSignature(),ctx.appPipelines->GetSunfallCompositePSO(),
                 ctx.vfxRenderTargets->GetSrvHandle(sceneInput),ctx.vfxRenderTargets->GetSrvHandle("SunfallVolume"),
@@ -358,7 +388,8 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         executionPlan.finalOutputResource.empty() ? "SceneColor" : executionPlan.finalOutputResource;
     std::unordered_map<std::string,std::string> aliases;
     if(sunfall && !executionPlan.passes.empty()) {
-        RegisterSunfall(ctx,"SceneColor");
+        if(ctx.railNearShadowActive) RegisterRailNearShadow(ctx);
+        RegisterSunfall(ctx,ctx.railNearShadowActive?"RailNearShadowColor":"SceneColor");
         aliases["SceneColor"]="SunfallColor";
     }
     bool beforeTone=true;

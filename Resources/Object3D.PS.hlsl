@@ -109,6 +109,7 @@ static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int
 #include "TitleLighting.hlsli"
 #include "SunfallLighting.hlsli"
 #include "CaveLighting.hlsli"
+#include "RailShadowReceiver.hlsli"
 
 // Mode 10 uses the existing normal SRV (t4); alpha carries linear roughness.
 // Other models continue to use their existing material modes and shader path.
@@ -358,9 +359,10 @@ static float3 RailSurfaceLighting(float3 base, float metal, float rough,
     float3 caveLit = 0.0f;
     [branch] if (caveWeight > 0.0f)
         caveLit = CaveSubjectLighting(base, metal, rough, N, N, V, worldPosition, contactVisibility);
+    float3 L = SafeNormalize(-gDirectionalLight.direction);
+    float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base, metal);
     float3 outdoorLit = 0.0f;
     [branch] if (caveWeight < 1.0f) {
-        float3 L = SafeNormalize(-gDirectionalLight.direction);
         float3 sun = gDirectionalLight.color.rgb * gDirectionalLight.intensity;
         // Integrate the geometric normal variation of distant, subpixel rails
         // into roughness so reflections do not become a continuous white line.
@@ -372,15 +374,26 @@ static float3 RailSurfaceLighting(float3 base, float metal, float rough,
             sky = float3(0.35f, 0.35f, 0.33f);
             reflection = gEnvironmentTexture.SampleLevel(gSampler, reflect(-V, N), filteredRoughness * 4.0f).rgb;
         }
-        float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), base, metal);
         // The albedo, metalness and roughness remain fixed across the exit.
         // Only incident sky/sun energy changes; no legacy additive white gloss.
         outdoorLit += (base * (1.0f - metal) * 0.65f + f0 * 0.45f) * sky * contactVisibility;
         outdoorLit += f0 * lerp(reflection, sky, filteredRoughness * filteredRoughness) *
             (0.18f * (1.0f - filteredRoughness * 0.5f)) * contactVisibility;
     }
-    return lerp(outdoorLit, caveLit, caveWeight)+
+    float directFacing = saturate(dot(N, L)) * (1.0f - caveWeight);
+    float3 bounceResponse = base * (1.0f - metal) * 0.80f + f0 * 0.28f;
+    float3 bounce = RailBounceIrradiance(worldPosition, N) * bounceResponse *
+        (contactVisibility * lerp(1.0f, 0.34f, directFacing));
+    return lerp(outdoorLit, caveLit, caveWeight) + bounce +
         RailWorldEffectSurfaceLighting(base,metal,filteredRoughness,N,V,worldPosition);
+}
+
+static float FilteredCarrierNoise(float2 uv, float2 frequency, float seed)
+{
+    float2 position = uv * frequency;
+    float2 footprint = fwidth(position);
+    float visibility = 1.0f - smoothstep(.32f, .90f, max(footprint.x, footprint.y));
+    return (CartSurfaceNoise(position + seed) - .5f) * visibility;
 }
 
 PixelShaderOutput main(VertexShaderOutput input)
@@ -531,18 +544,25 @@ PixelShaderOutput main(VertexShaderOutput input)
         const float metalness[12]={.08f,.15f,.90f,0,.06f,.80f,.25f,.75f,1,.06f,0,.05f};
         float rough=roughness[band]+gMaterial.shininess;
         float metal=metalness[band]*saturate(gMaterial.environmentCoefficient);
-        float grainFilter=1-smoothstep(.15f,.65f,max(fwidth(detail.x),fwidth(detail.y))*32);
-        float grain=CartSurfaceNoise(detail*float2(9,37)+4.2f);
-        float broad=CartSurfaceNoise(detail*5+11.7f);
+        float hull=saturate(gMaterial.caveSurface.z);
+        float grain=FilteredCarrierNoise(detail,float2(8,26),4.2f);
+        float broad=FilteredCarrierNoise(detail,float2(3,2),11.7f);
         bool painted=band==0 || band==1 || band==4 || band==9 || band==11;
-        float edge=min(min(detail.x,1-detail.x),min(detail.y,1-detail.y));
-        float edgeAA=max(fwidth(edge),.004f);
-        float wear=(1-smoothstep(.018f,.018f+edgeAA,edge))*
-            smoothstep(.63f,.88f,CartSurfaceNoise(detail*11+8.1f))*(painted?.14f:0);
-        base*=.97f+.06f*broad+(grain-.5f)*.035f*grainFilter;
-        base=lerp(base,float3(.26f,.28f,.29f),wear);
-        metal=lerp(metal,.85f,wear);
-        rough+=(broad-.5f)*.045f+(grain-.5f)*.025f*grainFilter-wear*.10f;
+        float2 edge=min(detail,1.0f-detail);
+        float2 edgeWidth=max(fwidth(detail),.002f);
+        float2 visibleEdge=(1.0f-smoothstep(.032f,.032f+edgeWidth,edge))*
+            (1.0f-smoothstep(.065f,.18f,edgeWidth));
+        float wear=max(visibleEdge.x,visibleEdge.y)*
+            smoothstep(-.14f,.25f,FilteredCarrierNoise(detail,float2(5,6),8.1f))*(painted?.22f:0);
+        base*=1.0f+broad*.12f+grain*lerp(.032f,.018f,hull);
+        base=lerp(base,base*.70f+float3(.14f,.16f,.17f),wear);
+        metal=lerp(metal,.67f,wear);
+        rough+=broad*.07f+grain*.024f-wear*.09f;
+        if(hull>.5f && band==7) {
+            // Broad dull highlights distinguish exposed bevels from paint.
+            rough=max(rough,.56f);
+            metal=max(metal,.48f);
+        }
         if(band==7) {
             // Subdued blue/straw tempering belongs only to hot steel collars.
             float3 temper=lerp(float3(.74f,.80f,1.0f),float3(1.0f,.79f,.56f),detail.y);
@@ -557,9 +577,21 @@ PixelShaderOutput main(VertexShaderOutput input)
         float counter=saturate(gMaterial.caveSurface.x);
         float rim=pow(1-saturate(abs(dot(N,V))),3);
         lit+=float3(.12f,.075f,.012f)*counter*(.3f+.7f*rim);
+        float carrierGrade=saturate(railCanyonGrade.x+railCanyonGrade.y);
+        float sideLight=smoothstep(.10f,.78f,1.0f-abs(N.y));
+        float keyFacing=saturate(dot(N,SafeNormalize(-gDirectionalLight.direction)));
+        // Add a soft lateral sky response to the hull and preserve the dark
+        // underside where the bridge's reflected light defines the planes.
+        lit*=1.0f-hull*railCanyonGrade.y*keyFacing*.13f;
+        lit+=base*float3(.13f,.21f,.29f)*sideLight*(.38f+.62f*rim)*hull*carrierGrade;
+        // The existing counter state lights exposed armour edges locally.
+        lit+=float3(.21f,.128f,.041f)*counter*carrierGrade*(.14f+.58f*rim);
         lit=lerp(lit,float3(1.4f,1.3f,1.1f),saturate(gMaterial.pad_)*.85f);
         if(titleSubject.w>.5f)lit=TitleAtmosphere(lit*TitleCaveExposure(),input.worldPosition);
-        output.color=float4(lit+impactEmission,gMaterial.color.a);return output;
+        // Mode 16 is opaque. Reserve one alpha value for the near-shadow
+        // pass so the carrier can cast onto the deck without self-stippling.
+        float sceneAlpha=railCanyonGrade.z>.5f ? kRailShadowCasterOnly : gMaterial.color.a;
+        output.color=float4(lit+impactEmission,sceneAlpha);return output;
     }
 
     // Only the forward surfaces of exposed pursuit hardware use the extra U band.

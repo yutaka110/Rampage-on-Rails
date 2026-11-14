@@ -1,5 +1,6 @@
 #include "AppPipelines.h"
 #include "SunfallAtmosphere.h"
+#include "RailNearShadow.h"
 #include "utils/math/Vector.h"
 
 #include <cassert>
@@ -377,6 +378,8 @@ bool AppPipelines::HotReloadIfNeeded(ID3D12Device* device) {
         L"resources/TitleLighting.hlsli",
         L"resources/SunfallVolume.PS.hlsl",
         L"resources/SunfallComposite.PS.hlsl",
+        L"resources/RailNearShadow.PS.hlsl",
+        L"resources/RailNearShadowDXR.PS.hlsl",
         L"resources/ContactAO.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",
@@ -1541,6 +1544,27 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         IID_PPV_ARGS(&sunfallRootSignature_));
     if(FAILED(hr)) return FailHr("CreateRootSignature(Sunfall)",hr);
 
+    D3D12_ROOT_PARAMETER railShadowParams[5] = {
+        compositeParams[0],compositeParams[1],compositeParams[2],compositeParams[3],{}};
+    railShadowParams[3].Constants.Num32BitValues=kRailNearShadowDwords;
+    railShadowParams[4].ParameterType=D3D12_ROOT_PARAMETER_TYPE_SRV;
+    railShadowParams[4].ShaderVisibility=D3D12_SHADER_VISIBILITY_PIXEL;
+    railShadowParams[4].Descriptor.ShaderRegister=3;
+    D3D12_STATIC_SAMPLER_DESC railShadowSampler=staticSamplers[0];
+    railShadowSampler.Filter=D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    railShadowSampler.ComparisonFunc=D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    D3D12_ROOT_SIGNATURE_DESC railShadowDesc=compositeRootDesc;
+    railShadowDesc.NumParameters=_countof(railShadowParams);
+    railShadowDesc.pParameters=railShadowParams;
+    railShadowDesc.NumStaticSamplers=1;
+    railShadowDesc.pStaticSamplers=&railShadowSampler;
+    ComPtr<ID3DBlob> railShadowSignature;
+    hr=D3D12SerializeRootSignature(&railShadowDesc,D3D_ROOT_SIGNATURE_VERSION_1,&railShadowSignature,nullptr);
+    if(FAILED(hr)) return FailHr("SerializeRootSignature(RailNearShadow)",hr);
+    hr=device->CreateRootSignature(0,railShadowSignature->GetBufferPointer(),railShadowSignature->GetBufferSize(),
+        IID_PPV_ARGS(&railNearShadowRoot_));
+    if(FAILED(hr)) return FailHr("CreateRootSignature(RailNearShadow)",hr);
+
     // ------------------------------
     // Compile shaders
     // ------------------------------
@@ -1801,6 +1825,12 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         &terrainShadowPsoDesc,
         IID_PPV_ARGS(&terrainShadowPso_));
     if (FAILED(hr)) return FailHr("CreateGraphicsPipelineState(TerrainShadow)", hr);
+
+    auto railCasterDesc=terrainShadowPsoDesc;
+    railCasterDesc.RasterizerState.DepthBias=32;
+    railCasterDesc.RasterizerState.SlopeScaledDepthBias=.6f;
+    hr=device->CreateGraphicsPipelineState(&railCasterDesc,IID_PPV_ARGS(&railCasterShadowPso_));
+    if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(RailCasterShadow)",hr);
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC terrainDebrisShadowPsoDesc = terrainShadowPsoDesc;
     terrainDebrisShadowPsoDesc.InputLayout = debrisInputLayoutDesc;
@@ -2165,6 +2195,25 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         d.PS={sunfallCompositePs_->GetBufferPointer(),sunfallCompositePs_->GetBufferSize()};
         hr=device->CreateGraphicsPipelineState(&d,IID_PPV_ARGS(&sunfallCompositePso_));
         if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(SunfallComposite)",hr);
+    }
+
+    {
+        auto d=compositeDesc;
+        d.RTVFormats[0]=DXGI_FORMAT_R16G16B16A16_FLOAT;
+        d.pRootSignature=railNearShadowRoot_.Get();
+        auto raster=Compile_(L"resources/RailNearShadow.PS.hlsl",L"ps_6_0");
+        if(!raster) return false;
+        d.PS={raster->GetBufferPointer(),raster->GetBufferSize()};
+        hr=device->CreateGraphicsPipelineState(&d,IID_PPV_ARGS(&railNearShadowPso_));
+        if(FAILED(hr)) return FailHr("CreateGraphicsPipelineState(RailNearShadow)",hr);
+        railNearShadowDxrPso_.Reset();
+        if(RailNearShadow::Supports(device)) {
+            if(auto dxr=Compile_(L"resources/RailNearShadowDXR.PS.hlsl",L"ps_6_5")) {
+                d.PS={dxr->GetBufferPointer(),dxr->GetBufferSize()};
+                hr=device->CreateGraphicsPipelineState(&d,IID_PPV_ARGS(&railNearShadowDxrPso_));
+                if(FAILED(hr)) OutputDebugStringA("[RailNearShadow] DXR PSO unavailable; using shadow map.\n");
+            }
+        }
     }
 
     {
@@ -2826,6 +2875,8 @@ bool AppPipelines::Initialize(ID3D12Device* device) {
         L"resources/TitleLighting.hlsli",
         L"resources/SunfallVolume.PS.hlsl",
         L"resources/SunfallComposite.PS.hlsl",
+        L"resources/RailNearShadow.PS.hlsl",
+        L"resources/RailNearShadowDXR.PS.hlsl",
         L"resources/ContactAO.PS.hlsl",
         L"resources/ToneMapping.PS.hlsl",
         L"resources/GlowComposite.PS.hlsl",

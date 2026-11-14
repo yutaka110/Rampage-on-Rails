@@ -1788,6 +1788,7 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
             item->materialData->specularMode=16;
             item->materialData->shininess=.08f;
             item->materialData->environmentCoefficient=.74f;
+            item->materialData->padding2[3]=1.0f; // Distinguish hull from mounted weapon materials.
         }
         if(IsCarrierBatterySurfaceMesh(mesh))
             *item->materialData=BuildCarrierBatterySurfaceMaterial(mesh,color,0,0);
@@ -1810,15 +1811,20 @@ void CourseMeshRenderQueue::AppendMothership(const RailMothership::Frame& carrie
             const auto mount=RailMothership::WeaponMount(i);
             if(carrier.partsBattle && carrier.partHealth[i]<=0)continue;
             const bool heavy=i==1;
-            const float glow=.54f+carrier.partCharge[i]*1.35f;
+            const float routeCharge=heavy && routeShotAge>=0
+                ? RailRouteHazards::HeavyCharge(distance,routeShotAge) : 0.0f;
+            const float charge=(std::max)(routeCharge,carrier.partCharge[i]);
+            const float glow=.48f+charge*1.15f;
             if(heavy) for(float side:{-1.f,1.f}) {
-                const float routeCharge=routeShotAge>=0?RailRouteHazards::HeavyCharge(distance,routeShotAge):0;
-                const float power=.65f+.55f*(std::max)(routeCharge,carrier.partCharge[i]);
+                const float power=.72f+.48f*charge;
                 part("carrier_box","carrier/heavy-identification",{mount.x+side*3.9f,-5.1f,-71.98f},
-                    {.94f,1.48f,.36f},{1.10f*power,.23f*power,1.22f*power,1},false);
+                    {1.06f,2.18f,.36f},{1.10f*power,.20f*power,1.22f*power,1},false);
             }
-            part("carrier_box","carrier/weapon-guide",{mount.x,mount.y-3.0f,mount.z+1.7f},{4.6f,.42f,.48f},
-                heavy?Vector4{1.15f*glow,.24f*glow,1.24f*glow,1}:Vector4{.20f*glow,.72f*glow,1.25f*glow,1},false);
+            if(!heavy) for(int index=-1;index<=1;++index) {
+                part("carrier_box","carrier/gatling-identification",
+                    {mount.x+1.37f*index,mount.y-3.0f,mount.z+1.7f},{.92f,.50f,.48f},
+                    {.13f*glow,.85f*glow,1.10f*glow,1},false);
+            }
             // The same weapon meshes take over as damageable actors at the
             // encounter boundary. The hull itself owns the permanent sockets.
             if(carrier.partsBattle)continue;

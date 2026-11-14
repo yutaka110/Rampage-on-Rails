@@ -36,6 +36,11 @@ public:
     ID3D12PipelineState* GetTerrainPSO() const { return terrainPso_.Get(); }
     ID3D12PipelineState* GetTerrainWireframePSO() const { return terrainWireframePso_.Get(); }
     ID3D12PipelineState* GetTerrainShadowPSO() const { return terrainShadowPso_.Get(); }
+    ID3D12PipelineState* GetRailCasterShadowPSO() const { return railCasterShadowPso_.Get(); }
+    ID3D12RootSignature* GetRailNearShadowRootSignature() const { return railNearShadowRoot_.Get(); }
+    ID3D12PipelineState* GetRailNearShadowPSO(bool rayTracing) const {
+        return rayTracing?railNearShadowDxrPso_.Get():railNearShadowPso_.Get();
+    }
     ID3D12PipelineState* GetTerrainDebrisPSO() const { return terrainDebrisPso_.Get(); }
     ID3D12PipelineState* GetTerrainDebrisShadowPSO() const { return terrainDebrisShadowPso_.Get(); }
     ID3D12PipelineState* GetTerrainDebrisCullPSO() const { return terrainDebrisCullPso_.Get(); }
@@ -296,6 +301,8 @@ private:
     uint32_t hotReloadPollFrame_ = 0;
     bool shaderHotReloadConfigured_ = false;
     bool shaderHotReloadEnabled_ = false;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> railNearShadowRoot_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> railCasterShadowPso_, railNearShadowPso_, railNearShadowDxrPso_;
 
     Microsoft::WRL::ComPtr<IDxcBlob> Compile_(const std::wstring& filePath, const wchar_t* profile);
     void TrackShader_(const std::wstring& filePath);

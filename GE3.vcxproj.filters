@@ -1419,6 +1419,9 @@
     <ClCompile Include="application\AppRunLoop.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
+    <ClCompile Include="application\RailNearShadow.cpp">
+      <Filter>ソース ファイル</Filter>
+    </ClCompile>
     <ClCompile Include="application\AppSceneControlsPanel.cpp">
       <Filter>ソース ファイル</Filter>
     </ClCompile>
@@ -1618,6 +1621,9 @@
       <Filter>ヘッダー ファイル\Streaming</Filter>
     </ClInclude>
     <ClInclude Include="application\AppRunLoop.h">
+      <Filter>ヘッダー ファイル</Filter>
+    </ClInclude>
+    <ClInclude Include="application\RailNearShadow.h">
       <Filter>ヘッダー ファイル</Filter>
     </ClInclude>
     <ClInclude Include="application\VfxEngine.h">
@@ -3146,6 +3152,9 @@
     <None Include="Resources\TerrainDebrisShadow.VS.hlsl" />
     <None Include="Resources\Terrain.PS.hlsl" />
     <None Include="Resources\TerrainShadow.VS.hlsl" />
+    <None Include="Resources\RailNearShadow.PS.hlsl" />
+    <None Include="Resources\RailNearShadowDXR.PS.hlsl" />
+    <None Include="Resources\RailShadowReceiver.hlsli" />
     <None Include="Resources\effects\AuthoringMetadataDemo.effect" />
     <None Include="Resources\effects\HandSocketParticle.effect" />
     <None Include="Resources\effects\LeftHandSocketParticle.effect" />

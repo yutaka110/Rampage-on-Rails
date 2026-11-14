@@ -108,6 +108,9 @@ struct AppFrameGraphBuildContext {
     // xy screen centre, z ring radius, w strength. Zero allocates no lens pass.
     Vector4 railEliteLens{};
     float railEliteLensAge=0;
+    bool railNearShadowActive = false;
+    const D3D12_GPU_VIRTUAL_ADDRESS* railShadowAcceleration = nullptr;
+    Vector2 sunfallCanyonGrade{}; // bridge and carrier arena blend weights
 };
 
 class AppFrameGraphBuilder {

@@ -6,7 +6,8 @@ SamplerState gSampler : register(s0);
 cbuffer Params : register(b0) {
     float gStrength; float gNear; float gFar; float gOutdoor;
     float3 gSunColor; float gSunIntensity;
-    float4 gSkyPalette;
+    float4 gSkyPalette; // linear sky palette and bridge blend weight
+    float gCarrierArena;
 };
 struct PSInput { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
 float LinearDepth(float d) {return gNear*gFar/max(gFar-d*(gFar-gNear),1e-5f);}
@@ -49,6 +50,14 @@ float4 main(PSInput input) : SV_TARGET {
     float3 air=SunfallCourseHorizon(gSkyPalette.rgb,gSunColor);
     float distant=smoothstep(300.0f,1250.0f,reference);
     air=lerp(lerp(SunfallCourseZenith(gSkyPalette.rgb),air,0.70f),air,distant);
+    // Hold back the bright veil across the deck and battery engagement range.
+    // Distant silhouettes still meet the same horizon as the sky.
+    float middle=1.0f-smoothstep(155.0f,460.0f,reference);
+    float clearAmount=saturate((gSkyPalette.w*.48f+gCarrierArena*.76f)*middle);
+    color=lerp(color,scene.rgb,clearAmount);
+    haze*=1.0f-clearAmount;
+    air=lerp(air,air*float3(.71f,.82f,.96f),
+        (gSkyPalette.w*.55f+gCarrierArena*.75f)*(1.0f-distant));
     if(reference<gFar*0.98f) color=lerp(color,air,haze);
     return float4(color,scene.a);
 }

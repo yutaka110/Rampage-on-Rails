@@ -8,6 +8,12 @@
 #include <limits>
 #include "terrain/TerrainVolumeField.h"
 
+struct RailBouncePatch {
+    Vector4 positionRadius{};
+    Vector4 normal{};
+    Vector4 radiance{};
+};
+
 // Four persistent world-space opening probes. Rebuild only the bin entering
 // the local window; camera motion must not repeat terrain queries per actor.
 class CaveOpeningLighting final {

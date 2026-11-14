@@ -13,7 +13,7 @@ cbuffer SunfallFrame : register(b0) {
     float4 gSunColorAndDensity;
     float4 gRangeHeightAndGround;
     float4 gWindAndShadow;
-    float4 gSkyPalette;
+    float4 gSkyPalette; // linear sky palette and bridge blend weight
 };
 struct PSInput { float4 position : SV_POSITION; float2 uv : TEXCOORD0; };
 
@@ -72,6 +72,7 @@ float4 main(PSInput input) : SV_TARGET {
             gSunDirectionAndStrength.w,gSkyPalette.rgb),0);
     }
     float phase=0.32f+0.68f*pow(saturate(dot(ray,toSun)),8);
+    float bridge=gSkyPalette.w;
     float3 scatter=0;
     float transmission=1;
     [loop] for(int i=0;i<16;++i) {
@@ -87,11 +88,22 @@ float4 main(PSInput input) : SV_TARGET {
         float density=gSunColorAndDensity.w*height*(0.28f+1.1f*dust)*
             smoothstep(30.0f,75.0f,distance)*(0.20f+0.80f*visibility)*
             lerp(1.0f,0.65f,gRangeHeightAndGround.w);
-        float extinction=1-exp(-density*stepLength);
+        // The bridge crosses above a low layer of dust. Integrate it only
+        // below the deck datum, so the rails and overhead hull stay clear.
+        float basinDensity=0.0f;
+        [branch] if(bridge>0.0f) {
+            float belowDeck=gRangeHeightAndGround.z-p.y;
+            float basin=smoothstep(2.0f,13.0f,belowDeck)*exp(-max(belowDeck-18.0f,0.0f)/30.0f);
+            basinDensity=bridge*basin*gSunColorAndDensity.w*(0.6f+0.8f*dust)*
+                smoothstep(25.0f,74.0f,distance);
+        }
+        float extinction=1-exp(-(density+basinDensity)*stepLength);
         float3 skyBounce=SunfallZenith(gSunColorAndDensity.rgb)*0.10f*gRangeHeightAndGround.w;
         float3 illumination=float3(0.045f,0.055f,0.075f)+skyBounce+
             SunfallHorizon(gSunColorAndDensity.rgb,gSunDirectionAndStrength.w)*
             gSunDirectionAndStrength.w*visibility*phase;
+        illumination=lerp(illumination,float3(.29f,.31f,.35f),
+            basinDensity/max(density+basinDensity,1e-6f));
         scatter+=transmission*extinction*illumination;
         transmission*=1-extinction;
     }
