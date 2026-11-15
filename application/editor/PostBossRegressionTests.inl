@@ -424,6 +424,11 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
         runner.Expect(!interrupted.InterruptCrossfire(0) && interrupted.InterruptCrossfire(2) &&
             interrupted.FangCrossfire().phase==Phase::Stagger && !interrupted.CrossfireRoundDue(),
             "only the marked wing can stop a crossfire before the first round");
+        input.fangNearPanel=0;
+        for(int i=0;i<fps*5 && !interrupted.FangCanFire();++i)interrupted.Tick(dt,input);
+        runner.Expect(interrupted.FangCanFire(),
+            "the next attack is an ordinary burst even if the other wing is intact");
+        input.fangNearPanel=2;
         input.playerLane=-.83f;
         for(int i=0;i<fps && !planner.CrossfireRoundDue();++i)planner.Tick(dt,input);
         const auto& attack=planner.FangCrossfire();
@@ -433,6 +438,53 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
         planner.CrossfireRoundEmitted(3);
         runner.Expect(!planner.InterruptCrossfire(2) && planner.FangCrossfire().rounds==1,
             "a late panel break cannot recall committed fire");
+        for(int i=0;i<2;++i) {
+            for(int frame=0;frame<fps && !planner.CrossfireRoundDue();++frame)planner.Tick(dt,input);
+            planner.CrossfireRoundEmitted(3);
+        }
+        for(int frame=0;frame<fps*6 && !planner.FangCrossfire().aimVolley;++frame)planner.Tick(dt,input);
+        runner.Expect(planner.FangCrossfire().aimVolley && planner.FangCrossfire().phase==Phase::Warning &&
+            !planner.InterruptCrossfire(2) && !planner.CrossfireRoundDue(),
+            "Fang warns before the alternating volleys");
+        for(int frame=0;frame<fps*2 && !planner.CrossfireRoundDue();++frame)planner.Tick(dt,input);
+        const float warning=RailPursuerCoordination::AimVolleyWarningSeconds;
+        runner.Expect(planner.CrossfireRoundDue() && planner.FangCrossfire().age>=warning &&
+            planner.FangCrossfire().age<=warning+dt+.001f,"Fang's turning volley gives a full warning");
+        std::array<Vector3,RailPursuerCoordination::AimSalvoCount> formations{};
+        constexpr auto count=RailPursuerCoordination::AimVolleyRoundCount;
+        for(unsigned round=0;round<count;++round) {
+            if(round>0) {
+                const float release=RailPursuerCoordination::AimRoundTime(round);
+                runner.Expect(!planner.CrossfireRoundDue() && planner.FangCrossfire().AimVolleyPreparing(),
+                    "the next round is delayed while Fang keeps turning");
+                for(int frame=0;frame<fps && !planner.CrossfireRoundDue();++frame)planner.Tick(dt,input);
+                runner.Expect(planner.CrossfireRoundDue() && planner.FangCrossfire().age>=release &&
+                    planner.FangCrossfire().age<=release+dt+.001f,"the rounds retain their authored spacing");
+            }
+            if(round%RailPursuerCoordination::AimSalvoRounds==0)
+                formations[round/RailPursuerCoordination::AimSalvoRounds]=planner.AircraftState(0).formation;
+            planner.CrossfireRoundEmitted(count);
+        }
+        runner.Expect(!planner.CrossfireRoundDue() && !planner.FangCrossfire().AimVolleyPreparing(),
+            "the turning volley fires exactly six rounds");
+        runner.Expect(formations[0].y>7 && std::abs(formations[1].y)<3 && formations[2].y<-7 &&
+            formations[1].z>9 && formations[1].z>formations[0].z && formations[1].z>formations[2].z &&
+            std::abs(planner.AircraftState(0).bank)>.75f,"Fang banks through a continuous left, high and right pass");
+
+        for(size_t salvo=0;salvo<kFangAimVolleyRoles.size();++salvo) {
+            CourseBulletActor arcing;
+            arcing.definitionId=kFangAimVolleyRound;
+            arcing.sourceRole=kFangAimVolleyRoles[salvo];
+            arcing.forwardSpeed=60;
+            arcing.lockedTargetDistance=60;
+            for(int frame=0;frame<fps/2;++frame)AdvanceEnemyProjectileTrajectory(arcing,dt);
+            const auto extent=kFangAimVolleyExtents[salvo];
+            runner.Expect(std::abs(arcing.lateralOffset-extent.x)<.01f &&
+                std::abs(arcing.verticalOffset-extent.y)<.01f,"each salvo has a distinct lane and height");
+            for(int frame=0;frame<fps/2+1;++frame)AdvanceEnemyProjectileTrajectory(arcing,dt);
+            runner.Expect(std::abs(arcing.lateralOffset)<.001f && std::abs(arcing.verticalOffset)<.001f,
+                "all three flight paths converge on the cart after their aiming window");
+        }
         CourseBulletActor round;
         round.sourceRole=kFangCrossfireRole;
         round.forwardSpeed=160;round.lateralOffset=-2.0f;round.verticalOffset=5.0f;
@@ -476,6 +528,32 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
         CourseCollisionSystem collision;std::string error;runner.Expect(collision.LoadWeaponDefinitions("Resources/weapons",&error),"rear prototype loads production weapon definitions");
         const auto ids=sequence.ActorIds();
         const auto armorCheckpoint=runtime.CaptureCheckpoint();
+        if(fps==60) {
+            auto counterSequence=sequence;
+            CourseSpawnRuntime counterRuntime;
+            runner.Expect(counterRuntime.RestoreCheckpoint(armorCheckpoint,&error),"Fang defense binds the live pursuers");
+            counterRuntime.ClearProjectiles(); // Collision prunes accepted contacts before the encounter reads them.
+            std::array<EnemyProjectileShootDownResult,3> hits{};
+            for(size_t i=0;i<hits.size();++i) {
+                hits[i].projectileId=101+i;
+                hits[i].ownerActorId=ids[0];
+                hits[i].accepted=hits[i].destroyed=true;
+            }
+            runner.Expect(!counterSequence.OnFangIntercepts(std::span(hits).first(2),counterRuntime) &&
+                !counterSequence.FangInterceptCounterOpen(),"a partially intercepted burst does not earn the counter window");
+            const auto* finalIntercept=counterSequence.OnFangIntercepts(std::span(hits).last(1),counterRuntime);
+            runner.Expect(finalIntercept==&hits.back() &&
+                counterSequence.FangFollowupTarget()==ids[0] && counterRuntime.Enemies().front().desc.bulletCount==3,
+                "the final intercepted round opens the hull counter and provides its physical contact");
+            const float counterLane=counterSequence.Coordination().AircraftState(0).formation.y;
+            for(int i=0;i<5;++i)counterSequence.Update(.21f,distance,true,counterRuntime,dispatcher);
+            runner.Expect(std::abs(counterSequence.Coordination().AircraftState(0).formation.y-counterLane)<.001f &&
+                std::abs(counterSequence.FangInterceptCounterRemaining()-.15f)<.001f,
+                "Fang holds its lane while the counter uses the remaining gameplay time");
+            counterSequence.Update(.21f,distance,true,counterRuntime,dispatcher);
+            runner.Expect(counterSequence.FangFollowupTarget()==0,
+                "the hull counter expires within 1.25 seconds");
+        }
         RailLockVolley panelVolley;
         std::vector<RailLockToken> panelTokens;
         for(const auto& anchor:registry.Anchors()) {
@@ -523,6 +601,9 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
             runner.Expect(runtime.Enemies().front().rearArmor.intact==0 &&
                 runtime.Enemies().front().rearArmor.exposedRemaining==0,"exposure ends before the rearm");
             runtime.UpdateRearArmor(4.80f);
+            runner.Expect(runtime.Enemies().front().rearArmor.intact==0,
+                "Fang's wings stay broken past the standard six-second rear armor rearm");
+            runtime.UpdateRearArmor(3.0f);
             runner.Expect(runtime.Enemies().front().rearArmor.intact==7 &&
                 !RailLockVolley::TargetPosition(panelTokens.front().target,rail,runtime,position),
                 "rearm restores three panels but rejects the previous generation");
@@ -538,7 +619,7 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
                     "a rebuilt panel accepts a new lock");
                 for(int i=0;i<fps*2;++i)panelVolley.Update(dt,muzzle,rail,runtime,panelCollision,&course);
                 runner.Expect(runtime.Enemies().front().rearArmor.intact!=7,"the rebuilt panel breaks again");
-                runtime.UpdateRearArmor(6.01f);
+                runtime.UpdateRearArmor(9.01f);
                 runner.Expect(runtime.Enemies().front().rearArmor.intact==7,"repeat break rearms again");
             } else runner.Expect(false,"rearm registers new lock targets");
         } else runner.Expect(false,"Fang registers three panel locks");

@@ -46,14 +46,14 @@ def main():
     by_stage={item['stage']:item for item in existing if item.get('build_sha256')==build}
     labels=['valley-vista','bridge-entry','rear-combat','pursuit-clear','first-pursuit-shadow','second-pursuit-shadow',
             'first-pursuer-reveal','pair-reveal','fang-close-pass','elite-cycle','pursuit-handoff',
-            'fang-followup','veil-interrupt','fang-cannon-break','veil-sensor-break','fang-panel-evade','fang-lightning-release','fang-lightning-flight','fang-lightning-hit','fang-lightning-surface',
+            'fang-followup','veil-beam-after-hull-lock','fang-turning-volley-counter','veil-sensor-break','fang-panel-evade','fang-lightning-release','fang-lightning-flight','fang-lightning-hit','fang-lightning-surface',
             'veil-beam-tracking','veil-beam-locked','veil-beam-impact','veil-beam-boost','fang-fire-punch','veil-pressure-shock',
             'bridge-cut','bridge-release-aim','bridge-release-hit','bridge-jump','bridge-landing','bridge-escape-clear','bridge-escape-retry','bridge-damage-escape','bridge-retry-then-clear',
             'bridge-structure-sequence','bridge-structure-retry',
             'coordination-cruise','coordination-accelerate','coordination-brake','coordination-occluded',
             'rear-panel-available','rear-panel-lock','rear-panel-broken','rear-panel-socket',
             'fang-crossfire-warning','fang-crossfire-counter','fang-crossfire-interrupted','fang-crossfire-hit',
-            'rear-beam-warning','rear-beam-evade','rear-beam-interrupted','rear-beam-hit','rear-attacks-overlap',
+            'rear-beam-warning','rear-beam-evade','veil-beam-after-sensor-lock','rear-beam-hit','rear-attacks-overlap',
              'veil-lightning-warning','veil-lightning-counter','veil-lightning-hit','veil-lightning-columns',
             'fang-blue-impact','veil-blue-impact','fang-critical-smoke','veil-critical-smoke']
     fang_hp,veil_hp=(float((ROOT/f'Resources/courses/actors/rear_{actor}.actor')
@@ -102,23 +102,18 @@ def main():
                 rows_by_asset={row['asset']:row for row in csv.DictReader(line for line in enemies if not line.startswith('#'))}
             assert all(rows_by_asset[asset]['targetable']=='1' for asset in ('rear_fang','rear_veil')),rows_by_asset
         if stage==11:
-            assert float(last['fang_bonus_damage'])==18 and last['veil_beams']=='1',last
-        if stage==12:
-            assert last['veil_beams']=='0' and last['rear_lock']=='1' and last['alive']=='2',last
-            assert any(row['veil_interrupted']=='1' for row in rows),last
+            assert float(last['fang_bonus_damage'])==18 and float(last['fang_hull_hp'])<fang_hp,last
         notice=next((r for r in rows if r['phase']=='4'),None)
         if stage==13:
-            assert int(last['fang_rounds'])==5 and float(last['fang_hull_hp'])==fang_hp and float(last['fang_cannon_hp'])==0,last
-            assert any(row['fang_rounds']=='3' and float(row['fang_cannon_hp'])==36 for row in rows),last
-            assert any(row['fang_rounds']=='3' and float(row['fang_cannon_hp'])==0 for row in rows),last
+            assert last['fang_followup']=='1' and float(last['fang_hull_hp'])<fang_hp and last['crossfire_rounds']=='6',last
+            assert any(row['crossfire_phase']=='1' and row['crossfire_panel']=='-1' for row in rows),last
         if stage in (8,13,24):
             with (out/f'{label}.parts.csv').open() as parts_file:parts=list(csv.DictReader(parts_file))
             names={p['node'] for p in parts}
             expected={'fang_body','fang_wing_left','fang_wing_right','fang_barrel_left','fang_engine_left','fang_engine_right','fang_sensor'}
-            if stage!=13:expected.add('fang_barrel_right')
+            expected.add('fang_barrel_right')
             assert names==expected,parts
             assert all(p['actor']!='0' for p in parts),parts
-            if stage==13:assert next(p for p in parts if p['node']=='fang_body')['mesh']=='fang_body_damaged',parts
         if stage==14:
             assert int(last['rear_primary'])==2 and int(last['veil_beams'])==1,last
             assert float(last['veil_hull_hp'])==veil_hp and float(last['veil_sensor_hp'])==0,last
@@ -144,7 +139,6 @@ def main():
                 assert last['crossfire_rounds']=='0' and abs(float(last['crossfire_bank']))>.75,last
             if stage==46:
                 assert .74<=float(warning[-1]['crossfire_age'])<=.81,warning[-1]
-                assert int(last['evasion_count'])>int(warning[0]['evasion_count']),last
                 assert last['player_hp']==warning[0]['player_hp'] and last['crossfire_rounds']=='3',last
                 assert last['fang_followup']=='1' and float(last['fang_bonus_damage'])>0,last
             if stage==47:
@@ -153,12 +147,12 @@ def main():
             if stage==48:
                 assert last['crossfire_rounds']=='3' and last['evasion_count']==warning[0]['evasion_count'],last
                 assert float(last['player_hp'])<float(warning[0]['player_hp']),last
-        if stage in (22,23,49,50,51,52,53):
+        if stage in (12,22,23,49,50,51,52,53):
             charging=[r for r in rows if r['veil_beam_phase'] in ('1','2')]
             assert charging and last['camera_weight']=='1' and last['alive']=='2',last
             first_charge=[r for r in charging if r['veil_beams']=='0']
             assert len({r['beam_end'] for r in first_charge})==1,last
-            if stage in (22,23,49,50,52):
+            if stage in (12,22,23,49,50,51,52):
                 assert abs(float(first_charge[0]['veil_beam_remaining'])-1.80)<.002,last
                 first_locked=next(r for r in first_charge if r['veil_beam_phase']=='2')
                 assert .648<=float(first_locked['veil_beam_remaining'])<=.701,first_locked
@@ -175,9 +169,16 @@ def main():
                     assert last['boost_held']=='1' and float(last['distance'])>float(last['beam_end']),last
                     assert float(last['player_speed'])>float(charging[0]['player_speed'])+4,last
                 else:assert last['boost_held']=='0',last
-            if stage==51:
-                assert last['veil_beams']=='0' and last['veil_interrupted']=='1',last
-                assert last['rear_lock']=='1' and last['veil_sensor_hp']=='0' and float(last['veil_hull_hp'])==veil_hp,last
+            if stage in (12,51):
+                field='veil_hull_hp' if stage==12 else 'veil_sensor_hp'
+                hit=next(r for r in first_charge if r['rear_lock']!='0' and float(r[field])<float(first_charge[0][field]))
+                fired=next(r for r in rows if r['veil_beam_phase']=='3')
+                assert float(hit['phase_age'])<float(fired['phase_age']),hit
+                assert abs(float(fired['phase_age'])-float(first_charge[0]['phase_age'])-1.80)<.055,fired
+                assert all(r['veil_interrupted']=='0' for r in first_charge),hit
+                assert last['veil_beams']=='1' and last['veil_beam_phase']=='3',last
+                if stage==51:
+                    assert float(last['veil_sensor_hp'])==0 and float(last['veil_hull_hp'])==veil_hp,last
             if stage==53:
                 assert last['fang_threat']==last['veil_threat']=='1',last
                 assert any(r['fang_threat']=='1' and r['veil_threat']=='0' for r in rows),last

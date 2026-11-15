@@ -338,7 +338,7 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
             }
         }
         std::optional<RailVehicleProjectileContact> armour;
-        if (bullet.definitionId == "enemy_fang_chase" && input.railPath) {
+        if (IsFangChaseRound(bullet.definitionId) && input.railPath) {
             // Crossfire passes through the exposed occupant band. The wider
             // armour probe would stop it before it could reach that band.
             if (input.vehicleBody && !crossfire) {
@@ -639,18 +639,20 @@ void CourseCollisionSystem::FirePlayerShot(
     bool focusedGatlingClash=true;
     if (input.railPath != nullptr) {
         bool projectileDepth=false;
-        const bool groundBatteryClash=std::any_of(runtime.Bullets().begin(),runtime.Bullets().end(),[](const auto& bullet) {
-            return bullet.active && !bullet.hitConsumed && RailGroundBattery::IsProjectile(bullet.definitionId);
-        });
-        if(input.convergePrimaryOnGatling || groundBatteryClash) {
+        const auto needsProjectileDepth=[&](const auto& bullet) {
+            return (input.convergePrimaryOnGatling && RailGatling::IsProjectile(bullet.definitionId)) ||
+                RailGroundBattery::IsProjectile(bullet.definitionId) || IsFangChaseRound(bullet.definitionId);
+        };
+        if(std::any_of(runtime.Bullets().begin(),runtime.Bullets().end(),[&](const auto& bullet) {
+            return bullet.active && !bullet.hitConsumed && needsProjectileDepth(bullet);
+        })) {
             const auto cameraDirection=NormalizeOr(shotAim.worldRayDirection,{0,0,1});
             float nearest=shotAim.hasWorldHit ? shotAim.aimDistance : shotAim.maxDistance;
             if(nearest<=0)nearest=shot.range+64;
             for(const auto& bullet:runtime.Bullets()) {
                 if(!bullet.active || bullet.hitConsumed || !bullet.shootDownEnabled ||
                     bullet.age>=bullet.lifetime ||
-                    !((input.convergePrimaryOnGatling && RailGatling::IsProjectile(bullet.definitionId)) ||
-                        RailGroundBattery::IsProjectile(bullet.definitionId)))continue;
+                    !needsProjectileDepth(bullet))continue;
                 const auto center=ResolveEnemyProjectileWorldPosition(*input.railPath,
                     {bullet.lateralOffset,bullet.verticalOffset,bullet.spawnDistance+bullet.distanceOffset});
                 const auto delta=Add(center,Scale(shotAim.worldRayOrigin,-1));
@@ -746,11 +748,15 @@ void CourseCollisionSystem::FirePlayerShot(
     request.hitNormal = aim->worldAimNormal;
     request.hitDistance = aim->aimDistance;
     request.baseDamage = shot.damage;
-    if(request.hitKind==RailAimHitKind::Enemy && request.targetActorId!=0 &&
-        request.targetActorId==input.bonusTargetActorId && std::isfinite(input.bonusDamageMultiplier))
-    {
-        request.baseDamage*=(std::clamp)(input.bonusDamageMultiplier,1.0f,4.0f);
-        if(input.bonusDamageMultiplier>1)request.counterTargetActorId=request.targetActorId;
+    if(request.hitKind==RailAimHitKind::Enemy && request.targetActorId!=0) {
+        const bool fangHull=request.sourceIndex==UINT32_MAX &&
+            request.targetActorId==input.fangHullCounterTargetActorId;
+        const bool bonus=request.targetActorId==input.bonusTargetActorId &&
+            std::isfinite(input.bonusDamageMultiplier);
+        const float multiplier=fangHull ? kFangHullCounterDamageMultiplier :
+            bonus ? (std::clamp)(input.bonusDamageMultiplier,1.0f,4.0f) : 1.0f;
+        request.baseDamage*=multiplier;
+        if(multiplier>1)request.counterTargetActorId=request.targetActorId;
     }
     ApplyWeaponHit(runtime, input.course, request, input.combatMount && input.combatMount->valid);
 

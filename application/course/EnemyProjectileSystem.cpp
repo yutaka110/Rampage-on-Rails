@@ -186,15 +186,26 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
 
 void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile,float deltaTime) {
     const float dt=(std::max)(0.0f,deltaTime);
-    if (projectile.sourceRole==kFangCrossfireRole &&
+    const int aimSalvo=projectile.definitionId==kFangAimVolleyRound?FangAimSalvo(projectile.sourceRole):-1;
+    if ((projectile.sourceRole==kFangCrossfireRole || aimSalvo>=0) &&
         projectile.forwardSpeed>0.0f) {
-        // The fixed entry line joins the warned lane well before the cart.
-        // After joining it, the round travels straight down that lane.
+        // Crossfire joins its warned lane early. The turning volleys arc
+        // out from their firing positions before converging near the cart.
         const float remaining=(projectile.lockedTargetDistance-projectile.spawnDistance-projectile.distanceOffset)/
             projectile.forwardSpeed;
         const float alignTime=(std::clamp)(remaining,0.0f,dt);
         projectile.lateralOffset+=projectile.lateralSpeed*alignTime;
         projectile.verticalOffset+=projectile.verticalSpeed*alignTime;
+        if(aimSalvo>=0 && alignTime>0) {
+            const float duration=(projectile.lockedTargetDistance-projectile.spawnDistance)/projectile.forwardSpeed;
+            const auto offset=[duration,aimSalvo](float timeRemaining) {
+                const float progress=(std::clamp)(1.0f-timeRemaining/duration,0.0f,1.0f);
+                return FangAimVolleyOffset(aimSalvo,progress);
+            };
+            const auto before=offset(remaining),after=offset(remaining-alignTime);
+            projectile.lateralOffset+=after.x-before.x;
+            projectile.verticalOffset+=after.y-before.y;
+        }
         if(remaining<=dt) {
             projectile.lateralOffset=projectile.lockedTargetLateralOffset;
             projectile.verticalOffset=projectile.lockedTargetVerticalOffset;

@@ -2,6 +2,7 @@
 #include "CourseAsset.h"
 #include "CourseEventDispatcher.h"
 #include "CourseSpawnRuntime.h"
+#include "EnemyProjectileShootDownSystem.h"
 #include "PlayerHitboxSystem.h"
 #include "RailRearPursuitRules.h"
 #include "RailRearDamageSmoke.h"
@@ -29,6 +30,7 @@ public:
     static constexpr float DamageGoal=2852;
     static constexpr float TimeBudgetSeconds=99; // Preserve the original margin past the survival goal.
     enum class Phase { Waiting, Aftermath, Vista, Bridge, Notice, Turning, Combat, Returning, Complete, Escape };
+    static constexpr float FangHullCounterSeconds=RailPursuerCoordination::FangHullCounterSeconds;
     using BeamPhase = RailVeilRearBeam::Phase;
     using BeamFrame = RailVeilRearBeam::Frame;
     using BeamEvents = RailVeilRearBeam::Events;
@@ -87,11 +89,12 @@ public:
         }
         if(phase_==Phase::Combat) {
             runtime.UpdateRearArmor(dt);
+            fangInterceptCounterRemaining_=(std::max)(0.0f,fangInterceptCounterRemaining_-dt);
             combatSeconds_+=dt;
             const bool earned=BreakthroughEarned();
             UpdatePursuers(dt,distance,entrySpeed,earned,runtime,perception);
             const bool safe=coordination_.SafeToExit();
-            if(earned && safe) {
+            if(earned && safe && !FangInterceptCounterOpen()) {
                 Enter(Phase::Escape);escape_.Begin(distance,veilSource_,anchor_+BridgeStart-10,entrySpeed);veilBeam_={};runtime.ClearProjectiles();
             }
         }
@@ -140,53 +143,111 @@ public:
         const auto fang=std::find_if(actors.begin(),actors.end(),[&](const auto& actor) {
             return actor.actorId==ids_[0] && actor.desc.hitPoints>0 && actor.weaponMount.ready;
         });
-        if(!canLaunch || fang==actors.end()) {coordination_.StopCrossfire();return;}
         const auto& attack=FangCrossfire();
-        const auto& muzzle=fang->weaponMount.muzzleRail[attack.rounds%2==1 && fang->fangCannonHitPoints>0 ? 1 : 0];
+        if(fang==actors.end() || (!canLaunch && !(attack.aimVolley && attack.rounds>0))) {
+            coordination_.StopCrossfire();
+            return;
+        }
+        const auto& muzzles=fang->weaponMount.muzzleRail;
+        const unsigned barrel=attack.rounds%2;
+        const auto& muzzle=muzzles[barrel];
         const auto& style=fang->desc.projectileDefinition;
-        const float flight=(std::max)(.10f,(playerDistance-muzzle.z)/RailPursuerCoordination::CrossfireRelativeSpeed);
-        const float alignTime=flight*.48f;
+        const float relativeSpeed=attack.aimVolley ? (std::max)(10.0f,(playerDistance-muzzle.z)/1.12f) :
+            RailPursuerCoordination::CrossfireRelativeSpeed;
+        const float flight=(std::max)(.10f,(playerDistance-muzzle.z)/relativeSpeed);
+        const float alignTime=flight*(attack.aimVolley ? .94f : .48f);
         CourseBulletActor round;
         round.initialized=true;round.ownerActorId=ids_[0];
-        round.definitionId="enemy_fang_chase";round.sourceRole=kFangCrossfireRole;
+        round.definitionId=attack.aimVolley ? kFangAimVolleyRound : "enemy_fang_chase";
+        round.sourceRole=attack.aimVolley ? kFangAimVolleyRoles[attack.rounds/RailPursuerCoordination::AimSalvoRounds] :
+            kFangCrossfireRole;
         round.spawnDistance=muzzle.z;round.lateralOffset=round.previousLateralOffset=muzzle.x;
         round.verticalOffset=round.previousVerticalOffset=muzzle.y;
-        round.forwardSpeed=playerSpeed+RailPursuerCoordination::CrossfireRelativeSpeed;
+        round.forwardSpeed=playerSpeed+relativeSpeed;
         const float lane=attack.lane;
         round.lateralSpeed=(lane-muzzle.x)/alignTime;
         round.verticalSpeed=(attack.height-muzzle.y)/alignTime;
         round.maximumSpeed=std::hypot(round.forwardSpeed,round.lateralSpeed,round.verticalSpeed);
-        round.radius=.29f;round.lifetime=flight+.21f;round.damage=style.damage;
-        round.color=style.color;round.trailEffectId=style.trailEffectId;round.impactEffectId=style.impactEffectId;
+        round.radius=attack.aimVolley ? .41f : .29f;
+        round.lifetime=flight+(attack.aimVolley ? .50f : .21f);
+        round.damage=style.damage;
+        round.color=attack.aimVolley ? Vector4{1,.44f,.08f,1} : style.color;
+        round.trailEffectId=style.trailEffectId;round.impactEffectId=style.impactEffectId;
         round.defenseResponses=style.defenseResponses;
         round.shootDownHitPoints=round.shootDownMaximumHitPoints=style.shootDownHitPoints;
-        round.shootDownRadiusScale=style.shootDownRadiusScale;round.shootDownEnabled=style.shootDownHitPoints>0;
+        round.shootDownRadiusScale=attack.aimVolley ? 1.25f : style.shootDownRadiusScale;
+        round.shootDownEnabled=round.shootDownHitPoints>0;
         round.lockedTargetDistance=muzzle.z+round.forwardSpeed*alignTime;
         round.lockedTargetLateralOffset=lane;round.lockedTargetVerticalOffset=attack.height;
-        if(runtime.SpawnProjectile(std::move(round)))coordination_.CrossfireRoundEmitted(fang->fangCannonHitPoints>0?3u:2u);
+        if(runtime.SpawnProjectile(std::move(round)))
+            coordination_.CrossfireRoundEmitted(attack.aimVolley?RailPursuerCoordination::AimVolleyRoundCount:3u);
         else coordination_.StopCrossfire();
     }
     // Legacy capture counter: completed attack pairs, no alternating cycle.
     unsigned CompletedCycles() const { return coordination_.AttackCount()/2; }
     uint32_t FangFollowupTarget() const {
-        return phase_==Phase::Combat && coordination_.FangFollowup() && !defeated_[0]?ids_[0]:0;
+        return FangInterceptCounterOpen()?ids_[0]:0;
+    }
+    bool FangInterceptCounterOpen() const {
+        return FangInterceptCounterRemaining()>0.0f;
+    }
+    float FangInterceptCounterRemaining() const {
+        return phase_==Phase::Combat && !defeated_[0]?fangInterceptCounterRemaining_:0.0f;
+    }
+    const CourseBulletActor* FangInterceptLead(const CourseSpawnRuntime& runtime,float distance) const {
+        if(phase_!=Phase::Combat || !ids_[0])return nullptr;
+        const CourseBulletActor* lead=nullptr;
+        float nearest=92.0f;
+        for(const auto& round:runtime.Bullets()) {
+            if(round.ownerActorId!=ids_[0] || !IsFangChaseRound(round.definitionId) ||
+                !round.active || round.hitConsumed || round.age>=round.lifetime)continue;
+            const float gap=distance-round.spawnDistance-round.distanceOffset;
+            if(gap<=0 || gap>=nearest)continue;
+            nearest=gap;
+            lead=&round;
+        }
+        return lead;
+    }
+    const EnemyProjectileShootDownResult* OnFangIntercepts(std::span<const EnemyProjectileShootDownResult> hits,
+            const CourseSpawnRuntime& runtime) {
+        if(phase_!=Phase::Combat || defeated_[0] || !ids_[0])return nullptr;
+        const auto volley=coordination_.AircraftState(0).grants;
+        if(fangInterceptVolley_!=volley) {
+            fangInterceptVolley_=volley;
+            fangInterceptedRounds_=0;
+        }
+        const auto& projectiles=runtime.Bullets();
+        const EnemyProjectileShootDownResult* lastIntercept=nullptr;
+        for(const auto& hit:hits) {
+            // Collision has already pruned the shot-down rounds. Fang's
+            // authored bursts and scripted volleys share the same owner.
+            if(hit.accepted && hit.destroyed && hit.ownerActorId==ids_[0]) {
+                ++fangInterceptedRounds_;
+                lastIntercept=&hit;
+            }
+        }
+        if(!lastIntercept)return nullptr;
+        const auto& crossfire=FangCrossfire();
+        const bool crossfireVolley=crossfire.phase==RailPursuerCoordination::CrossfirePhase::Volley;
+        if(crossfireVolley && crossfire.rounds<coordination_.CrossfireRoundLimit())return nullptr;
+        if(std::any_of(projectiles.begin(),projectiles.end(),[&](const auto& round) {
+            return round.ownerActorId==ids_[0] && IsFangChaseRound(round.definitionId) &&
+                !round.hitConsumed && (round.active || round.launchDelayRemaining>0);
+        }))return nullptr;
+        for(const auto& actor:runtime.Enemies()) {
+            if(actor.actorId!=ids_[0] || actor.desc.hitPoints<=0)continue;
+            const auto count=crossfireVolley ?
+                (crossfire.aimVolley ? RailPursuerCoordination::AimVolleyRoundCount : coordination_.CrossfireRoundLimit()) :
+                unsigned(actor.desc.bulletCount);
+            if(fangInterceptedRounds_!=count)return nullptr;
+            fangInterceptCounterRemaining_=FangHullCounterSeconds;
+            return lastIntercept;
+        }
+        return nullptr;
     }
     bool VeilSensorExposed() const {return phase_==Phase::Combat && !defeated_[1] &&
         !veilLightning_.BeforeFirstStrike() && coordination_.VeilPreparing();}
     bool VeilInterrupted() const {return phase_==Phase::Combat && coordination_.VeilInterrupted();}
-    bool VeilCanBeInterrupted() const {
-        return VeilSensorExposed() && ids_[1] && veilBeam_.phase!=BeamPhase::Flash;
-    }
-    bool OnVeilLockContact(std::span<const DamageResult> hits) {
-        if(!VeilCanBeInterrupted())return false;
-        const bool interrupted=std::any_of(hits.begin(),hits.end(),[&](const auto& hit) {
-            return hit.targetActorId==ids_[1] && hit.damageApplied && hit.weakPointHit;
-        });
-        if(interrupted) {
-            coordination_.CancelVeil();veilBeam_={};
-        }
-        return interrupted;
-    }
     const RailVeilLightning::Chain& VeilLightning()const{return veilLightning_;}
     uint32_t VeilLightningFollowupTarget()const{
         return phase_==Phase::Combat && !defeated_[1] && veilLightning_.CounterOpen()?ids_[1]:0;
@@ -355,7 +416,7 @@ private:
         input.veilThreat=veilBeam_.phase==BeamPhase::Flash || veilLightning_.Threat();
         const auto previousFang=coordination_.AircraftState(0).grants;
         const auto previousVeil=coordination_.AircraftState(1).grants;
-        coordination_.Tick(dt,input);
+        coordination_.Tick(dt,input,FangInterceptCounterRemaining());
         if(!coordination_.AircraftState(1).reserved && veilLightning_.BeforeFirstStrike())
             veilLightning_={};
         if(veilLightning_.flashNow&1) {
@@ -375,12 +436,14 @@ private:
         for(size_t i=0;i<ids_.size();++i) {
             const auto& n=coordination_.AircraftState(i);
             runtime.SetRearPursuerFormation(ids_[i],n.formation.x,n.formation.y,n.formation.z,n.bank,
-                i==0?FangFollowupTarget()!=0:VeilSensorExposed());
+                i==1 && VeilSensorExposed());
         }
     }
     RailPursuerCoordination coordination_{};
     float lastSpeed_=36.45f;bool hasSpeed_=false;
     float panelBoostRemaining_=0;unsigned panelBoostStacks_=0;
+    float fangInterceptCounterRemaining_=0;
+    unsigned fangInterceptVolley_=0,fangInterceptedRounds_=0;
     BeamFrame veilBeam_{};unsigned veilBeamShots_=0;
     RailVeilLightning::Chain veilLightning_{};
     static float Smooth(float x){x=(std::clamp)(x,0.0f,1.0f);return x*x*(3-2*x);}

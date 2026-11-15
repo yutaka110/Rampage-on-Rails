@@ -2,6 +2,7 @@
 #include "RailGroundBatteryAttack.h"
 #include "RailTurretGeometry.h"
 #include "CourseSpawnRuntime.h"
+#include "RailNeedlesPatrol.h"
 #include "RailRouteHazards.h"
 #include "../diagnostics/DronePerformanceProfile.h"
 #include "RailWorldRaycast.h"
@@ -229,7 +230,6 @@ void CourseSpawnRuntime::SetRearPursuerFormation(uint32_t actorId, float gap, fl
         actor.behaviorState.authoredLateralOffset=lateral;
         actor.behaviorState.authoredVerticalOffset=height;
         actor.desc.localRotation.z=bank;
-        actor.fangCannonExposed=exposeSubsystem && actor.desc.actorAssetId=="rear_fang";
         const bool sensorExposed=exposeSubsystem && actor.desc.actorAssetId=="rear_veil";
         if(sensorExposed && !actor.veilSensorExposed) actor.veilDescentAimCaptured=false;
         actor.veilSensorExposed=sensorExposed;
@@ -281,6 +281,35 @@ void CourseSpawnRuntime::DisengagePursuingWave(std::string_view waveId) {
         actor.entranceExitState.exitRequested=true;
         actor.entranceExitState.attackSuppressed=true;
         actor.entranceExitState.targetable=false;
+    }
+}
+
+void CourseSpawnRuntime::PeelBridgeEscort(float playerDistance) {
+    if(playerDistance<RailNeedlesPatrol::PeelDistance)return;
+    for(auto& actor:enemies_) {
+        const bool scout=RailNeedlesPatrol::Slot(actor.desc.waveId)>=0;
+        const bool sentry=playerDistance>=RailMothership::BridgeLookoutPeelDistance &&
+            actor.desc.waveId==RailMothership::BridgeLookoutWave && actor.terrainIngress.finished;
+        const bool escort = actor.desc.waveId==RailMothership::BridgeEscortWave && actor.carrierDeployment.finished &&
+            playerDistance>=RailMothership::BridgeEscortPeelDistance;
+        if ((!scout && !sentry && !escort) || actor.desc.hitPoints<=0.0f || actor.entranceExitState.exitRequested)continue;
+        if(scout) {
+            actor.terrainIngress.finished=true;
+            actor.startupFlightControlled=false;
+        }
+        actor.behaviorDefinition.maintainForwardEngagementBand=false;
+        actor.behaviorDefinition.movementEnabled=false;
+        actor.behaviorDefinition.choreographedAttackPass=false;
+        actor.desc.forwardSpeed=38.0f;
+        auto& state=actor.behaviorState;
+        const auto& formation=actor.formationState;
+        state.authoredLateralOffset=actor.desc.lateralOffset-formation.appliedLateralOffset-state.safetyLateralOffset;
+        state.authoredVerticalOffset=actor.desc.verticalOffset-formation.appliedVerticalOffset;
+        state.integratedForwardOffset=actor.desc.distanceOffset-formation.appliedForwardOffset-state.authoredForwardOffset;
+        actor.entranceExitState.exitRequested=true;
+        actor.entranceExitState.attackSuppressed=true;
+        actor.entranceExitState.targetable=false;
+        InvalidateEnemyAttackWarning(actor.actorId);
     }
 }
 
@@ -367,10 +396,10 @@ bool CourseSpawnRuntime::ValidateCheckpoint(
         valid = valid && validId(actor.actorId) && ValidEnemyDescription(actor.desc) && actor.energyShield.Validate(actor.desc.energyShield) &&
             FiniteValues({actor.rearArmor.rebuildRemaining,actor.rearArmor.exposedRemaining}) &&
             actor.rearArmor.intact<=RailRearArmor::FullMask &&
-            actor.rearArmor.rebuildRemaining>=0 && actor.rearArmor.rebuildRemaining<=RailRearArmor::RebuildSeconds &&
+            actor.rearArmor.rebuildRemaining>=0 &&
+            actor.rearArmor.rebuildRemaining<=(actor.desc.actorAssetId=="rear_fang" ?
+                RailRearArmor::FangWingRebuildSeconds : RailRearArmor::RebuildSeconds) &&
             actor.rearArmor.exposedRemaining>=0 && actor.rearArmor.exposedRemaining<=RailRearArmor::ExposedSeconds &&
-            std::isfinite(actor.fangCannonHitPoints) &&
-            actor.fangCannonHitPoints>=0 && actor.fangCannonHitPoints<=kFangCannonHitPoints &&
             FiniteValues({actor.veilSensorHitPoints,actor.veilDescentAim.x,actor.veilDescentAim.y}) &&
             actor.veilSensorHitPoints>=0 && actor.veilSensorHitPoints<=kVeilSensorHitPoints &&
             FiniteValues({actor.age, actor.fireTimer, actor.fireVisibleTime}) && actor.age >= 0.0f &&
@@ -448,6 +477,10 @@ void CourseSpawnRuntime::UpdateDefeatPresentation(float deltaTime, CourseEnemyFi
 }
 
 void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput) {
+    Update(deltaTime,safetyInput,0);
+}
+
+void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput, uint32_t lateralHoldActorId) {
     const drone_perf::Scope profile(drone_perf::Stage::Spawn);
     const float dt = (std::max)(0.0f, deltaTime);
     fireSafetyStats_ = {};
@@ -566,7 +599,7 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     EnemyBehaviorFrameInput behaviorInput{};
     behaviorInput.deltaTime = dt;
     behaviorInput.playerDistance = safetyInput.playerDistance;
-    enemyBehaviorSystem_.Update(*this, behaviorInput);
+    enemyBehaviorSystem_.UpdateActors(enemies_,*this,behaviorInput,lateralHoldActorId);
     enemyFormationSystem_.Update(*this, dt, safetyInput.railPath, &safetyInput);
     enemyEntranceExitDirector_.Update(*this, dt);
     placeCarrierWeapons();
@@ -989,7 +1022,8 @@ bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
             !safetyInput.cameraStableForAiming ||
             safetyInput.cameraHardTransition);
     const float minimumForwardDistance = RailGroundBattery::IsPredictive(enemy.desc.actorAssetId) ?
-        (std::max)(fireSafetySettings_.minForwardDistance,RailGroundBattery::MinimumFireDistance) :
+        (std::max)(fireSafetySettings_.minForwardDistance,RailGroundBattery::MinimumFireDistanceFor(
+            enemy.desc.waveId,enemy.desc.spawnDistance,enemy.fireSequence>0)) :
         fireSafetySettings_.minForwardDistance;
     const bool inFireRange =
         forwardDistance >= minimumForwardDistance &&
@@ -1135,7 +1169,6 @@ bool CourseSpawnRuntime::SpawnEnemyActor(CourseEnemyActorDesc desc, std::string*
         actor.desc.verticalOffset=RailRouteHazards::ArchPlatformTop-geometry.groundFootY*actor.desc.radius+.12f;
         actor.groundPlacementResolved=true;
     }
-    if(actor.desc.actorAssetId=="rear_fang") actor.fangCannonHitPoints=kFangCannonHitPoints;
     if(actor.desc.actorAssetId=="rear_veil") actor.veilSensorHitPoints=kVeilSensorHitPoints;
     actor.stationaryDormant=actor.desc.stationaryActivationDistance>=0;
     actor.fireTimer = actor.desc.firstShotDelay;
@@ -1248,13 +1281,29 @@ bool CourseSpawnRuntime::MarkEnemyAttackTelegraphPresented(
 }
 
 void CourseSpawnRuntime::StageCarrierDeployments(float playerDistance,
-        const RailMothership::Frame& carrier) {
+        const RailMothership::Frame& carrier, const RailPath* rail) {
     if(!carrier.visible || !std::isfinite(playerDistance)) return;
+    const auto updateBay=[&](RailMothership::Deployment& launch, bool bridge) {
+        launch.launchDistance=carrier.railDistance;
+        launch.launchVertical=carrier.railVertical+RailMothership::BayHeight;
+        if(!bridge || !rail) return;
+        const auto sample=rail->EvaluateExtended(carrier.railDistance);
+        const auto bay=carrier.Bay(0);
+        const Vector3 offset{bay.x-sample.position.x,bay.y-sample.position.y,bay.z-sample.position.z};
+        const auto project=[&](Vector3 axis) { return offset.x*axis.x+offset.y*axis.y+offset.z*axis.z; };
+        launch.launchLateral=project(sample.right);
+        launch.launchVertical=project(sample.up);
+        launch.launchDistance+=project(sample.tangent);
+    };
     uint32_t slot=0;
     for(auto& actor:enemies_) {
+        const bool bridge=actor.desc.waveId==RailMothership::BridgeEscortWave;
+        const int bridgeSlot=bridge?RailMothership::BridgeEscortLeadSlot(actor.desc.sourcePlacementGuid):-1;
+        if(bridge && bridgeSlot<0)continue;
         if(actor.carrierDeployment.initialized && !actor.carrierDeployment.finished) {
-            actor.carrierDeployment.launchDistance=carrier.railDistance;
-            actor.carrierDeployment.launchVertical=carrier.railVertical+RailMothership::BayHeight;
+            auto& launch=actor.carrierDeployment;
+            // Once out of the bay, the aircraft follows its own course.
+            if(!bridge || launch.elapsed<=launch.delay) updateBay(launch,bridge);
         }
         if(actor.age>0.0f || actor.carrierDeployment.initialized ||
             actor.desc.establishedEntrance || RailTurret::IsMesh(actor.desc.meshId) ||
@@ -1263,28 +1312,29 @@ void CourseSpawnRuntime::StageCarrierDeployments(float playerDistance,
             return member.desc.waveId==actor.desc.waveId && member.desc.hitPoints>0 &&
                 !RailTurret::IsMesh(member.desc.meshId);
         });
-        if(actor.desc.entrySource!=EnemyEntrySource::Carrier &&
+        if(!bridge && actor.desc.entrySource!=EnemyEntrySource::Carrier &&
             (actor.desc.entrySource!=EnemyEntrySource::Automatic || groupSize<3 || actor.desc.waveId.empty())) continue;
         auto& launch=actor.carrierDeployment;
         launch.initialized=true;
-        launch.delay=carrier.deploymentDelay+RailMothership::LaunchStagger*float(slot);
-        launch.launchDistance=carrier.railDistance;
-        launch.launchLateral=(slot&1u)?RailMothership::BayLateral:-RailMothership::BayLateral;
-        launch.launchVertical=carrier.railVertical+RailMothership::BayHeight;
+        launch.delay=carrier.deploymentDelay+(bridge?RailMothership::BridgeEscortLaunchStagger*float(bridgeSlot):
+            RailMothership::LaunchStagger*float(slot));
+        launch.launchLateral=!bridge && (slot&1u)?RailMothership::BayLateral:-RailMothership::BayLateral;
+        updateBay(launch,bridge);
         launch.forward=(std::clamp)(actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance,44.0f,85.0f);
         launch.lateral=actor.desc.lateralOffset;
         launch.vertical=actor.desc.verticalOffset;
+        if(bridge)launch.forward=48.0f+6.0f*float(bridgeSlot);
         actor.desc.establishedEntrance=true;
         actor.entranceExitState={};
         actor.entranceExitState.initialized=true;
         actor.entranceExitState.phase=EnemyEntranceExitPhase::Active;
         actor.entranceExitState.presentationAlpha=actor.entranceExitState.presentationScale=1.0f;
-        const auto flight=RailMothership::Evaluate(launch,playerDistance);
+        const auto flight=RailMothership::Evaluate(launch,playerDistance,bridge,bridgeSlot==0);
         (void)SetEnemyStartupFlight(actor.actorId,playerDistance,
             flight.distance-playerDistance,flight.lateral,flight.vertical,flight.rotation);
         actor.entranceExitState.targetable=false;
         actor.entranceExitState.attackSuppressed=true;
-        ++slot;
+        if(!bridge)++slot;
     }
 }
 
@@ -1293,7 +1343,9 @@ void CourseSpawnRuntime::UpdateCarrierDeployments(float deltaTime,float playerDi
         auto& launch=actor.carrierDeployment;
         if(!launch.initialized || launch.finished || actor.desc.hitPoints<=0.0f) continue;
         launch.elapsed+=std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,0.25f):0.0f;
-        const auto flight=RailMothership::Evaluate(launch,playerDistance);
+        const bool bridge=actor.desc.waveId==RailMothership::BridgeEscortWave;
+        const bool lead=bridge && RailMothership::BridgeEscortLeadSlot(actor.desc.sourcePlacementGuid)==0;
+        const auto flight=RailMothership::Evaluate(launch,playerDistance,bridge,lead);
         (void)SetEnemyStartupFlight(actor.actorId,playerDistance,
             flight.distance-playerDistance,flight.lateral,flight.vertical,flight.rotation,
             flight.released,playerSpeed);
@@ -1314,6 +1366,21 @@ void CourseSpawnRuntime::UpdateTerrainIngresses(float deltaTime,const CourseEnem
         if(entry.finished) {entry.elapsed+=(std::min)(deltaTime,0.25f);continue;}
         if(actor.desc.hitPoints<=0 || actor.carrierDeployment.initialized || IsRailRearPursuer(actor.desc.actorAssetId) ||
             RailTurret::IsMesh(actor.desc.meshId) || RailMothership::IsCombatActor(actor.desc.actorAssetId)) continue;
+        const int escortSlot=actor.desc.waveId==RailMothership::BridgeEscortWave ?
+            RailMothership::BridgeEscortSlot(actor.desc.sourcePlacementGuid) : -1;
+        const int ridgeGroup=RailMothership::BridgeEscortReinforcementGroup(escortSlot);
+        const bool ridgeFormation=ridgeGroup>=0;
+        const int needlesSlot=RailNeedlesPatrol::Slot(actor.desc.waveId);
+        const int groupLeadSlot=ridgeGroup==0 ? 3 : 6;
+        const int wingIndex=escortSlot-groupLeadSlot;
+        const CourseEnemyActor* previousWing=nullptr;
+        if(ridgeFormation && wingIndex>0) {
+            const auto previous=std::find_if(enemies_.begin(),enemies_.end(),[&](const auto& other) {
+                return other.desc.waveId==actor.desc.waveId &&
+                    RailMothership::BridgeEscortSlot(other.desc.sourcePlacementGuid)==escortSlot-1;
+            });
+            if(previous!=enemies_.end())previousWing=&*previous;
+        }
         if(!entry.waiting && !entry.initialized) {
             if(actor.age>0 || actor.desc.establishedEntrance) continue;
             entry.waiting=true;
@@ -1325,6 +1392,16 @@ void CourseSpawnRuntime::UpdateTerrainIngresses(float deltaTime,const CourseEnem
                 return other.actorId<actor.actorId && other.age<0.25f && other.desc.waveId==actor.desc.waveId;
             });
             entry.delay=float((std::min)(earlier,decltype(earlier)(5)))*0.12f;
+            if(ridgeFormation) {
+                entry.forward=52.0f+12.0f*wingIndex;
+                entry.delay=0.55f*wingIndex;
+            }
+            if(needlesSlot>=0) {
+                entry.forward=62;
+                entry.lateral=needlesSlot==0?-8.0f:8.0f;
+                entry.vertical=8;
+                entry.delay=0;
+            }
             actor.desc.establishedEntrance=true;actor.startupFlightControlled=true;
             actor.entranceExitState={};actor.entranceExitState.initialized=true;
             // This flight owns the whole entrance. Pending would replay the
@@ -1335,16 +1412,30 @@ void CourseSpawnRuntime::UpdateTerrainIngresses(float deltaTime,const CourseEnem
             actor.entranceExitState.attackSuppressed=true;
         }
         if(entry.waiting) {
-            const float desiredSide=actor.desc.entrySource==EnemyEntrySource::RockLeft?-1.0f:
+            if(previousWing && !previousWing->terrainIngress.initialized)continue;
+            const float desiredSide=ridgeFormation ? (ridgeGroup==0 ? 1.0f : -1.0f) :
+                actor.desc.entrySource==EnemyEntrySource::RockLeft?-1.0f:
                 actor.desc.entrySource==EnemyEntrySource::RockRight?1.0f:
                 (entry.lateral<0?-1.0f:1.0f);
             std::vector<std::pair<float,const RailEnemyIngressRoute*>> candidates;
             for(const auto& route:input.ingressRoutes) {
+                if(needlesSlot>=0) {
+                    if(route.id==RailNeedlesPatrol::RouteIds[needlesSlot])candidates.emplace_back(0.0f,&route);
+                    continue;
+                }
+                if(route.kind==RailEnemyIngressKind::Pillar)continue;
                 const float ahead=route.distance-input.playerDistance;
                 if(ahead<32+(std::max)(0.0f,input.playerSpeed)*0.20f || ahead>300) continue;
+                if(ridgeFormation && route.side!=desiredSide)continue;
                 const float desiredAhead=route.kind==RailEnemyIngressKind::SideOpening?
                     90+input.playerSpeed*.4f:90+input.playerSpeed*1.8f;
                 float candidate=std::abs(ahead-desiredAhead)+(route.side!=desiredSide?90.0f:0.0f);
+                if(ridgeFormation) {
+                    const float landmark=ridgeGroup==0 ? 2404.0f : 2524.0f;
+                    const float opening=previousWing ? previousWing->terrainIngress.route.distance : landmark;
+                    candidate=std::abs(route.distance-opening)*2.5f+std::abs(route.departure.y-68.0f)*0.6f;
+                    if(previousWing && route.id==previousWing->terrainIngress.route.id)candidate-=100.0f;
+                }
                 if(actor.desc.entrySource!=EnemyEntrySource::High)
                     candidate+=(std::max)(0.0f,route.departure.y-50)*0.40f;
                 if(actor.desc.entrySource==EnemyEntrySource::High && route.kind!=RailEnemyIngressKind::Cliff)
@@ -1360,10 +1451,10 @@ void CourseSpawnRuntime::UpdateTerrainIngresses(float deltaTime,const CourseEnem
             RailEnemyIngressState selected;
             for(size_t probe=0;probe<candidates.size();++probe) {
                 const auto& candidate=candidates[entry.routeProbeCursor%candidates.size()];
-                if(input.terrainCollision && (validationBudget<17 || !collisionMatches)) break;
+                if(needlesSlot<0 && input.terrainCollision && (validationBudget<17 || !collisionMatches)) break;
                 auto plan=entry;plan.route=*candidate.second;
-                PrepareRailEnemyIngress(plan,input.playerDistance,input.playerSpeed,input.railPath);
-                if(input.terrainCollision && input.railPath && input.terrainSettings) {
+                PrepareRailEnemyIngress(plan,input.playerDistance,input.playerSpeed,input.railPath,ridgeFormation);
+                if(needlesSlot<0 && input.terrainCollision && input.railPath && input.terrainSettings) {
                     auto forecast=plan;forecast.delay=0;forecast.elapsed=0;
                     auto previous=EvaluateRailEnemyIngress(forecast,input.playerDistance,input.railPath).railPosition;
                     bool clear=true;
@@ -1440,7 +1531,9 @@ void CourseSpawnRuntime::UpdateTerrainIngresses(float deltaTime,const CourseEnem
         actor.entranceExitState.presentationAlpha=actor.entranceExitState.presentationScale=1;
         // Visible arrivals can already be intercepted; terrain visibility and
         // the regular targeting range still exclude hidden/far actors.
-        actor.entranceExitState.targetable=flight.progress>=0.30f;
+        actor.entranceExitState.targetable=flight.released ||
+            (flight.progress>=(ridgeFormation ? 0.64f : needlesSlot>=0 ? .55f : 0.30f) &&
+             (!previousWing || previousWing->desc.hitPoints<=0 || previousWing->entranceExitState.targetable));
         actor.entranceExitState.attackSuppressed=!flight.released;
         entry.finished=flight.released;
     }
@@ -1494,7 +1587,7 @@ void CourseSpawnRuntime::SubmitPendingVfx(EffectRuntime& effectRuntime, const Ra
     }
 
     for (CourseVfxCue& cue : vfxCues_) {
-        if (cue.submitted) {
+        if (cue.submitted || cue.desc.effectName.empty()) {
             continue;
         }
 

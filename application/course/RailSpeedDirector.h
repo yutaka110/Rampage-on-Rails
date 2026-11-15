@@ -80,16 +80,17 @@ public:
     void SetManualBoostMaximum(float value) { manualBoost_.SetHeldMaximumMultiplier(value); }
     RailKillBoost& KillBoost() { return killBoost_; }
     const RailKillBoost& KillBoost() const { return killBoost_; }
-    float BoostMultiplier() const {
+    static float RewardMaximum(const CourseAsset* course, float distance);
+    float BoostMultiplier(float rewardLimit = RailKillBoost::MaximumMultiplier) const {
         const float manual=manualBoost_.SpeedMultiplier();
-        // Start a reward from the achieved manual tier, so holding E does not
-        // introduce a dead portion in its launch. This never stacks multipliers.
-        return manual+(RailKillBoost::MaximumMultiplier-manual)*killBoost_.Blend();
+        const float rewardMaximum=(std::max)(manual,rewardLimit);
+        return std::lerp(manual,rewardMaximum,killBoost_.Blend());
     }
-    float BoostPresentationStrength(float speed,float normalSpeed) const {
+    float BoostPresentationStrength(float speed,float normalSpeed,
+        float rewardLimit = RailKillBoost::MaximumMultiplier) const {
         if(!std::isfinite(speed) || !std::isfinite(normalSpeed) || normalSpeed<1)return 0;
-        const float gain=RailManualBoost::RequestedSpeed(normalSpeed,RailKillBoost::MaximumMultiplier)-normalSpeed;
-        return (std::min)((BoostMultiplier()-1)/(RailKillBoost::MaximumMultiplier-1),
+        const float gain=RailManualBoost::RequestedSpeed(normalSpeed,rewardLimit)-normalSpeed;
+        return (std::min)(killBoost_.Blend(),
             (std::clamp)((speed-normalSpeed)/(std::max)(1.0f,gain),0.0f,1.0f));
     }
     float BoostIgnitionPulse()const{return (std::max)(manualBoost_.IgnitionPulse()*.45f,killBoost_.IgnitionPulse());}
@@ -101,12 +102,13 @@ public:
         if(gain<.001f)return 0;
         return .82f*(std::min)(manualBoost_.Blend(),(std::clamp)((speed-normalSpeed)/gain,0.0f,1.0f));
     }
-    float TravelPresentationStrength(float speed,float normalSpeed)const {
+    float TravelPresentationStrength(float speed,float normalSpeed,
+        float rewardLimit = RailKillBoost::MaximumMultiplier)const {
         const float cruise=settings_.enabled && settings_.normalSpeedScale>=1.30f &&
             std::isfinite(speed) && std::isfinite(normalSpeed) && normalSpeed>=1?
             .40f*(std::clamp)(speed/normalSpeed,0.0f,1.0f):0;
         return (1.0f-manualBrake_.Blend())*
-            (std::max)({cruise,BoostPresentationStrength(speed,normalSpeed),ManualPresentationStrength(speed,normalSpeed)});
+            (std::max)({cruise,BoostPresentationStrength(speed,normalSpeed,rewardLimit),ManualPresentationStrength(speed,normalSpeed)});
     }
     bool BoostStartedThisFrame()const{return manualBoost_.StartedThisFrame() || killBoost_.StartedThisFrame();}
     void NotifyCourseEvents(const std::vector<CourseEventMarker>& events);

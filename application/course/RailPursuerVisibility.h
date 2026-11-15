@@ -8,7 +8,7 @@
 // endpoint. Obstacles, terrain and the other escort remain real occluders.
 inline bool RailPursuerHasShotLine(const CourseEnemyActor& actor,Vector3 playerWorld,RailWorldRaycastInput context) {
     if(!context.railPath || actor.desc.hitPoints<=0 || !actor.weaponMount.ready)return false;
-    for(int barrel=0;barrel<(actor.desc.actorAssetId=="rear_fang" && actor.fangCannonHitPoints>0?2:1);++barrel) {
+    for(int barrel=0;barrel<(actor.desc.actorAssetId=="rear_fang"?2:1);++barrel) {
         const auto target=ResolveEnemyProjectileWorldPosition(*context.railPath,actor.weaponMount.muzzleRail[barrel]);
         const Vector3 d{target.x-playerWorld.x,target.y-playerWorld.y,target.z-playerWorld.z};
         const float length=std::sqrt(d.x*d.x+d.y*d.y+d.z*d.z);if(length<.01f)return false;

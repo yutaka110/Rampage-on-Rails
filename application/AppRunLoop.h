@@ -1,4 +1,5 @@
 #pragma once
+#include "course/RailNeedlesPatrol.h"
 #include "course/RailTitleScene.h"
 #include "AppInputEdges.h"
 #include "course/RailLockVolley.h"
@@ -914,6 +915,7 @@ private:
     RailHeavyInterceptPresentation railHeavyIntercept_{};
     RailLockIntroPresentation railLockIntro_{};
     RailBasicTutorial railBasicTutorial_{};
+    RailNeedlesPatrol railNeedlesPatrol_{};
     RailVeilModelPresentation railVeilModel_{};
     RailEliteFirePresentation railEliteFire_{};
     std::array<audio::SoundHandle,4> railEliteSounds_{};

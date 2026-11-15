@@ -1,5 +1,6 @@
 #include "RailRearPursuitRules.h"
 #include "RailGroundBatteryAttack.h"
+#include "RailNeedlesPatrol.h"
 #include "CourseEventDispatcher.h"
 #include "RailRouteHazards.h"
 #include "../AppLogFile.h"
@@ -413,11 +414,14 @@ void CourseEventDispatcher::SpawnEnemyWave(
         desc.spawnDistance = event.distance;
         desc.entrySource = wave.entrySource;
         desc.establishedEntrance = wave.localApproach;
+        if(RailNeedlesPatrol::Slot(desc.waveId)>=0)desc.suppressFire=true;
         // Wake fixed batteries before the old trigger so their spawn, aiming
         // and exposure gates finish before a fast cart enters the warning window.
         // The distance-based first-shot gate still owns when they may attack.
-        if(event.payload=="preplaced:turret")
-            desc.stationaryActivationDistance=(std::max)(0.0f,event.distance-40.0f);
+        if(event.payload=="preplaced:turret") {
+            const float activationLead=RailGroundBattery::ActivationLead(event.id,event.distance,unit.lateralOffset);
+            desc.stationaryActivationDistance=(std::max)(0.0f,event.distance-activationLead);
+        }
         const std::string actorAssetId = !unit.actorAssetId.empty()
             ? unit.actorAssetId
             : DefaultActorAssetForRole(unit.role);

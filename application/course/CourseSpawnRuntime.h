@@ -195,8 +195,6 @@ struct CourseEnemyActor {
     float fireTimer = 0.0f;
     float fireVisibleTime = 0.0f;
     uint64_t fireSequence = 0;
-    float fangCannonHitPoints = 0.0f;
-    bool fangCannonExposed = false;
     RailRearArmor rearArmor{};
     float veilSensorHitPoints = 0.0f;
     bool veilSensorExposed = false;
@@ -325,6 +323,7 @@ public:
         float verticalOffset, float forwardSpeed);
     void RetireEnemies(std::span<const uint32_t> actorIds, bool playAuthoredExit = true);
     void DisengagePursuingWave(std::string_view waveId);
+    void PeelBridgeEscort(float playerDistance);
     // 敵を消す場合、その敵が所有する弾も停止する。
     void ClearEnemies();
     void ClearObstacles();
@@ -341,6 +340,7 @@ public:
         std::string* errorMessage = nullptr);
     void Update(float deltaTime);
     void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput);
+    void Update(float deltaTime, const CourseEnemyFireSafetyFrameInput& safetyInput, uint32_t lateralHoldActorId);
     // Call on a cinematic copy: preserve existing motion without new shots.
     void UpdateDefeatPresentation(float deltaTime, CourseEnemyFireSafetyFrameInput safetyInput);
     void EnforceEnemyEngagementClearance(const CourseEnemyFireSafetyFrameInput& safetyInput);
@@ -354,7 +354,7 @@ public:
         float forward, float lateral, float vertical, Vector3 rotation,
         bool releaseToCombat = false, float playerSpeed = 0.0f);
     // Stage newly spawned short-course actors at the actual carrier sockets.
-    void StageCarrierDeployments(float playerDistance, const RailMothership::Frame& carrier);
+    void StageCarrierDeployments(float playerDistance, const RailMothership::Frame& carrier, const RailPath* rail=nullptr);
     void UpdateCarrierDeployments(float deltaTime, float playerDistance, float playerSpeed);
     void UpdateTerrainIngresses(float deltaTime, const CourseEnemyFireSafetyFrameInput& input);
     bool SpawnObstacle(CourseObstacleActorDesc desc, std::string* errorMessage = nullptr);

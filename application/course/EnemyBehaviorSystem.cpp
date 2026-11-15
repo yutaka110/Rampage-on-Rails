@@ -273,6 +273,8 @@ EnemyBehaviorDefinition ResolveEnemyBehaviorDefinition(
             actorDescription.combatDefinition.telegraphLeadSeconds > 0.0f
                 ? actorDescription.combatDefinition.telegraphLeadSeconds
                 : 0.45f);
+        if (actorDescription.waveId == RailGroundBattery::ArchBatteryWave)
+            result.attackLeadSeconds = RailGroundBattery::ArchWarningSeconds;
         result.attackCooldownSeconds = (std::max)(
             result.attackCooldownSeconds,
             actorDescription.fireInterval);
@@ -343,7 +345,7 @@ void EnemyBehaviorSystem::Update(CourseSpawnRuntime& runtime,
 
 void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
-        const EnemyBehaviorFrameInput& input) {
+        const EnemyBehaviorFrameInput& input, uint32_t lateralHoldActorId) {
     frame_ = {};
     const float dt = std::isfinite(input.deltaTime)
         ? (std::clamp)(input.deltaTime, 0.0f, 0.25f)
@@ -397,7 +399,7 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
             // Spawning visuals must follow the cart too; otherwise a delayed
             // entrance can already be overtaken when combat becomes active.
             if (definition.maintainForwardEngagementBand) {
-                ApplyMovement(actor, dt, playerDistance, playerForwardSpeed);
+                ApplyMovement(actor, dt, playerDistance, playerForwardSpeed, false);
             }
             state.state = EnemyBehaviorState::Dormant;
             state.stateElapsedSeconds = 0.0f;
@@ -425,11 +427,11 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
                 state.attackCooldownRemaining <= 0.0f &&
                 (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
                     actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance >=
-                        RailGroundBattery::MinimumFireDistance+playerForwardSpeed*
+                        RailGroundBattery::MinimumFireDistanceFor(actor.desc.waveId,actor.desc.spawnDistance,actor.fireSequence>0)+playerForwardSpeed*
                             (definition.aimingDurationSeconds+definition.attackLeadSeconds+2.0f*dt)) &&
                 (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) || actor.fireSequence>0 ||
                     actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance <=
-                        RailGroundBattery::FirstShotDistance(actor.desc.waveId)+playerForwardSpeed*
+                        RailGroundBattery::FirstShotDistance(actor.desc.waveId,actor.desc.spawnDistance)+playerForwardSpeed*
                             (definition.aimingDurationSeconds+definition.attackLeadSeconds+2.0f*dt)) &&
                 (!definition.maintainForwardEngagementBand ||
                     state.engagementBandAttackAllowed) &&
@@ -476,7 +478,8 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
             break;
         }
 
-        ApplyMovement(actor, dt, playerDistance, playerForwardSpeed);
+        ApplyMovement(actor, dt, playerDistance, playerForwardSpeed,
+            lateralHoldActorId!=0 && actor.actorId==lateralHoldActorId);
         if (definition.maintainForwardEngagementBand) {
             ++frame_.engagementBandActors;
             if (!state.engagementBandAttackAllowed &&
@@ -627,17 +630,26 @@ void EnemyBehaviorSystem::BeginAttackIntent(CourseEnemyActor& actor) {
     actor.fireTimer = state.attackTimeRemaining;
 }
 
+static bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
+    float playerDistance, float playerForwardSpeed, bool holdLateral);
+
 void EnemyBehaviorSystem::ApplyMovement(
     CourseEnemyActor& actor,
     float deltaTime,
     float playerDistance,
-    float playerForwardSpeed) {
-    if (AdvanceEnemyBehaviorMovement(actor, deltaTime, playerDistance, playerForwardSpeed))
+    float playerForwardSpeed,
+    bool holdLateral) {
+    if (AdvanceEnemyBehaviorMovement(actor, deltaTime, playerDistance, playerForwardSpeed, holdLateral))
         ++frame_.engagementBandCorrections;
 }
 
 bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
         float playerDistance, float playerForwardSpeed) {
+    return AdvanceEnemyBehaviorMovement(actor,deltaTime,playerDistance,playerForwardSpeed,false);
+}
+
+static bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
+        float playerDistance, float playerForwardSpeed, bool holdLateral) {
     if(actor.startupFlightControlled) return false;
     if(deltaTime>0 && actor.terrainIngress.finished &&
         actor.terrainIngress.elapsed-actor.terrainIngress.delay-actor.terrainIngress.duration<deltaTime)
@@ -737,9 +749,11 @@ bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
     if (individualHover && definition.movementEnabled) {
         const bool aiming = state.state == EnemyBehaviorState::Aiming ||
             (state.attackIntentActive && actor.attackState.tokenReserved);
-        state.hoverMotionRate += ((aiming ? 0.24f : 1.0f) - state.hoverMotionRate) *
-            (1.0f - std::exp(-3.0f * deltaTime));
-        state.hoverMotionSeconds += deltaTime * state.hoverMotionRate;
+        if(!holdLateral) {
+            state.hoverMotionRate += ((aiming ? 0.24f : 1.0f) - state.hoverMotionRate) *
+                (1.0f - std::exp(-3.0f * deltaTime));
+            state.hoverMotionSeconds += deltaTime * state.hoverMotionRate;
+        }
         const float identity = state.deterministicPhase;
         const float rate = 0.72f + 0.55f * (0.5f + 0.5f * std::sin(identity * 2.17f));
         const float t = state.hoverMotionSeconds * definition.movementFrequency * kTau * rate;
@@ -763,12 +777,13 @@ bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTime,
         lateral += side * std::sin(evadeProgress * 3.14159265f) *
             (std::max)(0.8f, definition.lateralAmplitude * 0.42f);
     }
+    const float lateralOffset=holdLateral?state.behaviorLateralOffset:lateral*entryBlend;
     const float lateralVelocity = deltaTime > 0.000001f
-        ? (lateral * entryBlend - state.behaviorLateralOffset) / deltaTime : 0.0f;
+        ? (lateralOffset - state.behaviorLateralOffset) / deltaTime : 0.0f;
     const float verticalVelocity = deltaTime > 0.000001f
         ? (vertical * entryBlend - state.behaviorVerticalOffset) / deltaTime : 0.0f;
     state.behaviorForwardOffset = forward * entryBlend;
-    state.behaviorLateralOffset = lateral * entryBlend;
+    state.behaviorLateralOffset = lateralOffset;
     state.behaviorVerticalOffset = vertical * entryBlend;
     const float previousBank = state.presentationBankRadians;
     state.presentationYawRadians = lateral * 0.025f;

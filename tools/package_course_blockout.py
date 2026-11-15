@@ -83,6 +83,7 @@ def main():
                          'courses/waves/short_turret_left.wave',
                          'courses/waves/short_turret_right.wave',
                          'courses/waves/route_turret_left.wave',
+                         'courses/waves/ridge_ground_battery.wave',
                          'courses/waves/route_turret_right.wave',
                          'courses/waves/arch_inner_batteries.wave',
                          'courses/obstacles/route_arch_slab.obstacle',
@@ -99,7 +100,7 @@ def main():
                         target/'Resources/enemies/ElitePursuers', dirs_exist_ok=True)
         shutil.copytree(ROOT/'Resources/enemies/VeilInterceptor',
                         target/'Resources/enemies/VeilInterceptor', dirs_exist_ok=True)
-        for mesh in ('MothershipBlockout','SiegeTurret','SiegeTurretBase','SiegeTurretHead','SiegeTurretBarrel','SiegeTurretSingleBarrel',
+        for mesh in ('MothershipBlockout','SiegeTurret','SiegeTurretBase','RidgeBatteryBase','SiegeTurretHead','SiegeTurretBarrel','SiegeTurretSingleBarrel',
                      'GatlingTurretBase','GatlingTurretHead','GatlingTurretRotor','CarrierHeavyTurretBase',
                      'CarrierHeavyTurretHead','CarrierHeavyTurretBarrel','CarrierHeavyTurretVent','CarrierHeavyTurretShutter'):
             shutil.copytree(ROOT/'Resources/enemies'/mesh,

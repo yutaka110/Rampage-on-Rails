@@ -133,13 +133,13 @@ terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|
 # Cinematic shot sets bind landmarks, camera, lighting, fog, and material into authored distance shots.
 
 event|390.000|enemy_wave|route_patrol_left|route:single|short-route-0390|1|0
-event|1165.000|enemy_wave|short_turret_left|route:turret|short-ground-battery-left|1|0
+event|1040.000|enemy_wave|short_turret_left|route:turret|short-ground-battery-left|1|0
 event|1455.000|enemy_wave|short_turret_right|route:turret|short-ground-battery-right|1|0
+event|1568.000|obstacle|route_arch_slab||short-route-arch-collapse|1|0
 event|1615.000|obstacle|route_break_barricade||short-route-fence-bridge-exit|1|0
-event|1638.000|obstacle|route_arch_slab||short-route-arch-collapse|1|0
 event|1638.000|enemy_wave|arch_inner_batteries|route:turret|short-arch-inner-batteries|1|0
 event|1895.000|obstacle|route_break_barricade||short-route-break-barricade|1|0
-event|2060.000|enemy_wave|route_turret_left|route:turret|short-route-2060|1|0
+event|2060.000|enemy_wave|ridge_ground_battery|route:turret|short-route-2060|1|0
 event|2530.000|obstacle|route_break_barricade||short-route-fence-dive|1|0
 event|2840.000|enemy_wave|route_turret_left|route:turret|short-route-2840|1|0
 event|3065.000|enemy_wave|route_scout_sniper_pair|route:pair|short-route-3100|1|0
@@ -149,7 +149,7 @@ wave|short_fire|FIRE|260.000000|60.000000|0.000000|all_enemies_defeated|exclusiv
 wave|short_lock|LOCK|445.000000|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
 wave|short_intercept|INTERCEPT|1320.0|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
 wave|short_finale|STONE GATE ESCORT|1450.0|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
-wave|short-exit-guard|BRIDGE AMBUSH|1900.000000|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
+wave|short-exit-guard|BRIDGE AMBUSH|1882.000000|60.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
 wave|short-mothership|CARRIER WEAPON PARTS|3350.000000|30.000000|0.000000|all_enemies_defeated|exclusive|-|-|1|1|0
 
 # Authored encounter rhythm layered over stable Wave membership.
@@ -157,7 +157,7 @@ encounter_beat|short-beat-fire|short-fire|FIRE|short_fire|260.000000|365.000000|
 encounter_beat|short-beat-lock|short-lock|LOCK|short_lock|445.000000|645.000000|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 encounter_beat|short-beat-intercept|short-intercept|INTERCEPT|short_intercept|1320.0|1450.0|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|1|1.200000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 encounter_beat|short-beat-finale|short-finale|STONE GATE|short_finale|1450.0|1760.0|60.000000|0.600000|1.200000|0.950000|1.450000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
-encounter_beat|short-beat-exit|short-exit|BRIDGE AMBUSH|short-exit-guard|1900.000000|2440.000000|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
+encounter_beat|short-beat-exit|short-exit|BRIDGE AMBUSH|short-exit-guard|1882.000000|2440.000000|60.000000|0.600000|1.200000|0.950000|1.650000|1.500000|9.000000|0.800000|3.000000|0.720000|2|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 encounter_beat|short-beat-boss|short-carrier|CARRIER ASSAULT|short-mothership|3350.000000|3800.000000|30.000000|0.750000|1.200000|1.000000|1.800000|2.000000|10.000000|1.000000|4.000000|0.650000|1|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 
 # Persistent enemy instances anchored to rail topology.
@@ -181,19 +181,19 @@ enemy_placement|short_finale-member-0|short_shield_scout|assault_magenta_single|
 enemy_placement|short_finale-member-1|short_scout|assault_magenta_single|short_finale|bce46202b35aa23f32f5a09cfb71058f|0.028771075|-13.000000|8.000000|12.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_finale-member-2|short_scout|assault_magenta_single|short_finale|bce46202b35aa23f32f5a09cfb71058f|0.028771075|-4.000000|13.000000|22.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_finale-member-3|short_scout|assault_magenta_single|short_finale|bce46202b35aa23f32f5a09cfb71058f|0.028771075|8.000000|8.000000|27.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short-exit-guard-member-0|short_shield_scout|assault_magenta_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|-3.000000|5.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short-exit-guard-member-1|short_scout|assault_magenta_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|-12.000000|9.000000|13.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short-exit-guard-member-2|short_scout|assault_magenta_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|1.000000|13.000000|19.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short-exit-guard-member-3|short_scout|assault_magenta_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|12.000000|8.000000|24.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short-exit-guard-member-4|short_interceptor|combat_expansion_homing_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|-14.000000|13.000000|29.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short-exit-guard-member-5|short_interceptor|combat_expansion_homing_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|14.000000|15.000000|35.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short-exit-guard-member-0|short_scout|assault_magenta_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|-8.000000|8.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short-exit-guard-member-1|short_scout|assault_magenta_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|2.000000|10.000000|13.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short-exit-guard-member-2|short_scout|assault_magenta_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|12.000000|15.000000|19.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short-exit-guard-member-3|short_interceptor|combat_expansion_homing_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|9.000000|9.000000|24.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short-exit-guard-member-4|short_interceptor|combat_expansion_homing_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|23.000000|16.000000|29.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short-exit-guard-member-5|short_shield_scout|assault_magenta_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|35.000000|24.000000|35.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short-mothership-rapid|short_mothership_rapid|mothership_rapid|short-mothership|30482f5b7d510764518ca36f7f8d7af4|0.943000|-20.000000|18.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|180.000000|1|1|0
 enemy_placement|short-mothership-heavy|short_mothership_heavy|mothership_heavy|short-mothership|30482f5b7d510764518ca36f7f8d7af4|0.943000|20.000000|18.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|180.000000|1|1|0
 
 # Non-destructive procedural Terrain sculpt and paint strokes.
 
 enemy_placement|short-exit-guard-member-6|short_sniper|sniper_predictive_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|-7.000000|17.000000|40.000000|0.000000|0.000000|0.000000|1.080000|1.080000|1.080000|110.000000|1|1|0
-enemy_placement|short-exit-guard-member-7|short_sniper|sniper_predictive_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|8.000000|17.000000|46.000000|0.000000|0.000000|0.000000|1.080000|1.080000|1.080000|110.000000|1|1|0
+enemy_placement|short-exit-guard-member-7|short_sniper|sniper_predictive_single|short-exit-guard|4850076d8c557edcf97ec9ce5875d10c|0.019131134|-25.000000|27.000000|46.000000|0.000000|0.000000|0.000000|1.080000|1.080000|1.080000|110.000000|1|1|0
 
 # BEGIN COURSE BLOCKOUT: six visual beats, authored front-view cameras.
 camera|0|20.640|5.880|0|64|2|8|54|0|blockout-camera-0|1|0

@@ -77,10 +77,21 @@ public:
     }
     void ApplyAttackGates(CourseSpawnRuntime& runtime,float distance) const {
         if(!Active(distance))return;
+        // Give the roadside gun its opening shot even if escort aircraft
+        // from the bridge are still on screen. They resume after its launch.
+        bool ridgeOpening=false;
+        for(const auto& actor:runtime.Enemies()) {
+            const float gap=actor.desc.spawnDistance+actor.desc.distanceOffset-distance;
+            if(RailGroundBattery::IsRidgeBattery(actor.desc.waveId,actor.desc.spawnDistance) &&
+                Living(actor) && actor.fireSequence==0 &&
+                gap>=RailGroundBattery::MinimumFireDistance && gap<210.0f)ridgeOpening=true;
+        }
         for(const auto& actor:runtime.Enemies()) {
             const float at=actor.desc.spawnDistance+actor.desc.distanceOffset;
             const bool climbBattery=RailGroundBattery::IsBattery(actor.desc.actorAssetId) && at>2100 && at<2350;
-            if(Living(actor) && (hold_ || (primaryBusy_ && climbBattery)))
+            const bool ridgeBattery=RailGroundBattery::IsRidgeBattery(actor.desc.waveId,actor.desc.spawnDistance);
+            if(Living(actor) && (hold_ || (primaryBusy_ && climbBattery && !ridgeOpening) ||
+                (ridgeOpening && !ridgeBattery)))
                 runtime.SetEnemyEncounterPacing(actor.actorId,true,false);
         }
     }

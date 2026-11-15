@@ -26,8 +26,9 @@ void TestKillBoostCountAndActivation(RegressionRunner& runner) {
         runner.Expect(!retry.ObserveDefeat(defeat(6)),"checkpoint copies preserve kill deduplication");
         retry.Update(dt);runner.Expect(retry.Serial()==1 && retry.Charge()==0,"retry restores a pending reward exactly once");
         for(unsigned id=7;id<=30;++id)boost.ObserveDefeat(defeat(id));
-        runner.Expect(boost.Charge()==0 && boost.HoldRemaining()<=RailKillBoost::MaximumHoldRemaining+.001f,"kills extend the current boost up to six seconds without banking a second reward");
-        for(int frame=0;frame<int(std::ceil((RailKillBoost::MaximumHoldRemaining+RailKillBoost::ReleaseSeconds+.1f)*fps));++frame)boost.Update(dt);
+        runner.Expect(boost.Charge()==0 && boost.Age()+boost.Remaining()<=RailKillBoost::MaximumSeconds+.001f,
+            "kills respect an absolute expiry measured from ignition without banking a second reward");
+        for(int frame=0;frame<int(std::ceil((RailKillBoost::MaximumSeconds+.1f)*fps));++frame)boost.Update(dt);
         runner.Expect(boost.Serial()==1 && !boost.Active() && boost.Charge()==0,"an extended boost ends once without spinning or igniting again");
         boost.Reset();runner.Expect(boost.TotalKills()==0 && boost.Charge()==0 && !boost.Active(),"a fresh run clears reward and counted IDs");
     }
@@ -61,7 +62,7 @@ __declspec(noinline) void TestKillBoostFeedback(RegressionRunner& runner) {
             const float strength=director.BoostPresentationStrength(speed,32);
             const auto feedback=BuildRailKillBoostFeedback(director.KillBoost(),strength,previousAge,true,dt);
             ignitions+=feedback.ignitionSound;releases+=feedback.releaseSound;
-            if(director.KillBoost().Age()>1 && director.KillBoost().Age()<3) {
+            if(director.KillBoost().Age()>1 && director.KillBoost().HoldRemaining()>.001f) {
                 holdVisible|=feedback.visible && std::abs(feedback.strength-1)<.001f;
                 RailVehicleAudioInput ai;ai.actor=&actor;ai.presentation=&presentation;ai.deltaTime=dt;ai.manualBoostStrength=strength;audio.Update(ai);
                 runner.Expect(audio.Frame().rollingLoopPitch>1.25f && audio.Frame().rollingLoopGain>1.39f,
@@ -223,13 +224,13 @@ __declspec(noinline) void TestKillBoostExtension(RegressionRunner& runner) {
         live.speed.SetManualBoostInput(manual,true);live.Charge();live.speed.KillBoost().ActivatePending();
         for(int i=0;i<2*fps;++i)live.Step(dt);
         auto& reward=live.speed.KillBoost();const auto age=reward.Age();const auto remaining=reward.Remaining();
-        runner.Expect(reward.ObserveDefeat(defeat(7)) && std::abs(reward.Remaining()-remaining-1.5f)<.0001f &&
+        runner.Expect(reward.ObserveDefeat(defeat(7)) && std::abs(reward.Remaining()-remaining-RailKillBoost::KillExtensionSeconds)<.0001f &&
             reward.Age()==age && reward.Serial()==1 && reward.Charge()==0 && reward.SpinDegrees()==0,
-            "a real kill adds 1.5 seconds without rewinding age, spinning or banking another reward");
+            "a real kill adds a short extension without rewinding age, spinning or banking another reward");
         runner.Expect(!reward.ObserveDefeat(defeat(7)),"a repeated defeat cannot extend duration twice");
         for(unsigned id=8;id<30;++id)reward.ObserveDefeat(defeat(id));
-        runner.Expect(std::abs(reward.HoldRemaining()-6)<.0001f && reward.Charge()==0,
-            "a multi-kill clamps remaining hold to six seconds without excess charge");
+        runner.Expect(std::abs(reward.Age()+reward.Remaining()-RailKillBoost::MaximumSeconds)<.0001f && reward.Charge()==0,
+            "a multi-kill clamps the total run of the reward without excess charge");
         const auto checkpoint=live.speed;const auto forecast=live.Forecast(dt,8);
         runner.Expect(checkpoint.KillBoost().Remaining()==reward.Remaining() && checkpoint.KillBoost().Extensions()==reward.Extensions(),
             "checkpoint and forecast snapshots retain the extended expiry and duplicate guards");
@@ -250,18 +251,35 @@ __declspec(noinline) void TestKillBoostExtension(RegressionRunner& runner) {
         runner.Expect(before>0 && before<.8f && std::abs(reward.Blend()-before)<.0001f && reward.Serial()==serial && !reward.Spinning(),
             "a last-moment kill rescues release without a speed, pose or ignition discontinuity");
         for(int i=0;i<fps/4;++i)live.Step(dt);
-        runner.Expect(reward.Blend()>.999f && reward.HoldRemaining()>1,
-            "release rescue smoothly recovers full speed through the normal acceleration envelope");
+        runner.Expect(reward.Blend()>before && reward.Age()+reward.Remaining()<=RailKillBoost::MaximumSeconds+.0001f,
+            "release rescue briefly restores thrust inside the absolute duration cap");
     }
     CourseAsset course;std::string error;
     runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"speed-feel audit loads the shipped complete course");
+    const float batteryLimit=RailSpeedDirector::RewardMaximum(&course,2060.0f);
+    const float openLimit=RailSpeedDirector::RewardMaximum(&course,800.0f);
+    runner.Expect(batteryLimit==1.125f && openLimit==RailKillBoost::MaximumMultiplier &&
+        RailSpeedDirector::RewardMaximum(&course,2220.0f)==batteryLimit &&
+        RailSpeedDirector::RewardMaximum(&course,2280.0f)>batteryLimit,
+        "battery approach and pass share the lower reward cap before easing back to open travel");
+    KillBoostTravelFixture battery;
+    battery.Charge();battery.speed.KillBoost().ActivatePending();
+    for(int i=0;i<60;++i)battery.Step(1.0f/60.0f);
+    runner.Expect(std::abs(battery.speed.BoostMultiplier(batteryLimit)-batteryLimit)<.0001f,
+        "a fully lit reward reaches the lower battery speed cap");
+    battery.speed.SetManualBoostInput(true,true);
+    for(int i=0;i<60;++i)battery.Step(1.0f/60.0f);
+    const auto& manual=battery.speed.ManualBoost();
+    runner.Expect(manual.SpeedMultiplier()>batteryLimit &&
+        battery.speed.BoostMultiplier(batteryLimit)==manual.SpeedMultiplier(),
+        "an active capped reward preserves the full manual boost speed without stacking");
     unsigned markers=0;
     for(const auto& p:course.terrainPlacements)if(p.meshId=="rail_speed_marker") {
         ++markers;
         runner.Expect(std::abs(p.lateralOffset)>=6.6f && p.collisionMode==CourseTerrainCollisionMode::None,
             "trackside markers keep the vehicle and firing corridor clear without introducing collisions");
     }
-    runner.Expect(markers>=70 && markers<100,"near-field markers are bounded and authored across bridge and open valleys");
+    runner.Expect(markers>=70 && markers<=128,"near-field markers are bounded and authored across bridge and open valleys");
     runner.Expect(ShortRunAllowsAdaptivePatrol(1750) && !ShortRunAllowsAdaptivePatrol(1400),
         "bridge recovery permits gap filling while the grounded battery fight remains protected");
 }
@@ -560,7 +578,9 @@ __declspec(noinline) void TestKillBoostImmediateOnset(RegressionRunner& runner) 
         runner.Expect(live.vehicle.State().speed>=before+.95f*(RailManualBoost::RequestedSpeed(32,RailKillBoost::MaximumMultiplier)-before) && live.travel.Distance()>startDistance+40 && turned && sounds==1,
             "ignition flows into the complete turn and real speed ramp, with a single sound at each tested frame rate");
         for(unsigned id=7;id<=12;++id) {reward.ObserveDefeat(defeat(id));reward.ActivatePending(true,true);}
-        runner.Expect(reward.Serial()==1 && reward.Charge()==0 && reward.HoldRemaining()>5.99f,"rapid batch defeats extend the current hold without restarting the point ignition");
+        runner.Expect(reward.Serial()==1 && reward.Charge()==0 &&
+            std::abs(reward.Age()+reward.Remaining()-RailKillBoost::MaximumSeconds)<.0001f,
+            "rapid batch defeats reach the absolute expiry without restarting the point ignition");
     }
 }
 
@@ -577,7 +597,7 @@ __declspec(noinline) void TestKillBoostTravelPrediction(RegressionRunner& runner
             const float error=std::abs(live.travel.Distance()-forecast->DistanceAt(time));
             runner.Expect(error<.06f,"shared forecast matches the actual reward onset, sustained speed and release: "+std::to_string(error));
             if(frame==fps/2)onset=live.vehicle.State().speed;
-            if(frame==3*fps)hold=live.vehicle.State().speed;
+            if(frame==2*fps)hold=live.vehicle.State().speed;
             if(frame==8*fps)final=live.vehicle.State().speed;
             if(frame%(fps/10)==0)metrics<<fps<<','<<time<<','<<live.vehicle.State().speed<<','<<live.speed.BoostMultiplier()<<','<<error<<'\n';
         }

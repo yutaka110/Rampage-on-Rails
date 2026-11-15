@@ -1,4 +1,4 @@
 # A primary shot dislodges the overhead slab before the carrier can.
 obstacle|route_arch_slab|Stone arch keystone|rail_hazard_block|300|10.9|5.8|3.5|1|1|1|1
-placement|117|0|20|0
+placement|187|0|20|0
 breakable|true|12

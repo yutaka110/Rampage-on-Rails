@@ -762,17 +762,17 @@ void CourseMeshRenderQueue::AddObstacleInstances(
 }
 
 bool CourseMeshRenderQueue::WriteFang(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
-    float recoil,bool exposed,bool damaged,const RailRearArmor* armor,
+    float recoil,const RailRearArmor* armor,
     std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection) {
     std::array<uint32_t,RailFangModel::Parts.size()> indices{};
     for(size_t i=0;i<indices.size();++i) {
-        const auto name=RailFangModel::Mesh(i,exposed,damaged);
+        const auto name=RailFangModel::Mesh(i,false,false);
         indices[i]=ResolveModelIndex(models,name,nullptr);
         if(!models[indices[i]].loaded || models[indices[i]].name!=name)return false;
     }
     const auto panelIndex=ResolveModelIndex(models,"rear_boost_panel",nullptr);
     const size_t panelCount=armor ? kRearPanelAnchors.size() : 0;
-    if(items_.size()-visibleCount_<7u-unsigned(damaged)+panelCount)return false;
+    if(items_.size()-visibleCount_<indices.size()-1+panelCount)return false;
     const auto parent=BuildTwinShieldDroneWorldMatrix(pose);
     const auto motion=RailFangModel::FiringPose(recoil);
     const uint32_t owner=hull.sourceActorId;const float sort=hull.sortDistance;
@@ -782,16 +782,15 @@ bool CourseMeshRenderQueue::WriteFang(CourseMeshRenderItem& hull,const TwinShiel
         item.transformData->WorldInverseTranspose=Transpose(Inverse(item.transformData->World));
     };
     for(size_t i=0;i<indices.size();++i) {
-        const auto part=RailFangModel::EvaluatePart(i,motion,damaged);if(!part.visible)continue;
+        const auto part=RailFangModel::EvaluatePart(i,motion,false);if(!part.visible)continue;
         auto* item=i==0?&hull:AllocateItem();if(!item)break;
         item->kind=CourseMeshRenderKind::Enemy;item->name=RailFangModel::Parts[i].id;
-        item->meshId=RailFangModel::Mesh(i,exposed,damaged);item->sourceActorId=owner;item->sortDistance=sort;
+        item->meshId=RailFangModel::Mesh(i,false,false);item->sourceActorId=owner;item->sortDistance=sort;
         item->modelIndex=indices[i];item->visible=item->transformData && item->materialData;
         if(!item->visible)continue;
         *item->materialData={};auto& material=*item->materialData;
         material.color={1,1,1,pose.alpha};material.uvTransform=MakeIdentity4x4();material.enableLighting=true;
-        material.specularMode=i==0 && exposed && !damaged?17:2;
-        if(material.specularMode==17)material.padding2[0]=.94f;
+        material.specularMode=2;
         material.shininess=12;material.environmentCoefficient=.04f;item->useMaterialOverride=true;
         world(*item,part.local,indices[i]);
     }
@@ -1037,17 +1036,14 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 const auto* armor=enemy.rearArmor.enabled && enemy.desc.hitPoints>0 && enemy.weaponMount.ready?
                     &enemy.rearArmor:nullptr;
                 if(WriteFang(*item,pose,eliteFire?eliteFire->FangRecoil(enemy.actorId):0,
-                    enemy.fangCannonExposed,enemy.fangCannonHitPoints<=0,armor,models,viewProjection))continue;
+                    armor,models,viewProjection))continue;
             }
             if(IsRailElitePursuer(enemy.desc.actorAssetId)) {
                 const bool fang=enemy.desc.actorAssetId=="rear_fang";
-                const bool weakPointExposed=fang
-                    ? enemy.fangCannonExposed && enemy.fangCannonHitPoints>0
-                    : enemy.veilSensorExposed && enemy.veilSensorHitPoints>0;
+                const bool weakPointExposed=enemy.veilSensorExposed && enemy.veilSensorHitPoints>0;
                 std::string eliteMesh=enemy.desc.actorAssetId;
                 if(fang) {
-                    eliteMesh=enemy.fangCannonHitPoints<=0?"fang_fire_hull_damaged":
-                        enemy.fangCannonExposed?"fang_fire_hull_exposed":"fang_fire_hull";
+                    eliteMesh="fang_fire_hull";
                 } else {
                     if(enemy.veilSensorHitPoints<=0) eliteMesh="rear_veil_damaged";
                     else if(enemy.veilSensorExposed) eliteMesh="rear_veil_exposed";
@@ -1074,8 +1070,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                         item->useMaterialOverride=true;
                     }
                     if(fang) {
-                        const std::string barrels=enemy.fangCannonHitPoints<=0?"fang_fire_barrels_damaged":
-                            enemy.fangCannonExposed?"fang_fire_barrels_exposed":"fang_fire_barrels";
+                        const std::string barrels="fang_fire_barrels";
                         const auto barrelIndex=ResolveModelIndex(models,barrels,nullptr);
                         if(models[barrelIndex].loaded && models[barrelIndex].name==barrels) {
                             const auto parent=BuildTwinShieldDroneWorldMatrix(pose);
@@ -1284,6 +1279,8 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             // Keep the pedestal planted while the separate head aims in yaw/pitch.
             const auto geometry=RailTurret::ForMesh(enemy.desc.meshId);
             const bool siege=enemy.desc.meshId=="siege_turret";
+            const bool markedPedestal=siege && RailGroundBattery::UsesMarkedPedestal(enemy.desc.waveId,enemy.desc.spawnDistance);
+            const auto baseMesh=markedPedestal ? RailTurret::RidgeBatteryBaseMesh : geometry.baseMesh;
             const bool singleSiege=siege && RailGroundBattery::IsPredictive(enemy.desc.actorAssetId) && enemy.desc.bulletCount==1;
             const CourseBulletActor* siegeRound=nullptr;
             float shotAge=RailTurret::ShotAge(enemy.turretMotion,enemy.age);
@@ -1354,17 +1351,23 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 movingWorld.m[3][1]+=(launch.y-restMouth.y)*blend;
                 movingWorld.m[3][2]+=(launch.z-restMouth.z)*blend;
             }
-            const uint32_t baseIndex = ResolveModelIndex(models,geometry.baseMesh,nullptr);
+            const uint32_t baseIndex = ResolveModelIndex(models,baseMesh,nullptr);
             if (RailMothership::PartIndex(enemy.desc.actorAssetId)<0 &&
-                model.name == geometry.headMesh && models[baseIndex].name == geometry.baseMesh) {
+                model.name == geometry.headMesh && models[baseIndex].name == baseMesh) {
                 if (CourseMeshRenderItem* base = AllocateItem()) {
                     base->kind = CourseMeshRenderKind::Enemy;
                     base->sourceActorId = enemy.actorId;
-                    base->meshId = geometry.baseMesh;
+                    base->meshId = baseMesh;
                     base->modelIndex = baseIndex;
                     base->visible = models[baseIndex].loaded && base->transformData != nullptr;
                     if (base->materialData && item->materialData) {
                         *base->materialData = *item->materialData;
+                        if(markedPedestal) {
+                            auto& paint=*base->materialData;
+                            paint.color.x=(std::max)(paint.color.x,.88f);
+                            paint.color.y=(std::max)(paint.color.y,.88f);
+                            paint.color.z=(std::max)(paint.color.z,.88f);
+                        }
                         if(IsCarrierBatterySurfaceMesh(geometry.baseMesh))
                             *base->materialData=BuildCarrierBatterySurfaceMaterial(geometry.baseMesh,item->materialData->color,
                                 item->materialData->padding2[0],item->materialData->padding2[1]);
@@ -1618,7 +1621,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             };
             draw(geometry.baseMesh,pose.base);
             draw(geometry.headMesh,pose.head);
-            if(burst.groundTurret.meshId=="siege_turret") {
+            if(RailTurret::IsSiege(burst.groundTurret.meshId)) {
                 for(float side:{-1.0f,1.0f}) {
                     const auto socket=MakeAffineMatrix(Vector3{1,1,1},Vector3{},Vector3{side*geometry.muzzleSide,0,0});
                     draw(geometry.movingMesh,Multiply(socket,pose.barrel));

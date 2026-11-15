@@ -118,7 +118,7 @@ public:
 
 private:
     bool WriteFang(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
-        float recoil,bool exposed,bool damaged,const RailRearArmor* armor,
+        float recoil,const RailRearArmor* armor,
         std::span<const CourseMeshModelBinding> models,const Matrix4x4& viewProjection);
     bool WriteVeil(CourseMeshRenderItem& hull,const TwinShieldDronePose& pose,
         const RailVeilAttackFrame& attack,bool sensorExposed,bool sensorDamaged,const RailRearArmor* armor,

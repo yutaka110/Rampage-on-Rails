@@ -14,7 +14,7 @@ namespace RailRouteHazards {
 inline constexpr std::string_view BarricadeId="route_break_barricade";
 inline constexpr std::string_view SlabId="route_arch_slab";
 inline constexpr std::string_view ShelfSlabId="route_shelf_slab";
-inline constexpr std::string_view ArchBatteryWave="arch_inner_batteries";
+using RailGroundBattery::ArchBatteryWave;
 using RailGroundBattery::ShelfBatteryWave;
 inline constexpr float ArchPlatformTop=-2.25f;
 inline constexpr std::string_view SlabShotPrefix="slab-shot:";
@@ -36,17 +36,20 @@ inline bool CarrierStrikesSlab(const CourseObstacleActor& actor) {
     return !IsShelf(actor) && actor.desc.payload.empty();
 }
 
-inline float SlabAdvance(const CourseObstacleActor& actor,float distance,float dt) {
-    if(actor.age<=0 && (!CarrierStrikesSlab(actor) || distance<SlabTrigger))return 0;
-    return IsShelf(actor)?1.55f*dt:dt;
-}
-
 inline uint64_t SlabTriggerShot(const CourseObstacleActor& actor) {
     const std::string_view payload=actor.desc.payload;
     if(!payload.starts_with(SlabShotPrefix))return 0;
     uint64_t shot=0;
     const auto parsed=std::from_chars(payload.data()+SlabShotPrefix.size(),payload.data()+payload.size(),shot);
     return parsed.ec==std::errc{} && parsed.ptr==payload.data()+payload.size()?shot:0;
+}
+
+inline float SlabAdvance(const CourseObstacleActor& actor,float distance,float dt) {
+    if(actor.age<=0 && (!CarrierStrikesSlab(actor) || distance<SlabTrigger))return 0;
+    // The cart's shot breaks the support immediately. The carrier still uses
+    // its authored anticipation, recoil and fall timing.
+    if(IsShelf(actor))return 1.55f*dt;
+    return SlabTriggerShot(actor)>0?1.50f*dt:dt;
 }
 
 inline bool SlabCanBeReleased(const CourseObstacleActor& actor) {
@@ -56,7 +59,7 @@ inline bool SlabCanBeReleased(const CourseObstacleActor& actor) {
 inline void ReleaseSlab(CourseObstacleActor& actor,uint64_t shotId) {
     // The slab payload travels with the obstacle through checkpoint capture.
     actor.desc.payload=std::string(SlabShotPrefix)+std::to_string(shotId);
-    actor.age=BoltImpact;
+    actor.age=IsShelf(actor)?BoltImpact:SupportBreak-.001f;
 }
 
 inline void OpenBarricade(CourseObstacleActor& actor) {

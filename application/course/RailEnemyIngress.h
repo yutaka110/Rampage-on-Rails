@@ -10,7 +10,7 @@ struct CourseAsset;
 struct TerrainGenerationSettings;
 
 enum class EnemyEntrySource : unsigned char { Automatic, Carrier, RockLeft, RockRight, High, SideOpening, LocalApproach };
-enum class RailEnemyIngressKind : unsigned char { Rock, Cliff, SideOpening };
+enum class RailEnemyIngressKind : unsigned char { Rock, Cliff, SideOpening, Pillar };
 
 // Coordinates are (rail lateral, rail vertical, absolute rail distance).
 // The first three controls belong to a fixed terrain anchor. Only the final
@@ -49,7 +49,7 @@ std::vector<RailEnemyIngressRoute> BuildRailEnemyIngressRoutes(
 RailEnemyIngressFlight EvaluateRailEnemyIngress(const RailEnemyIngressState& state, float playerDistance,
     const RailPath* rail = nullptr);
 void PrepareRailEnemyIngress(RailEnemyIngressState& state, float playerDistance,
-    float playerSpeed, const RailPath* rail = nullptr);
+    float playerSpeed, const RailPath* rail = nullptr, bool ridgeFormation = false);
 Vector3 ResolveRailEnemyIngressRotation(const RailEnemyIngressState& state,
     const RailPath& rail, float playerDistance, float playerSpeed,
     Vector3 cameraPosition, bool hasCameraPosition);

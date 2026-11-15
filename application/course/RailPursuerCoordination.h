@@ -13,14 +13,29 @@ public:
     enum class CrossfirePhase { Idle, Warning, Volley, Stagger };
     static constexpr float WarningSpacing = .58f;
     static constexpr float CrossfireWarningSeconds=.80f;
+    static constexpr float AimVolleyWarningSeconds=.95f;
+    static constexpr float AimSalvoInterval=.72f, AimSalvoRoundInterval=.12f;
+    static constexpr unsigned AimSalvoCount=3, AimSalvoRounds=2;
+    static constexpr unsigned AimVolleyRoundCount=AimSalvoCount*AimSalvoRounds;
     static constexpr float CrossfireRoundInterval=.037f;
-    static constexpr float CrossfireRelativeSpeed=165.0f;
+    static constexpr float CrossfireRelativeSpeed=34.0f;
+    static constexpr float FangHullCounterSeconds=1.20f;
+    static constexpr float AimRoundTime(unsigned round) {
+        return AimSalvoInterval*float(round/AimSalvoRounds)+AimSalvoRoundInterval*float(round%AimSalvoRounds);
+    }
     struct Crossfire {
         CrossfirePhase phase=CrossfirePhase::Idle;
         float age=0,side=1,startLane=0,roll=0;
         float lane=0,height=0;
         int panel=-1;
         unsigned rounds=0;
+        bool aimVolley=false;
+        float WarningSeconds() const { return aimVolley ? AimVolleyWarningSeconds : CrossfireWarningSeconds; }
+        float RoundTime(unsigned round) const { return aimVolley ? AimRoundTime(round) : CrossfireRoundInterval*float(round); }
+        bool AimVolleyPreparing() const {
+            return aimVolley && (phase==CrossfirePhase::Warning ||
+                (phase==CrossfirePhase::Volley && rounds<AimVolleyRoundCount));
+        }
     };
     struct Aircraft {bool alive=false,ready=false,lineClear=true,readable=true;float gap=60,lateral=0,height=10;uint64_t shots=0;};
     struct Input {
@@ -35,13 +50,14 @@ public:
         bool reserved=false,committed=false;unsigned grants=0;
         Vector3 formation{};float bank=0;unsigned attacks=0;
     };
-    void Tick(float dt,const Input& input) {
+    void Tick(float dt,const Input& input,float fangCounterRemaining=0.0f) {
         if(!std::isfinite(dt) || dt<=0)return;
         dt=(std::min)(dt,.1f);input_=input;elapsed_+=dt;
         warningSpacing_=(std::max)(0.0f,warningSpacing_-dt);
         if(crossfire_.phase!=CrossfirePhase::Idle)crossfire_.age+=dt;
-        if((crossfire_.phase==CrossfirePhase::Stagger ||
-            (crossfire_.phase==CrossfirePhase::Volley && !nodes_[0].reserved)) && crossfire_.age>=1.65f)crossfire_={};
+        if((crossfire_.phase==CrossfirePhase::Stagger && crossfire_.age>=1.65f) ||
+            (crossfire_.phase==CrossfirePhase::Volley && !nodes_[0].reserved &&
+             (crossfire_.aimVolley?nodes_[0].age>=1.30f:crossfire_.age>=1.65f)))crossfire_={};
         brakeRest_=(std::max)(0.0f,brakeRest_-dt);
         brakeIntent_=(std::max)(0.0f,brakeIntent_-dt);
         if(input.acceleration<-7 || (input.speed<28 && !wasSlow_))brakeIntent_=1.2f;
@@ -72,10 +88,13 @@ public:
             } else if(crossfire_.phase==CrossfirePhase::Volley) {
                 if((crossfire_.rounds>=crossfireRoundLimit_ || !input.aircraft[0].alive) &&
                     !input.fangThreat && crossfire_.age>=.42f) {
-                    Recover(0,3.4f);fang.age=crossfire_.age;Release(0);
+                    Recover(0,3.4f);
+                    if(!crossfire_.aimVolley)fang.age=crossfire_.age;
+                    Release(0);
                 }
             } else if(crossfire_.phase!=CrossfirePhase::Warning) {
                 if(!fang.committed && input.aircraft[0].shots!=fangShotAtEntry_) {
+                    fangBurstAfterInterrupt_=false;
                     Commit(0);Recover(0,3.4f);
                 }
                 if(fang.committed) {
@@ -97,17 +116,18 @@ public:
             if(veilReady && (!fangReady || input.speed>42 || input.acceleration<-7))Reserve(1);
             else if(fangReady)Reserve(0);
         }
-        Move(dt,0);Move(dt,1);
+        Move(dt,0,fangCounterRemaining);Move(dt,1,0.0f);
     }
     void NotifyVeilFired() {if(VeilCanFire()){Commit(1);Recover(1,5.2f);}}
     void CancelVeil() {interrupted_=true;Recover(1,4.2f);Release(1);}
     bool FangCanFire()const{return nodes_[0].reserved && !nodes_[0].committed && crossfire_.phase==CrossfirePhase::Idle;}
     const Crossfire& FangCrossfire() const {return crossfire_;}
+    unsigned CrossfireRoundLimit() const {return crossfireRoundLimit_;}
     bool CrossfireRoundDue() const {
         return nodes_[0].reserved &&
-            ((crossfire_.phase==CrossfirePhase::Warning && crossfire_.age>=CrossfireWarningSeconds) ||
+            ((crossfire_.phase==CrossfirePhase::Warning && crossfire_.age>=crossfire_.WarningSeconds()) ||
              (crossfire_.phase==CrossfirePhase::Volley && crossfire_.rounds<crossfireRoundLimit_ &&
-              crossfire_.age>=CrossfireRoundInterval*float(crossfire_.rounds)));
+              crossfire_.age>=crossfire_.RoundTime(crossfire_.rounds)));
     }
     void CrossfireRoundEmitted(unsigned limit) {
         if(crossfire_.phase==CrossfirePhase::Warning) {
@@ -123,8 +143,9 @@ public:
         }
     }
     bool InterruptCrossfire(int panel) {
-        if(crossfire_.phase!=CrossfirePhase::Warning || crossfire_.panel!=panel)return false;
+        if(crossfire_.phase!=CrossfirePhase::Warning || crossfire_.aimVolley || crossfire_.panel!=panel)return false;
         crossfire_.phase=CrossfirePhase::Stagger;crossfire_.age=0;crossfire_.roll=nodes_[0].bank;
+        fangBurstAfterInterrupt_=true;
         Recover(0,3.4f);Release(0);
         return true;
     }
@@ -133,12 +154,6 @@ public:
     bool VeilInterrupted()const{return interrupted_;}
     bool VeilPreparing()const{return input_.aircraft[1].alive && !interrupted_ &&
         (nodes_[1].flight==Flight::Approach || VeilCanFire());}
-    bool FangFollowup()const{
-        if(!input_.aircraft[0].alive)return false;
-        if(crossfire_.phase==CrossfirePhase::Volley || crossfire_.phase==CrossfirePhase::Stagger)
-            return crossfire_.age>=.43f && crossfire_.age<1.60f;
-        return nodes_[0].flight==Flight::Recover && nodes_[0].age>=.68f && nodes_[0].age<1.38f;
-    }
     const Node& AircraftState(size_t i)const{return nodes_[i];}
     unsigned AttackCount()const{return nodes_[0].attacks+nodes_[1].attacks;}
     const Input& Perception()const{return input_;}
@@ -158,8 +173,11 @@ private:
         if(i==0) {
             fangShotAtEntry_=input_.aircraft[0].shots;
             crossfire_={};
-            if(nodes_[0].attacks%2==1 && input_.fangNearPanel>=0) {
-                crossfire_.phase=CrossfirePhase::Warning;crossfire_.panel=input_.fangNearPanel;
+            const auto pattern=nodes_[0].attacks%3;
+            if(!fangBurstAfterInterrupt_ && (pattern==2 || (pattern==1 && input_.fangNearPanel>=0))) {
+                crossfire_.phase=CrossfirePhase::Warning;
+                crossfire_.aimVolley=pattern==2;
+                if(!crossfire_.aimVolley)crossfire_.panel=input_.fangNearPanel;
                 crossfire_.startLane=nodes_[0].formation.y;
                 crossfire_.side=crossfire_.startLane>=0?1.0f:-1.0f;
                 crossfire_.lane=input_.playerLane;crossfire_.height=input_.playerHeight;
@@ -171,13 +189,22 @@ private:
     void Release(size_t i) {
         auto& n=nodes_[i];n.reserved=false;n.committed=false;n.leaseAge=0;
     }
-    void Move(float dt,size_t i) {
+    void Move(float dt,size_t i,float counterRemaining) {
         if(!input_.aircraft[i].alive)return;
         auto& n=nodes_[i];const float t=elapsed_;Vector3 target{};
+        const bool arcing=i==0 && crossfire_.aimVolley;
+        float arcProgress=0.0f;
         if(i==0) {
             target=n.flight==Flight::Recover?Vector3{52+4*std::sin(t*.8f),18+4*std::sin(t*1.3f),9+2*std::sin(t)}:
                 n.flight==Flight::Attack?Vector3{26,5.5f,5.5f}:Vector3{28+2*std::sin(t*.73f),6+3*std::sin(t*1.21f),6.5f+std::sin(t*.83f)};
-            if(crossfire_.phase==CrossfirePhase::Warning) {
+            if(arcing) {
+                constexpr float pi=3.14159265f;
+                arcProgress=crossfire_.phase==CrossfirePhase::Warning?0.0f:
+                    (std::clamp)(crossfire_.age/(2*AimSalvoInterval),0.0f,1.0f);
+                const float rise=std::sin(pi*arcProgress);
+                target={34+2*rise,9.2f*std::cos(pi*arcProgress),5.8f+5.4f*rise};
+                if(!n.reserved)target.z-=.6f*n.age;
+            } else if(crossfire_.phase==CrossfirePhase::Warning) {
                 const float u=(std::clamp)(crossfire_.age/CrossfireWarningSeconds,0.0f,1.0f);
                 target={28,std::lerp(crossfire_.startLane,-3.8f*crossfire_.side,u*u*(3-2*u)),5.9f};
             } else if(crossfire_.phase==CrossfirePhase::Volley && crossfire_.age<1.65f) {
@@ -191,13 +218,19 @@ private:
             target=n.flight==Flight::Recover?Vector3{58+3*std::sin(t*.6f),-23+3*std::sin(t*.9f),14+std::sin(t)}:
                 n.flight==Flight::Attack?(n.attacks%2==0?Vector3{32,0,3.8f}:Vector3{32,-9,8}):Vector3{43+6*std::sin(t*.47f+.7f),-13-4*std::sin(t*.68f),10+1.8f*std::sin(t*.91f)};
         }
-        const bool crossing=i==0 && crossfire_.phase==CrossfirePhase::Warning;
-        const float blend=1-std::exp(-dt*(crossing?6.5f:2.6f)),old=n.formation.y;
+        const bool crossing=i==0 && crossfire_.phase==CrossfirePhase::Warning && !crossfire_.aimVolley;
+        const bool counter=counterRemaining>0.0f;
+        if(counter)target.y=n.formation.y;
+        const float blend=1-std::exp(-dt*(arcing?11.0f:crossing?6.5f:2.6f)),old=n.formation.y;
         n.formation.x+=(target.x-n.formation.x)*blend;
         n.formation.y+=(target.y-n.formation.y)*blend;
         n.formation.z+=(target.z-n.formation.z)*blend;
         float bank=(std::clamp)((n.formation.y-old)/dt*.035f,-.52f,.52f);
         if(crossing)bank=-crossfire_.side*1.02f;
+        if(arcing) {
+            const float exit=(std::clamp)((crossfire_.age-AimRoundTime(AimVolleyRoundCount-1))/.34f,0.0f,1.0f);
+            bank=std::lerp(-.83f-.35f*std::sin(3.14159265f*arcProgress),.15f,exit);
+        }
         const bool stagger=i==0 && crossfire_.phase==CrossfirePhase::Stagger;
         if(stagger) {
             const float dropBank=crossfire_.panel==0?1.30f:-1.30f;
@@ -205,12 +238,18 @@ private:
             bank=std::lerp(crossfire_.roll,dropBank,u)*
                 std::exp(-(std::max)(0.0f,crossfire_.age-.20f)*4.7f);
         }
-        n.bank+=(bank-n.bank)*(1-std::exp(-dt*(stagger?14.0f:crossing?9.0f:5.0f)));
+        if(counter) {
+            const float age=FangHullCounterSeconds-counterRemaining;
+            bank=.86f*std::sin(age*15.2f+.44f)*std::exp(-age*6.8f);
+        }
+        const float bankRate=counter?23.0f:stagger?14.0f:(crossing || arcing)?9.0f:5.0f;
+        n.bank+=(bank-n.bank)*(1-std::exp(-dt*bankRate));
     }
     Input input_{};std::array<Node,2> nodes_{};
     bool initialized_=false,interrupted_=false,wasSlow_=false;
     float elapsed_=0,warningSpacing_=0,brakeRest_=0,brakeIntent_=0;
     uint64_t fangShotAtEntry_=0;
+    bool fangBurstAfterInterrupt_=false;
     Crossfire crossfire_{};
     unsigned crossfireRoundLimit_=0;
 };

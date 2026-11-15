@@ -47,7 +47,8 @@ public:
             for(const auto& actor:runtime.Enemies()) if(actor.actorId==lookout_ &&
                 actor.terrainIngress.finished && actor.entranceExitState.targetable &&
                 actor.screenPresenceAttackAllowed) lookoutSeconds_+=dt;
-            if(lookoutSeconds_>=LookoutEstablishDuration || lookoutDefeated_ || distance>=2150)
+            if(lookoutSeconds_>=LookoutEstablishDuration || lookoutDefeated_ ||
+                distance>=RailMothership::BridgeLookoutPeelDistance)
                 phase_=Phase::Complete;
         } else if(phase_==Phase::Gate && distance>=1850) {
             phase_=Phase::Complete;

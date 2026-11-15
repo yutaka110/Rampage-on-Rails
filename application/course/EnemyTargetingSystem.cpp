@@ -306,8 +306,7 @@ Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,i
             actor.desc.spawnDistance+actor.desc.distanceOffset+r*(-forward.z*p.z+right.z*p.x+up.z*p.y)};
     }
     if(actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready)
-        return actor.weaponMount.muzzleRail[actor.desc.actorAssetId=="rear_fang" &&
-            actor.fangCannonHitPoints<=0 ? 0 : index & 1];
+        return actor.weaponMount.muzzleRail[index & 1];
     if(actor.desc.meshId=="carrier_heavy_turret")return ResolveTurretMuzzleRailPosition(actor,0);
     if(RailTurret::IsMesh(actor.desc.meshId) && actor.targetingState.solutionLocked &&
         actor.targetingState.attackIntentSequence==actor.attackState.intentSequence &&

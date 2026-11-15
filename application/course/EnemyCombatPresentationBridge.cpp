@@ -390,8 +390,8 @@ void ApplyProceduralAnimation(
             : Vector4{0.10f, 0.26f, 0.36f, output.materialColor.w};
         output.contrastBackdropStrength = charging ? 0.62f + 0.18f * charge : 0.38f;
     }
-    if (actor.behaviorDefinition.maintainForwardEngagementBand &&
-        (actor.behaviorState.engagementBandExitRequested ||
+    if (((actor.behaviorDefinition.maintainForwardEngagementBand &&
+          actor.behaviorState.engagementBandExitRequested) ||
          actor.entranceExitState.exitRequested) &&
         state.phase != EnemyCombatPhase::Dying && state.phase != EnemyCombatPhase::Retired) {
         // Departure is not another charge-up. Combat's pending Telegraphing
@@ -842,7 +842,8 @@ void EnemyCombatPresentationBridge::Update(
                         if(RailGroundBattery::IsBattery(actor->desc.actorAssetId) &&
                             actor->groundPlacementResolved && RailTurret::IsMesh(actor->desc.meshId)) {
                             auto& wreck=burst.groundTurret;
-                            wreck.meshId=actor->desc.meshId;
+                            wreck.meshId=RailGroundBattery::UsesMarkedPedestal(actor->desc.waveId,actor->desc.spawnDistance)
+                                ? RailTurret::RidgeBatteryWreckMesh : actor->desc.meshId;
                             wreck.center=mix.position;
                             const auto rail=input.railPath->Evaluate(actor->desc.spawnDistance+actor->desc.distanceOffset);
                             wreck.baseRotation={0,std::atan2(rail.tangent.x,rail.tangent.z),0};

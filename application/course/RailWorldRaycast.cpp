@@ -744,15 +744,14 @@ RailAimHit RailWorldRaycast::Query(const RailWorldRaycastInput& input) {
                 enemy.desc.verticalOffset);
             float distance = 0.0f;
             Vector3 normal{};
-            const bool cannon=enemy.fangCannonExposed && enemy.fangCannonHitPoints>0;
             const bool sensor=enemy.veilSensorExposed && enemy.veilSensorHitPoints>0;
-            if ((cannon || sensor) && enemy.weaponMount.ready) {
+            if (sensor && enemy.weaponMount.ready) {
                 const auto& pose=enemy.weaponMount.dronePose;
                 const float radius=.37f*(std::max)({pose.scale.x,pose.scale.y,pose.scale.z});
-                const auto subsystemCenter=cannon?FangCannonWorldCenter(pose):VeilSensorWorldCenter(pose);
+                const auto subsystemCenter=VeilSensorWorldCenter(pose);
                 if (RaySphere(origin,direction,maxDistance,subsystemCenter,radius,distance,normal))
                     ConsiderHit(best,RailAimHitKind::Enemy,distance,origin,direction,normal,
-                        enemy.actorId,cannon?kFangCannonHitSource:kVeilSensorHitSource);
+                        enemy.actorId,kVeilSensorHitSource);
             }
             if (RaySphere(
                     origin,

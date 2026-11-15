@@ -49,7 +49,7 @@ inline Pose Evaluate(const Wreck& wreck,float age) {
         rotation.z+wreck.side*.24f*fall},headCenter);
     pose.barrel=Multiply(MakeAffineMatrix(Vector3{1,1,1},
         Vector3{-.11f*fall,0,wreck.rotor*(1-Smooth(age,HingeRelease,Slam))},
-        Vector3{0,wreck.meshId=="siege_turret"?0.0f:geometry.muzzleHeight,
+        Vector3{0,RailTurret::IsSiege(wreck.meshId)?0.0f:geometry.muzzleHeight,
             std::lerp(wreck.recoil,-.18f,fall)}),pose.head);
     pose.strike=Point({wreck.side*.36f,-.60f,-.65f},pose.base);
     pose.opacity=1-Smooth(age,Lifetime-.65f,Lifetime);

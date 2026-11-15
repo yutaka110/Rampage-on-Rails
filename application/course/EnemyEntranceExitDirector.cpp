@@ -5,6 +5,8 @@
 #include <utility>
 
 #include "CourseSpawnRuntime.h"
+#include "RailMothershipPresentation.h"
+#include "RailNeedlesPatrol.h"
 
 namespace {
 float Saturate(float value) noexcept {
@@ -13,6 +15,10 @@ float Saturate(float value) noexcept {
 float SmoothStep(float value) noexcept {
     const float t = Saturate(value);
     return t * t * (3.0f - 2.0f * t);
+}
+bool UsesBridgeDeparture(const CourseEnemyActor& actor) {
+    return actor.desc.waveId == RailMothership::BridgeLookoutWave ||
+        (actor.desc.waveId == RailMothership::BridgeEscortWave && actor.carrierDeployment.finished);
 }
 std::string FormationId(const CourseEnemyActor& actor) {
     if (actor.formationState.initialized &&
@@ -82,6 +88,19 @@ void ExitOffset(const EnemyFormationDefinition& definition,
         ? (actor.behaviorState.authoredLateralOffset < -0.1f ? -1.0f : 1.0f)
         : ((actor.formationState.slotIndex & 1u) != 0u ? -1.0f : 1.0f);
     forward = 0.0f; lateral = 0.0f; vertical = 0.0f;
+    const int scout = RailNeedlesPatrol::Slot(actor.desc.waveId);
+    if (scout >= 0) {
+        forward = 11.0f * progress;
+        lateral = (scout == 0 ? -30.0f : 30.0f) * progress;
+        vertical = 18.0f * progress;
+        return;
+    }
+    if (UsesBridgeDeparture(actor)) {
+        forward = 15.0f * progress;
+        lateral = 112.0f * progress;
+        vertical = 58.0f * progress;
+        return;
+    }
     if (actor.HoldsCombatPositionUntilResolved()) {
         // Encounter cleanup flies ahead; independent hover homes never peel
         // sideways together merely because a formation uses SplitSides.
@@ -270,14 +289,28 @@ void EnemyEntranceExitDirector::UpdateActors(std::span<CourseEnemyActor> actors,
             break;
         case EnemyEntranceExitPhase::Exiting: {
             state.phaseElapsedSeconds += dt;
-            const float progress = SmoothStep(
-                state.phaseElapsedSeconds / definition.exitDurationSeconds);
+            const bool bridgePeel = UsesBridgeDeparture(actor);
+            const int scout = RailNeedlesPatrol::Slot(actor.desc.waveId);
+            const float bridgeExitDuration = actor.desc.waveId == RailMothership::BridgeLookoutWave ? .9f : 1.2f;
+            float exitDuration = definition.exitDurationSeconds;
+            if (bridgePeel) exitDuration = bridgeExitDuration;
+            if (scout >= 0) exitDuration = .72f;
+            const float exitTime = state.phaseElapsedSeconds / exitDuration;
+            const float progress = SmoothStep(exitTime);
             ExitOffset(definition, actor, progress,
                 state.appliedForwardOffset, state.appliedLateralOffset,
                 state.appliedVerticalOffset);
+            if (bridgePeel) {
+                const float bank = SmoothStep(exitTime * 3.2f);
+                actor.desc.localRotation = {0.28f * bank, -0.70f * bank, -0.62f * bank};
+            }
+            if (scout >= 0) {
+                const float bank = (scout == 0 ? -1.0f : 1.0f) * SmoothStep(exitTime * 3.2f);
+                actor.desc.localRotation = {.20f * std::abs(bank), -.43f * bank, -.48f * bank};
+            }
             // Keep a departing body visible during its initial movement,
             // then fade near the end of encounter cleanup.
-            state.presentationAlpha = (actor.HoldsCombatPositionUntilResolved() ||
+            state.presentationAlpha = (bridgePeel || scout >= 0 || actor.HoldsCombatPositionUntilResolved() ||
                 definition.exitStyle == EnemyExitStyle::SplitSides)
                 ? 1.0f - SmoothStep((progress - 0.60f) / 0.40f)
                 : 1.0f - progress;

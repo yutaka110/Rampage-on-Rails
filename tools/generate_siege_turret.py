@@ -43,6 +43,21 @@ def tube(m,x,y,levels,col,n=20,cap=False,inside=False):
    k=(i+1)%n;points=[a[k],b[k],b[i],a[i]];m.face(list(reversed(points)) if inside else points,col)
  if cap:m.face(list(reversed(rings[0])),col);m.face(rings[-1],col)
 
+def ridge_pedestal():
+ m=Mesh('RidgeBatteryBase',[(49,68,76),(68,87,94),(78,98,102),
+     (24,35,41),(191,122,47),(255,171,57),(39,52,58),(233,223,192)])
+ tower(m)
+ # The tall cheek plates give the battery a separate silhouette at the bridge exit.
+ for side in (-1,1):
+  box(m,(side*.78,-.96,.62),(.38,1.96,.40),3)
+  box(m,(side*.78,-.51,.835),(.34,.69,.045),5)
+  box(m,(side*.78,-1.12,.835),(.34,.37,.045),7)
+  box(m,(side*.977,-.51,.62),(.035,.69,.40),4)
+ # Identification paint on the armor is visible before either barrel charges.
+ box(m,(0,-1.55,.995),(1.56,.59,.055),3)
+ box(m,(0,-1.55,1.028),(1.43,.34,.018),7)
+ m.save(ROOT/'Resources/enemies'/m.name)
+
 def main():
  base=Mesh('SiegeTurretBase',PALETTE);tower(base)
  head=Mesh('SiegeTurretHead',PALETTE)
@@ -71,4 +86,5 @@ def main():
   single.face([(x+.44,y,z) for x,y,z in points],colour)
  combined=Mesh('SiegeTurret',PALETTE);combined.faces=base.faces+head.faces+barrels.faces
  for mesh in (base,head,barrels,single,combined):mesh.save(ROOT/'Resources/enemies'/mesh.name)
+ ridge_pedestal()
 if __name__=='__main__':main()

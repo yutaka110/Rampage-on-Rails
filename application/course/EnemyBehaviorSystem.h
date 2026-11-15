@@ -182,7 +182,7 @@ private:
     friend class CourseSpawnRuntime;
     void UpdateActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
-        const EnemyBehaviorFrameInput& input);
+        const EnemyBehaviorFrameInput& input, uint32_t lateralHoldActorId=0);
     bool MarkTelegraphPresentedActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
         uint32_t actorId,
@@ -197,7 +197,8 @@ private:
         CourseEnemyActor& actor,
         float deltaTime,
         float playerDistance,
-        float playerForwardSpeed);
+        float playerForwardSpeed,
+        bool holdLateral);
     void QueueEvent(CourseEnemyActor& actor, EnemyBehaviorEventKind kind);
 
     EnemyBehaviorFrame frame_{};

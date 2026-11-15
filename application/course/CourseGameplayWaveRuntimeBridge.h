@@ -58,6 +58,7 @@ struct CourseGameplayWaveFrameInput final {
     bool combatClearConfirmed = false;
     bool allowEarlyAdvance = true;
     bool allowActivation = true;
+    bool allowBridgeEscortActivation = false;
 };
 
 struct CourseGameplayWaveRuntimeStats final {
@@ -126,7 +127,7 @@ private:
     void InitializeState(float startDistance);
     void ReconcileDefeatedActors();
     void UpdateActiveWaves(float deltaTime);
-    void UpdatePrewarmAndActivation(bool allowActivation);
+    void UpdatePrewarmAndActivation(bool allowActivation, bool allowBridgeEscortActivation);
     void UpdateEarlyClearAdvance(const CourseGameplayWaveFrameInput& input);
     bool CanActivateWave(std::size_t index) const;
     void PrewarmWave(std::size_t index);

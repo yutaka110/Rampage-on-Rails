@@ -2864,6 +2864,7 @@ bool AppSceneResources::Initialize(
         {"courseRibRock", "Resources/course_meshes/materials/rib_rock_albedo.bmp"},
         {"courseRootRock", "Resources/course_meshes/materials/root_rock_albedo.bmp"},
         {"siegeTurret", "Resources/enemies/SiegeTurret/SiegeTurret.bmp"},
+        {"ridgeBatteryBase", "Resources/enemies/RidgeBatteryBase/RidgeBatteryBase.bmp"},
         {"carrierGatling", "Resources/enemies/GatlingTurretHead/GatlingTurretHead.bmp"},
         {"carrierHeavy", "Resources/enemies/CarrierHeavyTurretHead/CarrierHeavyTurretHead.bmp"},
         {"courseVistaRock", "Resources/course_meshes/materials/vista_rock_albedo.bmp"},
@@ -3316,6 +3317,7 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("rail_speed_marker", "Resources/course_meshes/RailSpeedMarker", "RailSpeedMarker.obj", "courseBlockoutSteel");
     registerCourseMesh("rib_tunnel_wall", "Resources/course_meshes/RibTunnelWall", "RibTunnelWall.obj", "courseRibRock");
     registerCourseMesh("siege_turret_base", "Resources/enemies/SiegeTurretBase", "SiegeTurretBase.obj", "siegeTurret");
+    registerCourseMesh("ridge_battery_base", "Resources/enemies/RidgeBatteryBase", "RidgeBatteryBase.obj", "ridgeBatteryBase");
     registerCourseMesh("siege_turret_head", "Resources/enemies/SiegeTurretHead", "SiegeTurretHead.obj", "siegeTurret");
     registerCourseMesh("siege_turret_barrel", "Resources/enemies/SiegeTurretBarrel", "SiegeTurretBarrel.obj", "siegeTurret");
     registerCourseMesh("siege_turret_single_barrel", "Resources/enemies/SiegeTurretSingleBarrel", "SiegeTurretSingleBarrel.obj", "siegeTurret");

@@ -1,9 +1,19 @@
 #include "CourseGameplayWaveRuntimeBridge.h"
 #include "GameplaySettingsValidation.h"
+#include "RailMothershipPresentation.h"
 
 #include <algorithm>
 #include <cmath>
 #include <unordered_set>
+
+namespace {
+bool ActorArrivalReady(const CourseRuntimeWaveNode& wave,
+    const CourseRuntimeActorRecord& actor, float playerDistance) {
+    return wave.waveGuid != RailMothership::BridgeEscortWave ||
+        RailMothership::BridgeEscortLeadSlot(actor.placementGuid) >= 0 ||
+        playerDistance >= RailMothership::BridgeEscortArrivalDistance(actor.placementGuid);
+}
+}
 
 bool CourseGameplayWaveRuntimeSettings::Validate(std::string* errorMessage) const {
     return gameplay::settings::Result(
@@ -87,7 +97,7 @@ void CourseGameplayWaveRuntimeBridge::Update(
     ReconcileDefeatedActors();
     UpdateActiveWaves((std::max)(0.0f, input.deltaTime));
     UpdateEarlyClearAdvance(input);
-    UpdatePrewarmAndActivation(input.allowActivation);
+    UpdatePrewarmAndActivation(input.allowActivation, input.allowBridgeEscortActivation);
     // Zero-member and event-completed forced chains are allowed, but bounded
     // so malformed content can never stall a gameplay frame.
     for (uint32_t iteration = 0;
@@ -96,7 +106,7 @@ void CourseGameplayWaveRuntimeBridge::Update(
         const uint32_t beforeCompleted = stats_.completedThisFrame;
         const std::size_t beforeForced = forcedWaveIndices_.size();
         UpdateActiveWaves(0.0f);
-        UpdatePrewarmAndActivation(input.allowActivation);
+        UpdatePrewarmAndActivation(input.allowActivation, input.allowBridgeEscortActivation);
         if (beforeCompleted == stats_.completedThisFrame &&
             beforeForced == forcedWaveIndices_.size()) {
             break;
@@ -196,9 +206,11 @@ bool CourseGameplayWaveRuntimeBridge::RestoreCheckpoint(
             continue;
         }
         const CourseGameplayWavePhase wavePhase = wavePhases_[actor.waveIndex];
-        if (wavePhase == CourseGameplayWavePhase::Active) {
+        if (wavePhase == CourseGameplayWavePhase::Active &&
+            ActorArrivalReady(program_->waves[actor.waveIndex], actor, playerDistance_)) {
             SpawnActor(static_cast<uint32_t>(index));
-        } else if (wavePhase == CourseGameplayWavePhase::Prewarming ||
+        } else if (wavePhase == CourseGameplayWavePhase::Active ||
+                   wavePhase == CourseGameplayWavePhase::Prewarming ||
                    wavePhase == CourseGameplayWavePhase::Blocked) {
             actorPhases_[index] = CourseGameplayActorPhase::Prewarmed;
         } else if (wavePhase == CourseGameplayWavePhase::Completed) {
@@ -255,7 +267,11 @@ void CourseGameplayWaveRuntimeBridge::ReconcileDefeatedActors() {
                found->combatState.phase == EnemyCombatPhase::Retired)));
         const bool missing = found == runtime_->Enemies().end() &&
             settings_.detectMissingActiveActorsAsDefeated;
-        if (defeated || missing) {
+        if (!defeated && found != runtime_->Enemies().end() &&
+            found->desc.waveId == RailMothership::BridgeEscortWave &&
+            found->carrierDeployment.finished && found->entranceExitState.exitRequested) {
+            actorPhases_[index] = CourseGameplayActorPhase::Retired;
+        } else if (defeated || missing) {
             actorPhases_[index] = CourseGameplayActorPhase::Defeated;
             PushEvent(CourseGameplayWaveEventType::ActorDefeated,
                 record.placementGuid,
@@ -271,6 +287,14 @@ void CourseGameplayWaveRuntimeBridge::UpdateActiveWaves(float deltaTime) {
         if (wavePhases_[index] != CourseGameplayWavePhase::Active) continue;
         const CourseRuntimeWaveNode& wave = program_->waves[index];
         waveActiveSeconds_[index] += deltaTime;
+        if (wave.waveGuid == RailMothership::BridgeEscortWave) {
+            for (const uint32_t actorIndex : wave.actorIndices) {
+                if (actorPhases_[actorIndex] == CourseGameplayActorPhase::Prewarmed &&
+                    ActorArrivalReady(wave, program_->actors[actorIndex], playerDistance_)) {
+                    SpawnActor(actorIndex);
+                }
+            }
+        }
         bool isComplete = false;
         switch (wave.completionCondition) {
         case CourseWaveCompletionCondition::AllEnemiesDefeated:
@@ -357,7 +381,7 @@ void CourseGameplayWaveRuntimeBridge::UpdateEarlyClearAdvance(const CourseGamepl
     forcedWaveIndices_.insert(candidate);
 }
 
-void CourseGameplayWaveRuntimeBridge::UpdatePrewarmAndActivation(bool allowActivation) {
+void CourseGameplayWaveRuntimeBridge::UpdatePrewarmAndActivation(bool allowActivation, bool allowBridgeEscortActivation) {
     for (std::size_t index = 0; index < wavePhases_.size(); ++index) {
         CourseGameplayWavePhase& phase = wavePhases_[index];
         if (phase == CourseGameplayWavePhase::Disabled ||
@@ -372,9 +396,11 @@ void CourseGameplayWaveRuntimeBridge::UpdatePrewarmAndActivation(bool allowActiv
                 (std::max)(0.0f, wave.triggerRailDistance - wave.prewarmDistance))) {
             PrewarmWave(index);
         }
-        if (allowActivation && (forced || playerDistance_ >= wave.triggerRailDistance) &&
+        const bool scheduledBridgeLaunch = allowBridgeEscortActivation &&
+            wave.waveGuid == RailMothership::BridgeEscortWave && playerDistance_ >= wave.triggerRailDistance;
+        if ((allowActivation || scheduledBridgeLaunch) && (forced || playerDistance_ >= wave.triggerRailDistance) &&
             phase != CourseGameplayWavePhase::Active) {
-            if (CanActivateWave(index)) {
+            if (scheduledBridgeLaunch || CanActivateWave(index)) {
                 ActivateWave(index);
                 forcedWaveIndices_.erase(index);
             } else {
@@ -438,7 +464,11 @@ void CourseGameplayWaveRuntimeBridge::ActivateWave(std::size_t index) {
     for (const uint32_t actorIndex : program_->waves[index].actorIndices) {
         if (actorPhases_[actorIndex] != CourseGameplayActorPhase::Defeated &&
             actorPhases_[actorIndex] != CourseGameplayActorPhase::Retired) {
-            SpawnActor(actorIndex);
+            if (ActorArrivalReady(program_->waves[index], program_->actors[actorIndex], playerDistance_)) {
+                SpawnActor(actorIndex);
+            } else {
+                actorPhases_[actorIndex] = CourseGameplayActorPhase::Prewarmed;
+            }
         }
     }
     PushEvent(CourseGameplayWaveEventType::WaveActivated,
@@ -465,6 +495,14 @@ void CourseGameplayWaveRuntimeBridge::SpawnActor(uint32_t actorIndex) {
         CourseEnemyActorDesc desc = record.actor;
         desc.spawnDistance = (std::clamp)(desc.spawnDistance + waveDistanceOffsets_[record.waveIndex],
             0.0f, program_->railLength);
+        if (desc.waveId == RailMothership::BridgeEscortWave &&
+            RailMothership::BridgeEscortLeadSlot(record.placementGuid) < 0) {
+            // Preserve each reinforcement's spacing in front of its own entrance marker.
+            const auto& wave = program_->waves[record.waveIndex];
+            const float marker = RailMothership::BridgeEscortArrivalDistance(record.placementGuid);
+            desc.spawnDistance = (std::min)(program_->railLength,
+                (std::max)(playerDistance_, marker) + (record.actor.spawnDistance - wave.triggerRailDistance));
+        }
         desc.previewOnly = false;
         desc.suppressFire = false;
         runtime_->SpawnEnemyActor(std::move(desc));

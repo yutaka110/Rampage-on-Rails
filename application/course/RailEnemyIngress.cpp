@@ -1,4 +1,5 @@
 #include "RailEnemyIngress.h"
+#include "RailNeedlesPatrol.h"
 #include "CourseAsset.h"
 #include "../terrain/TerrainVolumeField.h"
 #include <algorithm>
@@ -17,6 +18,14 @@ std::vector<RailEnemyIngressRoute> BuildRailEnemyIngressRoutes(
     // scenery and the terrain surface are never changed to make an entrance.
     std::erase_if(course.terrainPlacements,[](const auto& p){return p.id.starts_with("enemy_ingress_");});
     std::vector<RailEnemyIngressRoute> routes;
+    for(const auto& pillar:course.terrainPlacements) {
+        const int slot=pillar.id=="blockout-spire-far-left"?0:pillar.id=="blockout-spire-far-right"?1:-1;
+        if(slot<0)continue;
+        const float side=slot==0?-1.0f:1.0f;
+        const float at=slot==0?900.0f:960.0f;
+        routes.push_back({std::string(RailNeedlesPatrol::RouteIds[slot]),RailEnemyIngressKind::Pillar,at,side,
+            {side*(slot==0?38.0f:42.0f),13,at+26},{side*20,11,at+25},{side*12,8,at+14}});
+    }
     TerrainVolumeField field(rail,terrain,&course.terrainEditLayer);
     for(float distance=220;distance<(std::min)(rail.Length()-140,3530.0f);distance+=8) {
         const auto sample=rail.Evaluate(distance);
@@ -156,12 +165,14 @@ float ArcParameter(const RailEnemyIngressState& state,float fraction) {
 }
 }
 
-void PrepareRailEnemyIngress(RailEnemyIngressState& state,float playerDistance,float playerSpeed,const RailPath* rail) {
+void PrepareRailEnemyIngress(RailEnemyIngressState& state,float playerDistance,float playerSpeed,
+        const RailPath* rail,bool ridgeFormation) {
     state.pathPrepared=false;
     state.worldPrepared=rail!=nullptr;
     state.worldControls=Controls(state);
     if(rail) for(auto& p:state.worldControls) p=World(rail,p);
-    state.duration=3.0f;
+    const bool pillar=state.route.kind==RailEnemyIngressKind::Pillar;
+    state.duration=pillar?1.15f:3.0f;
     for(int iteration=0;iteration<5;++iteration) {
         state.targetDistance=playerDistance+(std::max)(0.0f,playerSpeed)*(state.duration+state.delay)+state.forward;
         const auto target=World(rail,{state.lateral,state.vertical,state.targetDistance});
@@ -172,7 +183,11 @@ void PrepareRailEnemyIngress(RailEnemyIngressState& state,float playerDistance,f
             state.arcDistances[i]=state.arcDistances[i-1]+Length(Sub(next,previous));previous=next;
         }
         state.pathLength=state.arcDistances.back();
-        if(iteration<4) state.duration=(std::clamp)(state.pathLength/(78.0f*0.79f),2.6f,4.2f);
+        if(iteration<4) {
+            const float cruiseSpeed=ridgeFormation ? 104.0f : 78.0f;
+            state.duration=pillar?(std::clamp)(state.pathLength/76.0f,1.05f,1.50f):
+                (std::clamp)(state.pathLength/(cruiseSpeed*0.79f),2.6f,4.2f);
+        }
     }
     state.pathPrepared=true;
 }
@@ -231,7 +246,7 @@ bool ValidateRailEnemyIngress(const RailEnemyIngressState& state) {
         std::isfinite(state.duration) && state.duration>=0.25f && std::isfinite(state.forward) &&
         std::isfinite(state.lateral) && std::isfinite(state.vertical) &&
         std::isfinite(state.route.distance) && (state.route.side==-1 || state.route.side==1) &&
-        state.route.kind<=RailEnemyIngressKind::SideOpening &&
+        state.route.kind<=RailEnemyIngressKind::Pillar &&
         (!state.worldPrepared || std::all_of(state.worldControls.begin(),state.worldControls.end(),Finite)) &&
         (!state.pathPrepared || (std::isfinite(state.targetDistance) && std::isfinite(state.pathLength) &&
             state.pathLength>0 && state.arcDistances.front()==0 &&

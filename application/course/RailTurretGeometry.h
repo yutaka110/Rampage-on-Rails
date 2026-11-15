@@ -5,12 +5,16 @@
 #include <cstdint>
 #include "utils/math/Vector.h"
 namespace RailTurret {
+inline constexpr const char* RidgeBatteryWreckMesh="ridge_battery";
+inline constexpr const char* RidgeBatteryBaseMesh="ridge_battery_base";
+inline bool IsSiege(std::string_view mesh) { return mesh=="siege_turret" || mesh==RidgeBatteryWreckMesh; }
 inline bool IsMesh(std::string_view mesh) { return mesh=="combat_turret" || mesh=="siege_turret" || mesh=="gatling_turret" || mesh=="carrier_heavy_turret"; }
 struct Geometry { const char* baseMesh; const char* headMesh; float groundFootY,muzzleForward,muzzleSide,muzzleHeight,halfFootprint; const char* movingMesh=nullptr; };
 inline Geometry ForMesh(std::string_view mesh) {
     return mesh=="gatling_turret" ? Geometry{"gatling_turret_base","gatling_turret_head",-2.55f,2.25f,0,0.32f,1.10f,"gatling_turret_rotor"} :
         mesh=="carrier_heavy_turret" ? Geometry{"carrier_heavy_turret_base","carrier_heavy_turret_head",-2.55f,2.10f,0,0.32f,1.25f,"carrier_heavy_turret_barrel"} :
-        mesh=="siege_turret" ? Geometry{"siege_turret_base","siege_turret_head",-2.55f,1.95f,0.44f,0.32f,1.10f,"siege_turret_barrel"} :
+        IsSiege(mesh) ? Geometry{mesh==RidgeBatteryWreckMesh?RidgeBatteryBaseMesh:"siege_turret_base",
+            "siege_turret_head",-2.55f,1.95f,0.44f,0.32f,1.10f,"siege_turret_barrel"} :
         Geometry{"combat_turret_base","combat_turret_head",-0.47f,0.8272f,0.2538f,0.1598f,0.86f};
 }
 inline float GatlingRotation(float seconds) { return std::fmod(seconds*18.0f,6.28318530718f); }
@@ -45,7 +49,7 @@ inline float RotorAngle(const MotionState& state,float age,float delay=0) {
 }
 inline float RecoilAtAge(std::string_view mesh,float t) {
     if(t<0)return 0;
-    if(mesh=="siege_turret") {
+    if(IsSiege(mesh)) {
         constexpr float kick=.048f, finish=.49f, travel=.45f;
         if(t>=finish)return 0;
         if(t<kick)return travel*std::sin(t/kick*1.570796327f);

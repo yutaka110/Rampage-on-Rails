@@ -54,6 +54,28 @@ inline constexpr float DeploymentBegin = 5.2f;
 inline constexpr float IntroductionDuration = 8.0f;
 inline constexpr float FlybyRearOffset = -130.0f;
 inline constexpr float EscortForwardOffset = 155.0f;
+inline constexpr std::string_view BridgeEscortWave="short-exit-guard";
+inline constexpr std::string_view BridgeLookoutWave="short-bridge-lookout";
+inline constexpr float BridgeLookoutPeelDistance=1890.0f;
+inline constexpr float BridgeEscortPeelDistance=2010.0f;
+inline constexpr float BridgeEscortLaunchStagger=.39f;
+inline constexpr std::string_view BridgeEscortPlacementPrefix="short-exit-guard-member-";
+inline int BridgeEscortSlot(std::string_view placement) {
+    if (!placement.starts_with(BridgeEscortPlacementPrefix) ||
+        placement.size() != BridgeEscortPlacementPrefix.size()+1 ||
+        placement.back() < '0' || placement.back() > '7') return -1;
+    return placement.back()-'0';
+}
+inline int BridgeEscortLeadSlot(std::string_view placement) {
+    const int slot=BridgeEscortSlot(placement);
+    return slot<3 ? slot : -1;
+}
+inline int BridgeEscortReinforcementGroup(int slot) {
+    return slot<3 ? -1 : slot<6 ? 0 : 1;
+}
+inline float BridgeEscortArrivalDistance(std::string_view placement) {
+    return BridgeEscortReinforcementGroup(BridgeEscortSlot(placement))==1 ? 2345.0f : 2225.0f;
+}
 
 struct Frame {
     bool visible = false;
@@ -224,13 +246,24 @@ struct Flight {
     Vector3 rotation{};
     bool released=false;
 };
-inline Flight Evaluate(const Deployment& launch,float playerDistance) {
+inline Flight Evaluate(const Deployment& launch,float playerDistance,bool bridgeEscort=false,bool bridgeLead=false) {
     const float age=(std::max)(0.0f,launch.elapsed-launch.delay);
-    const float t=(std::clamp)(age/FlightDuration,0.0f,1.0f);
+    const float duration=bridgeEscort?(bridgeLead?.84f:1.38f):FlightDuration;
+    const float t=(std::clamp)(age/duration,0.0f,1.0f);
     // Accelerate away from the bay, then brake into the authored combat slot.
     const float p=t*t*t*(10.0f+t*(-15.0f+6.0f*t));
     const float side=launch.launchLateral<0.0f ? -1.0f : 1.0f;
     Flight flight;
+    if(bridgeEscort) {
+        const float descent=Smooth(t,0.0f,bridgeLead?.78f:.86f);
+        const float turn=std::sin(t*3.14159265f);
+        flight.distance=std::lerp(launch.launchDistance,playerDistance+launch.forward,p);
+        flight.lateral=std::lerp(launch.launchLateral,launch.lateral,p)-(bridgeLead?4.0f:7.0f)*turn;
+        flight.vertical=std::lerp(launch.launchVertical,launch.vertical,descent);
+        flight.rotation={-.36f*turn,.24f*turn,.48f*turn};
+        flight.released=t>=1.0f;
+        return flight;
+    }
     flight.distance=launch.launchDistance*(1-p)+(playerDistance+launch.forward)*p;
     flight.lateral=launch.launchLateral*(1-p)+launch.lateral*p+side*5.0f*std::sin(t*3.14159265f);
     flight.vertical=launch.launchVertical*(1-p)+launch.vertical*p;

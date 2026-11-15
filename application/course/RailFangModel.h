@@ -16,6 +16,11 @@ inline constexpr std::array<Part,8> Parts{{
     {"fang_engine_right","FangEngineRight.obj",{.54f,-.36f,1.19f}},
     {"fang_sensor","FangSensor.obj",{0,.015f,-2.18f}},
 }};
+inline Vector3 ExhaustSocket(size_t side) {
+    auto socket=Parts[size_t(Node::LeftEngine)+side].pivot;
+    socket.z+=1.02f;
+    return socket;
+}
 struct Motion {Vector3 rotation{},translation{};};
 struct Pose {
     std::array<Motion,Parts.size()> nodes{};

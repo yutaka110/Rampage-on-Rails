@@ -100,6 +100,21 @@ void RailSpeedDirector::Reset() {
     lastFrame_.enabled = settings_.enabled;
 }
 
+float RailSpeedDirector::RewardMaximum(const CourseAsset* course, float distance) {
+    constexpr float batteryMaximum=1.125f;
+    if(!course) return RailKillBoost::MaximumMultiplier;
+    float protection=0.0f;
+    for(const auto& event:course->events) {
+        if(event.type!="enemy_wave" || event.payload!="route:turret")continue;
+        // The marker precedes the stationary battery. Keep the lower reward
+        // speed from first sight through the pass, with room to settle.
+        const float offset=distance-event.distance;
+        const float t=std::clamp((std::max)(-100.0f-offset,offset-180.0f)/80.0f,0.0f,1.0f);
+        protection=(std::max)(protection,1.0f-t*t*(3.0f-2.0f*t));
+    }
+    return std::lerp(RailKillBoost::MaximumMultiplier,batteryMaximum,protection);
+}
+
 void RailSpeedDirector::NotifyCourseEvents(const std::vector<CourseEventMarker>& events) {
     for (const CourseEventMarker& event : events) {
         const std::string key = event.type + " " + event.id + " " + event.payload;

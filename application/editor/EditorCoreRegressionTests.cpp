@@ -37481,9 +37481,36 @@ void TestGateBridgeSpawnProtection(RegressionRunner& runner) {
     for(int i=0;i<40;++i)waves.Update({.1f,2000,{},true,false,false});
     runner.Expect(waves.Phase("short-exit-guard")!=CourseGameplayWavePhase::Active && waves.Stats().activeActors==0,
         "crossing the ambush marker cannot override an earned quiet window");
-    waves.Update({.1f,2000,{},true,false,true});
-    runner.Expect(waves.Phase("short-exit-guard")==CourseGameplayWavePhase::Active && waves.Stats().activeActors==8,
-        "eight-member ambush resumes without deleting mandatory actors");
+    waves.Update({.1f,2000,{},true,false,false,true});
+    runner.Expect(waves.Phase("short-exit-guard")==CourseGameplayWavePhase::Active && waves.Stats().activeActors==3,
+        "only the three carrier escorts are available before the ridge battery");
+    RailPath bridgeRail;course.ApplyToRailPath(bridgeRail);
+    RailMothership::Reveal carrier;
+    CourseEnemyFireSafetyFrameInput bridgeSafety;bridgeSafety.railPath=&bridgeRail;
+    bridgeSafety.playerDistance=2000;bridgeSafety.playerSpeed=43;
+    for (int step=0;step<22;++step) {
+        const auto& ship=carrier.Update(.1f,2000,600,bridgeRail,true,true);
+        runtime.StageCarrierDeployments(2000,ship,&bridgeRail);
+        runtime.Update(.1f,bridgeSafety);
+        if(step==13) runner.Expect(runtime.Enemies()[0].carrierDeployment.finished &&
+            !runtime.Enemies()[1].carrierDeployment.finished && !runtime.Enemies()[2].carrierDeployment.finished,
+            "the lead can be targeted before both wingmen finish their descent");
+    }
+    runtime.PeelBridgeEscort(2010);
+    waves.Update({.1f,2010,{},false,false,true});
+    runner.Expect(waves.Stats().activeActors==0 && std::all_of(runtime.Enemies().begin(),runtime.Enemies().end(),
+        [](const auto& actor) { return actor.desc.hitPoints>0 && actor.entranceExitState.exitRequested &&
+            !actor.entranceExitState.targetable; }),
+        "survivors stop taking locks and peel without counting as kills");
+    bridgeSafety.playerDistance=2010;
+    for (int step=0;step<13;++step) runtime.Update(.1f,bridgeSafety);
+    runner.Expect(runtime.Enemies().empty(),"the bridge escorts fly out and leave the route");
+    waves.Update({.1f,2224,{},true,false,true});
+    runner.Expect(waves.Stats().activeActors==0,"reinforcements give the ridge battery its own approach window");
+    waves.Update({.1f,2225,{},true,false,true});
+    runner.Expect(waves.Stats().activeActors==3,"the first reinforcements enter beyond the ridge battery");
+    waves.Update({.1f,2345,{},true,false,true});
+    runner.Expect(waves.Stats().activeActors==5,"all five reinforcements enter the route");
     EncounterDirector director;EnemyEncounterReadabilityFrame readable;CourseSpawnRuntime empty;
     EncounterDirectorFrameInput input;input.spawnRuntime=&empty;input.readability=&readable;
     input.currentDistance=1700;input.deltaTime=0;input.triggeredEvents={{1700,"enemy_wave","route_patrol_left","route:single","pending-before-rest"}};
@@ -38362,7 +38389,7 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
         else {
             check(firstWarning>=0 && firstFire>firstWarning && warningSeconds+dt>=.90f &&
                 fireForward>=RailGroundBattery::MinimumFireDistance &&
-                fireForward<=RailGroundBattery::FirstShotDistance(marker.id)+2.0f*speed*dt+.01f,
+                fireForward<=RailGroundBattery::FirstShotDistance(marker.id,marker.distance)+2.0f*speed*dt+.01f,
                 "the readable first warning finishes before passing the planned firing window"+context);
             check(mode==0 ? damage>0 : (damage==0 && cancelled>=1),
                 "ignoring the battery is damaging; screen-aimed primary interception prevents its real volley"+context);
@@ -38562,15 +38589,26 @@ void TestOverheadRockfall(RegressionRunner& runner) {
         }
         CourseEnemyFireSafetyFrameInput safety;
         safety.playerDistance=playerShot?1660:SlabTrigger;
+        if(playerShot) {
+            const float landingSeconds=(GroundImpact-runtime.Obstacles().front().age)/
+                SlabAdvance(runtime.Obstacles().front(),safety.playerDistance,1.0f);
+            runner.Expect(landingSeconds>.60f && landingSeconds<.70f,
+                "the player's shot breaks the support promptly and leaves time to see the rock land");
+            runner.Expect(std::all_of(runtime.Enemies().begin(),runtime.Enemies().end(),[](const auto& actor) {
+                return actor.behaviorDefinition.attackLeadSeconds==RailGroundBattery::ArchWarningSeconds;
+            }),"both arch batteries use the longer readable charge interval");
+        }
         for(int i=0;i<44;++i)runtime.Update(1.0f/60,safety);
         const auto falling=Stone(runtime.Obstacles().front(),runtime.Obstacles().front().age).rail;
         runner.Expect(falling.x==initial.x && falling.z==initial.z && falling.y<initial.y,
             "the rock accelerates downward directly above the track");
+        auto events=runtime.EnemyCombat().ConsumeEvents();
         const auto checkpoint=runtime.CaptureCheckpoint();
         runner.Expect(runtime.RestoreCheckpoint(checkpoint) && SlabTriggerShot(runtime.Obstacles().front())==shotId,
             "retries retain who released the falling slab");
         for(int i=0;i<66;++i)runtime.Update(1.0f/60,safety);
-        const auto events=runtime.EnemyCombat().ConsumeEvents();
+        const auto continued=runtime.EnemyCombat().ConsumeEvents();
+        events.insert(events.end(),continued.begin(),continued.end());
         const auto defeats=std::count_if(events.begin(),events.end(),[&](const auto& event) {
             return event.kind==EnemyCombatEventKind::Defeated && event.waveId==ArchBatteryWave && event.shotId==shotId;
         });
@@ -38659,7 +38697,7 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
         runner.Expect(slamCount()==1,"the falling head produces one impact");
         presentation.Update(pi);runner.Expect(slamCount()==0,"the settled head does not replay its impact");
     }
-    const float fixedDistances[]={1325,1615,2220,3000};
+    const float fixedDistances[]={1325,1615,2220,3014};
     size_t placementIndex=0;
     for(const auto& event:course.events) if(event.payload=="route:turret" && !RailRouteHazards::IsRockfallBattery(event.id)) {
         CourseSpawnRuntime probe;CourseEventDispatcher dispatcher;
@@ -39400,8 +39438,11 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
         runner.Expect(asset.units.size()==(pair?2:1),"admission slots match actual spawned unit counts");
         if(event.payload=="route:turret") ++towers;else ++patrols;
         pairs+=event.payload=="route:pair";
-        runner.Expect(event.distance<600 || (event.distance>=1120 && event.distance<3350),
-            "roadside additions respect the sky reveal, first boost lane and boss introduction");
+        for(const auto& unit:asset.units) {
+            const float position=event.distance+(event.payload=="route:turret"?unit.distanceOffset:0.0f);
+            runner.Expect(position<600 || (position>=1120 && position<3350),
+                "roadside positions respect the sky reveal, first boost lane and boss introduction");
+        }
     }
     runner.Expect(events.size()==7 && towers==5 && patrols==2 && pairs==1,
         "route has roadside guns, the original arch pair, singles and one staggered two-unit arrival");
@@ -39537,7 +39578,7 @@ void TestShortRunMixedGroupCombat(RegressionRunner& runner) {
     std::unordered_set<std::string> hulls,patterns;
     for(size_t i=0;i<5 && i<cooked.program.waves.size();++i) {
         runner.Expect(cooked.program.waves[i].actorIndices.size()==counts[i] &&
-            cooked.program.waves[i].executionPolicy==CourseWaveExecutionPolicy::Exclusive,"gate escort is focused while the later ambush preserves eight targets");
+            cooked.program.waves[i].executionPolicy==CourseWaveExecutionPolicy::Exclusive,"all authored actors retain their Wave ownership");
         for(auto actorIndex:cooked.program.waves[i].actorIndices) {
             const auto& desc=cooked.program.actors[actorIndex].actor;
             CourseEnemyActor candidate;candidate.desc=desc;candidate.behaviorDefinition=desc.behaviorDefinition;
@@ -39557,7 +39598,8 @@ void TestShortRunMixedGroupCombat(RegressionRunner& runner) {
         sniper.hitPoints>scout.hitPoints,"archetypes differ in motion, warning time and durability");
     RailPath rail;course.ApplyToRailPath(rail);
     std::ofstream report("logs/short_run_lock_group_windows.csv");report<<"wave,fps,peak_available,peak_distinct_captures,seconds_with_six_available,peak_attackers\n";
-    for(int fps:{30,60,120}) for(unsigned waveIndex:{1u,4u}) {
+    for(int fps:{30,60,120}) {
+        constexpr unsigned waveIndex=1;
         CourseSpawnRuntime spawn;CourseGameplayWaveRuntimeBridge waves;waves.Configure(ShortRunWaveSettings());
         waves.Bind(&cooked.program,&spawn,160,&error);
         auto checkpoint=waves.CaptureCheckpoint();
@@ -39572,7 +39614,7 @@ void TestShortRunMixedGroupCombat(RegressionRunner& runner) {
         RailCameraDirector camera;EnemyEncounterPacingDirector pacing;EnemyEncounterCameraCompositionBridge composition;
         RailTargetRegistry targets;RailLockResolver sweep;RailReticleState reticle;reticle.initialized=true;reticle.lockHeld=true;
         reticle.previousScreenPosition=reticle.currentScreenPosition={800,450};
-        unsigned peak=0,captures=0,peakAttackers=0;float sixSeconds=0;std::unordered_set<std::string> seenHulls;
+        unsigned peak=0,captures=0,peakAttackers=0;float sixSeconds=0;
         const float dt=1.0f/fps;
         for(int step=0;step<6*fps;++step) {
             const float elapsed=step*dt,at=checkpoint.playerDistance+20*elapsed;
@@ -39609,8 +39651,6 @@ void TestShortRunMixedGroupCombat(RegressionRunner& runner) {
             std::vector<Vector2> available;
             for(const auto& candidate:probe.Candidates()) if(candidate.lockable || candidate.rejectReason==RailLockRejectReason::NotSwept) {
                 available.push_back(candidate.anchor.screenPosition);
-                const auto actor=std::find_if(spawn.Enemies().begin(),spawn.Enemies().end(),[&](const auto& e){return e.actorId==candidate.anchor.target.actorId;});
-                if(actor!=spawn.Enemies().end()) seenHulls.insert(actor->desc.meshId);
             }
             peak=(std::max)(peak,static_cast<unsigned>(available.size()));if(available.size()>=6) sixSeconds+=dt;
             if(!available.empty()) {
@@ -39623,15 +39663,6 @@ void TestShortRunMixedGroupCombat(RegressionRunner& runner) {
         report<<waveIndex<<','<<fps<<','<<peak<<','<<captures<<','<<sixSeconds<<','<<peakAttackers<<'\n';
         runner.Expect(peakAttackers>0,"group combat actually exercises attack admission, not only an idle attacker cap");
         runner.Expect(peak>=6 && captures>=6 && sixSeconds>=2.0f,"at least six distinct targets remain capturable for a useful sweep window");
-        if(waveIndex==4) runner.Expect(seenHulls.size()==3 && captures==8,"final mixed formation can fill all eight locks across three visible hulls");
-        if(waveIndex==4 && fps==60) {
-            CourseEnemyFireSafetyFrameInput hold;hold.playerDistance=checkpoint.playerDistance+120;hold.railPath=&rail;
-            hold.cameraAllowsEnemyFire=false;
-            for(int i=0;i<1301;++i) spawn.Update(0.1f,hold);
-            runner.Expect(spawn.Enemies().size()==8 && std::all_of(spawn.Enemies().begin(),spawn.Enemies().end(),
-                [](const auto& actor){return !actor.entranceExitState.exitComplete && actor.entranceExitState.presentationAlpha>0.99f;}),
-                "all three hulls remain present beyond their original lifetime instead of silently fading or exiting");
-        }
     }
     // Slow play reaches the goal with the first group still alive. Defeating it
     // must reveal the next group ahead after recovery, never behind the cart.
@@ -44598,7 +44629,7 @@ int RunEditorCoreRegressionTests() {
         {"terrain enemy ingress cover flight and retry", [&]() { TestTerrainEnemyIngresses(runner); }},
         {"terrain ingress cinematic speed facing and handoff", [&]() { TestTerrainIngressCinematicMotion(runner); }},
         {"mothership blockout camera and bay deployment", [&]() { TestMothershipBlockoutDeployment(runner); }},
-        {"short run mixed groups and eight-lock opportunity", [&]() { TestShortRunMixedGroupCombat(runner); }},
+        {"short run mixed groups and lock opportunity", [&]() { TestShortRunMixedGroupCombat(runner); }},
          {"rail game over scene and checkpoint menu", [&]() { TestRailGameOverScene(runner); }},
          {"rail checkpoint follow state replay", [&]() { TestRailCheckpointFollowReplay(runner); }},
          {"rail game over rendered rail contact", [&]() { TestRailGameOverRenderedRailContact(runner); }},

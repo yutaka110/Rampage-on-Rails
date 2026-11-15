@@ -21,7 +21,7 @@ struct RailKillBoostControlInput final {
 class RailKillBoost final {
 public:
     static constexpr unsigned RequiredKills=6;
-    static constexpr float SpinSeconds=RailBoostLaunch::SpinSeconds,HoldSeconds=4.0f,ReleaseSeconds=.70f;
+    static constexpr float SpinSeconds=RailBoostLaunch::SpinSeconds,HoldSeconds=1.65f,ReleaseSeconds=.70f;
     static constexpr float AccelerationSeconds=.20f;
     static constexpr float LaunchFraction=.95f;
     static constexpr float TurnEndSeconds=RailBoostLaunch::TurnEndSeconds,AngularRampSeconds=RailBoostLaunch::AngularRampSeconds;
@@ -29,7 +29,9 @@ public:
     static constexpr float IgnitionLeadSeconds=RailBoostLaunch::IgnitionLeadSeconds,KillConfirmationSeconds=.16f;
     static constexpr float TotalSeconds=SpinSeconds+HoldSeconds+ReleaseSeconds;
     static constexpr float MaximumMultiplier=1.40f;
-    static constexpr float KillExtensionSeconds=1.50f,MaximumHoldRemaining=6.0f;
+    static constexpr float KillExtensionSeconds=.35f;
+    static constexpr float MaximumSeconds=TotalSeconds+.70f;
+    static constexpr float MaximumHoldRemaining=MaximumSeconds-ReleaseSeconds;
     void Reset(){*this=RailKillBoost{};}
     bool ObserveDefeat(const EnemyCombatEvent& event) {
         if(event.kind!=EnemyCombatEventKind::Defeated || !event.actorId || !event.shotId ||
@@ -42,10 +44,11 @@ public:
             const float before=Blend();
             const float previousExpiry=expiresAt_;
             const bool wasReleasing=age_>ReleaseStartAge();
-            expiresAt_=(std::min)((std::max)(expiresAt_,age_+ReleaseSeconds)+KillExtensionSeconds,
-                age_+MaximumHoldRemaining+ReleaseSeconds);
-            if(wasReleasing) { recoveryAge_=age_;recoveryBlend_=before; }
-            if(expiresAt_>previousExpiry+.00001f) {lastExtensionAge_=age_;++extensions_;}
+            expiresAt_=(std::min)(expiresAt_+KillExtensionSeconds,MaximumSeconds);
+            if(expiresAt_>previousExpiry+.00001f) {
+                if(wasReleasing) { recoveryAge_=age_;recoveryBlend_=before; }
+                lastExtensionAge_=age_;++extensions_;
+            }
         } else charge_=(std::min)(RequiredKills,charge_+1);
         return true;
     }

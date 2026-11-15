@@ -148,8 +148,9 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
             }
             if (IsRearPanelHit(request.sourceIndex)) {
                 result.hitPointsBefore=result.remainingHitPoints=currentHitPoints;
+                const size_t panel=request.sourceIndex-kRearPanelSourceBase;
                 if (!request.lockOnContact || request.baseDamage<=0 ||
-                    !enemy.rearArmor.Break(request.sourceIndex-kRearPanelSourceBase)) {
+                    !enemy.rearArmor.Break(panel,IsFangWingPanel(enemy.desc.actorAssetId,panel))) {
                     result.rejectReason=DamageRejectReason::TargetNotDamageable;
                     return result;
                 }
@@ -158,13 +159,11 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 return result;
             }
             if (IsRearSubsystemHit(request.sourceIndex)) {
-                const bool cannon=request.sourceIndex==kFangCannonHitSource;
-                const bool exposed=cannon?enemy.fangCannonExposed:enemy.veilSensorExposed;
-                float& hitPoints=cannon?enemy.fangCannonHitPoints:enemy.veilSensorHitPoints;
+                float& hitPoints=enemy.veilSensorHitPoints;
                 result.hitPointsBefore=currentHitPoints;
                 result.remainingHitPoints=currentHitPoints;
-                if (!exposed || hitPoints<=0 ||
-                    (request.lockOnContact ? cannon : request.damageType!=WeaponDamageType::Energy)) {
+                if (!enemy.veilSensorExposed || hitPoints<=0 ||
+                    (!request.lockOnContact && request.damageType!=WeaponDamageType::Energy)) {
                     result.rejectReason=DamageRejectReason::TargetNotDamageable;
                     return result;
                 }
@@ -172,7 +171,6 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 hitPoints-=result.appliedDamage;
                 result.damageApplied=result.appliedDamage>0;
                 result.weakPointHit=result.damageApplied;
-                if (cannon && hitPoints<=0) enemy.desc.bulletCount=2;
                 return result;
             }
             if(enemy.energyShield.lastShotId==request.shotId) {

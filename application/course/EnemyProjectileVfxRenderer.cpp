@@ -1,4 +1,5 @@
 #include "EnemyProjectileVfxRenderer.h"
+#include "RailRearPursuitRules.h"
 
 #include "../EffectRuntime.h"
 #include "../diagnostics/DebugDrawSystem.h"
@@ -574,7 +575,13 @@ void EnemyProjectileVfxRenderer::Update(
         proxy.coreColor = visual.coreColor;
         proxy.haloColor = visual.haloColor;
         proxy.trailColor = visual.trailColor;
-        if(projectile.definitionId=="enemy_fang_chase") {
+        if(projectile.definitionId==kFangAimVolleyRound) {
+            proxy.visualDefinitionId=kFangAimVolleyVisual;
+            proxy.bodyUvBase=2200.0f;
+            proxy.bodyColor={.55f,.14f,.018f,1};
+            proxy.haloColor={4.0f,1.28f,.14f,.80f};
+            proxy.trailColor={2.8f,.66f,.085f,.85f};
+        } else if(projectile.definitionId=="enemy_fang_chase") {
             proxy.bodyUvBase=2400;
             proxy.bodyColor={.17f,.012f,.018f,1};
             proxy.haloColor={2.5f,.045f,.10f,.85f};
@@ -724,7 +731,7 @@ void EnemyProjectileVfxRenderer::Update(
             event.motionDirection, {0.0f, 0.0f, -1.0f});
         burst.color = event.color;
         burst.fangImpact=event.kind==EnemyProjectilePresentationEventKind::Impacted &&
-            event.definitionId=="enemy_fang_chase";
+            IsFangChaseRound(event.definitionId);
         burst.surfaceImpact=event.surfaceImpact;
         burst.impactNormal=event.impactNormal;
         if (burst.fangImpact && event.vehicleImpactProbe && input.vehicleWorld && input.vehicleModel) {
@@ -896,7 +903,7 @@ const EnemyProjectileVisualDefinitionAsset&
 EnemyProjectileVfxRenderer::ResolveVisual(
     const EnemyProjectilePresentation& projectile) const noexcept {
     if (const EnemyProjectileVisualDefinitionAsset* resolved =
-            FindVisual(projectile.definitionId)) {
+            FindVisual(projectile.definitionId==kFangAimVolleyRound ? "enemy_fang_chase" : projectile.definitionId)) {
         return *resolved;
     }
     switch (projectile.trajectory) {
