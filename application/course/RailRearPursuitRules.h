@@ -71,7 +71,6 @@ struct RailRearArmor {
 };
 inline constexpr float kFangShotInterval = .16f;
 inline constexpr char kFangAimVolleyRound[] = "enemy_fang_aim_volley";
-inline constexpr char kFangAimVolleyVisual[] = "visual_fang_aim_volley";
 // Lane offsets are in rail coordinates, with positive lateral on screen left
 // while the camera is looking back at the pursuing aircraft.
 inline constexpr std::array<const char*,3> kFangAimVolleyRoles{

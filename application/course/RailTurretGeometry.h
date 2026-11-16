@@ -69,11 +69,15 @@ inline float ShotAge(const MotionState& state,float age) {
 inline float Recoil(const MotionState& state,std::string_view mesh,float age) {
     return RecoilAtAge(mesh,ShotAge(state,age));
 }
+inline constexpr float SiegeKickSeconds=.030f;
+inline constexpr float SiegeKickHoldUntil=.043f;
+inline constexpr float SiegeReturnSeconds=.22f;
+inline constexpr float SiegeRecoilSeconds=SiegeKickHoldUntil+SiegeReturnSeconds;
 inline float SiegeVisualRecoil(float age) {
-    constexpr float kick=.034f, hold=.064f, finish=.49f, travel=.62f;
-    if(age<0 || age>=finish)return 0;
-    if(age<kick)return travel*std::sin(age/kick*1.570796327f);
-    const float u=(std::max)(0.0f,age-hold)/(finish-hold);
+    constexpr float travel=.62f;
+    if(age<0 || age>=SiegeRecoilSeconds)return 0;
+    if(age<SiegeKickSeconds)return travel*std::sin(age/SiegeKickSeconds*1.570796327f);
+    const float u=(std::max)(0.0f,age-SiegeKickHoldUntil)/SiegeReturnSeconds;
     return travel*(1-u*u*(3-2*u));
 }
 inline float SiegePedestalKick(float age) {

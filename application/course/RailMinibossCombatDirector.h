@@ -26,6 +26,7 @@ struct RailGatlingInterceptFeedback final {
 class RailMinibossCombatDirector final {
 public:
     static constexpr float RapidCounterSeconds=1.15f,HeavyCounterSeconds=1.80f;
+    static constexpr float GatlingCompletionSeconds=.26f;
     static constexpr float CounterDamageMultiplier=RailBatteryDamage::CounterMultiplier;
     static constexpr float CounterFeedbackSeconds=.90f;
     void Reset(uint32_t seed=0x6d2b79f5u){*this={};random_=seed?seed:0x6d2b79f5u;}
@@ -37,11 +38,18 @@ public:
     uint32_t CounterOwner()const{return counterOwner_;}
     uint64_t CounterSerial()const{return counterSerial_;}
     int CounterPart()const{return counterPart_;}
+    bool CounterInstruction()const {
+        return counterRemaining_>0 && counterPart_>=0 && counterSerial_==firstCounters_[counterPart_];
+    }
     float FeedbackDamage()const{return feedbackDamage_;}
     float FeedbackRemaining()const{return feedbackRemaining_;}
     float FeedbackAge()const{return feedbackRemaining_>0?CounterFeedbackSeconds-feedbackRemaining_:-1;}
     uint32_t FeedbackOwner()const{return feedbackOwner_;}
     int FeedbackPart()const{return feedbackPart_;}
+    Vector3 FeedbackWorldPoint()const{return feedbackWorldPoint_;}
+    float CounterArcHitPulse()const {
+        return feedbackPart_>=0 && feedbackCycle_==counterSerial_?HitPulse():0.0f;
+    }
     float UnlockPulse()const {
         return counterRemaining_>0 ? (std::clamp)(1.0f-(counterDuration_-counterRemaining_)/.35f,0.0f,1.0f) : 0;
     }
@@ -76,6 +84,7 @@ public:
             if(first)feedbackDamage_=0;
             feedbackCycle_=credit.cycle;feedbackOwner_=credit.owner;
             feedbackPart_=credit.part;
+            feedbackWorldPoint_=hit.worldPosition;
             feedbackDamage_+=hit.appliedDamage;feedbackRemaining_=CounterFeedbackSeconds;credit.owner=0;
             return first;
         }
@@ -104,7 +113,12 @@ public:
         railPoint={guardOffset_.x,guardOffset_.y,playerDistance+guardOffset_.z};return true;
     }
     unsigned InterceptedCount()const{return std::popcount(intercepted_);}
-    const RailGatlingInterceptFeedback& GatlingInterceptFeedback()const{return gatlingInterceptFeedback_;}
+    const RailGatlingInterceptFeedback& GatlingInterceptFeedback()const {
+        return gatlingContacts_[gatlingContactSequence_%gatlingContacts_.size()];
+    }
+    const auto& GatlingContactPulses()const{return gatlingContacts_;}
+    float GatlingRingTime()const{return elapsed_;}
+    float GatlingCompletionRemaining()const{return gatlingCompletionRemaining_;}
     float CooldownRemaining(const CourseSpawnRuntime& runtime,int part)const {
         if(part<0 || part>1)return 0;
         const auto* actor=FindLiving(runtime,ids_[part]);
@@ -121,13 +135,18 @@ public:
         if(!enabled){Reset();return;}
         Bind(runtime);
         active_=Living(runtime,0) || Living(runtime,1);
-        if(!active_){counterRemaining_=0;gatlingInterceptFeedback_.remaining=0;ClearVolley();firstDefensePart_=-1;return;}
+        if(!active_) {
+            counterRemaining_=0;gatlingCompletionRemaining_=0;
+            for(auto& contact:gatlingContacts_)contact.remaining=0;
+            ClearVolley();firstDefensePart_=-1;return;
+        }
         if(!gameplayActive){ApplyGate(runtime,false);return;}
         const float dt=gameplayActive && std::isfinite(deltaTime)?(std::clamp)(deltaTime,0.0f,.25f):0;
         elapsed_+=dt;
-        gatlingInterceptFeedback_.remaining=(std::max)(0.0f,gatlingInterceptFeedback_.remaining-dt);
-        if(gatlingInterceptFeedback_.remaining>0 && !FindLiving(runtime,gatlingInterceptFeedback_.owner))
-            gatlingInterceptFeedback_.remaining=0;
+        for(auto& contact:gatlingContacts_)if(contact.remaining>0) {
+            contact.remaining=FindLiving(runtime,contact.owner)?(std::max)(0.0f,contact.remaining-dt):0;
+        }
+        gatlingCompletionRemaining_=(std::max)(0.0f,gatlingCompletionRemaining_-dt);
         for(auto& cooldown:cooldown_)cooldown=(std::max)(0.0f,cooldown-dt);
         counterRemaining_=(std::max)(0.0f,counterRemaining_-dt);
         gapRemaining_=(std::max)(0.0f,gapRemaining_-dt);
@@ -201,22 +220,24 @@ public:
         const unsigned bit=1u<<unsigned(it-projectiles_.begin());
         if(intercepted_&bit)return false;
         intercepted_|=bit;
+        const auto interceptedCount=InterceptedCount();
         if(volleyPart_==0 && guardValid_) {
             // Only a new, accepted destruction in the owned stream may light
             // the ring. Retain the defensive anchor through the final contact,
             // when FinishTurn clears the volley and the gold cue moves away.
-            gatlingInterceptFeedback_.guardOffset=guardOffset_;
-            gatlingInterceptFeedback_.worldHitPoint=result.worldHitPoint;
-            gatlingInterceptFeedback_.remaining=RailGatlingInterceptFeedback::Duration;
-            gatlingInterceptFeedback_.owner=volleyOwner_;
-            ++gatlingInterceptFeedback_.sequence;
+            ++gatlingContactSequence_;
+            gatlingContacts_[gatlingContactSequence_%gatlingContacts_.size()]={guardOffset_,result.worldHitPoint,
+                RailGatlingInterceptFeedback::Duration,gatlingContactSequence_,volleyOwner_};
+            if(interceptedCount==RailGatling::Rounds)gatlingCompletionRemaining_=GatlingCompletionSeconds;
         }
         // Each launched round must actually be intercepted. A short opening
         // volley cannot erase the remainder of the gun's firing schedule.
-        if(size_t(std::popcount(intercepted_))<count_)return false;
+        if(interceptedCount<count_)return false;
         counterOwner_=volleyOwner_;counterPart_=volleyPart_;
         counterDuration_=volleyPart_==0?RapidCounterSeconds:HeavyCounterSeconds;
         counterRemaining_=counterDuration_;++counterSerial_;
+        auto& firstCounter=firstCounters_[counterPart_];
+        if(firstCounter==0)firstCounter=counterSerial_;
         FinishTurn(0);ApplyGate(runtime,false);
         return true;
     }
@@ -280,6 +301,7 @@ private:
     uint64_t volleyIntent_=0;
     float counterRemaining_=0,counterDuration_=0,gapRemaining_=0;
     uint64_t counterSerial_=0;
+    std::array<uint64_t,2> firstCounters_{};
     bool active_=false;
     std::array<float,2> cooldown_{};
     bool selectionPending_=true;
@@ -288,13 +310,17 @@ private:
     float elapsed_=0;
     Vector3 guardOffset_{};
     bool guardValid_=false;
-    RailGatlingInterceptFeedback gatlingInterceptFeedback_{};
+    // Retain a pulse for every accepted contact, including paired hits in one frame.
+    std::array<RailGatlingInterceptFeedback,RailGatling::Rounds> gatlingContacts_{};
+    uint64_t gatlingContactSequence_=0;
+    float gatlingCompletionRemaining_=0;
     struct Credit {uint64_t shot=0;uint32_t owner=0;uint64_t cycle=0;int part=-1;};
     std::array<Credit,64> credits_{};
     size_t nextCredit_=0;
     int counterPart_=-1;
     uint64_t feedbackCycle_=0;
     uint32_t feedbackOwner_=0;
+    Vector3 feedbackWorldPoint_{};
     int feedbackPart_=-1;
     float feedbackDamage_=0,feedbackRemaining_=0;
 };

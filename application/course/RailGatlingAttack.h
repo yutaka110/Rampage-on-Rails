@@ -11,6 +11,7 @@ inline constexpr int Rounds = 24;
 inline constexpr float ClashRadius = 3.5f;
 inline constexpr float PulseContactRadius = RailPulseShot::ContactRadius;
 inline constexpr float ShotInterval = .05f;
+inline constexpr float MuzzleFlashSeconds = .044f;
 inline constexpr float BurstSeconds = (Rounds - 1) * ShotInterval;
 // A fixed point along the incoming stream, separated from the gun itself.
 inline constexpr float GuardSampleSeconds = .60f;

@@ -311,9 +311,7 @@ Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,i
     if(RailTurret::IsMesh(actor.desc.meshId) && actor.targetingState.solutionLocked &&
         actor.targetingState.attackIntentSequence==actor.attackState.intentSequence &&
         actor.targetingState.attackTokenId==actor.attackState.tokenId) {
-        if(RailGroundBattery::IsPredictive(actor.desc.actorAssetId)) {
-            // One coherent crossing volley uses the rail-outer barrel. The inner
-            // barrel's shallow crossing angle covered the post-launch brake escape.
+        if(RailGroundBattery::IsPredictive(actor.desc.actorAssetId) && actor.desc.bulletCount==1) {
             return ResolveTurretMuzzleRailPosition(actor,ResolvePredictiveTurretBarrel(actor)==0?-1.0f:1.0f);
         }
         return ResolveTurretMuzzleRailPosition(actor,(index & 1)?1.0f:-1.0f);

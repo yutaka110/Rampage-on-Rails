@@ -3,16 +3,19 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <cstdint>
 
 namespace RailGatlingRing {
 inline constexpr float Radius=21.0f;
 inline constexpr float ShaderRadius=.68f;
 inline constexpr float GaugeRadius=26.5f;
 inline constexpr float TickInner=30.0f,TickOuter=33.5f;
-inline constexpr Vector4 Energy{.16f,.80f,1.0f,.96f};
+inline constexpr float TravelSeconds=1.35f;
+inline constexpr float CompletionHalfExtent=52.0f;
+inline constexpr float CounterShaderRadius=.72f;
+inline constexpr float CounterRadius(int part) { return part==1?40.0f:34.0f; }
+enum class Layer { Idle, Contact, Completion };
 struct DischargeSegment final {Vector2 start{},end{};float width=0;Vector4 color{};};
-struct Discharge final {std::array<DischargeSegment,32> segments{};unsigned count=0;};
+struct Discharge final {std::array<DischargeSegment,4> segments{};unsigned count=0;};
 struct Guide final {
     std::array<DischargeSegment,48> track{},fill{};
     std::array<DischargeSegment,4> ticks{};
@@ -45,36 +48,18 @@ inline Guide BuildGuide(Vector2 center,float scale,float progress) {
     return result;
 }
 
-// Bounded strokes hug the outside of the original circular guide. Neither the
-// steady material nor this transient feedback paints across its open centre.
-inline Discharge BuildDischarge(Vector2 center,float scale,float life,uint64_t sequence,float contactAngle) {
+// Four short sparks leave the contact point, outside the aiming area.
+inline Discharge BuildDischarge(Vector2 center,float scale,float life,float contactAngle) {
     Discharge result;
     if(!std::isfinite(center.x) || !std::isfinite(center.y) || !std::isfinite(scale) || scale<=0 ||
         !std::isfinite(life) || life<=0 || !std::isfinite(contactAngle))return result;
-    const float fade=std::pow((std::clamp)(life,0.0f,1.0f),1.35f);
+    const float fade=std::pow((std::clamp)(life,0.0f,1.0f),2.0f);
     const auto point=[&](float angle,float radius) {return Vector2{center.x+std::cos(angle)*radius*scale,
         center.y+std::sin(angle)*radius*scale};};
-    const auto add=[&](Vector2 a,Vector2 b,float width,Vector4 color) {
-        if(result.count<result.segments.size())result.segments[result.count++]={a,b,width*scale,color};
-    };
-    for(unsigned arc=0;arc<2;++arc) {
-        const unsigned steps=arc?7u:13u;
-        const float base=contactAngle+(arc?2.35f:-.72f);
-        const auto jitter=[&](unsigned i) {
-            const uint64_t seed=(sequence+1)*0x9e3779b97f4a7c15ULL+(i+arc*19)*0x85ebca6bULL;
-            return float((seed^(seed>>17))&255u)/255.0f;
-        };
-        Vector2 previous=point(base,Radius+1.0f+jitter(0)*2.8f);
-        for(unsigned i=1;i<=steps;++i) {
-            const Vector2 next=point(base+i*.11f,Radius+1.0f+jitter(i)*2.8f);
-            add(previous,next,arc?.65f:1.0f,{.72f,.96f,1,fade*(arc?.62f:.95f)});
-            previous=next;
-        }
-    }
-    // The contact glint is outward-only, without a centre-covering starburst.
-    for(unsigned i=0;i<4;++i) {
-        const float angle=contactAngle+(float(i)-1.5f)*.17f;
-        add(point(angle,Radius+2),point(angle,Radius+6+float(i%3)*2),.8f,{.88f,.99f,1,fade*.9f});
+    for(unsigned i=0;i<result.segments.size();++i) {
+        const float angle=contactAngle+(float(i)-1.5f)*.14f;
+        result.segments[result.count++]={point(angle,Radius+2),point(angle,Radius+5+float(i%3)*2),
+            .85f*scale,{.88f,.99f,1,fade*.84f}};
     }
     return result;
 }

@@ -7,13 +7,16 @@
 inline constexpr const char* RailShortCoursePath="Resources/courses/ShortCompleteRun.course";
 inline constexpr float ShortRunLockPracticeEnd=810.0f;
 inline bool IsRailShortCourse(std::string_view path) { return path==RailShortCoursePath; }
+inline constexpr float kShortRunResultDelaySeconds=1.0f;
+inline constexpr float kRailVictoryTimeRevealSeconds=0.43f;
+inline constexpr float kRailVictoryActionsRevealSeconds=0.82f;
 inline bool UsesCanyonPresentation(std::string_view path) {
     return IsRailShortCourse(path) || path=="Resources/courses/CanyonAssaultRoute01.course";
 }
 inline GameSessionDefinition ShortRunSessionDefinition() {
     auto definition=GameSessionDefinition::RailShooterDefaults();
     definition.sessionId="rail_shooter.short_complete_run";
-    definition.resultDelaySeconds=1.0f;
+    definition.resultDelaySeconds=kShortRunResultDelaySeconds;
     definition.timeLimitPerAttempt=true;
     definition.timeLimitSeconds=210.0f; // bounded failure rather than a stranded finish
     definition.startingRetries=2;
@@ -64,6 +67,16 @@ inline bool IsRunResult(const GameSessionRuntimeState& state) {
     return state.phase==GameSessionPhase::Result;
 }
 
+inline bool IsRunVictory(const GameSessionRuntimeState& state) {
+    return state.outcome==GameSessionOutcome::Victory &&
+        (state.phase==GameSessionPhase::Victory || IsRunResult(state));
+}
+
+inline bool RailVictoryTimeRevealed(const GameSessionRuntimeState& state) {
+    return IsRunVictory(state) &&
+        (IsRunResult(state) || state.phaseElapsedSeconds>=kRailVictoryTimeRevealSeconds);
+}
+
 enum class RailRunResultAction { None, Restart, Checkpoint, Title };
 struct RailRunResultButton {
     float x=0,y=0,width=0,height=0;
@@ -72,13 +85,21 @@ struct RailRunResultButton {
         return px>=x && px<=x+width && py>=y && py<=y+height;
     }
 };
-inline RailRunResultButton RunResultButton(float width,float height,int index) {
+inline RailRunResultButton RunResultButton(float width,float height,int index,bool victory=false) {
     const float s=(std::min)(width/1600.0f,height/900.0f);
+    if(victory) {
+        const float left=(width-1600.0f*s)*.5f;
+        return {left+(128+(index==2?228:0))*s,height*.5f+143*s,212*s,48*s,
+            index==0?RailRunResultAction::Restart:RailRunResultAction::Title};
+    }
     return {width*0.5f-280*s,height*0.5f+(58+index*62)*s,560*s,50*s,
         index==0?RailRunResultAction::Restart:(index==1?RailRunResultAction::Checkpoint:RailRunResultAction::Title)};
 }
-inline RailRunResultAction HitRunResult(float x,float y,float width,float height,bool canCheckpoint) {
-    for(int i=0;i<3;++i) if((i!=1 || canCheckpoint) && RunResultButton(width,height,i).Contains(x,y))
-        return RunResultButton(width,height,i).action;
+inline RailRunResultAction HitRunResult(float x,float y,float width,float height,bool canCheckpoint,bool victory=false) {
+    for(int i=0;i<3;++i) {
+        if(i==1 && (victory || !canCheckpoint)) continue;
+        const auto button=RunResultButton(width,height,i,victory);
+        if(button.Contains(x,y)) return button.action;
+    }
     return RailRunResultAction::None;
 }

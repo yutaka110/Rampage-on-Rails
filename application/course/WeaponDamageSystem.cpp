@@ -5,6 +5,7 @@
 #include "CourseAsset.h"
 #include "CourseSpawnRuntime.h"
 #include "RailBatteryDamagePolicy.h"
+#include "RailGroundBatteryAttack.h"
 
 #include <algorithm>
 #include <cmath>
@@ -202,8 +203,9 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 ApplyHitPoints(enemy.desc.hitPoints, result);
             }
             result.preserveEnemyAttack = result.damageApplied && !result.destroyed &&
-                enemy.desc.actorAssetId == "rear_fang" &&
-                request.damageType == WeaponDamageType::Energy && !request.lockOnContact;
+                (RailGroundBattery::IsBattery(enemy.desc.actorAssetId) ||
+                 (enemy.desc.actorAssetId == "rear_fang" &&
+                  request.damageType == WeaponDamageType::Energy && !request.lockOnContact));
             return result;
         }
         result.rejectReason = DamageRejectReason::TargetNotFound;

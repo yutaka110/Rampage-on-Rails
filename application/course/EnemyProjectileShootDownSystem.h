@@ -48,6 +48,12 @@ struct EnemyProjectileShootDownResult final {
     float clashRadius = 0.0f;
     float primaryRadius = 0.0f;
     bool secondaryClash = false;
+
+    Vector3 SurfaceContact() const noexcept {
+        return {worldHitPoint.x-worldHitNormal.x*primaryRadius,
+            worldHitPoint.y-worldHitNormal.y*primaryRadius,
+            worldHitPoint.z-worldHitNormal.z*primaryRadius};
+    }
 };
 
 struct EnemyProjectileShootDownFrame final {

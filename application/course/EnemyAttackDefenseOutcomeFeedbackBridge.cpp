@@ -165,11 +165,13 @@ void EnemyAttackDefenseOutcomeFeedbackBridge::Update(
     next.cameraShake = 0.0f;
     next.cameraPitchImpulse = 0.0f;
     next.cameraYawImpulse = 0.0f;
-    const auto localSuccess=[&](uint32_t actor,EnemyAttackDefenseOutcome outcome) {
+    const auto localSuccess=[&](uint32_t actor,uint64_t projectile,EnemyAttackDefenseMethod method,EnemyAttackDefenseOutcome outcome) {
         return actor!=0 && outcome==EnemyAttackDefenseOutcome::Success &&
-            std::find(input.localSuccessActors.begin(),input.localSuccessActors.end(),actor)!=input.localSuccessActors.end();
+            ((method==EnemyAttackDefenseMethod::ShootDown && (actor==input.localShootDownActorId ||
+                std::find(input.localShootDownProjectiles.begin(),input.localShootDownProjectiles.end(),projectile)!=input.localShootDownProjectiles.end())) ||
+             std::find(input.localSuccessActors.begin(),input.localSuccessActors.end(),actor)!=input.localSuccessActors.end());
     };
-    if(localSuccess(next.actorId,next.outcome)) {
+    if(localSuccess(next.actorId,0,next.method,next.outcome)) {
         // Also clear a retained toast when entering this presentation policy.
         next={};displayRemainingSeconds_=displayDurationSeconds_=hapticRemainingSeconds_=0;
     }
@@ -180,7 +182,7 @@ void EnemyAttackDefenseOutcomeFeedbackBridge::Update(
         for (const EnemyAttackDefenseResult& result : input.results) {
             if (!result.accepted || result.sequence <= lastConsumedSequence_) continue;
             lastConsumedSequence_ = result.sequence;
-            if(localSuccess(result.actorId,result.outcome))continue;
+            if(localSuccess(result.actorId,result.projectileId,result.method,result.outcome))continue;
             next.resultSequence = result.sequence;
             next.actorId = result.actorId;
             next.method = result.method;

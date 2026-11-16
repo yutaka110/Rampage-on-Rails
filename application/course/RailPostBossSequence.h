@@ -168,14 +168,14 @@ public:
         round.lateralSpeed=(lane-muzzle.x)/alignTime;
         round.verticalSpeed=(attack.height-muzzle.y)/alignTime;
         round.maximumSpeed=std::hypot(round.forwardSpeed,round.lateralSpeed,round.verticalSpeed);
-        round.radius=attack.aimVolley ? .41f : .29f;
+        round.radius=attack.aimVolley ? style.radius : .29f;
         round.lifetime=flight+(attack.aimVolley ? .50f : .21f);
         round.damage=style.damage;
-        round.color=attack.aimVolley ? Vector4{1,.44f,.08f,1} : style.color;
+        round.color=style.color;
         round.trailEffectId=style.trailEffectId;round.impactEffectId=style.impactEffectId;
         round.defenseResponses=style.defenseResponses;
         round.shootDownHitPoints=round.shootDownMaximumHitPoints=style.shootDownHitPoints;
-        round.shootDownRadiusScale=attack.aimVolley ? 1.25f : style.shootDownRadiusScale;
+        round.shootDownRadiusScale=style.shootDownRadiusScale;
         round.shootDownEnabled=round.shootDownHitPoints>0;
         round.lockedTargetDistance=muzzle.z+round.forwardSpeed*alignTime;
         round.lockedTargetLateralOffset=lane;round.lockedTargetVerticalOffset=attack.height;

@@ -181,11 +181,13 @@ struct CameraForGPU {
     Vector4 railBounceControl{}; // active patch count and distance fade
     std::array<RailBouncePatch, 5> railBouncePatches{};
     Vector4 railCanyonGrade{}; // bridge blend, carrier arena blend, near-shadow receiver tagging
+    std::array<Vector4, 2> roadBatteryLights{}; // live shell position and amber light strength
 };
 static_assert(sizeof(RailBouncePatch) == 48);
 static_assert(offsetof(CameraForGPU, railBounceControl) == 784);
 static_assert(offsetof(CameraForGPU, railCanyonGrade) == 1040);
-static_assert(sizeof(CameraForGPU) == 1056);
+static_assert(offsetof(CameraForGPU, roadBatteryLights) == 1056);
+static_assert(sizeof(CameraForGPU) == 1088);
 
 struct CascadeShadowData {
     Matrix4x4 lightViewProjection[4]{};

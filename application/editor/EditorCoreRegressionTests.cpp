@@ -27669,6 +27669,19 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
                 }),
         "shoot-down disappearance should be replaced by a persistent cyan radial interception burst at the authoritative hit point");
 
+    EnemyProjectileVfxRenderer localRenderer;
+    interceptEvent.ownerActorId=40;
+    auto otherIntercept=interceptEvent;
+    otherIntercept.ownerActorId=41;
+    ++otherIntercept.projectileId;
+    presentation.events={interceptEvent,otherIntercept};
+    renderInput.localInterceptOwnerActorId=40;
+    localRenderer.Update(renderInput);
+    runner.Expect(localRenderer.Frame().interceptBursts==1 &&
+        localRenderer.Frame().lifecycleBursts.front().projectileId==otherIntercept.projectileId,
+        "the local Wing burst replaces only that actor's generic interception effect");
+    renderInput.localInterceptOwnerActorId=0;
+
     presentation.events.clear();
     EnemyProjectilePresentationEvent impactEvent{};
     impactEvent.kind = EnemyProjectilePresentationEventKind::Impacted;
@@ -27757,6 +27770,28 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
     orbs.Update(orbInput);
     runner.Expect(orbs.Frame().spriteBackedProjectiles==2 && orbs.Frame().droppedByBudget==9,
         "The new sphere backend must obey the existing projectile presentation budget");
+
+    // The turning attack retains its projectile ID for flight and interception.
+    // Both shots should render the authored interception sphere at the same size.
+    EnemyProjectileDefinitionAsset fangRound;
+    runner.Expect(fangRound.LoadFromFile("Resources/courses/projectiles/enemy_fang_chase.projectile",&directoryError),
+        "Fang's production projectile definition loads");
+    orbProjectile.definitionId="enemy_fang_chase";
+    orbProjectile.interceptionRadius=fangRound.radius*fangRound.shootDownRadiusScale;
+    orbPresentation.projectiles={orbProjectile};
+    orbs.Update(orbInput);
+    const auto chase=orbs.Frame().proxies.front();
+    orbPresentation.projectiles.front().definitionId=kFangAimVolleyRound;
+    orbs.Update(orbInput);
+    const auto turning=orbs.Frame().proxies.front();
+    const auto sameColor=[](Vector4 a,Vector4 b) {
+        return a.x==b.x && a.y==b.y && a.z==b.z && a.w==b.w;
+    };
+    runner.Expect(turning.visualDefinitionId==chase.visualDefinitionId && turning.spriteBacked && chase.spriteBacked &&
+        turning.bodyUvBase==chase.bodyUvBase && sameColor(turning.bodyColor,chase.bodyColor) &&
+        sameColor(turning.haloColor,chase.haloColor) && sameColor(turning.trailColor,chase.trailColor) &&
+        turning.coreRadius==chase.coreRadius && chase.coreRadius==orbProjectile.interceptionRadius,
+        "Fang's turning and usual rounds show the same energy and the same interception footprint");
     orbs.Reset();
     runner.Expect(orbs.Frame().proxies.empty(),"Retry/title reset must clear every native enemy sphere");
 
@@ -38235,14 +38270,15 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
     for(const auto& marker:markers) {
     TerrainCollisionWorld collisionWorld;
     collisionWorld.BuildSynchronously(rail,terrain,&course.terrainEditLayer,nullptr,marker.distance-250,marker.distance+300);
-    for(int fps:{30,60,120})for(float speed:allBatteries?std::vector<float>{10,30,64,68*RailManualBoost::HeldMaximumMultiplier,68*RailKillBoost::MaximumMultiplier}:std::vector<float>{10,30,64})for(int mode:{0,1,2}) {
+    for(int fps:{30,60,120})for(float speed:allBatteries?std::vector<float>{10,30,64,68*RailManualBoost::HeldMaximumMultiplier,68*RailKillBoost::MaximumMultiplier}:std::vector<float>{10,30,64})for(int mode:{0,1,2,3,4}) {
+        if(mode>=3 && (allBatteries || fps!=60 || speed!=30))continue;
         const bool boosted=speed>64,reward=speed>68*RailManualBoost::HeldMaximumMultiplier+.1f;
         const float dt=1.0f/fps,start=marker.distance-(boosted?180:30),playerY=controls.vehicle.bodyVerticalOffset+controls.vehicle.mounts.player.y;
         CourseSpawnRuntime runtime;CourseEventDispatcher dispatcher;auto preplaced=marker;preplaced.payload="preplaced:turret";
         dispatcher.Dispatch({preplaced},runtime,0);
         runner.Expect(runtime.Enemies().size()==1 && RailGroundBattery::IsPredictive(runtime.Enemies().front().desc.actorAssetId) &&
-            runtime.Enemies().front().desc.bulletCount==1,
-            "the selected battery uses the forward-intercept profile");
+            runtime.Enemies().front().desc.bulletCount==2,
+            "the selected battery uses the two-barrel forward-intercept profile");
         if(runtime.Enemies().empty())return;
         const uint32_t owner=runtime.Enemies().front().actorId;
         CourseCollisionSystem collision;collision.LoadWeaponDefinitions("Resources/weapons",&error);
@@ -38266,7 +38302,7 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
         RailCameraDirector camera;EnemyAttackTelegraphSystem warnings;RailTargetRegistry registry;
         RailLockResolver locks;RailLockVolley volley;bool released=false,killed=false;unsigned lockReleases=0;
         float firstWarning=-1,firstFire=-1,fireForward=-1,firstHit=-1,warningSeconds=0;
-        unsigned cancelled=0;Vector3 fixed{};bool anchored=false;uint64_t observedFire=0;float peakSpeed=0,lockDamage=0;
+        unsigned cancelled=0,warningHits=0;Vector3 fixed{};bool anchored=false;uint64_t observedFire=0;float peakSpeed=0,lockDamage=0;
         for(int step=0;step<int(23*fps);++step) {
             const float t=step*dt;
             if(boosted && step>0) {
@@ -38323,6 +38359,14 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
                     firstFire=t;fireForward=actor.desc.spawnDistance+actor.desc.distanceOffset-at;
                     runner.Expect(actor.targetingState.compensatesForwardTravel && actor.targetingState.forwardInterceptReachable,
                         "the actual admitted shot uses reachable fixed-muzzle interception");
+                    std::vector<Vector3> launchMuzzles;
+                    for(const auto& round:runtime.Bullets())if(round.ownerActorId==owner && round.active && round.age==0) {
+                        launchMuzzles.push_back({round.lateralOffset,round.verticalOffset,
+                            round.spawnDistance+round.distanceOffset});
+                    }
+                    runner.Expect(launchMuzzles.size()==2 &&
+                        std::hypot(launchMuzzles[0].x-launchMuzzles[1].x,launchMuzzles[0].z-launchMuzzles[1].z)>1.0f,
+                        "the first volley launches two live rounds from separate muzzles in one frame");
                 }
             }
             EnemyAttackTelegraphFrameInput wi;wi.spawnRuntime=&runtime;wi.railPath=&rail;wi.viewProjection=&vp;
@@ -38332,6 +38376,40 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
                 if(firstWarning<0)firstWarning=t;
                 if(firstFire<0)warningSeconds+=dt;
                 runtime.MarkEnemyAttackTelegraphPresented(owner,cue.attackIntentSequence);
+            }
+            if(mode>=3 && firstFire<0 && warningHits<(mode==3?2u:1u) && warningSeconds>=.18f*(warningHits+1)) {
+                const auto& target=runtime.Enemies().front();
+                if(target.attackState.tokenReserved && target.attackState.telegraphPresented) {
+                    const auto intent=target.attackState.intentSequence;
+                    const auto combatPhase=target.combatState.phase;
+                    const float remaining=target.behaviorState.attackTimeRemaining;
+                    WeaponHitRequest hit;
+                    hit.hitKind=RailAimHitKind::Enemy;hit.targetActorId=owner;hit.shotId=9001+warningHits;
+                    hit.lockOnContact=warningHits==1;
+                    hit.damageType=hit.lockOnContact?WeaponDamageType::Ice:WeaponDamageType::Energy;
+                    hit.baseDamage=mode==4?target.desc.hitPoints*2.0f:hit.lockOnContact?lockDamagePerHit:12.0f;
+                    hit.hitPoint=ResolveEnemyProjectileWorldPosition(rail,{target.desc.lateralOffset,target.desc.verticalOffset,
+                        target.desc.spawnDistance+target.desc.distanceOffset});
+                    hit.rayOrigin=view.gameplayPosition;
+                    const Vector3 toHit{hit.hitPoint.x-hit.rayOrigin.x,hit.hitPoint.y-hit.rayOrigin.y,hit.hitPoint.z-hit.rayOrigin.z};
+                    hit.hitDistance=std::sqrt(toHit.x*toHit.x+toHit.y*toHit.y+toHit.z*toHit.z);
+                    hit.rayDirection=unit(toHit);hit.hitNormal={0,0,-1};
+                    const auto damage=collision.ApplyWeaponHit(runtime,&course,hit);
+                    ++warningHits;
+                    runner.Expect(damage.damageApplied && collision.LastWeaponFeedbackResult().accepted,
+                        std::string("hits during the warning still apply damage and publish visual contact feedback: ")+
+                        ToDamageRejectReasonString(damage.rejectReason)+"/"+
+                        ToWeaponFeedbackRejectReasonString(collision.LastWeaponFeedbackResult().rejectReason));
+                    if(mode==3) {
+                        const auto& after=runtime.Enemies().front();
+                        runner.Expect(!damage.destroyed && damage.preserveEnemyAttack && after.attackState.tokenReserved &&
+                            after.attackState.intentSequence==intent && after.combatState.phase==combatPhase &&
+                            after.behaviorState.attackTimeRemaining==remaining,
+                            "surviving primary and lock-on contacts preserve the current warning and its timer");
+                    } else {
+                        killed=damage.destroyed;
+                    }
+                }
             }
             RailTargetRegistryFrameInput ri;ri.spawnRuntime=&runtime;ri.railPath=&rail;ri.playerDistance=at;ri.cameraPosition=view.gameplayPosition;registry.Build(ri);
             Vector2 cursor{1450,100};EditorViewportCoordinateService coordinates;coordinates.Update({{0,0,1600,900},1600,900,vp});
@@ -38386,13 +38464,17 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
             if(speed<=30)check(killed,
                 "consecutive travelling locks destroy the strengthened battery on a normal or slow approach"+context);
         }
-        else {
+        else if(mode==4) {
+            check(warningHits==1 && killed && firstFire<0 && damage==0,
+                "destroying the battery during the warning stops the scheduled shot"+context);
+        } else {
             check(firstWarning>=0 && firstFire>firstWarning && warningSeconds+dt>=.90f &&
                 fireForward>=RailGroundBattery::MinimumFireDistance &&
                 fireForward<=RailGroundBattery::FirstShotDistance(marker.id,marker.distance)+2.0f*speed*dt+.01f,
                 "the readable first warning finishes before passing the planned firing window"+context);
-            check(mode==0 ? damage>0 : (damage==0 && cancelled>=1),
+            check(mode==2 ? (damage==0 && cancelled>=1) : damage>0,
                 "ignoring the battery is damaging; screen-aimed primary interception prevents its real volley"+context);
+            if(mode==3)check(warningHits==2 && !killed,"the battery fires after surviving both pre-fire hits"+context);
             if(mode==0 && speed==30 && RailGroundBattery::IsFirstLiveBattery(marker.id))
                 check(observedFire>=2,"the first battery can fire twice during a normal approach"+context);
         }
@@ -38814,7 +38896,7 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
         encounter.spawnRuntime=&spawn;encounter.triggeredEvents={marker};
         dispatcher.Dispatch(director.Update(encounter).dispatchEvents,spawn,marker.distance);
         runner.Expect(spawn.Enemies().size()==1 && spawn.Enemies()[0].desc.meshId=="siege_turret" &&
-            spawn.Enemies()[0].desc.bulletCount==1,"fixed marker loads the single predictive crossing shot used by brake combat");
+            spawn.Enemies()[0].desc.bulletCount==2,"fixed marker loads the two-barrel predictive crossing volley");
         if(spawn.Enemies().empty()) continue;
         const float dt=1.0f/fps;
         RailMothership::Reveal carrier;const auto frame=carrier.Update(dt,marker.distance,600,rail,true);
@@ -39911,6 +39993,10 @@ void ExerciseCarrierCounterReward(RegressionRunner& runner,const CourseSpawnRunt
         for(const auto& shot:collision.LastWeaponFireResult().shots)counter.CreditShot(shot.shotId,owner,false);
         bool first=false;for(const auto& hit:collision.WeaponFeedback().RecentEvents())first|=counter.NotifyCounterDamage(hit);
         runner.Expect(first && std::abs(counter.FeedbackDamage()-24)<.001f,"actual primary damage starts one counter-success cue");
+        const auto point=counter.FeedbackWorldPoint();
+        const auto impact=collision.WeaponFeedback().LastAcceptedEvent().worldPosition;
+        runner.Expect(counter.CounterArcHitPulse()>0 && point.x==impact.x && point.y==impact.y && point.z==impact.z,
+            "the rapid counter flash uses the accepted impact position and the current counter window");
     }
     if(other) {
         input.deltaTime=.09f;input.weapon.triggerPressed=false;targetAim(other);collision.Update(probe,input);
@@ -39958,6 +40044,12 @@ void ExerciseCarrierCounterReward(RegressionRunner& runner,const CourseSpawnRunt
     runner.Expect(std::abs(counter.FeedbackDamage()-expected)<.001f,"success feedback totals accepted bonus damage, not unrelated hits");
     runner.Expect(counter.FeedbackPart()==counter.CounterPart() && counter.FeedbackOwner()==owner && counter.UnlockPulse()==0,
         "late credited contact retains its original gun and role without replaying the unlock cue");
+    if(counter.CounterPart()==1) {
+        const auto point=counter.FeedbackWorldPoint();
+        const auto impact=collision.WeaponFeedback().LastAcceptedEvent().worldPosition;
+        runner.Expect(counter.CounterArcHitPulse()>0 && point.x==impact.x && point.y==impact.y && point.z==impact.z,
+            "a credited lock-on arriving after the window still lights its actual impact side");
+    }
     for(const auto& hit:collision.WeaponFeedback().RecentEvents())
         runner.Expect(!counter.NotifyCounterDamage(hit),"replayed hit feedback never counts or rewards a shot twice");
     auto restored=counter;counter.Reset();
@@ -40188,9 +40280,9 @@ void TestGatlingRingMaterial(RegressionRunner& runner) {
         const float angle=std::atan2(tip.y-center.y,tip.x-center.x);
         runner.Expect(std::abs(angle-2.617993878f)<.002f,"sixteen of twenty-four fills clockwise from top to the lower-left");
     }
-    for(float scale:{.65f,.82f,1.0f,1.16f,1.7f})for(float life:{0.0f,.05f,.5f,1.0f})for(uint64_t sequence:{1ULL,24ULL,100000ULL}) {
-        const Vector2 center{800,450};const auto discharge=RailGatlingRing::BuildDischarge(center,scale,life,sequence,.65f);
-        runner.Expect(life>0?discharge.count==24:discharge.count==0,"discharge geometry is bounded and disappears when the contact pulse expires");
+    for(float scale:{.65f,.82f,1.0f,1.16f,1.7f})for(float life:{0.0f,.05f,.5f,1.0f}) {
+        const Vector2 center{800,450};const auto discharge=RailGatlingRing::BuildDischarge(center,scale,life,.65f);
+        runner.Expect(life>0?discharge.count==4:discharge.count==0,"four contact sparks disappear when the pulse expires");
         for(unsigned i=0;i<discharge.count;++i) {
             const auto& segment=discharge.segments[i];
             const auto distance=[&](Vector2 p){const float x=p.x-center.x,y=p.y-center.y;return std::sqrt(x*x+y*y)/scale;};
@@ -40200,8 +40292,8 @@ void TestGatlingRingMaterial(RegressionRunner& runner) {
                 "electricity stays outside the open centre at every HUD scale and contact age");
         }
     }
-    runner.Expect(RailGatlingRing::BuildDischarge({0,0},0,1,1,0).count==0 &&
-        RailGatlingRing::BuildDischarge({0,0},1,-1,1,0).count==0,"invalid or expired visual inputs do not emit strokes");
+    runner.Expect(RailGatlingRing::BuildDischarge({0,0},0,1,0).count==0 &&
+        RailGatlingRing::BuildDischarge({0,0},1,-1,0).count==0,"invalid or expired visual inputs do not emit strokes");
 }
 
 void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOnly=false) {
@@ -40393,9 +40485,14 @@ void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOn
                 runner.Expect(ringFeedback.sequence==previousFeedback.sequence+1 &&
                     ringFeedback.remaining==RailGatlingInterceptFeedback::Duration && ringFeedback.owner==hit.ownerActorId,
                     "only each real accepted gatling destruction produces one ring discharge");
+                if(contacts>1)runner.Expect(std::any_of(cycle.GatlingContactPulses().begin(),cycle.GatlingContactPulses().end(),
+                    [&](const auto& pulse){return pulse.sequence==previousFeedback.sequence && pulse.remaining==previousFeedback.remaining;}),
+                    "two interceptions in the same frame retain both contact fronts");
                 const uint64_t feedbackSequence=ringFeedback.sequence;
                 runner.Expect(!cycle.NotifyIntercept(hit,runtime) && cycle.GatlingInterceptFeedback().sequence==feedbackSequence,
                     "replayed interception does not retrigger ring discharge");
+                runner.Expect(cycle.GatlingCompletionRemaining()==(counter?RailMinibossCombatDirector::GatlingCompletionSeconds:0),
+                    "the completion wave is emitted only when the last real interception opens the counter");
                 if(cancelled==1) {
                     auto restored=cycle;
                     restored.Update(runtime,.25f,true,false,false,at);
@@ -40415,6 +40512,13 @@ void TestGatlingHeldPrimaryCancellation(RegressionRunner& runner,bool aimCycleOn
                     rewardAt=frame*dt;
                     runner.Expect(cancelled==24 && cycle.UnlockPulse()==1 && cycle.FeedbackRemaining()==0,
                         "24 actual contacts unlock the cue once, without fabricating counter damage");
+                    auto restored=cycle;
+                    restored.Update(runtime,dt,true,false,false,at);
+                    runner.Expect(restored.GatlingCompletionRemaining()==RailMinibossCombatDirector::GatlingCompletionSeconds,
+                        "pause preserves the completion wave");
+                    for(int decay=0;decay<fps;++decay)restored.Update(runtime,dt,true,true,false,at);
+                    runner.Expect(restored.GatlingCompletionRemaining()==0 && restored.CounterRemaining()>0,
+                        "the completion wave fades while the counter is still available");
                     if(!aimCycleOnly)ExerciseCarrierCounterReward(runner,runtime,rail,cycle,at,dt);
                 }
             }
@@ -40990,6 +41094,13 @@ void TestCarrierLocalDefenseFeedback(RegressionRunner& runner) {
     next.sequence=27;next.actorId=17;next.outcome=EnemyAttackDefenseOutcome::Failed;bridge.Update(input);
     runner.Expect(bridge.Frame().outcome==EnemyAttackDefenseOutcome::Failed && !bridge.Frame().audioCues.empty(),
         "local successes do not suppress authoritative damage or failure reactions");
+    next.sequence=28;next.actorId=99;next.outcome=EnemyAttackDefenseOutcome::Success;
+    input.localShootDownActorId=99;bridge.Update(input);
+    runner.Expect(bridge.Frame().audioCues.empty() && bridge.Frame().cameraShake==0,
+        "the Wing interception sound and camera feedback belong to its local presentation");
+    next.sequence=29;next.method=EnemyAttackDefenseMethod::Interrupt;bridge.Update(input);
+    runner.Expect(bridge.Frame().actorId==99 && bridge.Frame().audioCues.size()==1,
+        "Wing's separate panel interrupt presents its standard feedback");
 }
 
 void TestCarrierFeedbackHudSeparation(RegressionRunner& runner) {
@@ -41014,7 +41125,8 @@ void TestCarrierFeedbackHudSeparation(RegressionRunner& runner) {
         runner.Expect(!has(u8"重砲弾を2ロックして迎撃") && !has(u8"で反撃") && !has(u8"反撃命中"),
             "heavy defense leaves the compact projectile marker to the world overlay and never announces a false counter contact");
         input.miniBossHeavyFiring=false;input.miniBossCounterRemaining=input.miniBossCounterDuration=1.15f;
-        input.miniBossCounterPart=0;input.miniBossCounterUnlockPulse=1;hud.Update(input);check("unlock");
+        input.miniBossCounterPart=0;input.miniBossCounterInstruction=true;
+        hud.Update(input);check("unlock");
         runner.Expect(has(u8"通常弾で反撃") && !has(u8"反撃命中") && !has(u8"弾の相殺"),
             "an open counter window has a distinct gold callout and action, not a false damage confirmation");
         input.miniBossCounterDamage=72;input.miniBossCounterFeedbackRemaining=.9f;input.miniBossCounterDamageRatio=72.0f/420;
@@ -41032,6 +41144,16 @@ void TestCarrierFeedbackHudSeparation(RegressionRunner& runner) {
                 return c.kind==RailShooterHudDrawCommandKind::Text && c.text==Utf8ForTest(u8"反撃命中  72") &&
                     c.y>input.miniBossCounterFeedbackScreen.y && c.x>input.miniBossCounterFeedbackScreen.x;
             }),"onscreen counter damage uses one local callout below and outside the aim marker");
+        input.miniBossCounterInstruction=false;hud.Update(input);check("subsequent-counter");
+        runner.Expect(!has(u8"通常弾で反撃") && has(u8"反撃命中  72"),
+            "a subsequent rapid counter has no tutorial label and still reports confirmed damage");
+        input.miniBossCounterPart=input.miniBossCounterFeedbackPart=1;
+        input.miniBossCounterInstruction=true;hud.Update(input);check("heavy-unlock");
+        runner.Expect(has(u8"ロックオンで反撃") && !has(u8"通常弾で反撃"),
+            "the first heavy counter teaches its own weapon");
+        input.miniBossCounterInstruction=false;hud.Update(input);check("subsequent-heavy-counter");
+        runner.Expect(!has(u8"ロックオンで反撃") && has(u8"反撃命中  72"),
+            "a subsequent heavy counter has no tutorial label and still reports confirmed damage");
         input.miniBossCounterFeedbackOnscreen=false;
         input.miniBossCounterRemaining=0;hud.Update(input);check("late-contact");
         runner.Expect(has(u8"反撃命中") && !has(u8"で反撃"),"a credited laser arriving after closure remains a hit without reopening the counter");
@@ -41130,6 +41252,8 @@ void TestCarrierIntroAndCounterCycle(RegressionRunner& runner) {
                     ++heavyChipHits;runner.Expect(!rewarded,"a heavy projectile chip hit never awards a counter window");
                 }
                 if(rewarded) {
+                    runner.Expect(cycle.CounterInstruction(),
+                        "the first successful defense for each battery enables its own counter instruction");
                     ExerciseCarrierCounterReward(runner,spawn,rail,cycle,at,dt);
                     runner.Expect(!cycle.NotifyIntercept(hit,spawn),"duplicate interception events cannot extend the reward");
                     if(part==0) {
@@ -41170,7 +41294,8 @@ void TestCarrierIntroAndCounterCycle(RegressionRunner& runner) {
                         auto restored=std::make_unique<RailRetryFollowState>();
                         runner.Expect(follow.Restore(1,2,BindRailRetryFollowState(*restored)) &&
                             restored->minibossCombat.CounterRemaining()==held &&
-                            restored->minibossCombat.IntroducedMask()==cycle.IntroducedMask(),
+                            restored->minibossCombat.IntroducedMask()==cycle.IntroducedMask() &&
+                            restored->minibossCombat.CounterInstruction()==cycle.CounterInstruction(),
                             "checkpoint restores the counter and introduction progress without replay");retryChecked=true;
                     }
                 }
@@ -41206,6 +41331,7 @@ void TestCarrierIntroAndCounterCycle(RegressionRunner& runner) {
     hi.miniBossCounterMarkerRadius=42;
     for(int part=0;part<2;++part) {
         const bool gatling=part==0;
+        hi.miniBossCounterInstruction=true;
         hi.miniBossCounterPart=part;
         hi.miniBossCounterDuration=gatling?RailMinibossCombatDirector::RapidCounterSeconds:RailMinibossCombatDirector::HeavyCounterSeconds;
         hi.miniBossCounterScreen={gatling?560.0f:1040.0f,340};
@@ -42566,6 +42692,53 @@ void TestRailGameOverScene(RegressionRunner& runner) {
         retry.ApplyPlayerDamage(100);retry.Update({0.1f,250});
         runner.Expect(retry.Retry(&error) && retry.State().courseDistance==200 && retry.State().playerHealth==100,
             "unlimited checkpoint retry restores position and health beyond the old attempt limit: "+error);
+    }
+}
+
+void TestShortRunVictoryPresentation(RegressionRunner& runner) {
+    const auto definition=RailShooterHudDefinitionAsset::Defaults();
+    RailShooterHudPresentationFrame presentation;
+    GameSessionRuntimeState session;
+    session.outcome=GameSessionOutcome::Victory;
+    session.phase=GameSessionPhase::Victory;
+    session.gameplayElapsedSeconds=247.9f;
+    session.playerHealth=80.3f;
+    RailShooterHudRenderInput input;
+    input.definition=&definition;
+    input.presentation=&presentation;
+    input.resultSession=&session;
+    input.shortRun=true;
+    input.viewportWidth=1280;
+    input.viewportHeight=720;
+    RailShooterHudRenderer hud;
+    const auto command=[&](const char8_t* label) {
+        return std::find_if(hud.Frame().commands.begin(),hud.Frame().commands.end(),[&](const auto& draw) {
+            return draw.text==reinterpret_cast<const char*>(label);
+        });
+    };
+    const auto shown=[&](const char8_t* label) {return command(label)!=hud.Frame().commands.end();};
+    session.phaseElapsedSeconds=kRailVictoryTimeRevealSeconds-.03f;
+    hud.Update(input);
+    runner.Expect(shown(u8"任務完了") && !shown(u8"04:07") && !shown(u8"再挑戦"),
+        "the victory heading precedes both the clock and the actions");
+    session.phaseElapsedSeconds=kRailVictoryTimeRevealSeconds;
+    hud.Update(input);
+    const auto time=command(u8"04:07");
+    runner.Expect(time!=hud.Frame().commands.end() && time->textStyle==RailShooterHudTextStyle::ClearTime &&
+        !shown(u8"再挑戦"),"the clock is visible at the audio threshold in the fixed digit style");
+    session.phaseElapsedSeconds=kRailVictoryActionsRevealSeconds;
+    hud.Update(input);
+    runner.Expect(shown(u8"04:07") && shown(u8"残りHP  81") && !shown(u8"再挑戦"),
+        "the recorded time and health stay visible as the actions begin their reveal");
+    session.phase=GameSessionPhase::Result;
+    session.phaseElapsedSeconds=0.0f;
+    hud.Update(input);
+    runner.Expect(shown(u8"再挑戦") && shown(u8"タイトルに戻る") && !shown(u8"区間から再開できません"),
+        "the victory menu shows the two available actions");
+    for(int index:{0,2}) {
+        const auto b=RunResultButton(1280,720,index,true);
+        runner.Expect(HitRunResult(b.x+b.width*.5f,b.y+b.height*.5f,1280,720,false,true)==b.action,
+            "the visible victory buttons and mouse targets share a layout");
     }
 }
 
@@ -44600,6 +44773,7 @@ int RunEditorCoreRegressionTests() {
          {"carrier feedback HUD state separation", [&]() { TestCarrierFeedbackHudSeparation(runner); }},
          {"carrier pursuit reachability", [&]() { TestCarrierPursuitReachability(runner); }},
          {"short complete run flow and pacing", [&]() { TestShortCompleteRun(runner); }},
+         {"short run victory presentation", [&]() { TestShortRunVictoryPresentation(runner); }},
          {"short run aimed primary fire completion", [&]() { TestShortRunAimedFireCompletion(runner); }},
         {"short run terminal camera and early-clear waves", [&]() { TestShortRunFinishAndEarlyWaves(runner); }},
         {"encounter camera spawn kill and release continuity", [&]() { TestEncounterCameraContinuity(runner); }},

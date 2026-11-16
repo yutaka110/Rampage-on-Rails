@@ -83,6 +83,8 @@ enum class EnemyProjectileLifecycleVisualKind : unsigned char {
     PlayerImpact,
     Intercepted,
     ShellCracked,
+    RoadBatteryIntercept,
+    RoadBatteryLaunch,
 };
 
 struct EnemyProjectileLifecycleVfxProxy final {
@@ -140,6 +142,7 @@ struct EnemyProjectileVfxRenderInput final {
     float deltaTime = 1.0f / 60.0f;
     float verticalFovRadians = 0.78539816339f;
     uint32_t viewportHeightPixels = 720;
+    uint32_t localInterceptOwnerActorId = 0;
     bool gameplayActive = true;
     EnemyProjectileVfxRendererSettings settings{};
     EnemyProjectileScreenSpaceReadabilitySettings readabilitySettings{};

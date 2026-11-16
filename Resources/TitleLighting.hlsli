@@ -38,6 +38,21 @@ cbuffer Camera : register(b2)
     float4 railBounceControl; // active patch count and distance fade
     RailBouncePatch railBouncePatches[5];
     float4 railCanyonGrade; // bridge blend, carrier arena blend, near-shadow receiver tagging
+    float4 roadBatteryLights[2]; // live shell position and amber light strength
+}
+
+static float3 RoadBatteryRadiance(float3 worldPosition,int source,out float3 direction)
+{
+    float4 light=roadBatteryLights[source];
+    direction=float3(0,1,0);
+    [branch] if(light.w<=0.0f)return 0.0f;
+    float3 delta=light.xyz-worldPosition;
+    float distanceSquared=dot(delta,delta);
+    const float reachSquared=110.25f;
+    [branch] if(distanceSquared>=reachSquared)return 0.0f;
+    direction=delta*rsqrt(max(distanceSquared,.02f));
+    float edge=1.0f-distanceSquared/reachSquared;
+    return float3(6.5f,1.94f,.34f)*light.w*edge*edge/(1.0f+distanceSquared*.063f);
 }
 
 static float3 CombatImpactRadiance(float3 worldPosition,out float3 direction)

@@ -1296,6 +1296,9 @@ PixelShaderOutput main(VertexShaderOutput input)
         float3 frictionDirection;
         float3 frictionEnergy=RailFrictionRadiance(input.worldPosition,source,frictionDirection);
         lit+=rockColor*frictionEnergy*saturate(dot(normal,frictionDirection))*0.26f;
+        float3 shellDirection;
+        float3 shellEnergy=RoadBatteryRadiance(input.worldPosition,source,shellDirection);
+        lit+=rockColor*shellEnergy*saturate(dot(normal,shellDirection))*.53f;
     }
     float3 bridgeDirection;
     float3 bridgeEnergy=BridgeBeamRadiance(input.worldPosition,bridgeDirection);

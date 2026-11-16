@@ -42,6 +42,137 @@ float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
 }
 
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=114.0f && input.texcoord.x<=115.0f) {
+        const float u=input.texcoord.x-114.0f;
+        const float v=abs(input.texcoord.y*2.0f-1.0f);
+        const float aa=max(fwidth(v)*.55f,.055f);
+        const float core=1.0f-smoothstep(.10f,.22f+aa,v);
+        const float halo=exp(-v*v*6.6f)*(1.0f-smoothstep(.75f,1.0f,v));
+        const float end=smoothstep(0.0f,.055f,u)*(1.0f-smoothstep(.945f,1.0f,u));
+        const float3 tint=lerp(input.color.rgb,float3(4.7f,4.7f,4.75f),core*.42f);
+        return float4(tint,(core*.84f+halo*.22f)*end*input.color.a);
+    }
+    const bool violetDischarge=input.texcoord.x>=112.0f && input.texcoord.x<=113.0f;
+    if(violetDischarge || (input.texcoord.x>=106.0f && input.texcoord.x<=107.0f)) {
+        // The hollow discharge front has a hot edge and a thin shoulder.
+        float2 p=float2(input.texcoord.x-(violetDischarge?112.5f:106.5f),input.texcoord.y-.5f)*2.0f;
+        float angle=atan2(p.y,p.x);
+        float r=length(p)-.016f*sin(angle*5.0f+.9f);
+        float band=abs(r-.79f);
+        float width=max(.032f,min(.105f,fwidth(r)*.65f));
+        float crest=1-smoothstep(width*.27f,width*1.15f,band);
+        float shoulder=(1-smoothstep(width,width*2.18f,band))*.29f;
+        float arcs=.62f+.38f*smoothstep(-.54f,.63f,sin(angle*3.0f-.5f)+.24f*sin(angle*7.0f));
+        float3 hotEdge=lerp(input.color.rgb,violetDischarge?float3(3.30f,1.37f,5.40f):float3(4.55f,1.71f,.28f),crest*.71f);
+        return float4(hotEdge,(crest+shoulder)*arcs*input.color.a);
+    }
+    if(input.texcoord.x>=104.0f && input.texcoord.x<=105.0f) {
+        // A small photographic glint pinned to the hot nose.
+        float2 p=float2(input.texcoord.x-104.5f,input.texcoord.y-.5f)*2.0f;
+        float horiz=exp(-abs(p.x)*3.9f-p.y*p.y*150.0f);
+        float vert=exp(-abs(p.y)*5.5f-p.x*p.x*190.0f);
+        float star=(horiz+vert*.60f)*(1-smoothstep(.70f,1.0f,length(p)));
+        float3 tint=lerp(input.color.rgb,float3(5.3f,4.48f,3.27f),exp(-dot(p,p)*28.0f));
+        return float4(tint,saturate(star)*input.color.a);
+    }
+    if(input.texcoord.x>=102.0f && input.texcoord.x<=103.0f) {
+        // Curved, tapered pieces retain the colour of the orbiting shell.
+        float2 p=float2(input.texcoord.x-102.5f,input.texcoord.y-.5f)*2.0f;
+        float curve=p.y+.38f*p.x*p.x+.13f*p.x;
+        float halves=1-smoothstep(.42f,1.0f,abs(p.x));
+        float edge=abs(curve)/(.22f+halves*.29f);
+        float width=max(.065f,min(.40f,fwidth(edge)*.60f));
+        float chip=(1-smoothstep(.72f-width,.86f+width,edge))*halves;
+        float fracture=exp(-pow((curve+.16f)/.18f,2.0f));
+        float3 color=lerp(input.color.rgb*.57f,float3(4.8f,2.45f,.59f),fracture);
+        return float4(color,chip*input.color.a);
+    }
+    const bool violetShell=input.texcoord.x>=110.0f && input.texcoord.x<=111.0f;
+    if(violetShell || (input.texcoord.x>=100.0f && input.texcoord.x<=101.0f)) {
+        // Shade the visible hemisphere with the shot's world heading in camera space.
+        float packed=floor(input.texcoord.y*.5f);
+        float clock=fmod(packed,64.0f)*(6.2831853f/64.0f);
+        float heat=saturate(floor(packed/64.0f)/63.0f);
+        float2 p=float2((input.texcoord.x-(violetShell?110.5f:100.5f))*2.0f,1.0f-frac(input.texcoord.y*.5f)*4.0f);
+        float r=length(p);
+        float aa=min(.14f,fwidth(r)*.65f);
+        float body=1-smoothstep(.66f-aa,.72f+aa,r);
+        float2 sphereUV=p/.71f;
+        float3 normal=float3(sphereUV,sqrt(saturate(1-dot(sphereUV,sphereUV))));
+        float heading=dot(normal,input.color.rgb);
+        float ahead=smoothstep(-.52f,.88f,heading);
+        float rim=smoothstep(.43f,.70f,r)*(.60f+.40f*ahead);
+        float2 hotOffset=p-input.color.xy*.27f;
+        float core=exp(-dot(hotOffset,hotOffset)*15.0f)*(1-smoothstep(.45f,.68f,r));
+        float angle=atan2(p.y,p.x);
+        float orbit=angle-clock;
+        float sweepingArc=smoothstep(-.46f,.70f,sin(orbit*2.0f+.34f*sin(orbit*5.0f)));
+        float flicker=.5f+.5f*sin(orbit*7.0f+clock*2.0f);
+        float flameEdge=.69f+sweepingArc*(.075f+.071f*flicker);
+        float flameDistance=abs(r-flameEdge);
+        float crest=1-smoothstep(.024f,.084f+aa*.43f,flameDistance);
+        float flame=crest*sweepingArc*(.69f+.31f*flicker)*smoothstep(.46f,.66f,r);
+        float wake=exp(-flameDistance*flameDistance*59.0f)*sweepingArc*.30f;
+        wake*=1-smoothstep(.88f,.99f,r);
+        float3 shoulder=violetShell?
+            lerp(float3(.42f,.035f,.99f),float3(1.05f,.23f,2.18f),ahead):
+            lerp(float3(.96f,.18f,.017f),float3(2.08f,.66f,.073f),ahead);
+        shoulder+=(violetShell?float3(.79f,.19f,1.38f):float3(1.08f,.40f,.052f))*rim;
+        float whiteHot=smoothstep(.24f,.86f,heat);
+        float3 white=violetShell?lerp(float3(.13f,.022f,.23f),float3(4.68f,4.16f,5.20f),whiteHot):
+            lerp(float3(.18f,.009f,.004f),float3(5.3f,5.02f,4.5f),whiteHot);
+        float3 shell=lerp(shoulder*lerp(.26f,1.0f,heat),white,core);
+        float3 fire=violetShell?
+            lerp(float3(1.35f,.13f,3.30f),float3(2.84f,.78f,4.72f),flame):
+            lerp(float3(2.92f,.37f,.035f),float3(4.22f,1.68f,.26f),flame);
+        float fireBlend=saturate(flame*.83f+wake*.42f)*(1-core);
+        float halo=exp(-r*r*4.8f)*.39f*(1-smoothstep(.76f,1.0f,r));
+        return float4(lerp(shell,fire,fireBlend),saturate(body+halo+(flame+wake)*.75f)*input.color.a);
+    }
+    if(input.texcoord.x>=98.0f && input.texcoord.x<=99.0f) {
+        // A single shock front with a clear interior. World geometry owns its expansion.
+        float2 p=float2(input.texcoord.x-98.5f,input.texcoord.y-.5f)*2.0f;
+        float angle=atan2(p.y,p.x);
+        float r=length(p)-.014f*sin(angle*5.0f+.7f);
+        float width=max(.026f,min(.12f,fwidth(r)*.72f));
+        float distance=abs(r-.79f);
+        float band=1-smoothstep(width*.3f,width*1.2f,distance);
+        float fringe=(1-smoothstep(width,width*2.35f,distance))*.23f;
+        float sector=.74f+.26f*cos(angle*2.0f-.54f);
+        return float4(input.color.rgb,(band+fringe)*sector*input.color.a);
+    }
+    const bool violetWake=input.texcoord.x>=108.0f && input.texcoord.x<=109.0f;
+    if(violetWake || (input.texcoord.x>=96.0f && input.texcoord.x<=97.0f)) {
+        // Anchor the wake at the shell. The thin end wavers and erodes into air.
+        float clock=fmod(floor(input.texcoord.y*.5f),64.0f)*(6.2831853f/64.0f);
+        float along=input.texcoord.x-(violetWake?108.0f:96.0f);
+        float across=frac(input.texcoord.y*.5f)*4.0f-1.0f;
+        float loose=1-smoothstep(.27f,.87f,along);
+        across-=loose*(.24f*sin(along*16.0f+clock)+.09f*sin(along*25.0f+clock*2.0f));
+        float width=lerp(.115f,.89f,pow(along,.85f));
+        float v=across/width;
+        float filament=exp(-v*v*6.8f);
+        float glow=exp(-v*v*2.3f)*.30f;
+        float ragged=.79f+.21f*sin(along*23.0f+clock*2.0f);
+        float ends=smoothstep(.025f,.66f,along)*(1-smoothstep(.90f,1.0f,along))*lerp(1.0f,ragged,loose);
+        float twist=.38f*sin(along*12.0f+clock*2.0f);
+        float strand=exp(-pow((v-twist)*5.4f,2.0f));
+        strand*=smoothstep(.16f,.77f,.5f+.5f*sin(along*20.0f+clock*3.0f));
+        float3 hot=violetWake?float3(2.55f,1.0f,4.72f):float3(4.0f,2.15f,.70f);
+        float3 color=lerp(input.color.rgb,hot,saturate(filament*along*.52f+strand*.51f));
+        return float4(color,(filament+glow+strand*.30f)*ends*input.color.a);
+    }
+    if(input.texcoord.x>=94.0f && input.texcoord.x<=95.0f) {
+        // One thin front, with feathered edges and a transparent centre.
+        float2 p=(float2(input.texcoord.x-94.0f,input.texcoord.y)*2.0f)-1.0f;
+        float radius=length(p);
+        float distance=abs(radius-.81f);
+        float width=max(.025f,fwidth(radius)*.66f);
+        float rim=1-smoothstep(width*.35f,width*1.35f,distance);
+        float fringe=(1-smoothstep(width,width*2.5f,distance))*.23f;
+        float sector=.83f+.17f*cos(4.0f*atan2(p.y,p.x));
+        return float4(input.color.rgb,(rim+fringe)*sector*input.color.a);
+    }
     if(input.texcoord.x>=90.0f && input.texcoord.x<=91.0f) {
         float2 p;float phase,seed;
         ImpactCoordinates(input.texcoord,90,p,phase,seed);

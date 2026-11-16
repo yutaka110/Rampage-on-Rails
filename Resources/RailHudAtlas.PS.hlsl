@@ -11,6 +11,8 @@ struct PixelInput {
 };
 
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=52.0f && input.texcoord.x<=53.0f)
+        return RailBatteryCounterArc(input.texcoord,input.color);
     if(input.texcoord.x>=50.0f && input.texcoord.x<=51.0f) {
         float2 p=(input.texcoord-float2(50.5f,.5f))*2.0f;
         float r=length(float2(p.x,p.y*1.16f));

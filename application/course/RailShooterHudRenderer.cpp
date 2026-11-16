@@ -18,6 +18,19 @@ Vector4 WithOpacity(Vector4 color, float opacity) {
     color.w *= (std::clamp)(opacity, 0.0f, 1.0f);
     return color;
 }
+
+float Reveal(float age,float start,float duration) {
+    const float t=(std::clamp)((age-start)/duration,0.0f,1.0f);
+    return t*t*(3.0f-2.0f*t);
+}
+
+std::string FormatClearTime(float elapsedSeconds) {
+    const int seconds=int((std::max)(0.0f,elapsedSeconds));
+    const int minutes=seconds/60;
+    const int remainder=seconds%60;
+    return (minutes<10?"0":"")+std::to_string(minutes)+":"+
+        (remainder<10?"0":"")+std::to_string(remainder);
+}
 } // namespace
 
 void RailShooterHudRenderer::Reset() {
@@ -31,8 +44,10 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
     next.viewportHeight = input.viewportHeight;
     next.revision = ++revision_;
     const bool gameOver=input.gameOver && input.gameOver->active && !input.showTitleScreen;
+    const bool victory=input.shortRun && input.resultSession &&
+        !input.showTitleScreen && IsRunVictory(*input.resultSession);
     if (input.definition == nullptr || input.presentation == nullptr ||
-        (!input.showTitleScreen && !gameOver &&
+        (!input.showTitleScreen && !gameOver && !victory &&
          (!input.definition->enabled || !input.presentation->visible)) ||
         input.viewportWidth < 320 || input.viewportHeight < 180) {
         frame_ = std::move(next);
@@ -69,11 +84,13 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         float y,
         float fontScale,
         Vector4 color,
-        RailShooterHudTextAlignment alignment = RailShooterHudTextAlignment::Left) {
+        RailShooterHudTextAlignment alignment = RailShooterHudTextAlignment::Left,
+        RailShooterHudTextStyle style = RailShooterHudTextStyle::Body) {
         if (value.empty() || color.w <= 0.0f) return;
         RailShooterHudDrawCommand command{};
         command.kind = RailShooterHudDrawCommandKind::Text;
         command.textAlignment = alignment;
+        command.textStyle = style;
         command.x = x; command.y = y; command.fontScale = fontScale;
         command.color = color; command.text = std::move(value);
         push(std::move(command));
@@ -156,6 +173,55 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         text(Utf8(u8"↑ / ↓・W / S：選択    ENTER：決定"),cx,cy+278*s,0.60f*s,muted,center);
         text(Utf8(u8"マウス：選択 / 決定"),cx,cy+304*s,0.60f*s,muted,center);
         next.visible=!next.commands.empty();frame_=std::move(next);return;
+    }
+
+    if(victory) {
+        const auto& result=*input.resultSession;
+        const float s=(std::min)(width/1600.0f,height/900.0f);
+        const float left=(width-1600.0f*s)*.5f;
+        const float x=left+128*s,cy=height*.5f;
+        const float age=IsRunResult(result)?kShortRunResultDelaySeconds:result.phaseElapsedSeconds;
+        const float headline=Reveal(age,0.0f,.28f);
+        const Vector4 mint{.62f,.95f,.86f,1},ivory{.99f,.97f,.90f,1},muted{.78f,.85f,.83f,1};
+
+        rect(0,0,width,height,{.020f,.037f,.044f,.20f*headline});
+        // Shade the text side while leaving the rail and the open valley visible.
+        RailShooterHudDrawCommand scrim;
+        scrim.kind=RailShooterHudDrawCommandKind::HorizontalFade;
+        scrim.width=left+750*s;
+        scrim.height=height;
+        scrim.color={.013f,.024f,.031f,.72f*headline};
+        if(headline>0)push(std::move(scrim));
+        text(Utf8(u8"任務完了"),x,cy-132*s,1.72f*s,WithOpacity(mint,headline));
+        rect(x,cy-110*s,58*s*headline,2*s,WithOpacity(mint,.8f*headline));
+
+        if(RailVictoryTimeRevealed(result)) {
+            const float reveal=Reveal(age,kRailVictoryTimeRevealSeconds,.16f);
+            const float alpha=.72f+.28f*reveal;
+            const float settle=(1-reveal)*4*s;
+            text(Utf8(u8"クリアタイム"),x,cy-68*s+settle,.82f*s,WithOpacity(muted,alpha));
+            text(FormatClearTime(result.gameplayElapsedSeconds),x,cy+36*s+settle,5.4f*s,WithOpacity(ivory,alpha),
+                RailShooterHudTextAlignment::Left,RailShooterHudTextStyle::ClearTime);
+            const float hp=Reveal(age,.62f,.23f);
+            text(Utf8(u8"残りHP  ")+std::to_string(int(std::ceil(result.playerHealth))),
+                x,cy+93*s,.73f*s,WithOpacity(muted,hp));
+        }
+
+        const float menu=Reveal(age,kRailVictoryActionsRevealSeconds,
+            kShortRunResultDelaySeconds-kRailVictoryActionsRevealSeconds);
+        if(menu>0) {
+            for(int i:{0,2}) {
+                const bool restart=i==0;
+                const auto button=RunResultButton(width,height,i,true);
+                rect(button.x,button.y,button.width,button.height,
+                    WithOpacity(restart?Vector4{.10f,.22f,.22f,.92f}:Vector4{.035f,.07f,.085f,.84f},menu));
+                rect(button.x,button.y,button.width,s,WithOpacity(restart?mint:muted,(restart?.62f:.25f)*menu));
+                text(restart?Utf8(u8"再挑戦"):Utf8(u8"タイトルに戻る"),
+                    button.x+14*s,button.y+31*s,.80f*s,WithOpacity(ivory,menu));
+                text(restart?"ENTER":"T",button.x+(restart?156:185)*s,button.y+31*s,.61f*s,WithOpacity(muted,menu));
+            }
+        }
+        next.visible=!next.commands.empty(); frame_=std::move(next); return;
     }
 
     if(!input.showTitleScreen && input.resultSession && IsRunResult(*input.resultSession)) {
@@ -373,9 +439,10 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
         const bool counter=input.miniBossCounterRemaining>0 && input.miniBossCounterDuration>0 &&
             input.miniBossCounterPart>=0 && input.miniBossCounterPart<2 &&
             input.miniBossPartHealth[input.miniBossCounterPart]>0;
-        if(counter) {
+        if(counter && input.miniBossCounterInstruction) {
             const bool gatling=input.miniBossCounterPart==0;
-            const float cardWidth=(std::min)(224*scale,width-2*safe),cardHeight=40*scale;
+            const float cardWidth=(std::min)((gatling?172.0f:182.0f)*scale,width-2*safe);
+            const float cardHeight=26*scale;
             const auto target=input.miniBossCounterScreen;
             const float radius=input.miniBossCounterMarkerRadius;
             const bool anchored=radius>0;
@@ -386,15 +453,10 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
             const float cardY=anchored?(std::clamp)(nearY,safe,height-safe-cardHeight):y-cardHeight-11*scale;
             const float cardX=cx-cardWidth*.5f;
             const Vector4 gold{1,.86f,.36f,opacity};
-            rect(cardX,cardY,cardWidth,cardHeight,{.025f,.019f,.010f,.93f*opacity});
-            rect(cardX,cardY,cardWidth,(2+input.miniBossCounterUnlockPulse)*scale,gold);
-            if(anchored && target.x>=cardX && target.x<=cardX+cardWidth && cardY==nearY)
-                rect(target.x-scale,above?cardY+cardHeight:target.y+radius,2*scale,gap,gold);
+            rect(cardX,cardY,cardWidth,cardHeight,{.025f,.019f,.010f,.80f*opacity});
             text(Utf8(gatling?u8"通常弾で反撃":u8"ロックオンで反撃"),
-                cx,cardY+25*scale,.98f*scale,gold,center);
-            bar(cardX+12*scale,cardY+33*scale,cardWidth-24*scale,3*scale,
-                input.miniBossCounterRemaining/input.miniBossCounterDuration,gold,{.16f,.12f,.06f,opacity});
-        } else if(input.miniBossGatlingFiring) {
+                cx,cardY+18*scale,.85f*scale,gold,center);
+        } else if(!counter && input.miniBossGatlingFiring) {
             const float cardWidth=370*scale;
             const float cardY=y-87*scale,cardX=safe;
             const float cardCenter=cardX+cardWidth*.5f;

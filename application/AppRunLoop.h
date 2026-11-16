@@ -522,6 +522,8 @@ private:
     audio::SoundHandle railSessionCheckpointSound_{};
     audio::SoundHandle railSessionDamageSound_{};
     audio::SoundHandle railSessionVictorySound_{};
+    audio::SoundHandle railClearTimeSound_{};
+    uint8_t railClearTimePresentsRemaining_=0;
     audio::SoundHandle railSessionDefeatSound_{};
     audio::SoundHandle railSessionRetrySound_{};
     audio::SoundHandle railVehicleRollingSound_{};
@@ -608,6 +610,7 @@ private:
     };
     std::vector<SubmissionHudGlyph> submissionHudGlyphs_;
     std::vector<SubmissionHudGlyph> submissionStartCueGlyphs_;
+    std::array<SubmissionHudGlyph,11> submissionClearTimeGlyphs_{};
     bool submissionHudFontReady_ = false;
     bool submissionHudManuallyHidden_ = false;
     std::string railShooterCoursePath_ = "Resources/courses/CanyonAssaultRoute01.course";
@@ -924,6 +927,8 @@ private:
     audio::SoundHandle railArchLandSound_{};
     audio::SoundHandle railCarrierInterceptSound_{};
     audio::SoundHandle railCarrierBatteryHitSound_{};
+    audio::SoundHandle railFangInterceptSound_{};
+    audio::SoundHandle railFangCounterSound_{};
     bool railEliteChargePlaying_=false;
     CaveOpeningLighting caveOpeningLighting_{};
     std::array<RailBouncePatch, 5> caveWallBounce_{};

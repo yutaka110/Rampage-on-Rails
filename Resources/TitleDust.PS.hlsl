@@ -15,6 +15,18 @@ float Fbm(float2 p) {
     return Noise(p)*0.5f+Noise(p*2.07f+7.1f)*0.28f+Noise(p*4.13f+17.3f)*0.15f+Noise(p*8.3f)*0.07f;
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=3300.0f && input.texcoord.x<=3301.0f) {
+        // Alpha blending gives the charged shell a dark interior against the rock and sky.
+        float2 p=float2((input.texcoord.x-3300.5f)*2.0f,frac(input.texcoord.y*.5f)*4.0f-1.0f);
+        float r=length(p);
+        float aa=min(.14f,fwidth(r)*.65f);
+        float coverage=1-smoothstep(.62f-aa,.73f+aa,r);
+        float clock=fmod(floor(input.texcoord.y*.5f),64.0f)*(6.2831853f/64.0f);
+        float churn=Noise(p*6.0f+float2(cos(clock),sin(clock))*.78f);
+        float shoulder=smoothstep(.26f,.69f,r);
+        float3 color=input.color.rgb*(.24f+.35f*churn+.63f*shoulder);
+        return float4(color,coverage*input.color.a);
+    }
     if(input.texcoord.x>=3200.0f && input.texcoord.x<=3201.0f) {
         float2 p=float2((input.texcoord.x-3200.5f)*2,frac(input.texcoord.y*.5f)*4-1);
         float packed=floor(input.texcoord.y*.5f);

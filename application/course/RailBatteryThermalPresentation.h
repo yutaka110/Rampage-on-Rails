@@ -114,13 +114,6 @@ inline std::vector<RailWarningSprite> BuildRailBatteryThermalSprites(const Cours
             }
         }
     }
-    if(frame.heavy && charging) {
-        const float opening=HeavyMuzzleArmorOpen(frame,-1);
-        const Vector3 bore{0,.32f,-RailTurret::ForMesh(actor.desc.meshId).muzzleForward-.035f};
-        // Keep a dark edge around the single bore until the shot ignites.
-        glow(bore,.19f+.30f*frame.charge,opening*(.30f+.62f*frame.charge),palette.trail);
-        glow(bore,.07f+.14f*frame.charge,opening*frame.charge,palette.hot);
-    }
     for(float side:{-1.0f,1.0f}) {
         if(!frame.heavy)for(int cell=0;cell<3;++cell) {
             const float stage=(std::clamp)(frame.charge*3-cell,0.0f,1.0f);

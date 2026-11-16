@@ -3,7 +3,10 @@
 #include "EnemyAttackLaneTelegraphRenderer.h"
 #include "PlayerHitboxSystem.h"
 #include "RailEnemyEnergyPalette.h"
+#include "RailGatlingAttack.h"
 #include "RailGroundBatteryAttack.h"
+#include "RailHeavyAttack.h"
+#include "RailGroundBatteryCharge.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -27,6 +30,8 @@ struct RailWarningSource {
     float visibleAge=0,onset=0;
     bool primary=false,fired=false,imminent=false;
     bool firstHeavyCharge=false;
+    float shellRadius=0,secondsToFire=0;
+    std::array<Vector3,2> shellDirections{};
 };
 struct RailWarningSprite {
     Vector3 center{},horizontal{},vertical{};
@@ -59,9 +64,37 @@ struct RailBatteryWarningStroke {
 class RailAttackWarningPresentation final {
 public:
     static constexpr size_t MaxSources=3;
-    void Reset(){sources_.clear();flashes_.clear();primary_=0;clock_=0;}
-    void CancelActor(uint32_t id){std::erase_if(sources_,[&](const auto& s){return s.actorId==id;});flashes_.erase(id);}
+    void Reset(){sources_.clear();flashes_.clear();dissolving_.clear();primary_=0;clock_=0;}
+    void CancelActor(uint32_t id){
+        const auto source=std::find_if(sources_.begin(),sources_.end(),[&](const auto& s){return s.actorId==id;});
+        if(source!=sources_.end() && source->shellRadius>0) {
+            if(dissolving_.size()==MaxSources)dissolving_.erase(dissolving_.begin());
+            dissolving_.push_back({*source,clock_});
+        }
+        std::erase_if(sources_,[&](const auto& s){return s.actorId==id;});flashes_.erase(id);
+    }
     const auto& Sources() const{return sources_;}
+    bool HasDissolvingCharges()const{return !dissolving_.empty();}
+    template<class Emit>
+    void VisitMuzzleCharges(const CourseSpawnRuntime& runtime,Emit emit)const {
+        const auto visit=[&](const RailWarningSource& source,float opacity,bool dissolving) {
+            if(source.fired || source.shellRadius<=0)return;
+            const auto& bullets=runtime.Bullets();
+            const bool fired=std::any_of(bullets.begin(),bullets.end(),[&](const auto& bullet) {
+                return bullet.ownerActorId==source.actorId && bullet.attackIntentSequence==source.intent &&
+                    (RailGroundBattery::IsProjectile(bullet.definitionId) || RailHeavy::IsProjectile(bullet.definitionId) ||
+                        RailGatling::IsProjectile(bullet.definitionId)) &&
+                    (bullet.active || bullet.hitConsumed);
+            });
+            if(fired)return;
+            for(size_t barrel=0;barrel<source.muzzleCount;++barrel)emit(source,barrel,opacity,dissolving);
+        };
+        for(const auto& source:sources_)visit(source,1.0f,false);
+        for(const auto& dissolve:dissolving_) {
+            const float opacity=1-RailGroundBatteryCharge::Smooth(clock_-dissolve.started,0,RailGroundBatteryCharge::DissolveSeconds);
+            if(opacity>0)visit(dissolve.source,opacity,true);
+        }
+    }
     bool Presented(uint32_t id,uint64_t intent)const {
         return std::any_of(sources_.begin(),sources_.end(),[&](const auto& s){return s.actorId==id && s.intent==intent && !s.fired;});
     }
@@ -74,6 +107,7 @@ public:
         const size_t previousCount=(std::min)(sources_.size(),MaxSources);
         std::copy_n(sources_.begin(),previousCount,previous.begin());
         clock_=time;sources_.clear();
+        std::erase_if(dissolving_,[&](const auto& entry){return time-entry.started>=RailGroundBatteryCharge::DissolveSeconds;});
         for(const auto& cue:warnings.cues) {
             if(sources_.size()>=MaxSources || !cue.onScreen || cue.occluded)continue;
             const auto actor=std::find_if(runtime.Enemies().begin(),runtime.Enemies().end(),[&](const auto& a){return a.actorId==cue.actorId;});
@@ -114,6 +148,22 @@ public:
                     source.muzzles[source.muzzleCount++]=world;
                 }
             } else {source.muzzles[0]=cue.worldPosition;source.muzzleCount=1;}
+            if(source.groundBattery || source.weapon!=RailWarningWeapon::Ordinary) {
+                const auto& definition=actor->desc.projectileDefinition;
+                source.shellRadius=(std::max)(.05f,definition.radius*definition.shootDownRadiusScale);
+                source.secondsToFire=cue.timeToFire;
+                for(size_t barrel=0;barrel<source.muzzleCount;++barrel) {
+                    auto aim=ResolveTurretAimDirection(*actor);
+                    float distance=actor->desc.spawnDistance+actor->desc.distanceOffset;
+                    if(barrel<cue.projectileLaunches.size()) {
+                        const auto& launch=cue.projectileLaunches[barrel];
+                        aim={launch.lateralSpeed,launch.verticalSpeed,launch.forwardSpeed};
+                        distance=launch.spawnDistance+launch.distanceOffset;
+                    }
+                    const auto sample=rail.Evaluate(distance);
+                    source.shellDirections[barrel]=Add(Add(Mul(sample.right,aim.x),Mul(sample.up,aim.y)),Mul(sample.tangent,aim.z));
+                }
+            }
             if(fired) {
                 auto& flash=flashes_[cue.actorId];
                 if(flash.sequence!=cue.fireSequence){flash.sequence=cue.fireSequence;flash.started=time;flash.muzzles=source.muzzles;flash.count=source.muzzleCount;}
@@ -185,7 +235,7 @@ public:
                     line({side*(style.extent+10),y-3},{side*style.extent,y+3},style.stroke,ink);
             }
             if(source.imminent)for(float side:{-1.0f,1.0f})
-                line({side*4,-8},{side*4,8},3.0f,palette.hotInk);
+                line({side*4,-8},{side*4,8},3.0f,RailEnemyEnergy::Alpha(palette.hotInk,.18f));
         } else {
             constexpr float halfPi=1.570796327f;
             for(int wedge=0;wedge<4;++wedge) {
@@ -200,7 +250,7 @@ public:
                 const float a=1.047197551f*edge,b=1.047197551f*(edge+1);
                 line({std::cos(a)*style.coreRadius,std::sin(a)*style.coreRadius},
                     {std::cos(b)*style.coreRadius,std::sin(b)*style.coreRadius},source.imminent?3.8f:2.6f,
-                    RailEnemyEnergy::Alpha(palette.hotInk,source.imminent?1.0f:.55f));
+                    RailEnemyEnergy::Alpha(palette.hotInk,source.imminent?.24f:.40f));
             }
         }
         return strokes;
@@ -222,12 +272,7 @@ public:
             // Lift only the soft sprite surface off the physical barrel. The
             // muzzle/aim anchor itself is unchanged, and terrain still occludes.
             const auto muzzle=Add(anchor,Mul(forward,-.12f));
-            if(source.groundBattery) {
-                const float intensity=.52f+.48f*source.charge;
-                emit(muzzle,Mul(right,r*.95f),Mul(up,r*.95f),{2.0f,.62f,.08f,intensity*.72f});
-                emit(muzzle,Mul(right,r*.40f),Mul(up,r*.40f),{2.8f,1.5f,.27f,intensity});
-                continue;
-            }
+            if(source.shellRadius>0)continue;
             if(source.fired) {
                 const float a=source.flash;
                 emit(muzzle,Mul(right,r*(1+1.8f*(1-a))),Mul(up,r*(1+1.8f*(1-a))),RailEnemyEnergy::Alpha(palette.halo,a*.65f));
@@ -352,6 +397,7 @@ public:
     }
 private:
     struct Flash {uint64_t sequence=0;float started=0;std::array<Vector3,2> muzzles{};size_t count=0;};
+    struct DissolvingCharge {RailWarningSource source;float started=0;};
     static Vector3 Add(Vector3 a,Vector3 b){return {a.x+b.x,a.y+b.y,a.z+b.z};}
     static Vector3 Sub(Vector3 a,Vector3 b){return {a.x-b.x,a.y-b.y,a.z-b.z};}
     static Vector3 Mul(Vector3 a,float s){return {a.x*s,a.y*s,a.z*s};}
@@ -359,6 +405,7 @@ private:
     static float Distance(Vector3 a,Vector3 b){const auto d=Sub(a,b);return std::sqrt(Dot(d,d));}
     std::vector<RailWarningSource> sources_;
     std::unordered_map<uint32_t,Flash> flashes_;
+    std::vector<DissolvingCharge> dissolving_;
     uint32_t primary_=0;
     float clock_=0;
 };

@@ -3979,6 +3979,7 @@ void AppSceneResources::UpdateCameraWorldPosition(const Vector3& worldPosition) 
     mappedCamera->combatMarkNormalAge = {};
     mappedCamera->combatMarkTintRadius = {};
     mappedCamera->combatImpactLight = {};
+    mappedCamera->roadBatteryLights = {};
     mappedCamera->combatImpactTint = {};
 }
 

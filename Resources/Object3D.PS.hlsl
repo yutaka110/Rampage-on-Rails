@@ -338,6 +338,10 @@ static float3 RailWorldEffectSurfaceLighting(float3 base,float metal,float rough
         energy=RailFrictionRadiance(worldPosition,source,L);
         [branch] if(any(energy>0.0f))
             lighting+=DroneDirect(base,metal,max(rough,0.30f),N,V,L,energy);
+        energy=RoadBatteryRadiance(worldPosition,source,L);
+        [branch] if(any(energy>0.0f))
+            lighting+=DroneDirect(base,metal,max(rough,0.30f),N,V,L,energy)+
+                (.06f+.14f*base)*energy*saturate(dot(N,L));
     }
     float3 beamDirection;
     float3 bridgeLight=BridgeBeamRadiance(worldPosition,beamDirection);

@@ -20,6 +20,7 @@ enum class RailShooterHudDrawCommandKind : uint8_t {
     Plate,
     TunnelTransition,
     GameOverDiorama,
+    HorizontalFade,
 };
 
 enum class RailShooterHudTextAlignment : uint8_t {
@@ -30,6 +31,7 @@ enum class RailShooterHudTextAlignment : uint8_t {
 enum class RailShooterHudTextStyle : uint8_t {
     Body,
     StartCue,
+    ClearTime,
 };
 
 struct RailShooterHudDrawCommand final {
@@ -87,13 +89,13 @@ struct RailShooterHudRenderInput final {
     int miniBossCounterPart=-1;
     Vector2 miniBossCounterScreen{};
     float miniBossCounterMarkerRadius=0;
-    bool miniBossGatlingFiring=false;
+    bool miniBossGatlingFiring=false,miniBossCounterInstruction=false;
     unsigned miniBossGatlingIntercepts=0;
     float miniBossCounterDamage=0,miniBossCounterFeedbackRemaining=0;
     int miniBossCounterFeedbackPart=-1;
     Vector2 miniBossCounterFeedbackScreen{};
     bool miniBossCounterFeedbackOnscreen=false;
-    float miniBossCounterUnlockPulse=0,miniBossCounterHitPulse=0,miniBossCounterDamageRatio=0;
+    float miniBossCounterHitPulse=0,miniBossCounterDamageRatio=0;
     float damageGaugePulse=0;
 };
 

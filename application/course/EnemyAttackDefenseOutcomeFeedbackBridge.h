@@ -69,9 +69,11 @@ struct EnemyAttackDefenseOutcomeFeedbackInput final {
     // These sources own local projectile feedback and a separate whole-volley
     // reward. Consume their per-contact successes without a generic celebration.
     std::span<const uint32_t> localSuccessActors{};
+    uint32_t localShootDownActorId = 0;
     float deltaTime = 0.016f;
     bool gameplayActive = true;
     EnemyAttackDefenseOutcomeFeedbackSettings settings{};
+    std::span<const uint64_t> localShootDownProjectiles{};
 };
 
 // Presentation-only consumer of authoritative defense results. One-shot audio,

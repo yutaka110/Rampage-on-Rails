@@ -1,6 +1,8 @@
 #include "EnemyProjectilePresentationBridge.h"
 
 #include "CourseSpawnRuntime.h"
+#include "RailGatlingAttack.h"
+#include "RailGroundBatteryAttack.h"
 #include "RailHeavyAttack.h"
 
 #include <algorithm>
@@ -76,9 +78,14 @@ EnemyProjectilePresentation BuildPresentation(
         previousDistance,
         projectile.previousLateralOffset,
         projectile.previousVerticalOffset);
-    const Vector3 fallbackDirection = projectile.forwardSpeed < 0.0f
+    Vector3 fallbackDirection = projectile.forwardSpeed < 0.0f
         ? Scale(sample.tangent, -1.0f)
         : sample.tangent;
+    if (spawnedThisFrame && (RailGroundBattery::IsProjectile(projectile.definitionId) ||
+            RailHeavy::IsProjectile(projectile.definitionId) || RailGatling::IsProjectile(projectile.definitionId))) {
+        fallbackDirection = NormalizeOr(Add(Add(Scale(sample.right, projectile.lateralSpeed),
+            Scale(sample.up, projectile.verticalSpeed)), Scale(sample.tangent, projectile.forwardSpeed)), fallbackDirection);
+    }
     output.motionDirection = NormalizeOr(
         Subtract(output.worldPosition, output.previousWorldPosition),
         fallbackDirection);
@@ -141,11 +148,17 @@ void EnemyProjectilePresentationBridge::Update(
 
     for (const EnemyProjectileRuntimeState& projectile :
          input.runtime->Bullets()) {
-        if (!projectile.active || projectile.age >= projectile.lifetime ||
-            projectile.projectileId == 0) {
-            continue;
-        }
-        ++frame_.activeRuntimeProjectiles;
+        if (projectile.projectileId == 0) continue;
+        const bool active=projectile.active && projectile.age<projectile.lifetime;
+        // A primary shot can consume the shell before the first presentation update.
+        // Its muzzle discharge still belongs to the committed launch.
+        const bool interceptedAtLaunch=!active && input.gameplayActive && projectile.frameEndLaunch &&
+            projectile.hitConsumed && RailGroundBattery::IsProjectile(projectile.definitionId) &&
+            std::any_of(input.shootDownResults.begin(),input.shootDownResults.end(),[&](const auto& result) {
+                return result.projectileId==projectile.projectileId && result.accepted && result.destroyed;
+            });
+        if (!active && !interceptedAtLaunch) continue;
+        if (active) ++frame_.activeRuntimeProjectiles;
         currentIds.insert(projectile.projectileId);
         const bool spawned = tracked_.find(projectile.projectileId) == tracked_.end();
         EnemyProjectilePresentation visual = BuildPresentation(
@@ -155,12 +168,17 @@ void EnemyProjectilePresentationBridge::Update(
             input.playerDistance,
             input.settings,
             spawned);
-        const Vector3 eventPosition = visual.worldPosition;
+        // Carrier rounds can already have advanced on their firing tick.
+        // Emit from the bore at the start of that first sweep.
+        const Vector3 eventPosition = (RailHeavy::IsProjectile(projectile.definitionId) ||
+            RailGatling::IsProjectile(projectile.definitionId)) ?
+            visual.previousWorldPosition : visual.worldPosition;
         const Vector3 eventMotionDirection = visual.motionDirection;
-        if (frame_.projectiles.size() < maximumProjectiles) {
-            frame_.projectiles.push_back(visual);
+        if (interceptedAtLaunch) {
+            visual.interceptionRadius=(std::max)(.05f,projectile.radius*projectile.shootDownRadiusScale);
         } else {
-            ++frame_.droppedProjectiles;
+            if (frame_.projectiles.size() < maximumProjectiles) frame_.projectiles.push_back(visual);
+            else ++frame_.droppedProjectiles;
         }
         nextTracked.emplace(projectile.projectileId, std::move(visual));
         if (spawned && input.gameplayActive) {
@@ -237,10 +255,10 @@ void EnemyProjectilePresentationBridge::Update(
             event.kind = result.destroyed?EnemyProjectilePresentationEventKind::Intercepted:EnemyProjectilePresentationEventKind::ShellCracked;
             event.projectileId = result.projectileId;
             event.ownerActorId = result.ownerActorId;
-            event.worldPosition = result.worldHitPoint;
             // The trace ends at the pulse centre; the spark belongs to the
             // common surface of the two touching energy bodies.
-            if(result.primaryRadius>0)event.worldPosition=Add(event.worldPosition,Scale(result.worldHitNormal,-result.primaryRadius));
+            event.worldPosition = result.SurfaceContact();
+            event.impactNormal = result.worldHitNormal;
             if(source){event.definitionId=source->definitionId;event.bodyRadius=source->interceptionRadius;
                 if(!result.destroyed)event.worldPosition=current!=nextTracked.end()?current->second.worldPosition:source->worldPosition;}
             else for(const auto& bullet:input.runtime->Bullets())if(bullet.projectileId==result.projectileId) {

@@ -76,7 +76,9 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
             actor.attackState.intentSequence &&
         actor.targetingState.attackTokenId == actor.attackState.tokenId;
 
-    const float lane=(RailGatling::IsWeapon(actor.desc.actorAssetId) || actor.desc.actorAssetId=="rear_fang")
+    // Each predictive battery barrel solves its own crossing trajectory.
+    const float lane=(RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
+        RailGatling::IsWeapon(actor.desc.actorAssetId) || actor.desc.actorAssetId=="rear_fang")
         ? 0.0f : static_cast<float>(index)-centerLane;
     EnemyProjectileLaunchSolution solution;
     auto& projectile = solution.projectile;

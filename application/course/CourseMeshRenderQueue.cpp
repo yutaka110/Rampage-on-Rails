@@ -1279,42 +1279,62 @@ void CourseMeshRenderQueue::AddEnemyInstances(
             // Keep the pedestal planted while the separate head aims in yaw/pitch.
             const auto geometry=RailTurret::ForMesh(enemy.desc.meshId);
             const bool siege=enemy.desc.meshId=="siege_turret";
+            const bool heavy=enemy.desc.meshId=="carrier_heavy_turret";
+            const bool rapid=enemy.desc.meshId=="gatling_turret";
             const bool markedPedestal=siege && RailGroundBattery::UsesMarkedPedestal(enemy.desc.waveId,enemy.desc.spawnDistance);
             const auto baseMesh=markedPedestal ? RailTurret::RidgeBatteryBaseMesh : geometry.baseMesh;
-            const bool singleSiege=siege && RailGroundBattery::IsPredictive(enemy.desc.actorAssetId) && enemy.desc.bulletCount==1;
+            const bool predictiveSiege=siege && RailGroundBattery::IsPredictive(enemy.desc.actorAssetId);
+            const bool singleSiege=predictiveSiege && enemy.desc.bulletCount==1;
             const CourseBulletActor* siegeRound=nullptr;
+            const CourseBulletActor* secondSiegeRound=nullptr;
             float shotAge=RailTurret::ShotAge(enemy.turretMotion,enemy.age);
-            if(singleSiege) {
+            constexpr float siegeDischargePoseSeconds=.094f;
+            if(predictiveSiege) {
                 const auto& rounds=runtime.Bullets();
-                const auto shot=std::find_if(rounds.rbegin(),rounds.rend(),[&](const auto& round) {
-                    return round.ownerActorId==enemy.actorId && round.active && !round.hitConsumed && round.age<.49f;
-                });
-                if(shot!=rounds.rend())siegeRound=&*shot;
-                if(siegeRound)shotAge=siegeRound->age;
+                const auto justFired=[&](const auto& round) {
+                    return round.ownerActorId==enemy.actorId && round.active && !round.hitConsumed &&
+                        round.age<RailTurret::SiegeRecoilSeconds;
+                };
+                const auto shot=std::find_if(rounds.rbegin(),rounds.rend(),justFired);
+                if(shot!=rounds.rend()) {
+                    siegeRound=&*shot;
+                    shotAge=siegeRound->age;
+                    if(!singleSiege && shotAge<siegeDischargePoseSeconds) {
+                        const auto other=std::find_if(shot+1,rounds.rend(),[&](const auto& round) {
+                            return justFired(round) && round.attackIntentSequence==shot->attackIntentSequence;
+                        });
+                        if(other!=rounds.rend())secondSiegeRound=&*other;
+                    }
+                }
             }
-            const float recoil=singleSiege?RailTurret::SiegeVisualRecoil(shotAge):RailTurret::RecoilAtAge(enemy.desc.meshId,shotAge);
-            constexpr float siegeFlashSeconds=.094f;
-            const bool siegeFlash=siegeRound && siegeRound->age<siegeFlashSeconds;
-            const float flashStrength=siegeFlash?1.0f-TwinShieldDestructionSmooth(siegeRound->age,.016f,.094f):0;
-            const bool siegeWarning=singleSiege && presentation && presentation->turretMuzzleActive &&
+            const float recoil=predictiveSiege?RailTurret::SiegeVisualRecoil(shotAge):RailTurret::RecoilAtAge(enemy.desc.meshId,shotAge);
+            const bool siegeDischarging=siegeRound && siegeRound->age<siegeDischargePoseSeconds;
+            const bool siegeWarning=predictiveSiege && presentation && presentation->turretMuzzleActive &&
                 enemy.behaviorState.attackIntentActive && enemy.attackState.tokenReserved && enemy.behaviorState.telegraphPresented;
+            const bool carrierWarning=(heavy || rapid) && presentation &&
+                (presentation->batteryThermal.phase==RailBatteryThermalPhase::Charging ||
+                    presentation->batteryThermal.phase==RailBatteryThermalPhase::Imminent);
+            const auto launchOrigin=[](const CourseBulletActor& round) {
+                return Vector3{round.lateralOffset-round.lateralSpeed*round.age,
+                    round.verticalOffset-round.verticalSpeed*round.age,
+                    round.spawnDistance+round.distanceOffset-round.forwardSpeed*round.age};
+            };
             int siegeBarrel=singleSiege?ResolvePredictiveTurretBarrel(enemy):0;
-            if(siegeRound) {
+            if(siegeRound && (singleSiege || (siegeDischarging && !secondSiegeRound))) {
                 // Recovery may already be tracking the player again. Keep the
-                // kick on the tube that owned this round's launch.
-                const float launchLateral=siegeRound->lateralOffset-siegeRound->lateralSpeed*siegeRound->age;
-                const float launchDistance=siegeRound->spawnDistance+siegeRound->distanceOffset-siegeRound->forwardSpeed*siegeRound->age;
-                const float across=(launchDistance-enemy.desc.spawnDistance-enemy.desc.distanceOffset)*siegeRound->lateralSpeed
-                    -(launchLateral-enemy.desc.lateralOffset)*siegeRound->forwardSpeed;
+                // rim aligned even if only one round remains available.
+                const auto launch=launchOrigin(*siegeRound);
+                const float across=(launch.z-enemy.desc.spawnDistance-enemy.desc.distanceOffset)*siegeRound->lateralSpeed
+                    -(launch.x-enemy.desc.lateralOffset)*siegeRound->forwardSpeed;
                 siegeBarrel=across>0?1:0;
             }
-            if((siegeWarning && enemy.targetingState.solutionLocked) || siegeFlash) {
+            if(((siegeWarning || carrierWarning) && enemy.targetingState.solutionLocked) || siegeDischarging) {
                 // The visual head finishes tracking at the committed solution.
                 // The targeting and projectile simulation retain their own state.
-                const float settle=siegeFlash?1.0f-TwinShieldDestructionSmooth(siegeRound->age,.024f,siegeFlashSeconds):
+                const float settle=siegeDischarging?1.0f-TwinShieldDestructionSmooth(siegeRound->age,.024f,siegeDischargePoseSeconds):
                     TwinShieldDestructionSmooth(presentation->weaponCharge,.18f,.68f);
                 const auto tracked=enemy.targetingState.turretAimDirection;
-                const auto locked=siegeFlash?Vector3{
+                const auto locked=siegeDischarging?Vector3{
                     siegeRound->lockedTargetLateralOffset-enemy.desc.lateralOffset,
                     siegeRound->lockedTargetVerticalOffset-enemy.desc.verticalOffset-geometry.muzzleHeight*enemy.desc.radius,
                     siegeRound->lockedTargetDistance-enemy.desc.spawnDistance-enemy.desc.distanceOffset}:ResolveTurretAimDirection(enemy);
@@ -1326,27 +1346,28 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 WriteItemTransform(*item,model.rootLocal,{baseScale,baseScale,baseScale},rotation,center,viewProjection);
             }
             const auto impactRotation=presentation?presentation->primaryImpactRotation:Vector3{};
-            if(!siegeFlash && (impactRotation.x!=0 || impactRotation.y!=0 || impactRotation.z!=0)) {
+            if(!siegeDischarging && (impactRotation.x!=0 || impactRotation.y!=0 || impactRotation.z!=0)) {
                 rotation=Add(rotation,impactRotation);
                 WriteItemTransform(*item,model.rootLocal,{baseScale,baseScale,baseScale},rotation,center,viewProjection);
             }
             const auto head=MakeAffineMatrix({baseScale,baseScale,baseScale},rotation,center);
-            const float rotorAngle=enemy.desc.meshId=="gatling_turret"?RailTurret::RotorAngle(enemy.turretMotion,enemy.age):0;
+            const float rotorAngle=rapid?RailTurret::RotorAngle(enemy.turretMotion,enemy.age):0;
             const auto local=MakeAffineMatrix(Vector3{1,1,1},Vector3{0,0,rotorAngle},
                 Vector3{0,siege?0.0f:geometry.muzzleHeight,recoil});
             auto movingWorld=Multiply(local,head);
-            if(siegeFlash || siegeWarning) {
-                const auto rim=RailTurret::MuzzleLocalAtPhase(enemy.desc.meshId,siegeBarrel,0);
+            if(siegeDischarging || siegeWarning) {
+                const bool alignCenter=secondSiegeRound || (!singleSiege && !siegeDischarging);
+                auto rim=RailTurret::MuzzleLocalAtPhase(enemy.desc.meshId,siegeBarrel,0);
+                if(alignCenter)rim.x=0;
                 const auto restMouth=TransformTurretPoint(rim,head);
-                const auto mouthRail=siegeFlash?Vector3{
-                    siegeRound->lateralOffset-siegeRound->lateralSpeed*siegeRound->age,
-                    siegeRound->verticalOffset-siegeRound->verticalSpeed*siegeRound->age,
-                    siegeRound->spawnDistance+siegeRound->distanceOffset-siegeRound->forwardSpeed*siegeRound->age}:
-                    ResolveTurretMuzzleRailPosition(enemy,siegeBarrel==0?-1.0f:1.0f);
-                const auto launch=ResolveEnemyProjectileWorldPosition(railPath,mouthRail);
-                // The committed round anchors the rim at ignition. The barrel
-                // still recoils along its local axis as the alignment fades.
-                const float blend=siegeFlash?1.0f-TwinShieldDestructionSmooth(siegeRound->age,0.0f,siegeFlashSeconds):presentation->weaponCharge;
+                const float barrelSide=alignCenter?0.0f:(siegeBarrel==0?-1.0f:1.0f);
+                auto launch=ResolveEnemyProjectileWorldPosition(railPath,siegeDischarging?
+                    launchOrigin(*siegeRound):ResolveTurretMuzzleRailPosition(enemy,barrelSide));
+                if(secondSiegeRound)launch=Scale(Add(launch,ResolveEnemyProjectileWorldPosition(railPath,
+                    launchOrigin(*secondSiegeRound))),.5f);
+                // Anchor the rims at ignition while the barrels recoil along
+                // their local axis and the alignment fades.
+                const float blend=siegeDischarging?1.0f-TwinShieldDestructionSmooth(siegeRound->age,0.0f,siegeDischargePoseSeconds):presentation->weaponCharge;
                 movingWorld.m[3][0]+=(launch.x-restMouth.x)*blend;
                 movingWorld.m[3][1]+=(launch.y-restMouth.y)*blend;
                 movingWorld.m[3][2]+=(launch.z-restMouth.z)*blend;
@@ -1374,14 +1395,14 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                         base->useMaterialOverride = true;
                     }
                     auto baseRotation=RotationFromRailTangent(sample.tangent);
-                    if(siege)baseRotation.y+=RailTurret::SiegePedestalKick(shotAge);
+                    if(siege && !predictiveSiege)baseRotation.y+=RailTurret::SiegePedestalKick(shotAge);
                     WriteItemTransform(*base,models[baseIndex].rootLocal,
                         {baseScale,baseScale,baseScale},baseRotation,center,viewProjection);
                 }
             }
             if(geometry.movingMesh) {
                 constexpr auto singleMesh="siege_turret_single_barrel";
-                const bool split=singleSiege && models[ResolveModelIndex(models,singleMesh,nullptr)].name==singleMesh;
+                const bool split=predictiveSiege && models[ResolveModelIndex(models,singleMesh,nullptr)].name==singleMesh;
                 const auto mesh=split?singleMesh:geometry.movingMesh;
                 const uint32_t rotorIndex=ResolveModelIndex(models,mesh,nullptr);
                 if(models[rotorIndex].name==mesh)for(int barrel=0;barrel<(split?2:1);++barrel)if(auto* rotor=AllocateItem()) {
@@ -1398,7 +1419,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                     if(split) {
                         const auto offset=MakeAffineMatrix(Vector3{1,1,1},Vector3{},
                             Vector3{(barrel==0?-1:1)*geometry.muzzleSide,0,0});
-                        parent=Multiply(offset,barrel==siegeBarrel?movingWorld:head);
+                        parent=Multiply(offset,(!singleSiege || barrel==siegeBarrel)?movingWorld:head);
                     }
                     auto world=Multiply(models[rotorIndex].rootLocal,parent);
                     if(rotor->transformData) {
@@ -1408,7 +1429,7 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                     }
                 }
             }
-            if(enemy.desc.meshId=="carrier_heavy_turret" && presentation) {
+            if(heavy && presentation) {
                 const auto drawPart=[&](const char* mesh,const Matrix4x4& parent) {
                     const uint32_t index=ResolveModelIndex(models,mesh,nullptr);
                     if(models[index].name!=mesh || !models[index].loaded)return;
@@ -1430,29 +1451,30 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 const float opening=HeavyMuzzleArmorOpen(presentation->batteryThermal,shotAge);
                 DrawHeavyTurretArmor(head,movingWorld,opening,presentation->batteryThermal.ventOpen,drawPart);
             }
-            if (presentation && (singleSiege?(siegeFlash || siegeWarning):presentation->turretMuzzleActive)) {
+            if (presentation && !predictiveSiege && presentation->turretMuzzleActive &&
+                ((!heavy && !rapid) || presentation->batteryThermal.phase==RailBatteryThermalPhase::Counter)) {
                 const uint32_t glowIndex = ResolveModelIndex(models,"ball",nullptr);
                 if (models[glowIndex].name == "ball") {
-                    const int barrels=singleSiege?1:enemy.desc.meshId=="gatling_turret"?6:geometry.muzzleSide==0?1:2;
+                    const int barrels=enemy.desc.meshId=="gatling_turret"?6:geometry.muzzleSide==0?1:2;
                     for (int barrel=0;barrel<barrels;++barrel) {
                         CourseMeshRenderItem* glow = AllocateItem();
                         if (!glow) break;
                         glow->kind = CourseMeshRenderKind::Enemy;
                         glow->sourceActorId = enemy.actorId;
-                        glow->meshId = siegeFlash?"siege_muzzle_flash":"turret_muzzle_glow";
+                        glow->meshId = "turret_muzzle_glow";
                         glow->modelIndex = glowIndex;
                         glow->visible = models[glowIndex].loaded && glow->transformData != nullptr;
-                        const Vector3 p=RailTurret::MuzzleLocalAtPhase(enemy.desc.meshId,singleSiege?siegeBarrel:barrel,rotorAngle,singleSiege?0:recoil);
-                        const auto muzzle=TransformTurretPoint(p,singleSiege?movingWorld:head);
+                        const Vector3 p=RailTurret::MuzzleLocalAtPhase(enemy.desc.meshId,barrel,rotorAngle,recoil);
+                        const auto muzzle=TransformTurretPoint(p,head);
                         if (glow->materialData) {
                             *glow->materialData = {};
-                            glow->materialData->color = siegeFlash?Vector4{5.2f*flashStrength,4.8f*flashStrength,4.0f*flashStrength,flashStrength}:presentation->coreColor;
+                            glow->materialData->color = presentation->coreColor;
                             glow->materialData->enableLighting = false;
                             glow->materialData->specularMode = 5;
                             glow->materialData->uvTransform = MakeIdentity4x4();
                             glow->useMaterialOverride = true;
                         }
-                        const float radius = baseScale*(siegeFlash?0.05f+0.29f*flashStrength:0.07f+0.10f*presentation->weaponCharge);
+                        const float radius = baseScale*(0.07f+0.10f*presentation->weaponCharge);
                         WriteItemTransform(*glow,models[glowIndex].rootLocal,{radius,radius,radius},{},muzzle,viewProjection);
                     }
                 }
