@@ -243,6 +243,16 @@ static float3 CombatScorch(float owner,float3 world,float3 normal,inout float3 b
             float3 side=normalize(cross(abs(contact.y)>.9f?float3(1,0,0):float3(0,1,0),contact.xyz));
             float3 up=cross(contact.xyz,side);
             float2 uv=float2(dot(delta,side),dot(delta,up))/ink.w;
+            if(owner == -1.0f && style == .125f) {
+                // A brief coloured reflection on a cover. It leaves no scorch.
+                const float radius=length(uv*float2(.89f,1.21f));
+                const float face=smoothstep(-.04f,.61f,dot(normal,contact.xyz));
+                const float reach=1.0f-smoothstep(.23f,.89f,abs(along)/ink.w);
+                const float edge=1.0f-smoothstep(.25f,1.0f,radius);
+                const float hot=1.0f-smoothstep(.06f,.52f,radius);
+                emission+=ink.rgb*face*reach*edge*(.63f+.37f*hot);
+                continue;
+            }
             if(owner>0) {
                 style-=float(effect)*.0625f;
                 if(effect!=0u) {

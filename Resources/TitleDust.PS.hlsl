@@ -15,6 +15,13 @@ float Fbm(float2 p) {
     return Noise(p)*0.5f+Noise(p*2.07f+7.1f)*0.28f+Noise(p*4.13f+17.3f)*0.15f+Noise(p*8.3f)*0.07f;
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=3400.0f && input.texcoord.x<=3401.0f) {
+        float2 p=float2((input.texcoord.x-3400.5f)*2.0f,input.texcoord.y*2.0f-1.0f);
+        float width=max(.10f,.68f*fwidth(p.x));
+        float channel=1.0f-smoothstep(.40f-width,.56f+width,abs(p.x));
+        float join=1.0f-smoothstep(.91f,1.0f,abs(p.y));
+        return float4(input.color.rgb,channel*join*input.color.a);
+    }
     if(input.texcoord.x>=3300.0f && input.texcoord.x<=3301.0f) {
         // Alpha blending gives the charged shell a dark interior against the rock and sky.
         float2 p=float2((input.texcoord.x-3300.5f)*2.0f,frac(input.texcoord.y*.5f)*4.0f-1.0f);

@@ -33,12 +33,23 @@ struct RailVehicleCollisionFeedbackSettings final {
     bool Validate(std::string* errorMessage = nullptr) const;
 };
 
+enum class RailVehicleImpactKind : uint8_t {
+    Contact,
+    Projectile,
+    Gatling,
+    Heavy,
+    VeilLightning,
+    VeilBeam,
+    Wing,
+};
+
 struct RailVehicleCollisionAudioCue final {
     uint64_t resultSequence = 0;
     float volume = 0.0f;
     float pitch = 1.0f;
     float pan = 0.0f;
     bool lethal = false;
+    RailVehicleImpactKind kind = RailVehicleImpactKind::Contact;
 };
 
 struct RailVehicleCollisionVfxCommand final {
@@ -63,6 +74,7 @@ struct RailVehicleCollisionFeedbackInput final {
     const RailVehicleRuntimeState* vehicleState = nullptr;
     float deltaTime = 0.0f;
     bool gameplayActive = true;
+    bool presentProtectedProjectileContacts = false;
     Vector3 listenerRight{1,0,0};
     Vector3 listenerForward{0,0,1};
     RailVehicleCollisionFeedbackSettings settings{};
@@ -75,7 +87,7 @@ struct RailVehicleImpactParticle final {
 };
 
 struct RailVehicleCollisionFeedbackFrame final {
-    static constexpr size_t kMaximumAudioCues = 2;
+    static constexpr size_t kMaximumAudioCues = 8;
     static constexpr size_t kMaximumVfxCommands = 8;
 
     std::array<RailVehicleCollisionAudioCue, kMaximumAudioCues> audioCues{};
@@ -93,6 +105,7 @@ struct RailVehicleCollisionFeedbackFrame final {
     float cameraShake = 0.0f;
     float cameraPitchImpulse = 0.0f;
     float cameraYawImpulse = 0.0f;
+    Vector2 heavyCameraOffset{};
     float activeResponseRemainingSeconds = 0.0f;
     // Rear left, rear right, front left, front right. Positive is upward.
     std::array<float, 4> wheelLiftOffsets{};
@@ -104,8 +117,8 @@ struct RailVehicleCollisionFeedbackFrame final {
     uint64_t revision = 0;
 };
 
-// Presentation-only consumer of accepted PlayerDamageResult records. Collision
-// counters and rejected hits can never trigger vehicle feel or speed changes.
+// Presents accepted damage and eligible projectile contacts during post-hit
+// protection. Only accepted vehicle contacts can request a speed change.
 class RailVehicleCollisionFeedbackBridge final {
 public:
     void Reset();
@@ -130,8 +143,11 @@ private:
         float elapsed = 0.0f;
         float duration = 0.44f;
         float intensity = 0.0f;
-        bool projectile = false;
+        RailVehicleImpactKind kind = RailVehicleImpactKind::Contact;
     };
     std::array<ImpactResponse, 8> responses_{};
+    // Keep an entire 24-round burst and overlapping contacts across frames.
+    std::array<uint64_t, 64> presentedRounds_{};
+    size_t nextPresentedRound_ = 0;
     std::vector<RailVehicleImpactParticle> particles_;
 };

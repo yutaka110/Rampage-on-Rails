@@ -85,6 +85,17 @@ using namespace Microsoft::WRL;
 namespace {
 constexpr const char* kFangCounterBurstId="fang_counter_burst";
 constexpr const char* kFangInterceptBurstId="fang_intercept_burst";
+RailCartImpactEnergy::Frame EvaluateCartImpact(const RailCombatImpact::Mark& hit,Matrix4x4 world,
+        const RailVehicleWheelContactPresentationFrame& wheels,bool drawStrokes=true) {
+    std::array<Vector3,2> rearHubs{{{-2.00f,-.44f,-1.86f},{2.00f,-.44f,-1.86f}}};
+    const auto inverse=Inverse(world);
+    for(size_t i=0;i<rearHubs.size();++i)if(wheels.wheels[i].visible) {
+        rearHubs[i]=RailCombatImpact::Transform(wheels.wheels[i].axleCenter,inverse,1);
+        rearHubs[i].x+=std::copysign(.19f,rearHubs[i].x);
+    }
+    return RailCartImpactEnergy::Evaluate(hit.localPoint,hit.age,hit.kind==RailCombatImpact::Kind::Heavy,
+        hit.seed,rearHubs,drawStrokes);
+}
 bool IsFangInterceptCue(const CourseVfxCue& cue) {
     return cue.desc.hasWorldPosition &&
         (cue.desc.id==kFangInterceptBurstId || cue.desc.id==kFangCounterBurstId);
@@ -4170,32 +4181,32 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const bool heavyCartImpact=impactKind==RailEnemyEnergy::BatteryKind::Heavy;
     const float impactAge=PlayerDamagePresentationBridge::DamageNoticeSeconds-damagePresentation.damageNoticeRemainingSeconds;
     const float impactFlashLength=heavyCartImpact?.075f:.055f;
-    const bool localImpactFlash=mountedProjectileImpact && lastImpact.request.hasWorldImpact && impactAge<impactFlashLength;
+    const bool localImpactFlash=mountedProjectileImpact && lastImpact.request.hasWorldImpact &&
+        impactKind!=RailEnemyEnergy::BatteryKind::Gatling && !IsFangChaseRound(lastImpact.request.sourceId) &&
+        impactAge<impactFlashLength;
     const auto& cartRender=railShooterVehicleRenderer_.Frame();
     RailCartImpactEnergy::Frame cartEnergy;
-    bool cartOwnsProjectileImpact=false;
-    Vector3 cartImpactTint=RailCartImpactEnergy::Tint(lastImpact.request.sourceId,{1.0f,.40f,.07f,1.0f});
-    if(mountedProjectileImpact && lastImpact.request.hasWorldImpact && cartRender.visible &&
-        cartRender.meshId=="rail_vehicle.mine_cart") {
-        const auto marks=railCombatImpactMarks_.Items();
-        const auto hit=std::find_if(marks.rbegin(),marks.rend(),[&](const auto& mark) {
-            return mark.owner==RailCombatImpact::CartOwner && mark.seed==lastImpact.sequence;
+    const auto cartMarks=railCombatImpactMarks_.Items();
+    const bool cartVisible=cartRender.visible && cartRender.meshId=="rail_vehicle.mine_cart" && !lastImpact.lethal;
+    const auto* cartDischarge=cartVisible?RailCombatImpact::LatestCartDischarge(cartMarks,false):nullptr;
+    const auto* gatlingDischarge=cartVisible?RailCombatImpact::LatestCartDischarge(cartMarks,true):nullptr;
+    std::array<const RailCombatImpact::Mark*,2> rearCartMarks{};
+    std::array<RailRearCartImpact::Frame,2> rearCartEnergy{};
+    if(cartVisible)for(const auto& mark:cartMarks) {
+        const auto type=RailCombatImpact::RearCartType(mark.kind);
+        if(mark.owner!=RailCombatImpact::CartOwner || type==RailRearCartImpact::Type::None)continue;
+        const size_t index=type==RailRearCartImpact::Type::Lightning?0:1;
+        rearCartMarks[index]=&mark;
+        rearCartEnergy[index]=RailRearCartImpact::Evaluate(type,mark.localPoint,mark.age,mark.seed,mark.localNormal);
+    }
+    const bool cartOwnsProjectileImpact=cartVisible &&
+        std::any_of(cartMarks.begin(),cartMarks.end(),[&](const auto& mark) {
+            return mark.owner==RailCombatImpact::CartOwner && mark.seed==lastImpact.sequence &&
+                mark.kind!=RailCombatImpact::Kind::WingCart;
         });
-        if(hit!=marks.rend()) {
-            cartOwnsProjectileImpact=true;
-            cartImpactTint=hit->tint;
-            if(hit->age<RailCartImpactEnergy::Duration(heavyCartImpact)) {
-                std::array<Vector3,2> rearHubs{{{-2.00f,-.44f,-1.86f},{2.00f,-.44f,-1.86f}}};
-                const auto& wheels=railShooterWheelContactPresentation_.Frame();
-                auto world=cartRender.worldMatrix;
-                const auto inverse=Inverse(world);
-                for(size_t i=0;i<rearHubs.size();++i)if(wheels.wheels[i].visible) {
-                    rearHubs[i]=RailCombatImpact::Transform(wheels.wheels[i].axleCenter,inverse,1);
-                    rearHubs[i].x+=std::copysign(.19f,rearHubs[i].x);
-                }
-                cartEnergy=RailCartImpactEnergy::Evaluate(hit->localPoint,hit->age,heavyCartImpact,hit->seed,rearHubs);
-            }
-        }
+    Vector3 cartImpactTint=RailCartImpactEnergy::Tint(lastImpact.request.sourceId,{1.0f,.40f,.07f,1.0f});
+    if(cartDischarge) {
+        cartEnergy=EvaluateCartImpact(*cartDischarge,cartRender.worldMatrix,railShooterWheelContactPresentation_.Frame());
     }
     float damageFlashIntensity = sessionPresentation.screenFlashIntensity;
     Vector4 damageFlashColor{
@@ -5579,8 +5590,9 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     };
     const bool barricadeLamps=!railTitleScreenVisible_ && !railGameOverScene_.Active() &&
         std::any_of(routeObstacles.begin(),routeObstacles.end(),showsBarricadeLamps);
-    const bool hasWorldEffects=fangInterceptVisible || fangExhaust || barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
-    if (hasWorldEffects || hasProjectileBursts || railAttackWarningPresentation_.HasDissolvingCharges()) {
+    const bool hasWorldEffects=fangInterceptVisible || fangExhaust || barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || gatlingDischarge || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    if (hasWorldEffects || rearCartMarks[0] || rearCartMarks[1] ||
+        hasProjectileBursts || railAttackWarningPresentation_.HasDissolvingCharges()) {
         // Suppress every gameplay overlay, including the reticle built above.
         if (railTitleScreenVisible_) railLockOnHudAtlasVertexCount_ = 0;
         if(railTitleScreenVisible_ && hudVisible) emitHudCommands(railShooterHudRenderer_.Frame().commands);
@@ -5628,6 +5640,19 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         };
         std::vector<SandBillboard> billboards;
         billboards.reserve(180+RailTitleScene::CollapseGrainCount+RailTitleScene::CollapsePuffCount);
+        const auto cartWorld=[&](Vector3 local) {
+            return RailCombatImpact::Transform(local,cartRender.worldMatrix,1);
+        };
+        // The dark channels use alpha blending beneath the tracer's red edges.
+        for(size_t i=0;i<rearCartEnergy[0].count;++i) {
+            const auto& stroke=rearCartEnergy[0].strokes[i];
+            const auto start=cartWorld(stroke.start),end=cartWorld(stroke.end);
+            const auto middle=Scale(Add(start,end),.5f);
+            const auto half=Scale(Subtract(end,start),.5f);
+            const auto across=NormalizeOr(Cross(half,Subtract(frameState_.cameraWorldPosition,middle)),right);
+            billboards.push_back({middle,Scale(across,stroke.width*1.77f),Scale(half,1.11f),
+                {.018f,.0025f,.009f,stroke.opacity*.93f},3400});
+        }
         if(lightningVisible) for(size_t i=0;i<lightning.positions.size();++i) {
             const float t=lightning.LocalAge(i);
             if(t<.064f || t>1.14f)continue;
@@ -6443,11 +6468,11 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             glowQuad(center,Scale(right,radius*1.45f),Scale(up,radius),60,{halo.x,halo.y,halo.z,strength*.84f});
             glowQuad(center,Scale(right,radius*.51f),Scale(up,radius*.46f),16,{5.4f,4.8f,3.7f,strength});
         }
-        if(cartEnergy.count>0) {
+        if(cartEnergy.count>0 || gatlingDischarge!=nullptr) {
             static const bool audit=ReadEnvironmentUInt("GE3_CART_ENERGY_AUDIT",0)!=0;
-            if(audit) {
+            if(audit && cartDischarge) {
                 static std::ofstream log("logs/cart_impact_energy.csv");
-                static const bool header=bool(log<<"frame,source,age,strokes,r,g,b,rear_panel,left_cover,right_cover\n");
+                static const bool header=bool(log<<"frame,source,age,strokes,r,g,b,rear_panel,left_cover,right_cover,left_arrival,right_arrival,left_flash,right_flash,hot_tips\n");
                 size_t rearPanel=0,leftCover=0,rightCover=0;
                 for(size_t i=0;i<cartEnergy.count;++i) {
                     const auto point=cartEnergy.strokes[i].end;
@@ -6457,27 +6482,111 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                         if(point.x>2.25f)++rightCover;
                     }
                 }
-                if(header)log<<railShooterFrameIndex_<<','<<lastImpact.request.sourceId<<','<<impactAge<<','<<cartEnergy.count<<','
-                    <<cartImpactTint.x<<','<<cartImpactTint.y<<','<<cartImpactTint.z<<','
-                    <<rearPanel<<','<<leftCover<<','<<rightCover<<std::endl;
+                if(header)log<<railShooterFrameIndex_<<','<<lastImpact.request.sourceId<<','<<cartDischarge->age<<','<<cartEnergy.count<<','
+                    <<cartDischarge->tint.x<<','<<cartDischarge->tint.y<<','<<cartDischarge->tint.z<<','
+                    <<rearPanel<<','<<leftCover<<','<<rightCover<<','
+                    <<cartEnergy.wheels[0].arrival<<','<<cartEnergy.wheels[1].arrival<<','
+                    <<cartEnergy.wheels[0].intensity<<','<<cartEnergy.wheels[1].intensity<<','<<cartEnergy.hotTipCount<<std::endl;
             }
             const auto& m=cartRender.worldMatrix.m;
             const auto world=[&](Vector3 p){return Vector3{
                 p.x*m[0][0]+p.y*m[1][0]+p.z*m[2][0]+m[3][0],
                 p.x*m[0][1]+p.y*m[1][1]+p.z*m[2][1]+m[3][1],
                 p.x*m[0][2]+p.y*m[1][2]+p.z*m[2][2]+m[3][2]};};
-            for(size_t i=0;i<cartEnergy.count;++i) {
-                const auto& stroke=cartEnergy.strokes[i];
+            const auto drawStroke=[&](const RailCartImpactEnergy::Stroke& stroke,Vector3 color,float atlas) {
                 const auto start=world(stroke.start),end=world(stroke.end);
                 const auto center=Scale(Add(start,end),.5f),axis=Scale(Subtract(end,start),.5f);
                 const auto across=NormalizeOr(Cross(axis,Subtract(eye,center)),up);
-                const auto tint=Scale(cartImpactTint,heavyCartImpact?4.7f:4.2f);
-                glowQuad(center,Scale(axis,1.06f),Scale(across,stroke.width*2.5f),114,
-                    {tint.x,tint.y,tint.z,stroke.opacity});
-                if(i%7==0 && stroke.opacity>.61f) {
-                    const float size=stroke.width*2.10f;
-                    glowQuad(end,Scale(right,size),Scale(up,size),16,{tint.x,tint.y,tint.z,stroke.opacity*.68f});
+                glowQuad(center,Scale(axis,1.09f),Scale(across,stroke.width*2.5f),atlas,
+                    {color.x,color.y,color.z,stroke.opacity});
+            };
+            const auto tint=cartDischarge?Scale(cartDischarge->tint,
+                cartDischarge->kind==RailCombatImpact::Kind::Heavy?4.1f:3.8f):Vector3{};
+            for(size_t i=0;i<cartEnergy.count;++i)drawStroke(cartEnergy.strokes[i],tint,114);
+            for(size_t i=0;i<cartEnergy.hotTipCount;++i)drawStroke(cartEnergy.hotTips[i],{5.2f,5.0f,4.9f},116);
+            for(const auto& junction:cartEnergy.junctions)if(junction.intensity>.012f) {
+                const auto center=world(junction.position);
+                glowQuad(center,Scale(right,.15f),Scale(up,.14f),16,
+                    {tint.x,tint.y,tint.z,junction.intensity*.72f});
+                glowQuad(center,Scale(right,.081f),Scale(up,.072f),104,
+                    {5.3f,5.2f,5.1f,junction.intensity});
+            }
+            for(const auto& wheel:cartEnergy.wheels)if(wheel.heat>.008f) {
+                const auto center=world(wheel.position);
+                glowQuad(center,Scale(right,.25f),Scale(up,.20f),16,
+                    {tint.x,tint.y,tint.z,wheel.heat*.86f});
+                const Vector3 edge{std::copysign(.30f,wheel.position.x),-.085f,.065f};
+                const auto end=Add(wheel.position,edge);
+                drawStroke({wheel.position,end,wheel.heat,.045f},{6.4f,6.1f,6.7f},116);
+                glowQuad(center,Scale(right,.093f),Scale(up,.081f),104,
+                    {6.2f,6.0f,6.6f,wheel.heat});
+            }
+            if(gatlingDischarge) {
+                const auto residual=RailCartImpactEnergy::GatlingResidual(gatlingDischarge->localPoint,
+                    gatlingDischarge->localNormal,gatlingDischarge->age,gatlingDischarge->seed);
+                for(const auto& stroke:residual)drawStroke(stroke,{2.8f,.68f,.10f},114);
+                for(const auto& mark:cartMarks) {
+                    if(mark.owner!=RailCombatImpact::CartOwner || mark.kind!=RailCombatImpact::Kind::GatlingCart ||
+                        mark.age>=RailCartImpactEnergy::GatlingFlashSeconds)continue;
+                    const float flash=RailCartImpactEnergy::GatlingFlash(mark.age);
+                    const auto center=world(Add(mark.localPoint,Scale(mark.localNormal,.11f)));
+                    glowQuad(center,Scale(right,.20f),Scale(up,.17f),16,{3.8f,.97f,.15f,flash*.70f});
+                    glowQuad(center,Scale(right,.074f),Scale(up,.067f),104,{4.8f,2.35f,.72f,flash*.87f});
                 }
+            }
+        }
+        const auto drawRearRibbon=[&](const RailCartImpactEnergy::Stroke& stroke,Vector3 tint,
+                float width,float alpha,float atlas) {
+            if(stroke.opacity<.006f)return;
+            const auto start=cartWorld(stroke.start),end=cartWorld(stroke.end);
+            const auto center=Scale(Add(start,end),.5f);
+            const auto half=Scale(Subtract(end,start),.5f);
+            const auto across=NormalizeOr(Cross(half,Subtract(eye,center)),right);
+            glowQuad(center,Scale(half,1.11f),Scale(across,stroke.width*width),atlas,
+                {tint.x,tint.y,tint.z,alpha*stroke.opacity});
+        };
+        const auto drawRearElectricity=[&](const RailRearCartImpact::Frame& arc,const RailCombatImpact::Mark& mark) {
+            const bool wing=mark.kind==RailCombatImpact::Kind::WingCart;
+            const bool lightning=mark.kind==RailCombatImpact::Kind::VeilLightningCart;
+            const auto edge=Scale(mark.tint,lightning?3.8f:4.8f);
+            const auto core=lightning?Vector3{5.5f,.44f,.42f}:
+                wing?Vector3{5.3f,.77f,3.05f}:Vector3{2.06f,2.53f,6.2f};
+            for(size_t i=0;i<arc.count;++i) {
+                drawRearRibbon(arc.strokes[i],edge,lightning?1.95f:1.62f,.86f,114);
+                drawRearRibbon(arc.strokes[i],core,.66f,lightning?.56f:.71f,116);
+            }
+            const auto tip=lightning?Vector3{6.6f,3.14f,2.65f}:
+                wing?Vector3{6.8f,4.1f,5.9f}:Vector3{4.9f,5.4f,7.6f};
+            for(size_t i=0;i<arc.hotTipCount;++i)drawRearRibbon(arc.hotTips[i],tip,1.52f,.98f,116);
+            for(size_t i=0;i<arc.flashCount;++i) {
+                const auto& flash=arc.flashes[i];
+                const auto center=cartWorld(Add(flash.position,Scale(flash.normal,.074f)));
+                const float radius=flash.radius*(lightning?.48f:.44f);
+                glowQuad(center,Scale(right,radius),Scale(up,radius*.81f),16,
+                    {edge.x,edge.y,edge.z,.78f*flash.intensity});
+                glowQuad(center,Scale(right,radius*.38f),Scale(up,radius*.32f),104,
+                    {tip.x,tip.y,tip.z,.99f*flash.intensity});
+            }
+        };
+        for(size_t index=0;index<rearCartMarks.size();++index) {
+            if(const auto* mark=rearCartMarks[index])drawRearElectricity(rearCartEnergy[index],*mark);
+        }
+        if(cartVisible)for(const auto& mark:cartMarks) {
+            if(mark.owner!=RailCombatImpact::CartOwner || mark.kind!=RailCombatImpact::Kind::WingCart)continue;
+            drawRearElectricity(RailRearCartImpact::Evaluate(RailRearCartImpact::Type::Wing,
+                mark.localPoint,mark.age,mark.seed,mark.localNormal),mark);
+            const float pulse=RailRearCartImpact::Pulse(mark.age,-.010f,.025f,RailRearCartImpact::WingSparkDuration);
+            if(pulse<.008f)continue;
+            const auto root=Add(mark.localPoint,Scale(mark.localNormal,.12f));
+            const auto outward=NormalizeOr(Add(mark.localNormal,{0,.70f,0}),{0,1,0});
+            const auto sideways=NormalizeOr(Cross(outward,{0,1,0}),{1,0,0});
+            const float travel=RailCartImpactEnergy::Smooth(mark.age,0.0f,.125f);
+            for(unsigned spark=0;spark<3;++spark) {
+                const float spread=.75f*(float((mark.seed+spark)%3)-1.0f);
+                const auto direction=Add(outward,Scale(sideways,spread));
+                const float distance=.13f+(.65f+.25f*spark)*travel;
+                drawRearRibbon({Add(root,Scale(direction,distance*.56f)),
+                    Add(root,Scale(direction,distance)),pulse,.042f},{6.0f,1.52f,3.1f},1.0f,.91f,114);
             }
         }
         for(size_t i=0;i<veilWreck.sparkCount;++i) {
@@ -7072,6 +7181,24 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 const float surfaceOffset = burst.vehicleArmourImpact ? .025f :
                     (burst.surfaceImpact ? .075f : .12f);
                 const auto center = Add(burst.worldPosition, Scale(n, surfaceOffset));
+                if(!burst.surfaceImpact) {
+                    const float life=1-TwinShieldDestructionSmooth(age,.08f,.62f);
+                    const float flash=1-TwinShieldDestructionSmooth(age,.155f,.39f);
+                    const float size=(std::clamp)(r*.58f,.24f,.47f);
+                    glowQuad(center,Scale(right,size),Scale(up,size*.81f),16,{4.9f,.24f,2.0f,.92f*flash});
+                    glowQuad(center,Scale(right,size*.29f),Scale(up,size*.25f),16,{6.2f,2.5f,4.4f,flash});
+                    for(unsigned ray=0;ray<5;++ray) {
+                        const float angle=float(ray)*1.256637f+float(burst.projectileId%17)*.32f;
+                        const auto radial=Add(Scale(axis,std::cos(angle)),Scale(across,std::sin(angle)));
+                        const auto direction=NormalizeOr(Add(radial,Scale(n,.30f+.06f*float(ray))),n);
+                        const auto head=Add(center,Scale(direction,size*(.19f+age*(2.2f+.33f*ray))));
+                        const auto edge=NormalizeOr(Cross(direction,Subtract(eye,head)),up);
+                        const auto half=Scale(direction,size*(.15f+.21f*life));
+                        glowQuad(Subtract(head,half),half,Scale(edge,.066f*size),114,
+                            {4.5f,.26f,2.55f,.94f*life});
+                    }
+                    continue;
+                }
                 const float flash=1-TwinShieldDestructionSmooth(age,0,.19f);
                 const float spread=(burst.surfaceImpact?3.7f:2.4f)*r;
                 glowQuad(center,Scale(right,r*1.4f),Scale(up,r*1.1f),16,{4.9f,.78f,.56f,flash*.92f});
@@ -7175,7 +7302,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
         if(!railTitleScreenVisible_)for(const auto& mark:impactMarks) {
             using RailCombatImpact::Kind;
-            if(mark.age>=.33f)continue;
+            if(RailCombatImpact::TransientCart(mark.kind) || mark.age>=.33f)continue;
             if(mark.arc!=RailCombatImpact::Arc::None && !mark.needsSurfaceBinding && mark.age<RailCombatImpact::ArcLifetime) {
                 const auto meshes=scene_.CourseMeshes().Items();
                 const auto part=std::find_if(meshes.begin(),meshes.end(),[&](const auto& item) {
@@ -10597,7 +10724,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     railPulseShots_.Update(gameplayDeltaTime);
     railPrimaryKills_.Update(gameplayDeltaTime);
-    railCombatImpactMarks_.Advance(gameplayDeltaTime);
+    railCombatImpactMarks_.Advance(gameplayDeltaTime,sessionDeltaTime);
 
     if (!railShooterInitialized_) {
         EnterRailShooterScene();
@@ -13130,6 +13257,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         }
         if(lightning.hitNow) {
             const auto& player=railShooterCollisionSystem_.PlayerHitbox().State();
+            const auto& cart=railShooterVehicleMovement_.State();
+            const auto scale=railShooterVehicleActor_.Frame().visualScale;
+            size_t strike=0;
+            while((lightning.hitNow & (1u<<strike))==0)++strike;
             PlayerHitRequest request{};
             request.kind=PlayerHitKind::ScriptedHazard;
             request.sourceActorId=railPostBossSequence_.ActorIds()[1];
@@ -13139,6 +13270,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
             request.railDistance=player.distance;
             request.lateralOffset=player.lateralOffset;
             request.verticalOffset=player.verticalOffset;
+            const float along=(std::clamp)(lightning.positions[strike]-cart.distance,-1.70f*scale.z,1.70f*scale.z);
+            request.impactWorldPosition=Add(cart.position,Add(Scale(cart.right,RailVeilLightning::StrikeLanes[strike]),
+                Add(Scale(cart.up,1.98f*scale.y),Scale(cart.forward,along))));
+            request.impactNormalWorld=cart.up;
+            request.hasWorldImpact=cart.initialized;
             railShooterCollisionSystem_.ApplyPlayerHit(request);
         }
     }
@@ -13146,6 +13282,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
         (void)audio_.PlaySpatial(railLockFullSound_,.27f,.28f,.71f);
     if(veilBeamEvents.hit) {
         const auto& player=railShooterCollisionSystem_.PlayerHitbox().State();
+        const auto& cart=railShooterVehicleMovement_.State();
+        const auto scale=railShooterVehicleActor_.Frame().visualScale;
+        const auto beamCenter=veilModelBeam.Center(player.distance);
+        const float lateral=(std::clamp)(beamCenter.x-player.lateralOffset,-1.55f*scale.x,1.55f*scale.x);
+        const float height=(std::clamp)(.91f*scale.y+beamCenter.y-player.verticalOffset,.58f*scale.y,1.27f*scale.y);
         PlayerHitRequest request{};
         request.kind=PlayerHitKind::ScriptedHazard;
         request.sourceActorId=railPostBossSequence_.ActorIds()[1];
@@ -13155,6 +13296,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         request.railDistance=player.distance;
         request.lateralOffset=player.lateralOffset;
         request.verticalOffset=player.verticalOffset;
+        request.impactWorldPosition=Add(cart.position,Add(Scale(cart.right,lateral),
+            Add(Scale(cart.up,height),Scale(cart.forward,-3.43f*scale.z))));
+        request.impactNormalWorld=Scale(cart.forward,-1.0f);
+        request.hasWorldImpact=cart.initialized;
         railShooterCollisionSystem_.ApplyPlayerHit(request);
     }
     if(!fangFollowup && !veilFollowup && collisionInput.bonusDamageMultiplier>1)for(const auto& shot:railShooterCollisionSystem_.LastWeaponFireResult().shots)
@@ -13244,10 +13389,13 @@ void AppRunLoop::UpdateRailShooterFrame() {
     collisionFeedbackInput.damageResults =
         railShooterCollisionSystem_.PlayerDamageResults();
     collisionFeedbackInput.vehicleState = &railShooterVehicleMovement_.State();
-    collisionFeedbackInput.deltaTime = gameplayDeltaTime;
+    // Let the cart reaction settle in presentation time during defense slow motion.
+    collisionFeedbackInput.deltaTime = gameplayDeltaTime > 0.0f ? sessionDeltaTime : 0.0f;
     collisionFeedbackInput.listenerRight = {frameState_.viewMatrix.m[0][0],frameState_.viewMatrix.m[1][0],frameState_.viewMatrix.m[2][0]};
     collisionFeedbackInput.listenerForward = {frameState_.viewMatrix.m[0][2],frameState_.viewMatrix.m[1][2],frameState_.viewMatrix.m[2][2]};
     collisionFeedbackInput.gameplayActive = vehicleDamageInput.gameplayActive;
+    collisionFeedbackInput.presentProtectedProjectileContacts = mountedMovementActive &&
+        !collisionInput.player.dodgeActive && collisionInput.player.invulnerabilityTime <= 0.0f;
     collisionFeedbackInput.settings =
         railShooterVehicleCollisionFeedbackSettings_;
     collisionFeedbackInput.settings.cameraShake = 0.0f;
@@ -13291,32 +13439,64 @@ void AppRunLoop::UpdateRailShooterFrame() {
     DispatchPlayerDamagePresentation();
     const auto& cartDamage=railPlayerDamagePresentationBridge_.Frame().lastDamage;
     const auto& impactVehicle=railShooterVehicleRenderer_.Frame();
-    if(cartDamage.accepted && !cartDamage.lethal && cartDamage.request.kind==PlayerHitKind::EnemyProjectile &&
-        cartDamage.request.hasWorldImpact && impactVehicle.visible && impactVehicle.meshId=="rail_vehicle.mine_cart" &&
-        railCombatImpactMarks_.AcceptCart(cartDamage.sequence)) {
+    if(impactVehicle.visible && impactVehicle.meshId=="rail_vehicle.mine_cart") {
         using namespace RailCombatImpact;
-        const auto& hit=cartDamage.request;
-        auto local=railShooterVehicleCollisionFeedback_.Frame().impactOffsetLocal;
         const auto scale=railShooterVehicleActor_.Frame().visualScale;
-        local={local.x/(std::max)(.01f,scale.x),local.y/(std::max)(.01f,scale.y),local.z/(std::max)(.01f,scale.z)};
-        const bool end=std::abs(local.z)>2.90f && std::abs(local.x)<1.80f;
-        local.x=end?(std::clamp)(local.x,-1.75f,1.75f):std::copysign(2.29f,local.x);
-        local.z=end?std::copysign(3.28f,local.z):(std::clamp)(local.z,-3.23f,3.23f);
-        local.y=(std::clamp)(local.y,.53f,end?1.31f:1.88f);
-        const Vector3 localNormal=end?Vector3{0,0,std::copysign(1.0f,local.z)}:
-            Vector3{std::copysign(1.0f,local.x),0,0};
-        const bool heavy=RailEnemyEnergy::KindForProjectile(hit.sourceId)==RailEnemyEnergy::BatteryKind::Heavy;
-        Vector4 projectileColor{1.0f,.40f,.07f,1.0f};
-        if(const auto* prior=railEnemyProjectilePresentationBridge_.FindProjectile(hit.sourceProjectileId))
-            projectileColor=prior->color;
-        else for(const auto& bullet:railShooterSpawnRuntime_.Bullets())if(bullet.projectileId==hit.sourceProjectileId) {
-            projectileColor=bullet.color;
-            break;
+        const auto addCartMark=[&](uint64_t sequence,Vector3 local,Vector3 origin,Vector3 tint,Kind kind) {
+            local={local.x/(std::max)(.01f,scale.x),local.y/(std::max)(.01f,scale.y),local.z/(std::max)(.01f,scale.z)};
+            const bool end=std::abs(local.z)>2.90f && std::abs(local.x)<1.80f;
+            local.x=end?(std::clamp)(local.x,-1.75f,1.75f):std::copysign(2.29f,local.x);
+            local.z=end?std::copysign(3.28f,local.z):(std::clamp)(local.z,-3.23f,3.23f);
+            local.y=(std::clamp)(local.y,.53f,end?1.31f:1.88f);
+            const Vector3 localNormal=end?Vector3{0,0,std::copysign(1.0f,local.z)}:
+                Vector3{std::copysign(1.0f,local.x),0,0};
+            const auto normal=NormalizeOr(RailCombatImpact::Transform(localNormal,impactVehicle.worldMatrix,0),{0,1,0});
+            railCombatImpactMarks_.Add({CartOwner,sequence,local,localNormal,
+                origin,normal,tint,kind,0,kind==Kind::Heavy?1.0f:.71f});
+        };
+        const auto& cart=railShooterVehicleMovement_.State();
+        for(size_t i=0;i<collisionFeedback.vfxCommandCount;++i) {
+            const auto& impact=collisionFeedback.vfxCommands[i];
+            const auto offset=Subtract(impact.worldPosition,cart.position);
+            const Vector3 local{Dot(offset,cart.right),Dot(offset,cart.up),Dot(offset,cart.forward)};
+            const auto rear=RailRearCartImpact::FromSource(impact.effectId);
+            if(rear==RailRearCartImpact::Type::Wing) {
+                const auto normal=impact.impactNormalWorld;
+                const auto contact=RailRearCartImpact::ResolveWingContact(
+                    {local.x/(std::max)(.01f,scale.x),local.y/(std::max)(.01f,scale.y),local.z/(std::max)(.01f,scale.z)},
+                    {Dot(normal,cart.right),Dot(normal,cart.up),Dot(normal,cart.forward)});
+                railCombatImpactMarks_.Add({CartOwner,impact.resultSequence,contact.point,contact.normal,
+                    impact.worldPosition,normal,{1.0f,.11f,.47f},Kind::WingCart});
+                continue;
+            }
+            if(rear==RailRearCartImpact::Type::Lightning || rear==RailRearCartImpact::Type::Beam) {
+                const bool lightningContact=rear==RailRearCartImpact::Type::Lightning;
+                const Vector3 point{local.x/(std::max)(.01f,scale.x),
+                    local.y/(std::max)(.01f,scale.y),local.z/(std::max)(.01f,scale.z)};
+                const Vector3 normal=lightningContact?Vector3{0,1,0}:Vector3{0,0,-1};
+                const Vector3 tint=lightningContact?Vector3{1.0f,.09f,.035f}:Vector3{.34f,.26f,1.0f};
+                railCombatImpactMarks_.Add({CartOwner,impact.resultSequence,point,normal,impact.worldPosition,
+                    impact.impactNormalWorld,tint,lightningContact?Kind::VeilLightningCart:Kind::VeilBeamCart});
+                continue;
+            }
+            addCartMark(impact.resultSequence,local,impact.worldPosition,{1.0f,.40f,.07f},Kind::GatlingCart);
         }
-        const auto tint=RailCartImpactEnergy::Tint(hit.sourceId,projectileColor);
-        railCombatImpactMarks_.Add({CartOwner,cartDamage.sequence,local,localNormal,
-            hit.impactWorldPosition,NormalizeOr(RailCombatImpact::Transform(localNormal,impactVehicle.worldMatrix,0),{0,1,0}),
-            tint,heavy?Kind::Heavy:Kind::Cart,0,heavy?1.0f:.71f});
+        const auto& hit=cartDamage.request;
+        const auto kind=RailEnemyEnergy::KindForProjectile(hit.sourceId);
+        if(cartDamage.accepted && !cartDamage.lethal && hit.kind==PlayerHitKind::EnemyProjectile &&
+            hit.hasWorldImpact && kind!=RailEnemyEnergy::BatteryKind::Gatling && !IsFangChaseRound(hit.sourceId) &&
+            railCombatImpactMarks_.AcceptCart(cartDamage.sequence)) {
+            Vector4 projectileColor{1.0f,.40f,.07f,1.0f};
+            if(const auto* prior=railEnemyProjectilePresentationBridge_.FindProjectile(hit.sourceProjectileId))
+                projectileColor=prior->color;
+            else for(const auto& bullet:railShooterSpawnRuntime_.Bullets())if(bullet.projectileId==hit.sourceProjectileId) {
+                projectileColor=bullet.color;
+                break;
+            }
+            const auto tint=RailCartImpactEnergy::Tint(hit.sourceId,projectileColor);
+            addCartMark(cartDamage.sequence,collisionFeedback.impactOffsetLocal,hit.impactWorldPosition,
+                tint,kind==RailEnemyEnergy::BatteryKind::Heavy?Kind::Heavy:Kind::Cart);
+        }
     }
     GrazeScoreFrameInput grazeInput{};
     grazeInput.deltaTime = gameplayDeltaTime;
@@ -14529,9 +14709,12 @@ void AppRunLoop::UpdateRailShooterFrame() {
     for(const auto& contact:railLockVolley_.Contacts())
         scoutCameraPulse=(std::max)(scoutCameraPulse,contact.ScoutBlast().camera);
     Vector3 renderEye=cameraPosition;
-    if(!rearCameraTurning && scoutCameraPulse>0.0f) {
-        // Offset only the displayed chase camera after aiming is complete.
-        const auto offset=Scale(Add(Scale(Cross(cameraUp,forward),.18f),Scale(cameraUp,-.10f)),scoutCameraPulse);
+    const Vector2 heavyShake=collisionFeedback.heavyCameraOffset;
+    if(!rearCameraTurning && (scoutCameraPulse>0.0f || heavyShake.x!=0.0f || heavyShake.y!=0.0f)) {
+        // Translate the displayed rig after the gameplay aim is resolved.
+        const auto cameraRight=NormalizeOr(Cross(cameraUp,forward),{1,0,0});
+        const auto offset=Add(Scale(cameraRight,.18f*scoutCameraPulse+heavyShake.x),
+            Scale(cameraUp,-.10f*scoutCameraPulse+heavyShake.y));
         renderEye=Add(cameraPosition,offset);
         frameState_.viewMatrix=MakeLookAtMatrix(renderEye,Add(lookTarget,offset),cameraUp);
         frameState_.viewProjectionMatrix=Multiply(frameState_.viewMatrix,frameState_.projMatrix);
@@ -16118,27 +16301,55 @@ void AppRunLoop::DispatchRailVehicleEvasionFeedback() {
 void AppRunLoop::DispatchRailVehicleCollisionFeedback() {
     const RailVehicleCollisionFeedbackFrame& feedback =
         railShooterVehicleCollisionFeedback_.Frame();
-    const auto& damage=railShooterCollisionSystem_.PlayerDamageResults();
     const char* hitType="";
     bool played=false;
     float pan=0;
+    size_t gatlingTicks=0;
     for (size_t index = 0; index < feedback.audioCueCount; ++index) {
         const RailVehicleCollisionAudioCue& cue = feedback.audioCues[index];
-        const auto hit=std::find_if(damage.begin(),damage.end(),[&](const auto& result){return result.sequence==cue.resultSequence;});
-        const bool projectile=hit!=damage.end() && hit->request.kind==PlayerHitKind::EnemyProjectile;
-        const bool heavy=projectile && RailHeavy::IsProjectile(hit->request.sourceId);
-        const auto sample=projectile?(heavy?railHeavyCartHitSound_:railProjectileCartHitSound_):railVehicleCollisionSound_;
-        hitType=projectile?(heavy?"heavy":"projectile"):"contact";
+        auto sample=railVehicleCollisionSound_;
+        switch (cue.kind) {
+        case RailVehicleImpactKind::Contact:
+            hitType="contact";
+            break;
+        case RailVehicleImpactKind::Projectile:
+            sample=railProjectileCartHitSound_;
+            hitType="projectile";
+            break;
+        case RailVehicleImpactKind::Gatling:
+            sample=railProjectileCartHitSound_;
+            hitType="gatling";
+            break;
+        case RailVehicleImpactKind::Heavy:
+            sample=railHeavyCartHitSound_;
+            hitType="heavy";
+            break;
+        case RailVehicleImpactKind::VeilLightning:
+            sample=railEliteSounds_[2];
+            hitType="veil_lightning";
+            break;
+        case RailVehicleImpactKind::VeilBeam:
+            sample=railVehicleCollisionSound_;
+            hitType="veil_beam";
+            break;
+        case RailVehicleImpactKind::Wing:
+            sample=railProjectileCartHitSound_;
+            hitType="wing";
+            break;
+        }
         pan=cue.pan;
-        played|=audio_.PlaySpatial(sample.IsValid()?sample:railVehicleCollisionSound_,cue.volume,cue.pan,cue.pitch);
+        const bool cuePlayed=audio_.PlaySpatial(sample.IsValid()?sample:railVehicleCollisionSound_,cue.volume,cue.pan,cue.pitch);
+        played|=cuePlayed;
+        gatlingTicks+=cuePlayed && cue.kind==RailVehicleImpactKind::Gatling;
     }
     static const bool audit=ReadEnvironmentUInt("GE3_CART_DAMAGE_AUDIT",0)!=0;
     if(audit) {
         static std::ofstream log("logs/cart_damage_feel.csv");
-        static const bool header=bool(log<<"frame,distance,hit,audio,pan,bank,pitch,heave,particles,hp\n");
+        static const bool header=bool(log<<"frame,distance,hit,audio,pan,bank,pitch,heave,particles,hp,gatlingTicks,heavyShakeX,heavyShakeY\n");
         if(header)log<<railShooterFrameIndex_<<','<<railShooterDistance_<<','<<hitType<<','<<played<<','<<pan
             <<','<<feedback.bodyBankDegrees<<','<<feedback.bodyPitchDegrees<<','<<feedback.bodyTranslationWorld.y<<','
-            <<feedback.particles.size()<<','<<railShooterCollisionSystem_.Player().hitPoints<<std::endl;
+            <<feedback.particles.size()<<','<<railShooterCollisionSystem_.Player().hitPoints<<','<<gatlingTicks
+            <<','<<feedback.heavyCameraOffset.x<<','<<feedback.heavyCameraOffset.y<<std::endl;
     }
     // Sparks and metal chips are retained by the vehicle feedback bridge and
     // submitted as bounded production primitives in UpdateTerrainAuthoring.
@@ -19331,8 +19542,54 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 for (const auto& token : lockFrame.tokens) applyLockFlash(token);
                 for (const auto& token : lockFrame.releasedTokens) applyLockFlash(token);
             }
+            const auto& cartPose=railShooterVehicleRenderer_.Frame();
+            if(cart.visible && cartPose.meshId=="rail_vehicle.mine_cart" &&
+                !railPlayerDamagePresentationBridge_.Frame().lastDamage.lethal) {
+                if(const auto* hit=LatestCartDischarge(railCombatImpactMarks_.Items(),false)) {
+                    const auto discharge=EvaluateCartImpact(*hit,cartPose.worldMatrix,
+                        railShooterWheelContactPresentation_.Frame(),false);
+                    for(const auto& wheel:discharge.wheels)if(wheel.intensity>.002f) {
+                        const auto position=RailCombatImpact::Transform(wheel.position,cartPose.worldMatrix,1);
+                        const auto normal=NormalizeOr(RailCombatImpact::Transform(
+                            {std::copysign(.56f,wheel.position.x),.22f,-.79f},cartPose.worldMatrix,0),{0,0,-1});
+                        const auto ink=Scale(Add(hit->tint,Vector3{.34f*wheel.heat,.38f*wheel.heat,.18f*wheel.heat}),
+                            wheel.intensity*2.45f);
+                        camera.combatMarkPosition[slots]={position.x,position.y,position.z,-.875f};
+                        camera.combatMarkNormalAge[slots]={normal.x,normal.y,normal.z,0};
+                        camera.combatMarkTintRadius[slots]={ink.x,ink.y,ink.z,.64f};
+                        ++slots;
+                    }
+                }
+                const auto marks=railCombatImpactMarks_.Items();
+                for(auto it=marks.rbegin();it!=marks.rend() && slots<DrawCapacity;++it) {
+                    const auto& mark=*it;
+                    const auto rear=mark.kind==Kind::WingCart?RailRearCartImpact::Type::Wing:RearCartType(mark.kind);
+                    if(mark.owner!=CartOwner || rear==RailRearCartImpact::Type::None)continue;
+                    const auto arc=RailRearCartImpact::Evaluate(rear,mark.localPoint,mark.age,mark.seed,mark.localNormal,false);
+                    for(size_t i=0;i<arc.flashCount && slots<DrawCapacity;++i) {
+                        const auto& flash=arc.flashes[i];
+                        const auto position=RailCombatImpact::Transform(flash.position,cartPose.worldMatrix,1);
+                        const auto facing=NormalizeOr(RailCombatImpact::Transform(flash.normal,cartPose.worldMatrix,0),{0,1,0});
+                        const auto hue=Add(Scale(mark.tint,2.65f),{.78f,.65f,.73f});
+                        const auto ink=Scale(hue,flash.intensity);
+                        camera.combatMarkPosition[slots]={position.x,position.y,position.z,-.875f};
+                        camera.combatMarkNormalAge[slots]={facing.x,facing.y,facing.z,0};
+                        camera.combatMarkTintRadius[slots]={ink.x,ink.y,ink.z,flash.radius};
+                        ++slots;
+                    }
+                    if(rear==RailRearCartImpact::Type::Lightning) {
+                        const auto light=Add(mark.origin,Vector3{0,.28f,0});
+                        const float intensity=1.34f*RailRearCartImpact::LightningReflection(mark.age);
+                        if(intensity>camera.combatImpactLight.w) {
+                            camera.combatImpactLight={light.x,light.y,light.z,intensity};
+                            camera.combatImpactTint={mark.tint.x,mark.tint.y,mark.tint.z,5.1f};
+                        }
+                    }
+                }
+            }
             for(auto it=railCombatImpactMarks_.Items().rbegin();it!=railCombatImpactMarks_.Items().rend();++it) {
                 auto& mark=*it;
+                if(TransientCart(mark.kind))continue;
                 if(mark.kind==Kind::Heavy || mark.kind==Kind::Kill) {
                     const float strength=(mark.kind==Kind::Heavy?2.5f:1.45f)*
                         (1.0f-TwinShieldDestructionSmooth(mark.age,.012f,.115f));

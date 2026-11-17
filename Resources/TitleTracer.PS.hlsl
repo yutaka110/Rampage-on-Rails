@@ -42,15 +42,15 @@ float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
 }
 
 float4 main(PixelInput input) : SV_TARGET0 {
-    if(input.texcoord.x>=114.0f && input.texcoord.x<=115.0f) {
-        const float u=input.texcoord.x-114.0f;
+    const bool cartArcTip=input.texcoord.x>=116.0f && input.texcoord.x<=117.0f;
+    if(cartArcTip || (input.texcoord.x>=114.0f && input.texcoord.x<=115.0f)) {
+        const float u=input.texcoord.x-(cartArcTip?116.0f:114.0f);
         const float v=abs(input.texcoord.y*2.0f-1.0f);
         const float aa=max(fwidth(v)*.55f,.055f);
         const float core=1.0f-smoothstep(.10f,.22f+aa,v);
         const float halo=exp(-v*v*6.6f)*(1.0f-smoothstep(.75f,1.0f,v));
         const float end=smoothstep(0.0f,.055f,u)*(1.0f-smoothstep(.945f,1.0f,u));
-        const float3 tint=lerp(input.color.rgb,float3(4.7f,4.7f,4.75f),core*.42f);
-        return float4(tint,(core*.84f+halo*.22f)*end*input.color.a);
+        return float4(input.color.rgb,(core*.84f+halo*(cartArcTip?.12f:.31f))*end*input.color.a);
     }
     const bool violetDischarge=input.texcoord.x>=112.0f && input.texcoord.x<=113.0f;
     if(violetDischarge || (input.texcoord.x>=106.0f && input.texcoord.x<=107.0f)) {
