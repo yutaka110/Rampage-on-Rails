@@ -322,7 +322,7 @@ public:
     bool SetEnemyRailPose(uint32_t actorId, float distanceOffset, float lateralOffset,
         float verticalOffset, float forwardSpeed);
     void RetireEnemies(std::span<const uint32_t> actorIds, bool playAuthoredExit = true);
-    void DisengagePursuingWave(std::string_view waveId);
+    void BeginLockPracticeDeparture(float playerSpeed);
     void PeelBridgeEscort(float playerDistance);
     // 敵を消す場合、その敵が所有する弾も停止する。
     void ClearEnemies();

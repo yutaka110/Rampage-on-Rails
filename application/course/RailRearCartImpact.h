@@ -16,8 +16,8 @@ inline Type FromSource(std::string_view source) {
 
 inline constexpr float LightningDuration=.50f;
 inline constexpr float BeamDuration=.34f;
-inline constexpr float WingDuration=.28f;
-inline constexpr float WingSparkDuration=.15f;
+inline constexpr float WingDuration=.34f;
+inline constexpr float WingSparkDuration=.12f;
 inline constexpr float LightningSettle=.25f;
 inline constexpr float BeamSettle=.23f;
 inline constexpr float WingSettle=.14f;
@@ -62,6 +62,8 @@ struct Frame {
     struct Flash {
         Vector3 position{}, normal{};
         float intensity=0, radius=0;
+        bool atContact=false;
+        bool contactReflection=false;
     };
     std::array<RailCartImpactEnergy::Stroke,112> strokes{};
     std::array<RailCartImpactEnergy::Stroke,16> hotTips{};
@@ -82,7 +84,7 @@ inline Frame Evaluate(Type type,Vector3 contact,float age,uint64_t seed,Vector3 
     const float tick=std::floor(age*49.0f);
     const float variation=float(seed%127)*.713f;
     const float shape=std::sin(variation);
-    const float life=1.0f-Smooth(age,lightning?.30f:wing?.19f:.235f,duration);
+    const float life=1.0f-Smooth(age,lightning?.30f:wing?.22f:.235f,duration);
     const auto along=[](Vector3 a,Vector3 b,float t) {
         return Vector3{std::lerp(a.x,b.x,t),std::lerp(a.y,b.y,t),std::lerp(a.z,b.z,t)};
     };
@@ -114,8 +116,9 @@ inline Frame Evaluate(Type type,Vector3 contact,float age,uint64_t seed,Vector3 
                 auto p=along(a,b,float(cell)/cells);
                 if(cell==0 || cell==cells)return p;
                 const float phase=pattern+float(cell)*3.49f+float(i)*4.67f;
-                const float bend=(.16f*std::sin(phase)+.056f*std::sin(phase+tick*1.71f));
-                const float lift=.035f+.050f*std::abs(std::sin(phase+tick*1.27f));
+                const float motion=wing?0.0f:tick;
+                const float bend=.16f*std::sin(phase)+.056f*std::sin(phase+motion*1.71f);
+                const float lift=.035f+.050f*std::abs(std::sin(phase+motion*1.27f));
                 return Vector3{p.x+across.x*bend+surface.x*lift,
                     p.y+across.y*bend+surface.y*lift,p.z+across.z*bend+surface.z*lift};
             };
@@ -134,8 +137,10 @@ inline Frame Evaluate(Type type,Vector3 contact,float age,uint64_t seed,Vector3 
                 // Each live branch has a short white leader. Its path stays
                 // connected while individual kinks can shift between frames.
                 if(progress<=1.0f && to>=progress && result.hotTipCount<result.hotTips.size()) {
-                    const auto tip=along(end,start,(std::min)(1.0f,.44f/((to-from)*length)));
-                    result.hotTips[result.hotTipCount++]={tip,end,life*gain*(.91f+.09f*flicker),width*.72f};
+                    const float tipLength=wing?.18f:.44f;
+                    const auto tip=along(end,start,(std::min)(1.0f,tipLength/((to-from)*length)));
+                    const float heat=wing?.76f:1.0f;
+                    result.hotTips[result.hotTipCount++]={tip,end,life*gain*heat*(.91f+.09f*flicker),width*.72f};
                 }
             }
         }
@@ -223,43 +228,91 @@ inline Frame Evaluate(Type type,Vector3 contact,float age,uint64_t seed,Vector3 
         return result;
     }
 
-    // Wing rounds retain the swept contact and favor the struck panel.
-    flash(contact,normal,0,1.09f,.57f);
-    contact={contact.x+normal.x*.072f,contact.y+normal.y*.072f,contact.z+normal.z*.072f};
-    if(normal.z>.5f) {
-        const Vector3 fork{(std::clamp)(contact.x-side*.42f,-1.52f,1.52f),
-            (std::clamp)(contact.y+.19f,.50f,1.21f),3.45f};
-        const float forkTime=trace(std::array{contact,fork},front,-.008f,37,.085f,1.0f);
-        flash(fork,front,forkTime,.63f,.38f);
-        trace(std::array{fork,Vector3{fork.x-side*.54f,.61f+.11f*shape,3.45f},
-            Vector3{(std::clamp)(fork.x-side*1.64f,-2.10f,2.10f),.54f,3.42f}},
-            front,forkTime,29,.060f,.79f);
-        trace(std::array{fork,Vector3{contact.x+side*.40f,1.24f,3.43f},
-            Vector3{(std::clamp)(contact.x+side*.68f,-2.12f,2.12f),1.44f,3.36f}},
-            front,forkTime+.011f,28,.045f,.52f);
+    const float contactHeat=1.62f*(1.0f-Smooth(age,.018f,.082f));
+    if(contactHeat>.012f)result.flashes[result.flashCount++]={contact,normal,contactHeat,.54f,true};
+    if(contactHeat>.06f && contact.z<-2.66f && contact.y<1.50f &&
+        (normal.z<-.5f || normal.y>.5f)) {
+        // The rear camera sees the inner lip above a contact hidden by the
+        // far wall, including a descending round that first touches the bed.
+        const Vector3 reflection{(std::clamp)(contact.x,-1.65f,1.65f),1.55f,-2.75f};
+        result.flashes[result.flashCount++]={reflection,top,.58f*contactHeat,.54f,false,true};
+    }
+    const Vector3 root{contact.x+normal.x*.075f,contact.y+normal.y*.075f,contact.z+normal.z*.075f};
+    const float angle=std::sin(variation+2.19f);
+    const float reach=std::sin(variation+4.38f);
+    const float depthDirection=contact.z>.76f*angle?-1.0f:1.0f;
+    const auto floorBranch=[&](Vector3 entry,Vector3 surface,float arrival,float gain) {
+        const float inward=std::abs(entry.x)>.36f?-std::copysign(1.0f,entry.x):-side;
+        const float depth=entry.z>.70f*reach?-1.0f:1.0f;
+        const Vector3 split{(std::clamp)(entry.x+inward*(.49f+.13f*angle),-1.56f,1.56f),
+            entry.y,(std::clamp)(entry.z+depth*(.41f+.18f*shape),-2.43f,2.58f)};
+        const Vector3 end{(std::clamp)(split.x+inward*(.73f+.19f*reach),-1.56f,1.56f),
+            entry.y,(std::clamp)(split.z+depth*(.61f+.22f*angle),-2.39f,2.53f)};
+        const float splitTime=trace(std::array{entry,split},surface,arrival,30,.068f,gain,.068f);
+        flash(split,surface,splitTime,gain*.56f,.50f);
+        trace(std::array{split,end},surface,splitTime,28,.050f,gain*.82f,.064f);
+        trace(std::array{split,Vector3{(std::clamp)(split.x+inward*.22f,-1.53f,1.53f),
+            entry.y,(std::clamp)(split.z-depth*(.45f+.18f*reach),-2.42f,2.55f)}},
+            surface,splitTime+.008f,28,.035f,gain*.59f,.052f);
+    };
+
+    if(std::abs(normal.z)>.5f) {
+        const float end=normal.z;
+        const float inward=std::abs(contact.x)>.34f?-side:(angle>0?1.0f:-1.0f);
+        const float faceHeight=contact.y>.76f?.55f+.08f*reach:.98f+.10f*reach;
+        const float faceDepth=end*3.44f;
+        const Vector3 elbow{(std::clamp)(contact.x+inward*.25f,-1.70f,1.70f),
+            std::lerp(root.y,faceHeight,.38f),faceDepth};
+        const Vector3 fork{(std::clamp)(contact.x+inward*(.63f+.16f*shape),-1.59f,1.59f),
+            faceHeight,faceDepth};
+        const float forkTime=trace(std::array{root,elbow,fork},normal,-.012f,32,.093f,.92f);
+        const Vector3 faceEnd{(std::clamp)(fork.x+inward*(.61f+.24f*reach),-1.62f,1.62f),
+            faceHeight>.78f?.63f+.09f*angle:1.04f+.07f*angle,faceDepth};
+        trace(std::array{fork,faceEnd},normal,forkTime,31,.057f,.65f,.071f);
+
+        const float wallTop=end>0?1.32f:1.54f;
+        const float wallInside=end>0?2.68f:2.57f;
+        const float crossX=(std::clamp)(fork.x+inward*(.18f+.25f*angle),-1.47f,1.47f);
+        const Vector3 cap{crossX,wallTop,end*3.27f};
+        const float capTime=trace(std::array{fork,cap},normal,forkTime+.012f,37,.048f,.60f);
+        const Vector3 inner{crossX+inward*.16f,wallTop,end*wallInside};
+        const float innerTime=trace(std::array{cap,inner},top,capTime,43,.048f,.59f);
+        const Vector3 entry{inner.x,.46f,inner.z-end*.10f};
+        const float entryTime=trace(std::array{inner,entry},{0,0,-end},innerTime,43,.048f,.57f);
+        floorBranch(entry,top,entryTime,.61f);
         return result;
     }
 
-    const float depth=(std::clamp)(contact.z+.48f, -3.07f,2.83f);
-    const Vector3 seam{side*2.35f,(std::clamp)(contact.y+.23f,.64f,1.80f),depth};
-    const Vector3 fork{side*2.41f,1.47f,(std::lerp)(depth,3.17f,.45f+.08f*shape)};
-    const float forkTime=trace(std::array{contact,seam,Vector3{side*2.36f,1.10f,seam.z+.27f},fork},
-        flank,-.010f,63,.086f,1.0f);
-    flash(fork,flank,forkTime,.73f,.47f);
-    trace(std::array{fork,Vector3{side*2.38f,.88f,fork.z+.27f},
-        Vector3{side*2.48f,.36f,(std::clamp)(fork.z+.48f,-2.90f,2.71f)}},
-        flank,forkTime,40,.048f,.61f);
-    const Vector3 corner{side*2.18f,.98f+.12f*shape,3.45f};
-    const float cornerTime=trace(std::array{fork,Vector3{side*2.39f,1.32f,3.16f},corner},
-        flank,forkTime,57,.075f,.92f);
-    flash(corner,front,cornerTime,.77f,.45f);
-    const Vector3 faceSplit{side*.96f,.73f+.14f*shape,3.45f};
-    const float faceTime=trace(std::array{corner,Vector3{side*1.59f,1.12f,3.45f},faceSplit},
-        front,cornerTime,48,.067f,.77f);
-    trace(std::array{faceSplit,Vector3{side*.52f,.48f,3.45f},Vector3{-side*.37f,.53f,3.44f}},
-        front,faceTime+.008f,44,.040f,.42f,.056f);
-    trace(std::array{faceSplit,Vector3{side*.63f,1.13f,3.46f}},
-        front,faceTime,33,.043f,.54f,.064f);
+    if(std::abs(normal.y)>.5f && contact.y<1.50f) {
+        floorBranch(root,normal,-.014f,.93f);
+        return result;
+    }
+
+    // Keep the first fork on the struck side. Only its weaker branch climbs
+    // over the wall, then drops onto the exposed bed.
+    const float z=(std::clamp)(contact.z+depthDirection*(.72f+.24f*shape),-2.87f,2.87f);
+    const bool trimHit=normal.y>.5f;
+    const float forkHeight=trimHit?1.95f:contact.y>.91f?.55f+.18f*angle:1.14f+.19f*angle;
+    const Vector3 fork{side*(trimHit?2.02f:2.332f),forkHeight,z};
+    const Vector3 elbow{std::lerp(root.x,fork.x,.48f),std::lerp(root.y,fork.y,.36f),
+        std::lerp(root.z,fork.z,.63f)};
+    const auto surface=trimHit?top:flank;
+    const float forkTime=trace(std::array{root,elbow,fork},surface,-.013f,35,.094f,.95f);
+    const Vector3 panelEnd{side*(trimHit?1.86f:2.33f),
+        trimHit?1.95f:forkHeight>.88f?.55f+.15f*reach:1.18f+.15f*reach,
+        (std::clamp)(z+depthDirection*(.51f+.25f*reach),-2.91f,2.91f)};
+    trace(std::array{fork,panelEnd},surface,forkTime,30,.058f,.67f,.072f);
+
+    const float crossZ=(std::clamp)(z+depthDirection*(.21f+.29f*angle),-2.66f,2.72f);
+    const Vector3 cap{side*(trimHit?1.89f:2.37f),1.95f,crossZ};
+    const float capTime=trace(std::array{fork,cap},surface,forkTime+.012f,38,.060f,.69f);
+    flash(cap,top,capTime,.32f,.43f);
+    const Vector3 inner{side*1.66f,1.95f,crossZ+depthDirection*.17f};
+    const float innerTime=trace(std::array{cap,inner},top,capTime,43,.053f,.64f);
+    const Vector3 entry{side*1.52f,.46f,inner.z+depthDirection*(.34f+.16f*shape)};
+    const float entryTime=trace(std::array{inner,entry},{-side,0,0},innerTime,48,.048f,.59f);
+    flash(entry,top,entryTime,.27f,.51f);
+    floorBranch(entry,top,entryTime,.65f);
     return result;
 }
 }

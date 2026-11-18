@@ -717,6 +717,9 @@ void EnemyProjectileVfxRenderer::Update(
     };
     for (const EnemyProjectilePresentationEvent& event :
          input.presentation->events) {
+        if(input.vehicleOwnsOrdinaryImpact && event.kind==EnemyProjectilePresentationEventKind::Impacted &&
+            !event.surfaceImpact && !IsFangChaseRound(event.definitionId) &&
+            RailEnemyEnergy::KindForProjectile(event.definitionId)==RailEnemyEnergy::BatteryKind::None)continue;
         if (event.kind == EnemyProjectilePresentationEventKind::Expired) {
             continue;
         }

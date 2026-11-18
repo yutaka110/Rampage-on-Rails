@@ -78,6 +78,9 @@ struct RailVehicleCollisionFeedbackInput final {
     Vector3 listenerRight{1,0,0};
     Vector3 listenerForward{0,0,1};
     RailVehicleCollisionFeedbackSettings settings{};
+    // Normal rounds follow the gameplay clock so a short recoil remains
+    // visible even when presentation time advances through a frame hitch.
+    float ordinaryProjectileDeltaTime = -1.0f;
 };
 
 struct RailVehicleImpactParticle final {

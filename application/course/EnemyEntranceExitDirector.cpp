@@ -289,6 +289,25 @@ void EnemyEntranceExitDirector::UpdateActors(std::span<CourseEnemyActor> actors,
             break;
         case EnemyEntranceExitPhase::Exiting: {
             state.phaseElapsedSeconds += dt;
+            if (actor.desc.waveId == "short_lock") {
+                const float side = actor.behaviorState.authoredLateralOffset < 0 ? -1.0f : 1.0f;
+                const float time = (std::max)(0.0f, state.phaseElapsedSeconds - 0.05f * float(actor.actorId % 6u));
+                // Gain height before moving toward the canyon walls. Integrating
+                // the speed ramp gives the plane a continuous departure path.
+                const auto travel = [](float seconds) {
+                    constexpr float ramp = 0.74f;
+                    const float u = Saturate(seconds / ramp);
+                    return ramp * u*u*u * (1.0f - 0.5f*u) + (std::max)(0.0f, seconds - ramp);
+                };
+                state.appliedForwardOffset = 10.0f * travel(time);
+                state.appliedLateralOffset = side * 32.0f * travel(time - 0.25f);
+                state.appliedVerticalOffset = 58.0f * travel(time);
+                const float turn = SmoothStep(time / 0.65f);
+                actor.desc.localRotation = {0.48f * turn, -2.2f * side * turn, -0.54f * side * turn};
+                state.presentationAlpha = state.presentationScale = 1.0f;
+                ++frame_.exitingActors;
+                break;
+            }
             const bool bridgePeel = UsesBridgeDeparture(actor);
             const int scout = RailNeedlesPatrol::Slot(actor.desc.waveId);
             const float bridgeExitDuration = actor.desc.waveId == RailMothership::BridgeLookoutWave ? .9f : 1.2f;

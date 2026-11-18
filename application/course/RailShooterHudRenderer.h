@@ -113,6 +113,7 @@ class RailShooterHudRenderer final {
 public:
     void Reset();
     void Update(const RailShooterHudRenderInput& input);
+    void Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat);
     const RailShooterHudRenderFrame& Frame() const noexcept { return frame_; }
 
 private:

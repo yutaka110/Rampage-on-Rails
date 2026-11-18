@@ -146,6 +146,7 @@ struct EnemyProjectileVfxRenderInput final {
     bool gameplayActive = true;
     EnemyProjectileVfxRendererSettings settings{};
     EnemyProjectileScreenSpaceReadabilitySettings readabilitySettings{};
+    bool vehicleOwnsOrdinaryImpact=false;
 };
 
 // Production hostile-projectile presentation. It resolves a visual asset by

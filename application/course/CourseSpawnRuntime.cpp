@@ -273,14 +273,30 @@ bool CourseSpawnRuntime::SynchronizePreviewEnemy(uint32_t actorId, CourseEnemyAc
     return false;
 }
 
-void CourseSpawnRuntime::DisengagePursuingWave(std::string_view waveId) {
+void CourseSpawnRuntime::BeginLockPracticeDeparture(float playerSpeed) {
     for(auto& actor:enemies_) {
-        if(actor.desc.waveId!=waveId || actor.desc.hitPoints<=0 || !actor.behaviorDefinition.maintainForwardEngagementBand)continue;
-        // End this wave's pursuit so the ordinary staged exit can play.
-        actor.behaviorDefinition.maintainForwardEngagementBand=false;
-        actor.entranceExitState.exitRequested=true;
-        actor.entranceExitState.attackSuppressed=true;
-        actor.entranceExitState.targetable=false;
+        auto& definition=actor.behaviorDefinition;
+        auto& staging=actor.entranceExitState;
+        if(actor.desc.waveId!="short_lock" || actor.desc.hitPoints<=0 ||
+            actor.startupFlightControlled || staging.exitRequested ||
+            !definition.maintainForwardEngagementBand)continue;
+        auto& behavior=actor.behaviorState;
+        const auto& formation=actor.formationState;
+        // Start the departure at the last combat pose, including its hover offset.
+        behavior.authoredLateralOffset=actor.desc.lateralOffset-formation.appliedLateralOffset-
+            staging.appliedLateralOffset-behavior.safetyLateralOffset;
+        behavior.authoredVerticalOffset=actor.desc.verticalOffset-formation.appliedVerticalOffset-
+            staging.appliedVerticalOffset;
+        behavior.integratedForwardOffset=actor.desc.distanceOffset-formation.appliedForwardOffset-
+            staging.appliedForwardOffset-behavior.authoredForwardOffset;
+        actor.desc.forwardSpeed=(std::max)(playerSpeed,behavior.engagementBandVelocity) /
+            (std::max)(0.01f,definition.forwardMotionScale);
+        definition.maintainForwardEngagementBand=false;
+        definition.movementEnabled=false;
+        staging.exitRequested=true;
+        staging.attackSuppressed=true;
+        staging.targetable=false;
+        InvalidateEnemyAttackWarning(actor.actorId);
     }
 }
 
@@ -602,6 +618,27 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     enemyBehaviorSystem_.UpdateActors(enemies_,*this,behaviorInput,lateralHoldActorId);
     enemyFormationSystem_.Update(*this, dt, safetyInput.railPath, &safetyInput);
     enemyEntranceExitDirector_.Update(*this, dt);
+    for(auto& actor:enemies_) {
+        auto& staging=actor.entranceExitState;
+        if(actor.desc.waveId!="short_lock" || staging.phase!=EnemyEntranceExitPhase::Exiting)continue;
+        // Use the full hull's clearance, including banking and presentation scale.
+        if(safetyInput.railPath && safetyInput.viewProjection) {
+            const auto position=ResolveRailLocal(*safetyInput.railPath,actor.desc.spawnDistance,
+                actor.desc.distanceOffset,actor.desc.lateralOffset,actor.desc.verticalOffset);
+            const auto& m=safetyInput.viewProjection->m;
+            const float radius=actor.desc.radius*3.0f*
+                (std::max)({actor.desc.localScale.x,actor.desc.localScale.y,actor.desc.localScale.z})+2.0f;
+            const auto outside=[&](int axis,float sign) {
+                const Vector3 normal{m[0][3]+sign*m[0][axis],m[1][3]+sign*m[1][axis],m[2][3]+sign*m[2][axis]};
+                const float planeDistance=position.x*normal.x+position.y*normal.y+position.z*normal.z+
+                    m[3][3]+sign*m[3][axis];
+                return planeDistance < -radius*std::hypot(normal.x,normal.y,normal.z);
+            };
+            staging.exitComplete=outside(0,1) || outside(0,-1) || outside(1,-1);
+        } else {
+            staging.exitComplete=staging.phaseElapsedSeconds>=3.0f;
+        }
+    }
     placeCarrierWeapons();
     // Check the final staged pose, not just Behavior's pre-formation position.
     EnforceEnemyEngagementClearance(safetyInput);
@@ -1073,6 +1110,7 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             enemies_.end(),
             [](const CourseEnemyActor& enemy) {
                 if (!enemy.HoldsCombatPositionUntilResolved() && !RailGroundBattery::IsBattery(enemy.desc.actorAssetId) &&
+                    !(enemy.desc.waveId=="short_lock" && enemy.entranceExitState.exitRequested) &&
                     enemy.age >= enemy.desc.lifetime) {
                     return true;
                 }

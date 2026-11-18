@@ -42,6 +42,18 @@ float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
 }
 
 float4 main(PixelInput input) : SV_TARGET0 {
+    if(input.texcoord.x>=118.0f && input.texcoord.x<=119.0f) {
+        // Red rims border the alpha-blended dark channel. Only the moving
+        // leader and the impact glint carry white heat.
+        const float u=input.texcoord.x-118.0f;
+        const float v=abs(input.texcoord.y*2.0f-1.0f);
+        const float aa=max(fwidth(v)*.55f,.045f);
+        const float rim=1.0f-smoothstep(.055f,.14f+aa,abs(v-.48f));
+        const float shoulder=exp(-pow((v-.48f)/.25f,2.0f))*.19f;
+        const float hollow=smoothstep(.16f,.32f,v);
+        const float end=smoothstep(0.0f,.055f,u)*(1.0f-smoothstep(.945f,1.0f,u));
+        return float4(input.color.rgb,(rim+shoulder)*hollow*end*input.color.a);
+    }
     const bool cartArcTip=input.texcoord.x>=116.0f && input.texcoord.x<=117.0f;
     if(cartArcTip || (input.texcoord.x>=114.0f && input.texcoord.x<=115.0f)) {
         const float u=input.texcoord.x-(cartArcTip?116.0f:114.0f);

@@ -2,6 +2,7 @@
 
 #include "RailCartImpactEnergy.h"
 #include "RailRearCartImpact.h"
+#include "RailLocalCartImpact.h"
 #include "utils/math/MathUtils.h"
 #include <algorithm>
 #include <cmath>
@@ -17,7 +18,9 @@ inline constexpr uint32_t CartOwner=0;
 inline constexpr float ArcLifetime=.18f;
 inline constexpr float BlueArcDelay=.018f;
 enum class Arc { None, Blue, Green };
-enum class Kind { Hull, Plate, Cart, Heavy, Kill, GatlingCart, VeilLightningCart, VeilBeamCart, WingCart };
+enum class Kind { Hull, Plate, Cart, Heavy, Kill, GatlingCart, VeilLightningCart, VeilBeamCart, WingCart, BatteryCart };
+
+inline bool LocalCart(Kind kind) {return kind==Kind::Cart || kind==Kind::BatteryCart;}
 
 inline RailRearCartImpact::Type RearCartType(Kind kind) {
     if(kind==Kind::VeilLightningCart)return RailRearCartImpact::Type::Lightning;
@@ -26,7 +29,7 @@ inline RailRearCartImpact::Type RearCartType(Kind kind) {
 }
 
 inline bool TransientCart(Kind kind) {
-    return kind==Kind::GatlingCart || kind==Kind::WingCart ||
+    return LocalCart(kind) || kind==Kind::GatlingCart || kind==Kind::WingCart ||
         RearCartType(kind)!=RailRearCartImpact::Type::None;
 }
 
@@ -51,6 +54,8 @@ struct Mark {
 };
 
 inline float CartDischargeDuration(const Mark& mark) {
+    if (mark.kind==Kind::Cart) return RailLocalCartImpact::EnemyDuration;
+    if (mark.kind==Kind::BatteryCart) return RailLocalCartImpact::BatteryDuration;
     if (mark.kind==Kind::Heavy) return RailCartImpactEnergy::HeavyDuration;
     if (mark.kind==Kind::GatlingCart) return RailCartImpactEnergy::GatlingDuration;
     if (mark.kind==Kind::VeilLightningCart) return RailRearCartImpact::LightningDuration;
@@ -77,7 +82,8 @@ public:
     void Advance(float dt,float cartPresentationDt=-1.0f) {
         if(!std::isfinite(dt) || dt<=0)return;
         for(auto& mark:marks_) {
-            const bool bossCart=mark.owner==CartOwner && (mark.kind==Kind::Heavy || TransientCart(mark.kind));
+            const bool bossCart=mark.owner==CartOwner &&
+                (mark.kind==Kind::Heavy || (TransientCart(mark.kind) && !LocalCart(mark.kind)));
             mark.age+=bossCart && cartPresentationDt>=0.0f?cartPresentationDt:dt;
         }
         std::erase_if(marks_,[](const auto& mark){

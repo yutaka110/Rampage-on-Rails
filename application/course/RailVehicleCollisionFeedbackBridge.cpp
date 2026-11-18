@@ -124,7 +124,10 @@ void RailVehicleCollisionFeedbackBridge::Update(
     }
     if (input.gameplayActive) {
         for (auto& response : responses_) {
-            response.elapsed += dt;
+            const float responseDt=response.kind==RailVehicleImpactKind::Projectile &&
+                Finite(input.ordinaryProjectileDeltaTime) && input.ordinaryProjectileDeltaTime>=0.0f
+                ? (std::clamp)(input.ordinaryProjectileDeltaTime,0.0f,.25f) : dt;
+            response.elapsed += responseDt;
             if (response.elapsed >= response.duration) response.intensity = 0.0f;
         }
     }
@@ -139,6 +142,7 @@ void RailVehicleCollisionFeedbackBridge::Update(
             const bool gatling = projectile && RailGatling::IsProjectile(result.request.sourceId);
             const auto rear = RailRearCartImpact::FromSource(result.request.sourceId);
             const bool wing = projectile && rear==RailRearCartImpact::Type::Wing;
+            const bool ordinaryProjectile=projectile && !heavy && !gatling && !wing;
             const bool lightning = result.request.kind==PlayerHitKind::ScriptedHazard &&
                 rear==RailRearCartImpact::Type::Lightning;
             const bool beam = result.request.kind==PlayerHitKind::ScriptedHazard &&
@@ -191,7 +195,7 @@ void RailVehicleCollisionFeedbackBridge::Update(
                     result.request.impactWorldPosition.y-vehicle->position.y,
                     result.request.impactWorldPosition.z-vehicle->position.z};
                 direction = {Dot(offset,vehicle->right),0,Dot(offset,vehicle->forward)};
-                if (std::abs(direction.x)<0.15f) direction.x=0;
+                if (std::abs(direction.x)<(ordinaryProjectile?.035f:.15f)) direction.x=0;
                 if (std::abs(direction.z)<0.15f) direction.z=0;
                 const float extent=(std::max)(1.0f,(std::max)(std::abs(direction.x),std::abs(direction.z)));
                 direction=wing?Vector3{(std::clamp)(direction.x/.85f,-1.0f,1.0f),0,0}:Scale(direction,1.0f/extent);
@@ -211,7 +215,7 @@ void RailVehicleCollisionFeedbackBridge::Update(
                     (std::clamp)(.38f+result.appliedDamage/60.0f,.38f,1.0f);
                 const float duration = lightning ? RailRearCartImpact::LightningSettle : beam ? RailRearCartImpact::BeamSettle
                     : wing ? RailRearCartImpact::WingSettle : heavy ? RailCartImpactEnergy::HeavySettleSeconds : gatling ? kGatlingSettleSeconds
-                    : input.settings.responseDurationSeconds * (projectile ? .65f : 1.0f);
+                    : input.settings.responseDurationSeconds;
                 *slot = {direction, 0.0f, duration, strength, kind};
             }
 
@@ -293,6 +297,8 @@ void RailVehicleCollisionFeedbackBridge::Update(
     float heavyHeave=0, heavyBank=0, heavyPitch=0;
     float gatlingHeave=0, gatlingBank=0, gatlingPitch=0;
     float rearHeave=0, rearBank=0, rearPitch=0;
+    float projectileHeave=0, projectileBank=0, projectilePitch=0;
+    Vector3 projectilePush{};
     if(vehicle!=nullptr && vehicle->initialized) for(const auto& response:responses_) {
         if(response.intensity<=0) continue;
         frame_.activeResponseRemainingSeconds=(std::max)(frame_.activeResponseRemainingSeconds,
@@ -347,18 +353,27 @@ void RailVehicleCollisionFeedbackBridge::Update(
             gatlingPitch += response.directionLocal.z * spring;
             continue;
         }
+        if(response.kind==RailVehicleImpactKind::Projectile) {
+            const float time=age/response.duration*.40f;
+            const float compression=Pulse(time,0,.036f,.142f);
+            const float rebound=.34f*Pulse(time,.103f,.190f,.302f);
+            const float settle=.075f*Pulse(time,.255f,.305f,.40f);
+            const float spring=response.intensity*(compression-rebound+settle);
+            const float x=response.directionLocal.x,z=response.directionLocal.z;
+            const float roll=std::abs(x)>.001f?std::copysign(.45f+.55f*std::abs(x),x):0.0f;
+            projectileHeave+=spring;
+            projectileBank+=roll*spring;
+            projectilePitch+=z*spring;
+            projectilePush=Add(projectilePush,Add(Scale(vehicle->right,-x*.12f*spring),
+                Scale(vehicle->forward,-z*.10f*spring)));
+            continue;
+        }
         const float t=(std::clamp)(response.elapsed/response.duration,0.0f,1.0f);
         // Ease in with zero velocity, one compression/rebound, ease out to rest.
         const float cycles=(std::clamp)(input.settings.oscillationFrequencyHz*response.duration,0.8f,1.2f);
         const float onset=(std::min)(1.0f,t/0.12f);
         const float easedOnset=onset*onset*(3.0f-2.0f*onset);
         float pulse=2.2f*std::sin(kTau*cycles*t)*std::exp(-2.0f*t)*(1-t)*(1-t)*easedOnset;
-        if(response.kind == RailVehicleImpactKind::Projectile) {
-            // Fast suspension compression, one smaller rebound, and a clean settle.
-            if(t<.16f)pulse=SmoothStep(t/.16f);
-            else if(t<.59f)pulse=std::lerp(1.0f,-.23f,SmoothStep((t-.16f)/.43f));
-            else pulse=std::lerp(-.23f,0.0f,SmoothStep((t-.59f)/.41f));
-        }
         pulse*=response.intensity;
         heave+=pulse;
         bank+=response.directionLocal.x*pulse;
@@ -374,14 +389,17 @@ void RailVehicleCollisionFeedbackBridge::Update(
     if(vehicle!=nullptr) {
         const float bodyTravel = input.settings.bodyKickDistance * (
             (std::clamp)(heave,-.30f,1.0f) + 2.25f*(std::clamp)(heavyHeave,-.20f,1.0f) +
-            .45f*(std::clamp)(gatlingHeave,-1.15f,.60f) + (std::clamp)(rearHeave,-.48f,2.7f));
-        frame_.bodyTranslationWorld = Scale(vehicle->up,-bodyTravel);
+            .45f*(std::clamp)(gatlingHeave,-1.15f,.60f) + (std::clamp)(rearHeave,-.48f,2.7f) +
+            2.2f*(std::clamp)(projectileHeave,-.40f,1.0f));
+        frame_.bodyTranslationWorld = Add(Scale(vehicle->up,-bodyTravel),projectilePush);
         frame_.bodyBankDegrees = input.settings.maximumBankDegrees * (
             (std::clamp)(bank,-1.0f,1.0f) + 1.8f*(std::clamp)(heavyBank,-1.0f,1.0f) +
-            .30f*(std::clamp)(gatlingBank,-1.0f,1.0f) + (std::clamp)(rearBank,-.57f,.57f));
+            .30f*(std::clamp)(gatlingBank,-1.0f,1.0f) + (std::clamp)(rearBank,-.57f,.57f) +
+            2.2f*(std::clamp)(projectileBank,-1.0f,1.0f));
         frame_.bodyPitchDegrees = input.settings.maximumPitchDegrees * (
             (std::clamp)(pitch,-1.0f,1.0f) + 1.35f*(std::clamp)(heavyPitch,-1.0f,1.0f) +
-            .32f*(std::clamp)(gatlingPitch,-1.0f,1.0f) + (std::clamp)(rearPitch,0.0f,2.05f));
+            .32f*(std::clamp)(gatlingPitch,-1.0f,1.0f) + (std::clamp)(rearPitch,0.0f,2.05f) +
+            1.8f*(std::clamp)(projectilePitch,-1.0f,1.0f));
         // No yaw kick: preserve the cart's heading while its suspension reacts.
         for(float& lift:frame_.wheelLiftOffsets) lift=(std::clamp)(lift,0.0f,0.12f);
     }
