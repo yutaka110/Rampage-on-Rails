@@ -335,7 +335,19 @@ WeaponFeedbackDispatchResult WeaponFeedbackSystem::Submit(
         event.impactEffectName.clear();
         event.hudDuration=0.18f;
     }
-    const bool spawnImpact=!droneCoreBreak && !event.lockOnContact && !event.shieldHit &&
+    const bool primaryTerrain=nativePrimaryImpact && !request.lockOnContact &&
+        event.damageType==WeaponDamageType::Energy &&
+        (event.hitKind==RailAimHitKind::ProceduralTerrain || event.hitKind==RailAimHitKind::TerrainPlacement);
+    if(primaryTerrain) {
+        // The visible bolt arrival owns the surface response. Scenery is not a
+        // confirmed enemy hit and must not add a marker or camera impulse.
+        event.intensity=event.cameraShake=event.hitStopSeconds=event.hudDuration=0;
+        event.controllerLowFrequency=event.controllerHighFrequency=0;
+        event.showHitMarker=false;event.impactEffectName.clear();
+        event.impactCueId="weapon_feedback_world_surface";
+        event.audioCueId.clear();
+    }
+    const bool spawnImpact=!primaryTerrain && !droneCoreBreak && !event.lockOnContact && !event.shieldHit &&
         !(nativePrimaryImpact && (RailPrimaryContact::Matches(event) || RailPrimaryKill::Matches(event)));
     if(spawnImpact) SpawnImpactVfx(runtime, event);
     result.accepted = true;

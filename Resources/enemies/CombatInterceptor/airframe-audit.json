@@ -1,0 +1,209 @@
+{
+  "triangles": 2544,
+  "components": [
+    {
+      "component": "central_fuselage",
+      "triangles": 60,
+      "volume": 0.5535023333333332,
+      "closed": true
+    },
+    {
+      "component": "dorsal_spine",
+      "triangles": 60,
+      "volume": 0.04918508333333336,
+      "closed": true
+    },
+    {
+      "component": "optical_slit",
+      "triangles": 60,
+      "volume": 0.0020546886354166696,
+      "closed": true
+    },
+    {
+      "component": "forward_wing_-1",
+      "triangles": 12,
+      "volume": 0.12881250000000002,
+      "closed": true
+    },
+    {
+      "component": "wing_inlay_-1",
+      "triangles": 12,
+      "volume": 0.01322559999999999,
+      "closed": true
+    },
+    {
+      "component": "engine_pylon_-1",
+      "triangles": 60,
+      "volume": 0.10645380441666666,
+      "closed": true
+    },
+    {
+      "component": "engine_shell_-1",
+      "triangles": 60,
+      "volume": 0.452623,
+      "closed": true
+    },
+    {
+      "component": "intake_lip_-1",
+      "triangles": 192,
+      "volume": 0.00840437203256901,
+      "closed": true
+    },
+    {
+      "component": "intake_shadow_-1",
+      "triangles": 92,
+      "volume": 0.0023889536206576456,
+      "closed": true
+    },
+    {
+      "component": "intake_vane_-1_-1",
+      "triangles": 60,
+      "volume": 0.00018818956758332491,
+      "closed": true
+    },
+    {
+      "component": "intake_vane_-1_0",
+      "triangles": 60,
+      "volume": 0.00018818956758332475,
+      "closed": true
+    },
+    {
+      "component": "intake_vane_-1_1",
+      "triangles": 60,
+      "volume": 0.00018818956758334812,
+      "closed": true
+    },
+    {
+      "component": "exhaust_rim_-1",
+      "triangles": 192,
+      "volume": 0.01062193361100751,
+      "closed": true
+    },
+    {
+      "component": "exhaust_hot_-1",
+      "triangles": 92,
+      "volume": 0.0017044787034271392,
+      "closed": true
+    },
+    {
+      "component": "engine_stripe_-1",
+      "triangles": 60,
+      "volume": 0.0024774733526666736,
+      "closed": true
+    },
+    {
+      "component": "paired_gun_-1",
+      "triangles": 96,
+      "volume": 0.0038287199999999994,
+      "closed": true
+    },
+    {
+      "component": "gun_lens_-1",
+      "triangles": 44,
+      "volume": 6.22080000000039e-05,
+      "closed": true
+    },
+    {
+      "component": "wingtip_marker_-1",
+      "triangles": 60,
+      "volume": 0.0009992312213333416,
+      "closed": true
+    },
+    {
+      "component": "forward_wing_1",
+      "triangles": 12,
+      "volume": 0.1288125,
+      "closed": true
+    },
+    {
+      "component": "wing_inlay_1",
+      "triangles": 12,
+      "volume": 0.013225600000000004,
+      "closed": true
+    },
+    {
+      "component": "engine_pylon_1",
+      "triangles": 60,
+      "volume": 0.10645380441666667,
+      "closed": true
+    },
+    {
+      "component": "engine_shell_1",
+      "triangles": 60,
+      "volume": 0.452623,
+      "closed": true
+    },
+    {
+      "component": "intake_lip_1",
+      "triangles": 192,
+      "volume": 0.00840437203256907,
+      "closed": true
+    },
+    {
+      "component": "intake_shadow_1",
+      "triangles": 92,
+      "volume": 0.002388953620657664,
+      "closed": true
+    },
+    {
+      "component": "intake_vane_1_-1",
+      "triangles": 60,
+      "volume": 0.00018818956758336283,
+      "closed": true
+    },
+    {
+      "component": "intake_vane_1_0",
+      "triangles": 60,
+      "volume": 0.0001881895675833404,
+      "closed": true
+    },
+    {
+      "component": "intake_vane_1_1",
+      "triangles": 60,
+      "volume": 0.0001881895675833294,
+      "closed": true
+    },
+    {
+      "component": "exhaust_rim_1",
+      "triangles": 192,
+      "volume": 0.010621933611007427,
+      "closed": true
+    },
+    {
+      "component": "exhaust_hot_1",
+      "triangles": 92,
+      "volume": 0.0017044787034271724,
+      "closed": true
+    },
+    {
+      "component": "engine_stripe_1",
+      "triangles": 60,
+      "volume": 0.0024774733526666697,
+      "closed": true
+    },
+    {
+      "component": "paired_gun_1",
+      "triangles": 96,
+      "volume": 0.0038287199999999994,
+      "closed": true
+    },
+    {
+      "component": "gun_lens_1",
+      "triangles": 44,
+      "volume": 6.220799999999798e-05,
+      "closed": true
+    },
+    {
+      "component": "wingtip_marker_1",
+      "triangles": 60,
+      "volume": 0.0009992312213333457,
+      "closed": true
+    },
+    {
+      "component": "ventral_mechanics",
+      "triangles": 60,
+      "volume": 0.041898602822916645,
+      "closed": true
+    }
+  ]
+}

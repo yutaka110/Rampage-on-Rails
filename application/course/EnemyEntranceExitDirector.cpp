@@ -217,13 +217,24 @@ void EnemyEntranceExitDirector::UpdateActors(std::span<CourseEnemyActor> actors,
             !actor.behaviorDefinition.maintainForwardEngagementBand) {
             continue;
         }
-        const EnemyFormationDefinition definition = Definition(actor, runtime);
+        auto definition = Definition(actor, runtime);
+        const bool firstWave = actor.desc.waveId == "short_fire";
+        const bool lockPractice = actor.desc.waveId == "short_lock";
+        if(firstWave || lockPractice) {
+            definition.entranceStyle = EnemyEntranceStyle::FromAhead;
+            definition.entranceForwardDistance = firstWave ? 18.0f : 14.0f;
+            definition.entranceSideDistance = 10.0f;
+            definition.entranceDurationSeconds = .90f;
+            definition.entranceStaggerSeconds = firstWave ? .42f : .20f;
+        }
         if (!state.initialized) {
             state = {};
             state.initialized = true;
             state.phase = EnemyEntranceExitPhase::Pending;
             state.delayRemainingSeconds = definition.entranceStaggerSeconds *
                 static_cast<float>(actor.formationState.slotIndex);
+            if(firstWave && actor.formationState.slotIndex>0)
+                state.delayRemainingSeconds += .80f;
             state.attackSuppressed = true;
             state.targetable = false;
             state.revision = ++revision_;
@@ -263,8 +274,8 @@ void EnemyEntranceExitDirector::UpdateActors(std::span<CourseEnemyActor> actors,
             EntranceOffset(definition, actor, 1.0f - progress,
                 state.appliedForwardOffset, state.appliedLateralOffset,
                 state.appliedVerticalOffset);
-            state.presentationAlpha = progress;
-            state.presentationScale = 0.72f + progress * 0.28f;
+            state.presentationAlpha = firstWave || lockPractice ? 1.0f : progress;
+            state.presentationScale = firstWave || lockPractice ? 1.0f : 0.72f + progress * 0.28f;
             state.targetable = progress >= 0.68f;
             state.attackSuppressed = progress < 0.98f;
             ++frame_.enteringActors;

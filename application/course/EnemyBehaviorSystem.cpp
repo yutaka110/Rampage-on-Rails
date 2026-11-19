@@ -704,8 +704,17 @@ static bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTim
     const float entryBlend = definition.entryDurationSeconds > 0.0f
         ? SmoothStep(actor.age / definition.entryDurationSeconds)
         : 1.0f;
-    const float phase = actor.age * definition.movementFrequency * kTau +
-        state.deterministicPhase;
+    const bool tacticalAirframe=actor.desc.meshId=="combat_sniper_hull" || actor.desc.meshId=="combat_interceptor_hull";
+    if(tacticalAirframe) {
+        const bool aiming=state.state==EnemyBehaviorState::Aiming ||
+            state.state==EnemyBehaviorState::RequestingAttack || actor.attackState.tokenReserved;
+        const bool sniper=definition.archetype==EnemyBehaviorArchetype::Sniper;
+        const float rate=aiming?(sniper?.035f:.36f):1.0f;
+        state.hoverMotionRate+=(rate-state.hoverMotionRate)*(1-std::exp(-5.0f*deltaTime));
+        state.hoverMotionSeconds+=deltaTime*state.hoverMotionRate;
+    }
+    const float phase = (tacticalAirframe?state.hoverMotionSeconds:actor.age) *
+        definition.movementFrequency * kTau + state.deterministicPhase;
     const bool individualHover = actor.desc.meshId == "twin_shield_hull" &&
         definition.maintainForwardEngagementBand && !definition.choreographedAttackPass;
     float lateral = 0.0f;
@@ -777,6 +786,11 @@ static bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTim
         lateral += side * std::sin(evadeProgress * 3.14159265f) *
             (std::max)(0.8f, definition.lateralAmplitude * 0.42f);
     }
+    if(individualHover && actor.desc.actorAssetId=="short_scout" && state.state==EnemyBehaviorState::Evading) {
+        const float t=Saturate(state.stateElapsedSeconds/(std::max)(.10f,definition.evadeDurationSeconds));
+        const float envelope=std::sin(t*3.14159265f);
+        lateral+=(actor.actorId%2?1.0f:-1.0f)*1.30f*envelope*envelope;
+    }
     const float lateralOffset=holdLateral?state.behaviorLateralOffset:lateral*entryBlend;
     const float lateralVelocity = deltaTime > 0.000001f
         ? (lateralOffset - state.behaviorLateralOffset) / deltaTime : 0.0f;
@@ -798,6 +812,14 @@ static bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTim
         state.presentationBankRadians = previousBank + (desiredBank - previousBank) * response;
         state.presentationYawRadians = (std::clamp)(lateralVelocity * 0.045f, -0.10f, 0.10f);
         state.presentationPitchRadians = (std::clamp)(verticalVelocity * 0.05f, -0.065f, 0.065f);
+    }
+    if(tacticalAirframe) {
+        const float response=1-std::exp(-6.0f*deltaTime);
+        const float limit=definition.archetype==EnemyBehaviorArchetype::Sniper?.12f:.52f;
+        const float desired=(std::clamp)(-lateralVelocity*.11f,-limit,limit);
+        state.presentationBankRadians=previousBank+(desired-previousBank)*response;
+        state.presentationYawRadians=(std::clamp)(lateralVelocity*.035f,-.18f,.18f);
+        state.presentationPitchRadians=(std::clamp)(verticalVelocity*.04f,-.11f,.11f);
     }
     if (definition.choreographedAttackPass) {
         state.presentationYawRadians = 0.0f;

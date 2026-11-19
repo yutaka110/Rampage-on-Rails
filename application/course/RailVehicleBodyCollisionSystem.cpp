@@ -1,3 +1,4 @@
+#include "RailSideRock.h"
 #include "RailVehicleBodyCollisionSystem.h"
 #include "RailRouteHazards.h"
 
@@ -239,7 +240,7 @@ const RailVehicleBodyCollisionFrame& RailVehicleBodyCollisionSystem::Update(
             // Damage resolves before the next runtime cleanup; a destroyed
             // obstacle must stop blocking the vehicle in the same frame.
             const bool slab=RailRouteHazards::IsSlab(obstacle);
-            if(obstacle.age>=obstacle.desc.lifetime ||
+            if(RailSideRock::Is(obstacle) || obstacle.age>=obstacle.desc.lifetime ||
                 (slab?obstacle.age>=RailRouteHazards::GroundImpact:
                     obstacle.desc.breakable && obstacle.desc.hitPoints<=0.0f))continue;
             RailLocalPoint center{

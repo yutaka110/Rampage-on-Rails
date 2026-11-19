@@ -1,3 +1,4 @@
+#include "RailVisualOcclusion.h"
 #include "EnemyEncounterReadabilityDirector.h"
 
 #include <algorithm>
@@ -157,11 +158,12 @@ void EnemyEncounterReadabilityDirector::Update(
             (!actor.entranceExitState.initialized ||
              actor.entranceExitState.targetable);
 
+        const bool visuallyClear = !RailVisualOcclusion::FromCamera(world);
         EnemyScreenPresenceInput presenceInput{};
         presenceInput.projectedDiameterPixels = diameter;
         presenceInput.authoredAlpha = actor.combatState.initialized
             ? actor.combatState.presentationAlpha : 1.0f;
-        presenceInput.onScreen = center.onScreen;
+        presenceInput.onScreen = center.onScreen && visuallyClear;
         presenceInput.behindCamera = center.behind;
         presenceInput.targetable = targetable;
         presenceInput.attackEngaged = attackEngaged;
@@ -206,7 +208,7 @@ void EnemyEncounterReadabilityDirector::Update(
                     dt * (std::max)(0.0f,
                         input.settings.exposureDecayPerSecond));
         }
-        const bool attackReady = center.onScreen && presence.screenReadable &&
+        const bool attackReady = center.onScreen && visuallyClear && presence.screenReadable &&
             tracked.readableExposureSeconds >=
             (std::max)(0.0f,
                 input.settings.minimumAttackExposureSeconds);
@@ -223,9 +225,9 @@ void EnemyEncounterReadabilityDirector::Update(
         output.colorBoost = presence.colorBoost;
         output.priority = presence.priority;
         output.readableExposureSeconds = tracked.readableExposureSeconds;
-        output.onScreen = center.onScreen;
+        output.onScreen = center.onScreen && visuallyClear;
         output.behindCamera = center.behind;
-        output.targetable = targetable;
+        output.targetable = targetable && visuallyClear;
         output.attackEngaged = attackEngaged;
         output.fixedSizeProxyApplied = presence.fixedSizeProxyApplied;
         output.screenReadable = presence.screenReadable;

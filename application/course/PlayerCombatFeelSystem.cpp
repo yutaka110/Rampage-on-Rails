@@ -1,3 +1,4 @@
+#include "RailSideRock.h"
 #include "PlayerCombatFeelSystem.h"
 
 #include "CourseSpawnRuntime.h"
@@ -196,7 +197,7 @@ bool PlayerCombatFeelSystem::TryResolveLockOn(
     }
 
     for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-        if (!obstacle.desc.breakable || RailRouteHazards::IsSlab(obstacle)) {
+        if (RailSideRock::Is(obstacle) || !obstacle.desc.breakable || RailRouteHazards::IsSlab(obstacle)) {
             continue;
         }
         const float distance = ObstacleDistance(obstacle);

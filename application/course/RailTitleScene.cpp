@@ -1,4 +1,4 @@
-﻿#include "RailTitleScene.h"
+#include "RailTitleScene.h"
 #include "../ModelLoaderAssimp.h"
 #include "CourseSpawnRuntime.h"
 #include "RailWorldRaycast.h"
@@ -118,6 +118,10 @@ bool RailTitleScene::Initialize() {
     place("title_distant_cliff_a", "title_cliff", 0.24f, 120.0f, -2.0f, {38,32,29}, 0.8f);
     // Keep this vista behind the longer cave approach at every departure angle.
     place("title_distant_cliff_b", "title_cliff", 0.68f, 220.0f, -8.0f, {48,26,35}, -0.6f);
+    // Two offset strata masses frame the cart against a cool distant skyline.
+    // They are static solids, outside the circular track and departure corridor.
+    place("title_rear_ridge_a", "title_cliff", .88f, -42.0f, -8.0f, {24,19,18}, -.35f);
+    place("title_rear_ridge_b", "title_cliff", .74f, -36.0f, -9.0f, {27,23,20}, .65f);
     // Broad gaps and modest scale differences; never a ring of repeated rocks.
     place("title_rock_a", "title_boulder", 0.07f, -26.0f, -0.8f, {3.4f,3.0f,2.7f}, 0.3f);
     place("title_rock_b", "title_boulder", 0.32f, -22.0f, -0.8f, {2.4f,2.0f,3.6f}, 1.0f);

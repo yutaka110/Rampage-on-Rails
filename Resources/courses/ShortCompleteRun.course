@@ -140,6 +140,7 @@ event|1615.000|obstacle|route_break_barricade||short-route-fence-bridge-exit|1|0
 event|1638.000|enemy_wave|arch_inner_batteries|route:turret|short-arch-inner-batteries|1|0
 event|1895.000|obstacle|route_break_barricade||short-route-break-barricade|1|0
 event|2060.000|enemy_wave|ridge_ground_battery|route:turret|short-route-2060|1|0
+event|2140.000|obstacle|side_breakable_rock||optional-side-rock-2320|1|0
 event|2530.000|obstacle|route_break_barricade||short-route-fence-dive|1|0
 event|2840.000|enemy_wave|route_turret_left|route:turret|short-route-2840|1|0
 event|3065.000|enemy_wave|route_scout_sniper_pair|route:pair|short-route-3100|1|0
@@ -161,16 +162,16 @@ encounter_beat|short-beat-exit|short-exit|BRIDGE AMBUSH|short-exit-guard|1882.00
 encounter_beat|short-beat-boss|short-carrier|CARRIER ASSAULT|short-mothership|3350.000000|3800.000000|30.000000|0.750000|1.200000|1.000000|1.800000|2.000000|10.000000|1.000000|4.000000|0.650000|1|2.000000|-|0.750000|0.320000|1.500000|1.000000|10|0|0|1|1|0
 
 # Persistent enemy instances anchored to rail topology.
-enemy_placement|short_fire-member-0|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|-8.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short_fire-member-1|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|0.000000|9.000000|8.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short_fire-member-2|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|8.000000|5.000000|2.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short_fire-member-3|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|2.000000|3.000000|18.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short_fire-member-0|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|-5|3.8|-145|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short_fire-member-1|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|3|5.8|-139|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short_fire-member-2|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|-3|3.5|-134|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short_fire-member-3|short_scout|assault_magenta_single|short_fire|38caa9331ea5e34fe17137e21f6833ff|0.574302|5|6.5|-129|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_lock-member-0|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|-10.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_lock-member-1|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|-2.000000|8.000000|4.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_lock-member-2|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|7.000000|4.000000|8.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_lock-member-3|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|-7.000000|11.000000|15.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_lock-member-4|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|3.000000|12.000000|19.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
-enemy_placement|short_lock-member-5|short_sniper|sniper_predictive_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|11.000000|8.000000|23.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
+enemy_placement|short_lock-member-5|short_scout|assault_magenta_single|short_lock|bc9d43145cc6ee0316f959a76b3ebd33|0.310208|6|7|23.000000|0.000000|0.000000|0.000000|1|1|1|110.000000|1|1|0
 enemy_placement|short_intercept-member-0|short_shield_scout|assault_magenta_single|short_intercept|313a81005dbaa5cb06d77310c514a47b|0.100000|-9.000000|4.000000|0.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_intercept-member-1|short_scout|assault_magenta_single|short_intercept|313a81005dbaa5cb06d77310c514a47b|0.100000|-3.000000|9.000000|6.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0
 enemy_placement|short_intercept-member-2|short_scout|assault_magenta_single|short_intercept|313a81005dbaa5cb06d77310c514a47b|0.100000|4.000000|3.000000|12.000000|0.000000|0.000000|0.000000|1.000000|1.000000|1.000000|110.000000|1|1|0

@@ -222,7 +222,7 @@ def rock_arch_surface(u, v, depth, seed, tunnel=False, inner_variant=False):
     outer_height = 1.94 + smooth_noise(u * 5, 7, seed) * 0.22 - notch
     height = ((1.46 if tunnel else 1.16) * (1 - v) + outer_height * v) + crown
     x = cosine * width + sine * (0.07 + v * v * (-0.16 if inner_variant else 0.12))
-    y = -1.10 + sine * height
+    y = -1.10 + sine * height - .36 * abs(cosine) ** 8
     relief = smooth_noise(u * 9, v * 4, seed + 1) * 0.32
     relief += smooth_noise(u * 24, v * 9, seed + 2) * 0.055
     # Recessed oblique fractures break up the front face at a readable scale.
@@ -274,15 +274,17 @@ def add_arch_cliff_roots(mesh, seed, tunnel):
     for side in (-1, 1):
         # A continuous buried apron climbs from the foot into the side wall.
         # Its top and sides share exactly the same perimeter samples.
-        inner = 1.02 if tunnel else 0.74
+        inner = 0.90 if tunnel else 0.48
         width = 2.25 if tunnel else 2.60
         def apron(u, v, depth, side=side):
-            x = side * (inner + width * u)
-            z = side * (1 - 2 * v) * (1.8 + u * 0.65)
+            x = side * (inner + width * u - .22 * u * abs(2*v-1) ** 3)
+            z = side * (1 - 2 * v) * (1.8 + u * 0.65) * (1 + .08 * smooth_noise(u * 9, v * 7, seed))
             peak = math.exp(-((u - 0.26) / 0.25) ** 2 - ((v - 0.5) / 0.40) ** 2)
-            top = -1.10 + peak * 0.42 + u * u * 0.62
+            top = -1.02 + peak * 0.20 + u * u * 0.10
+            edge = max(0, (abs(2*v-1)-.55)/.45)
+            top -= .60 * edge ** 3 + .10 * u ** 6
             top += smooth_noise(u * 7, v * 6, seed + (0 if side < 0 else 9)) * 0.055 * math.sin(math.pi * u)
-            return x, -1.42 + (top + 1.42) * ((depth + 1) * 0.5), z
+            return x, -1.68 + (top + 1.68) * ((depth + 1) * 0.5), z
         # Broad aprons need fewer samples than the visible arch fractures.
         # Keep Assimp's expanded corner stream below the editor's 65535 cap.
         add_closed_rock_patch(mesh, apron, 24, 16)
@@ -300,6 +302,12 @@ def make_organic_arch():
     mesh = Mesh("OrganicArchLarge_HD", "organic_rock")
     add_closed_rock_patch(mesh, lambda u, v, d: rock_arch_surface(u, v, d, 11), 96, 24)
     add_arch_cliff_roots(mesh, 111, False)
+    # Overlapping, closed fracture plates break the rounded crown at metre
+    # scale. Grow outside v=.82: the track aperture stays completely unchanged.
+    for i,u in enumerate((.24,.36,.49,.63,.76)):
+        x,y,z=rock_arch_surface(u,.88,-1,11)
+        add_fractured_boulder(mesh,(x,y+.035,z-.075),
+            (.16+.035*(i%2),.10+.025*((i+1)%3),.16+.03*(i%3)),421+i*37)
     return mesh
 
 
@@ -318,9 +326,10 @@ def make_root_spire():
     ids = []
     for i in range(rings + 1):
         t = i / rings
-        y = -1.0 + 2.0 * t
+        y = -1.14 + 2.14 * t
         twist = t * 2.4
-        radius = 0.30 * (1.0 - t) + 0.14 * t + 0.035 * math.sin(t * 31.0)
+        radius = 0.30 * (1.0 - t) + 0.14 * t + 0.022 * math.sin(t * 23.0)
+        radius += .48 * math.exp(-t * 14.0)
         row = []
         for j in range(slices):
             a = (j / slices) * math.tau + twist
@@ -348,16 +357,19 @@ def make_root_spire():
             d = ids[i + 1][j]
             mesh.add_face(a, c, b)
             mesh.add_face(a, d, c)
-    for root_index, angle in enumerate((0.35, 2.45, 4.35)):
-        mesh.add_grid(
-            lambda u, v, a=angle: (
-                math.cos(a + u * 0.45) * (0.20 + v * 0.78),
-                -0.92 + u * 0.55,
-                math.sin(a + u * 0.45) * (0.20 + v * 0.78),
-            ),
-            36,
-            5,
-        )
+    # A closed flared foot replaces three open rectangular root fins.
+    for i, ring in ((0, ids[0]), (1, ids[-1])):
+        y = mesh.vertices[ring[0] - 1][1]
+        center = mesh.add_vertex((0, y, 0), (.5, .5), (0, -1 if i == 0 else 1, 0))
+        cap = [mesh.add_vertex(mesh.vertices[index-1], (.5, .5), (0, -1 if i == 0 else 1, 0)) for index in ring]
+        for j in range(slices):
+            a, b = cap[j], cap[(j + 1) % slices]
+            mesh.add_face(center, a, b) if i == 0 else mesh.add_face(center, b, a)
+    for i in range(7):
+        a = i * 2.399963
+        radius = .44 + .11 * (i % 3)
+        add_fractured_boulder(mesh, (math.cos(a)*radius, -1.06, math.sin(a)*radius),
+            (.16, .09 + .02*(i%2), .22), 719+i*29)
     return mesh
 
 

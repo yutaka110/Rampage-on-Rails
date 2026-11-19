@@ -1,5 +1,7 @@
+#include "RailSideRock.h"
 #include "RailTargetRegistry.h"
 #include "RailRouteHazards.h"
+#include "RailVisualOcclusion.h"
 
 #include "CourseSpawnRuntime.h"
 #include "../terrain/RailPath.h"
@@ -85,6 +87,11 @@ bool ResolveLineOfSightBlock(
     float& outBlockT) {
     if (!settings.lockLineOfSightEnabled) {
         return false;
+    }
+    if (RailVisualOcclusion::Blocked(cameraPosition, targetPosition)) {
+        outOccluderActorId = 0; // Static environment has no runtime actor ID.
+        outBlockT = 0.5f;
+        return true;
     }
 
     float bestT = 1.0f;
@@ -236,7 +243,7 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
         anchors_.push_back(std::move(anchor));
     }
     for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-        if (!obstacle.desc.breakable || RailRouteHazards::IsBarricade(obstacle) || RailRouteHazards::IsSlab(obstacle)) {
+        if (RailSideRock::Is(obstacle) || !obstacle.desc.breakable || RailRouteHazards::IsBarricade(obstacle) || RailRouteHazards::IsSlab(obstacle)) {
             continue;
         }
         const float distance = ObstacleDistance(obstacle);

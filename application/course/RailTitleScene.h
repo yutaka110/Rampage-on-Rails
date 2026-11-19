@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CourseRailTrackMeshBakePipeline.h"
 #include "RailVehicleRenderer.h"
@@ -11,7 +11,7 @@
 // A presentation-only world: it never advances the playable course or combat.
 struct RailTitleColors final {
     Vector4 light{1.15f,0.89f,0.72f,1.0f};
-    Vector3 background{0.55f,0.51f,0.46f};
+    Vector3 background{0.30f,0.38f,0.46f};
     float transition = 0.0f;
 };
 

@@ -21808,10 +21808,14 @@ void TestRailVehicleMovementAndPresentation(RegressionRunner& runner) {
             openingLight,{0,0,-1},{0,0.32f,-0.95f},1.0f/1.55f);
         const Material reference=BuildRailVehicleTitleMaterial(source,gameplayMaterial,
             openingLight,{0,0,-1},{0,0.32f,-0.95f});
+        const DirectionalLight coldLight{{.5f,.8f,1,1},{.7f,-.3f,-.5f},6.0f};
+        const auto coldPaint=BuildRailVehicleTitleMaterial(source,gameplayMaterial,
+            coldLight,{1,0,0},{0,1,0});
         runner.Expect(titlePaint.color.x==reference.color.x && titlePaint.color.y==reference.color.y &&
-            titlePaint.color.z==reference.color.z && titlePaint.color.x>titlePaint.color.y &&
-            titlePaint.color.y>titlePaint.color.z && titlePaint.color.w==source.baseColorFactor.w,
-            "Title preview must inherit the warm opening gameplay appearance rather than replace gameplay with the blue title palette");
+            titlePaint.color.z==reference.color.z && titlePaint.color.x==coldPaint.color.x &&
+            titlePaint.color.y==coldPaint.color.y && titlePaint.color.z==coldPaint.color.z &&
+            titlePaint.color.w==source.baseColorFactor.w,
+            "Title albedo must stay stable across sun direction, colour and exposure; lighting must not bake a clipped white highlight into paint");
         runner.Expect(std::abs(titlePaint.padding2[0]*1.55f-reference.padding2[0])<0.0001f &&
             gameplayMaterial.specularMode==1 && gameplayMaterial.color.x==0.4f,
             "Title exposure compensation must preserve the gameplay reference and leave the source gameplay material unchanged");
@@ -21835,8 +21839,8 @@ void TestRailVehicleMovementAndPresentation(RegressionRunner& runner) {
         caveBody.padding2[4] >= 0.35f && caveBody.padding2[4] <= 0.90f,
         "Cave cart shading must retain the established title/gameplay palette in the GPU cave surface ABI");
     runner.Expect(titleBody.specularMode==8 && titleIron.specularMode==8 &&
-        titleBody.shininess>titleIron.shininess && titleBody.environmentCoefficient==0 &&
-        titleIron.environmentCoefficient>0.5f && titleIron.color.x<titleBody.color.x*0.5f,
+        titleBody.shininess>titleIron.shininess && titleBody.environmentCoefficient<.1f &&
+        titleIron.environmentCoefficient>0.5f && titleIron.color.y<titleBody.color.y*.65f,
         "Title paint and iron must retain different roughness, reflectance and value under the shared gameplay palette");
     for (float exposure : {0.0f,-1.0f,std::numeric_limits<float>::quiet_NaN()}) {
         const auto material=BuildRailVehicleTitleMaterial(cartModel.materials[0],gameplayMaterial,
@@ -28419,6 +28423,14 @@ void TestRailLockVolleyArrival(RegressionRunner& runner) {
     runner.Expect(resolver.Tokens().front().acquiredScreenPosition.x==500 &&
         resolver.Tokens().front().acquiredTime==1 && resolver.AcceptedThisFrame()==0,
         "A full lock container must still track the target without replaying its capture cue");
+    anchors[0].lineOfSightBlocked=true;input.elapsedTime=1.2f;resolver.Update(input);
+    runner.Expect(resolver.Tokens().size()==1 && resolver.Tokens().front().acquiredScreenPosition.x<0 &&
+        resolver.AcceptedThisFrame()==0,
+        "A retained lock behind static stone must hide its bracket and forbid duplicate acquisition");
+    anchors[0].lineOfSightBlocked=false;input.elapsedTime=1.3f;resolver.Update(input);
+    runner.Expect(resolver.Tokens().front().acquiredScreenPosition.x==500 &&
+        resolver.Tokens().front().acquiredTime==1,
+        "A target emerging from stone restores its bracket without replaying lock confirmation");
     anchors.clear();resolver.Update(input);
     runner.Expect(resolver.Tokens().empty(),"Defeated targets must release their confirmation markers");
 }
@@ -35440,7 +35452,7 @@ void TestRailTitleLandscape(RegressionRunner& runner) {
             target.push_back({v(0),v(1),v(2)});
         }
     }
-    runner.Expect(groundCount==1 && cliffCount==3 && rockCount==41 && stakeCount==24 && ground.size()+rocks.size()<24000,
+    runner.Expect(groundCount==1 && cliffCount==5 && rockCount==41 && stakeCount==24 && ground.size()+rocks.size()<24000,
         "Title scenery should retain continuous ground and sparse large forms, with bounded foreground rocks/stakes");
     const auto nearest=[&](const std::vector<Triangle>& mesh,Vector3 origin,Vector3 direction){
         float nearest=10000;
@@ -35646,8 +35658,8 @@ void TestRailTitleCinematic(RegressionRunner& runner) {
         auto previousColors=title.Colors(courseSun);
         runner.Expect(std::abs(previousColors.light.y/previousColors.light.x-courseSun.y/courseSun.x)<0.035f &&
             std::abs(previousColors.light.z/previousColors.light.x-courseSun.z/courseSun.x)<0.035f &&
-            previousColors.background.x>previousColors.background.z && lightLuma>0.90f,
-            "Title menu must share the opening course warm hue while retaining readable outdoor luminance");
+            previousColors.background.z>previousColors.background.x && lightLuma>0.90f,
+            "Title keeps the warm course key above a cool horizon, preserving readable outdoor luminance");
         bool colorContinuous=true;
         Vector3 previous=initial;
         bool continuous=true;
@@ -39372,7 +39384,29 @@ void TestMixedEnemyRoleChoices(RegressionRunner& runner) {
         const auto role=cooked.program.actors[index].actor.behaviorDefinition.archetype;
         scouts+=role==EnemyBehaviorArchetype::Assault;snipers+=role==EnemyBehaviorArchetype::Sniper;
     }
-    runner.Expect(scouts==5 && snipers==1,"first lock group preserves five sweep targets and introduces one precision priority");
+    runner.Expect(scouts==6 && snipers==0,"first lock lesson isolates six ordinary sweep targets before introducing precision threats");
+    // Physical launch lips and rendered rigid pose stay together on a bend,
+    // including the distinct single barrel and the alternating twin cannons.
+    RailPath muzzleRail;muzzleRail.SetControlPoints({{{0,0,0}},{{20,9,80}},{{50,16,160}}});
+    for(const std::string mesh:{"combat_sniper_hull","combat_interceptor_hull"}) {
+        CourseSpawnRuntime mounts;CourseEnemyActorDesc desc;
+        desc.actorAssetId=mesh;desc.waveId="airframe-muzzle-test";desc.meshId=mesh;
+        desc.spawnDistance=65;desc.verticalOffset=7;desc.radius=1.4f;desc.localRotation={.08f,.19f,-.27f};
+        mounts.SpawnEnemyActor(desc);
+        EnemyTargetingFrameInput aiming;aiming.railPath=&muzzleRail;aiming.cameraPosition={0,8,-10};
+        aiming.hasCameraPosition=true;aiming.deltaTime=1.0f/60;
+        EnemyTargetingSystem targeting;targeting.Update(mounts,aiming);
+        const auto& actor=mounts.Enemies().front();const auto& pose=actor.weaponMount.dronePose;
+        runner.Expect(actor.weaponMount.ready,"complete airframes publish their actual rigid barrel mounts");
+        const auto matrix=BuildTwinShieldDroneWorldMatrix(pose);
+        const Vector3 lip=mesh=="combat_sniper_hull"?Vector3{0,-.02f,-1.235f}:Vector3{-.19f,-.24f,-1.115f};
+        const Vector3 expected{lip.x*matrix.m[0][0]+lip.y*matrix.m[1][0]+lip.z*matrix.m[2][0]+matrix.m[3][0],
+            lip.x*matrix.m[0][1]+lip.y*matrix.m[1][1]+lip.z*matrix.m[2][1]+matrix.m[3][1],
+            lip.x*matrix.m[0][2]+lip.y*matrix.m[1][2]+lip.z*matrix.m[2][2]+matrix.m[3][2]};
+        const auto actual=ResolveEnemyProjectileWorldPosition(muzzleRail,ResolveEnemyProjectileMuzzleRailPosition(actor,0));
+        runner.Expect(std::hypot(actual.x-expected.x,actual.y-expected.y,actual.z-expected.z)<.002f,
+            "airframe shots originate at the model gun lip after pitch, bank, scale and curved-rail conversion");
+    }
     EnemyWaveAsset ambush;CourseActorAsset precision;
     runner.Expect(ambush.LoadFromFile("Resources/courses/waves/route_scout_sniper_pair.wave",&error) &&
         precision.LoadFromFile("Resources/courses/actors/route_sniper.actor",&error),"mixed roadside assets load");

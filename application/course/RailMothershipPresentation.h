@@ -138,6 +138,15 @@ inline void ApplyArchFlight(Frame& frame,const RailPath& rail,float distance,flo
     frame.up=cross(frame.forward,frame.right);
 }
 
+inline void ApplyOpeningCombatClearance(Frame& frame,float distance,float elapsed) {
+    const float clear=Smooth(elapsed,1.8f,4.5f)*(1-Smooth(distance,1250,1410));
+    const Vector3 offset=Add(Scale(frame.right,-46.0f*clear),
+        Add(Scale(frame.up,68.0f*clear),Scale(frame.forward,82.0f*clear)));
+    frame.center=Add(frame.center,offset);
+    frame.railVertical+=68.0f*clear;
+    frame.railDistance+=82.0f*clear;
+}
+
 inline Vector3 WeaponLocalDirection(const Frame& carrier,int part,Vector3 target) {
     const auto mount=carrier.World(WeaponMount(part));
     const Vector3 delta{target.x-mount.x,target.y-mount.y,target.z-mount.z};
@@ -196,6 +205,7 @@ public:
         // may turn this pass into a ship falling from the sky.
         frame_.railVertical=(flightAltitude-sample.position.y)/(std::max)(sample.up.y,0.1f);
         frame_.center=Add(sample.position,Scale(sample.up,frame_.railVertical));
+        if(preserveCourseView)ApplyOpeningCombatClearance(frame_,distance,elapsed_);
         if(firingArchDistance>0)ApplyArchFlight(frame_,rail,distance,firingArchDistance);
         frame_.deploymentDelay=(std::max)(0.0f,DeploymentBegin-elapsed_);
         frame_.launchGlow=0.35f+0.65f*Smooth(elapsed_,FlybyDuration-0.5f,FlybyDuration+0.3f);

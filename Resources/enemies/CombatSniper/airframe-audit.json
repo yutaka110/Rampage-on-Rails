@@ -1,0 +1,179 @@
+{
+  "triangles": 2752,
+  "components": [
+    {
+      "component": "pressure_hull",
+      "triangles": 60,
+      "volume": 0.9733753333333336,
+      "closed": true
+    },
+    {
+      "component": "armour_-1",
+      "triangles": 60,
+      "volume": 0.9889726666666665,
+      "closed": true
+    },
+    {
+      "component": "cheek_frame_-1",
+      "triangles": 60,
+      "volume": 0.1335393875833332,
+      "closed": true
+    },
+    {
+      "component": "unit_stripe_-1",
+      "triangles": 60,
+      "volume": 0.004359962239583347,
+      "closed": true
+    },
+    {
+      "component": "vent_-1_0",
+      "triangles": 60,
+      "volume": 0.0009081730559999975,
+      "closed": true
+    },
+    {
+      "component": "vent_-1_1",
+      "triangles": 60,
+      "volume": 0.0009081730560000015,
+      "closed": true
+    },
+    {
+      "component": "vent_-1_2",
+      "triangles": 60,
+      "volume": 0.0009081730560000043,
+      "closed": true
+    },
+    {
+      "component": "hover_motor_-1",
+      "triangles": 192,
+      "volume": 0.06949679589570322,
+      "closed": true
+    },
+    {
+      "component": "hover_hot_-1",
+      "triangles": 92,
+      "volume": 0.0013417179298114213,
+      "closed": true
+    },
+    {
+      "component": "upper_fin_-1",
+      "triangles": 60,
+      "volume": 0.03710934908333338,
+      "closed": true
+    },
+    {
+      "component": "armour_1",
+      "triangles": 60,
+      "volume": 0.9889726666666669,
+      "closed": true
+    },
+    {
+      "component": "cheek_frame_1",
+      "triangles": 60,
+      "volume": 0.1335393875833333,
+      "closed": true
+    },
+    {
+      "component": "unit_stripe_1",
+      "triangles": 60,
+      "volume": 0.0043599622395833456,
+      "closed": true
+    },
+    {
+      "component": "vent_1_0",
+      "triangles": 60,
+      "volume": 0.0009081730560000017,
+      "closed": true
+    },
+    {
+      "component": "vent_1_1",
+      "triangles": 60,
+      "volume": 0.0009081730560000027,
+      "closed": true
+    },
+    {
+      "component": "vent_1_2",
+      "triangles": 60,
+      "volume": 0.0009081730560000012,
+      "closed": true
+    },
+    {
+      "component": "hover_motor_1",
+      "triangles": 192,
+      "volume": 0.06949679589570343,
+      "closed": true
+    },
+    {
+      "component": "hover_hot_1",
+      "triangles": 92,
+      "volume": 0.0013417179298115017,
+      "closed": true
+    },
+    {
+      "component": "upper_fin_1",
+      "triangles": 60,
+      "volume": 0.037109349083333236,
+      "closed": true
+    },
+    {
+      "component": "gun_mount",
+      "triangles": 60,
+      "volume": 0.19910971733333327,
+      "closed": true
+    },
+    {
+      "component": "barrel_jacket",
+      "triangles": 256,
+      "volume": 0.14471019725868303,
+      "closed": true
+    },
+    {
+      "component": "muzzle_armour",
+      "triangles": 256,
+      "volume": 0.02884215320686438,
+      "closed": true
+    },
+    {
+      "component": "muzzle_inner",
+      "triangles": 256,
+      "volume": 0.042820764959964036,
+      "closed": true
+    },
+    {
+      "component": "single_optic_back",
+      "triangles": 92,
+      "volume": 0.005687095065160873,
+      "closed": true
+    },
+    {
+      "component": "single_optic",
+      "triangles": 92,
+      "volume": 0.0015849043045897964,
+      "closed": true
+    },
+    {
+      "component": "optic_pupil",
+      "triangles": 92,
+      "volume": 0.0001630187284720938,
+      "closed": true
+    },
+    {
+      "component": "rangefinder",
+      "triangles": 60,
+      "volume": 0.08889927258333341,
+      "closed": true
+    },
+    {
+      "component": "rangefinder_glass",
+      "triangles": 60,
+      "volume": 0.0006327729899166705,
+      "closed": true
+    },
+    {
+      "component": "underside",
+      "triangles": 60,
+      "volume": 0.14757196941666675,
+      "closed": true
+    }
+  ]
+}

@@ -1,3 +1,4 @@
+#include "course/RailSceneryImpact.h"
 #include "course/RailVehicleBreakawayGeometry.h"
 #include "AppSceneResources.h"
 #include "course/RailRouteHazards.h"
@@ -1344,7 +1345,7 @@ namespace {
         model.vertices.clear(); model.indices.clear();
         for(float z=-200.0f;z<40.0f;z+=4.0f) {
             const auto first=model.vertices.size();
-            AppendBox(model,{-32,-1,z},{32,0,z+4});
+            AppendBox(model,{-80,-1,z},{80,0,z+4});
             const float h0=RailStartupRearFloorHeight(z),h1=RailStartupRearFloorHeight(z+4);
             const auto normal=Normalize(Vector3{0,1,-(h1-h0)/4.0f});
             for(size_t i=first;i<model.vertices.size();++i) {
@@ -2076,35 +2077,19 @@ Material BuildRailVehicleTitleMaterial(const MaterialData& source, const Materia
     const DirectionalLight& gameplayLight, Vector3 referenceNormal,
     Vector3 referenceView, float exposureRatio) {
     Material material{};
-    const Vector3 normal = Normalize(referenceNormal);
-    const Vector3 light = Normalize(Vector3{-gameplayLight.direction.x,-gameplayLight.direction.y,-gameplayLight.direction.z});
-    const Vector3 view = Normalize(referenceView);
-    const auto dot=[](Vector3 a,Vector3 b){return a.x*b.x+a.y*b.y+a.z*b.z;};
-    const float diffuse = std::pow((std::max)(0.0f,dot(normal,light))*0.5f+0.5f,2.0f);
-    const Vector3 halfway = Normalize(Vector3{light.x+view.x,light.y+view.y,light.z+view.z});
-    const float specular = std::pow((std::max)(0.0f,dot(normal,halfway)),
-        (std::max)(1.0f,gameplayMaterial.shininess));
-    // Match the existing gameplay Blinn-Phong response, including the broad
-    // warm highlight. Clamp as the RGBA8 scene target does before tone mapping.
-    const auto channel=[&](float albedo,float tint,float sun){
-        return (std::clamp)((albedo*tint*diffuse+specular)*sun*gameplayLight.intensity,0.0f,1.0f);
-    };
-    material.color = {
-        channel(source.baseColorFactor.x,gameplayMaterial.color.x,gameplayLight.color.x),
-        channel(source.baseColorFactor.y,gameplayMaterial.color.y,gameplayLight.color.y),
-        channel(source.baseColorFactor.z,gameplayMaterial.color.z,gameplayLight.color.z),
-        source.baseColorFactor.w*gameplayMaterial.color.w};
-    material.enableLighting = true;
-    material.uvTransform = MakeIdentity4x4();
-    // Keep the opening gameplay palette as the colour reference, then shade
-    // each surface normal on the GPU. Running gear must retain its iron value
-    // instead of inheriting the reference's broad white highlight.
+    // Shade the same linear paint used by gameplay. Baking a legacy highlight
+    // into albedo clipped all three paint channels and turned the teal cart grey.
+    (void)gameplayLight; (void)referenceNormal; (void)referenceView;
     const bool iron=source.name=="iron_running_gear";
-    const float reflectance=iron ? 0.26f : 0.84f;
-    material.color.x*=reflectance; material.color.y*=reflectance; material.color.z*=reflectance;
-    material.shininess = iron ? 0.46f : 0.62f; // Mode 8: linear roughness.
-    material.environmentCoefficient = iron ? 0.75f : 0.0f; // Mode 8: metalness.
-    material.specularMode = 8; // Title per-face material; gameplay retains its shader.
+    const bool trim=source.name=="safety_trim";
+    const Vector3 base=iron?Vector3{.095f,.115f,.13f}:trim?Vector3{.84f,.37f,.057f}:
+        Vector3{source.baseColorFactor.x,source.baseColorFactor.y,source.baseColorFactor.z};
+    material.color={base.x,base.y,base.z,source.baseColorFactor.w*gameplayMaterial.color.w};
+    material.enableLighting=true;
+    material.uvTransform=MakeIdentity4x4();
+    material.shininess=iron?.46f:trim?.48f:.60f;
+    material.environmentCoefficient=iron?.64f:.04f;
+    material.specularMode=8;
     material.padding2[0] = std::isfinite(exposureRatio) && exposureRatio > 0.0f ? exposureRatio : 1.0f;
     return material;
 }
@@ -3243,6 +3228,7 @@ bool AppSceneResources::Initialize(
         }
         return terrainAlbedoTextureSrvHandleGPU.ptr != 0 ? terrainAlbedoTextureSrvHandleGPU : textureSrvHandleGPU2;
     };
+    RailSceneryImpact::ResetCache();
     auto registerCourseMesh = [&](const char* name, const char* directory, const char* filename, const char* textureName) {
         if (!std::filesystem::is_regular_file(std::filesystem::path(directory) / filename)) {
             return;
@@ -3262,6 +3248,8 @@ bool AppSceneResources::Initialize(
             return;
         }
 
+        if(RailSceneryImpact::IsStone(name) || std::string_view(name)=="combat_sniper_hull" ||
+            std::string_view(name)=="combat_interceptor_hull")RailSceneryImpact::Prepare(courseMeshData);
         GpuMeshResource courseMesh = CreateGpuMeshResource(
             device,
             uploadCommandList,
@@ -3345,6 +3333,16 @@ bool AppSceneResources::Initialize(
     registerCourseMesh("title_cliff", "Resources/course_meshes/TitleLandscape", "TitleCliff.obj", "titleCaveRock");
     registerCourseMesh("title_boulder", "Resources/course_meshes/TitleLandscape", "TitleBoulder.obj", "titleCaveRock");
     registerCourseMesh("rear_boulder", "Resources/course_meshes/TitleLandscape", "TitleBoulder.obj", "titleSandstone");
+    registerCourseMesh("side_rock", "Resources/course_meshes/SideRock", "SideRock.obj", "default");
+    registerCourseMesh("side_rock_0", "Resources/course_meshes/SideRock", "SideRockFragment0.obj", "default");
+    registerCourseMesh("side_rock_1", "Resources/course_meshes/SideRock", "SideRockFragment1.obj", "default");
+    registerCourseMesh("side_rock_2", "Resources/course_meshes/SideRock", "SideRockFragment2.obj", "default");
+    registerCourseMesh("side_rock_3", "Resources/course_meshes/SideRock", "SideRockFragment3.obj", "default");
+    registerCourseMesh("side_rock_4", "Resources/course_meshes/SideRock", "SideRockFragment4.obj", "default");
+    registerCourseMesh("side_rock_5", "Resources/course_meshes/SideRock", "SideRockFragment5.obj", "default");
+    registerCourseMesh("side_rock_6", "Resources/course_meshes/SideRock", "SideRockFragment6.obj", "default");
+    registerCourseMesh("side_rock_7", "Resources/course_meshes/SideRock", "SideRockFragment7.obj", "default");
+
     registerCourseMesh("title_sand_clod", "Resources/course_meshes/TitleLandscape", "TitleSandClod.obj", "titleCaveRock");
     registerCourseMesh("title_stake", "Resources/course_meshes/TitleLandscape", "TitleStake.obj", "default");
     registerCourseMesh("title_tunnel", "Resources/course_meshes/TitleLandscape", "TitleTunnel.obj", "titleCaveRock");

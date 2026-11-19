@@ -63,7 +63,8 @@ void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& 
     const auto previous=mount.dronePose;
     const bool hadPrevious=mount.ready;
     mount={};
-    if(actor.startupFlightControlled || actor.desc.meshId!="twin_shield_hull" || !input.railPath ||
+    const bool airframe=actor.desc.meshId=="combat_sniper_hull" || actor.desc.meshId=="combat_interceptor_hull";
+    if(actor.startupFlightControlled || (actor.desc.meshId!="twin_shield_hull" && !airframe) || !input.railPath ||
         !input.hasCameraPosition || input.railPath->Length()<=0 ||
         actor.combatState.phase==EnemyCombatPhase::Dying || actor.combatState.phase==EnemyCombatPhase::Retired) return;
     const auto animation=ResolveEnemyCombatActorPresentation(actor,input.presentationSettings?
@@ -92,13 +93,17 @@ void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& 
     } else if(hadPrevious) {
         pose.flightVelocity=previous.flightVelocity;pose.hasFlightVelocity=previous.hasFlightVelocity;
     }
-    pose.rotation=ResolveTwinShieldDroneFacing(sample.tangent,pose.position,
+    if(airframe) {
+        pose.rotation={std::asin((std::clamp)(-sample.tangent.y,-1.0f,1.0f))+actor.desc.localRotation.x+animation.rotationOffset.x,
+            std::atan2(sample.tangent.x,sample.tangent.z)+actor.desc.localRotation.y+animation.rotationOffset.y,
+            actor.desc.localRotation.z+animation.rotationOffset.z};
+    } else pose.rotation=ResolveTwinShieldDroneFacing(sample.tangent,pose.position,
         input.cameraPosition,actor.desc.localRotation,animation.rotationOffset,false);
     float readableScale=1.0f;
     if(input.readability) if(const auto* readable=input.readability->FindActor(actor.actorId))
         readableScale=(std::max)(1.0f,readable->presentationScale);
     const bool elite=IsRailElitePursuer(actor.desc.actorAssetId);
-    const float modelSize=elite?kElitePursuerModelScale:actor.desc.radius*kTwinShieldGameplayModelScale;
+    const float modelSize=elite?kElitePursuerModelScale:actor.desc.radius*(airframe?1.0f:kTwinShieldGameplayModelScale);
     const float size=(std::max)(0.01f,modelSize*
         (actor.combatState.initialized?actor.combatState.presentationScale:1.0f)*animation.scaleMultiplier*readableScale);
     pose.scale={size*(std::max)(0.01f,actor.desc.localScale.x),size*(std::max)(0.01f,actor.desc.localScale.y),
@@ -106,7 +111,9 @@ void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& 
     // Authored gun lips in TwinShieldHull.obj after Assimp's LH conversion.
     for(int barrel=0;barrel<2;++barrel) {
         const float side=barrel==0?-1.0f:1.0f;
-        const Vector3 local=elite ? Vector3{side*.73f,-.18f,actor.desc.actorAssetId=="rear_fang"?-2.03f:-1.43f}
+        const Vector3 local=airframe ? (actor.desc.meshId=="combat_sniper_hull"?
+            Vector3{0,-.02f,-1.235f}:Vector3{side*.19f,-.24f,-1.115f}) :
+            elite ? Vector3{side*.73f,-.18f,actor.desc.actorAssetId=="rear_fang"?-2.03f:-1.43f}
             : Vector3{side*.30f,-.61f,-.94f};
         mount.muzzleRail[barrel]=ProjectMuzzleToRail(*input.railPath,TransformAnchor(local,pose),distance);
     }
@@ -305,8 +312,12 @@ Vector3 ResolveEnemyProjectileMuzzleRailPosition(const CourseEnemyActor& actor,i
             actor.desc.verticalOffset+r*(-forward.y*p.z+right.y*p.x+up.y*p.y),
             actor.desc.spawnDistance+actor.desc.distanceOffset+r*(-forward.z*p.z+right.z*p.x+up.z*p.y)};
     }
-    if(actor.desc.meshId=="twin_shield_hull" && actor.weaponMount.ready)
-        return actor.weaponMount.muzzleRail[index & 1];
+    if(actor.weaponMount.ready && (actor.desc.meshId=="twin_shield_hull" ||
+        actor.desc.meshId=="combat_sniper_hull" || actor.desc.meshId=="combat_interceptor_hull")) {
+        const int barrel=actor.desc.meshId=="combat_interceptor_hull" && actor.desc.bulletCount==1
+            ? int(actor.fireSequence&1u) : (index&1);
+        return actor.weaponMount.muzzleRail[barrel];
+    }
     if(actor.desc.meshId=="carrier_heavy_turret")return ResolveTurretMuzzleRailPosition(actor,0);
     if(RailTurret::IsMesh(actor.desc.meshId) && actor.targetingState.solutionLocked &&
         actor.targetingState.attackIntentSequence==actor.attackState.intentSequence &&

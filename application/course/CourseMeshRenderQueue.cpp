@@ -1,3 +1,4 @@
+#include "RailSideRock.h"
 #include "RailGroundBatteryAttack.h"
 #include "RailRouteHazards.h"
 #include "RailRearPursuitRules.h"
@@ -254,7 +255,7 @@ std::array<RailStartupRearScenery,3> BuildRailStartupRearScenery(const RailPath&
         // different slopes cannot expose sky at the base of the far wall.
         {"startup_rear_cap","course_rail.track_unit",
             Add(Add(start.position,Scale(start.tangent,-142.0f)),Scale(start.up,8.0f)),
-            rotation,{64.0f,40.0f,12.0f}}}};
+            rotation,{160.0f,70.0f,12.0f}}}};
 }
 
 Material BuildTitleLandscapePbrMaterial(std::string_view meshId) {
@@ -545,6 +546,54 @@ void CourseMeshRenderQueue::AddObstacleInstances(
     const Matrix4x4& viewProjection) {
     for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
         if(obstacle.age>=obstacle.desc.lifetime)continue;
+        if(RailSideRock::Is(obstacle)) {
+            const float distance=obstacle.desc.spawnDistance+obstacle.desc.distanceOffset;
+            const auto sample=railPath.Evaluate(distance);
+            const auto facing=RotationFromRailTangent(sample.tangent);
+            const auto impact=RailSideRock::Impact(obstacle);
+            const auto draw=[&](const char* mesh,Vector3 rail,Vector3 scale,Vector3 rotation,float alpha) {
+                const auto index=ResolveModelIndex(models,mesh,nullptr);
+                if(models[index].name!=mesh || !models[index].loaded || alpha<=.001f)return;
+                auto* part=AllocateItem();if(!part)return;
+                part->kind=CourseMeshRenderKind::Obstacle;part->sourceActorId=obstacle.actorId;
+                part->name=obstacle.desc.id;part->meshId=mesh;part->modelIndex=index;
+                part->sortDistance=distance;part->visible=part->transformData!=nullptr;
+                if(part->materialData) {
+                    auto& material=*part->materialData;material={};
+                    material.uvTransform=MakeIdentity4x4();material.color={1,1,1,alpha};
+                    material.enableLighting=true;material.shininess=1;material.environmentCoefficient=0;
+                    material.specularMode=20;
+                    material.padding2[1]=impact.point.x;material.padding2[2]=impact.point.y;material.padding2[3]=impact.point.z;
+                    material.padding2[4]=impact.valid?1-RailSideRock::Smooth(obstacle.age,.015f,.105f):0;
+                    part->useMaterialOverride=true;
+                }
+                WriteItemTransform(*part,models[index].rootLocal,scale,Add(facing,rotation),
+                    ResolveRailLocal(railPath,rail.z,0,rail.x,rail.y),viewProjection);
+            };
+            if(obstacle.desc.hitPoints>0) {
+                const float kick=impact.valid?.018f*std::sin(obstacle.age*46)*(1-RailSideRock::Smooth(obstacle.age,0,.17f)):0;
+                draw(RailSideRock::Mesh,{obstacle.desc.lateralOffset,obstacle.desc.verticalOffset,distance},
+                    obstacle.desc.halfExtents,{kick,0,-kick},1);
+            } else {
+                for(size_t i=0;i<RailSideRock::Pieces.size();++i) {
+                    const auto f=RailSideRock::Evaluate(obstacle,i);
+                    draw(RailSideRock::Pieces[i],f.rail,obstacle.desc.halfExtents,f.rotation,f.alpha);
+                }
+                for(size_t i=0;i<12;++i) {
+                    const float t=obstacle.age-.025f*float(i%3);
+                    if(t<0 || t>.80f)continue;
+                    const float side=std::copysign(1.0f,obstacle.desc.lateralOffset),phase=float(i)*2.39996f;
+                    const Vector3 point{obstacle.desc.lateralOffset+side*(.9f+t*(2.8f+.21f*float(i))),
+                        obstacle.desc.verticalOffset+.5f+t*(3.3f+.18f*float(i))-5.2f*t*t,
+                        distance+1.9f*std::sin(phase)+t*std::cos(phase)*2.1f};
+                    const float size=.14f+.04f*float(i%3);
+                    draw(RailSideRock::Pieces[i%8],point,{size,size*.72f,size*.88f},
+                        {t*(2+float(i)),t*3,t*2.4f},1-RailSideRock::Smooth(t,.42f,.80f));
+                }
+            }
+            continue;
+        }
+
         if(RailRouteHazards::IsBarricade(obstacle) || RailRouteHazards::IsSlab(obstacle)) {
             using namespace RailRouteHazards;
             const bool shelf=IsShelf(obstacle);
@@ -1120,6 +1169,40 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 }
             }
             WriteTwinShieldDrone(*item,pose,models,viewProjection,enemy.desc.energyShield.enabled);
+            continue;
+        }
+        if (enemy.desc.meshId == "combat_sniper_hull" ||
+            enemy.desc.meshId == "combat_interceptor_hull") {
+            // These are complete airframes. Do not add the blockout's shared
+            // pods, floating core, enlarged outline, or sniper height stretch.
+            if (item->materialData != nullptr) {
+                auto& material = *item->materialData;
+                material = {};
+                material.uvTransform = MakeIdentity4x4();
+                material.color = {1, 1, 1, enemy.combatState.initialized
+                    ? enemy.combatState.presentationAlpha : 1.0f};
+                if (readability != nullptr)
+                    material.color.w *= readability->presentationAlpha;
+                material.enableLighting = true;
+                material.specularMode = 21;
+                material.padding2[0] = presentation ? presentation->flashStrength : 0;
+                material.padding2[1] = presentation ? presentation->weaponCharge : 0;
+                item->useMaterialOverride = true;
+            }
+            // Preserve authored scale and the existing banking/recoil pose.
+            // Rigid armour keeps its proportions instead of squash/stretch.
+            Vector3 airframeScale{baseScale * (std::max)(.01f, enemy.desc.localScale.x),
+                baseScale * (std::max)(.01f, enemy.desc.localScale.y),
+                baseScale * (std::max)(.01f, enemy.desc.localScale.z)};
+            if(enemy.weaponMount.ready && enemy.desc.hitPoints>0) {
+                const auto& mounted=enemy.weaponMount.dronePose;
+                center=mounted.position;rotation=mounted.rotation;airframeScale=mounted.scale;
+                if(presentation) {
+                    center=Add(center,presentation->primaryImpactOffset);
+                    rotation=Add(rotation,presentation->primaryImpactRotation);
+                }
+            }
+            WriteItemTransform(*item, model.rootLocal,airframeScale,rotation,center,viewProjection);
             continue;
         }
         if (item->materialData != nullptr) {

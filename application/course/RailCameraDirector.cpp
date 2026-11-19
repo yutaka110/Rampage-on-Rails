@@ -1,3 +1,4 @@
+#include "RailSideRock.h"
 #include "RailCameraDirector.h"
 #include "../diagnostics/DronePerformanceProfile.h"
 #include "GameplaySettingsValidation.h"
@@ -262,7 +263,7 @@ bool ResolveObstacleLineOfSightBlock(
     float bestT = 1.0f;
     uint32_t bestOccluder = 0;
     for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
-        if (obstacle.actorId == ignoredObstacleActorId) {
+        if (RailSideRock::Is(obstacle) || obstacle.actorId == ignoredObstacleActorId) {
             continue;
         }
         const bool slab=RailRouteHazards::IsSlab(obstacle);
@@ -1490,7 +1491,7 @@ void RailCameraDirector::UpdateLookAtTarget(
 
     if (totalWeight <= 0.001f) {
         for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-            if (!obstacle.desc.breakable || RailRouteHazards::IsSlab(obstacle)) {
+            if (RailSideRock::Is(obstacle) || !obstacle.desc.breakable || RailRouteHazards::IsSlab(obstacle)) {
                 continue;
             }
             const float distance = ActorDistance(obstacle.desc.spawnDistance, obstacle.desc.distanceOffset);
@@ -1680,7 +1681,7 @@ void RailCameraDirector::ApplyCompositionSafety(
     }
 
     for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-        if (!obstacle.desc.breakable) {
+        if (RailSideRock::Is(obstacle) || !obstacle.desc.breakable) {
             continue;
         }
         const float actorDistance = ActorDistance(obstacle.desc.spawnDistance, obstacle.desc.distanceOffset);
@@ -1926,7 +1927,7 @@ void RailCameraDirector::ApplyLineOfSightSafety(
     }
 
     for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
-        if (!obstacle.desc.breakable) {
+        if (RailSideRock::Is(obstacle) || !obstacle.desc.breakable) {
             continue;
         }
         const float actorDistance = ActorDistance(obstacle.desc.spawnDistance, obstacle.desc.distanceOffset);

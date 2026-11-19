@@ -1728,7 +1728,7 @@ void AppendConnectedCanyonRidges(
         return;
     }
     constexpr uint32_t kColumns = 20;
-    constexpr uint32_t kRows = 12;
+    constexpr uint32_t kRows = 20;
     constexpr uint32_t kStride = kColumns + 1;
     for (uint32_t sideIndex = 0; sideIndex < 2; ++sideIndex) {
         const float side = sideIndex == 0 ? -1.0f : 1.0f;
@@ -1762,7 +1762,8 @@ void AppendConnectedCanyonRidges(
         for (uint32_t layer = 0; layer < 2; ++layer) {
             bases[layer] = static_cast<uint32_t>(mesh.vertices.size());
             for (uint32_t row = 0; row <= kRows; ++row) {
-                const float v = static_cast<float>(row) / kRows;
+                const float rowT = static_cast<float>(row) / kRows;
+                const float v = rowT * rowT;
                 for (uint32_t col = 0; col <= kColumns; ++col) {
                     const float d = col == kColumns ? chunk.endDistance :
                         std::lerp(chunk.startDistance, chunk.endDistance, static_cast<float>(col) / kColumns);

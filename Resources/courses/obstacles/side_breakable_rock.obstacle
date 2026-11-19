@@ -1,0 +1,4 @@
+# Optional manual-fire scenery target. Stationary and safely outside the track.
+obstacle|side_breakable_rock|Side Rock|side_rock|300|3.4|2.7|3.1|1|1|1|1
+placement|180|-9|2.5|0
+breakable|true|36

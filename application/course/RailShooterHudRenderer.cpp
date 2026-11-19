@@ -369,7 +369,9 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
             rect(x,y,315*responsive,26*responsive,{.008f,.018f,.028f,.83f*fade});
             text(Utf8(u8"撃破ブースト終了後に加速を練習"),x+10*responsive,y+18*responsive,.68f*responsive,muted);
         } else {
-            const float w=760*scale,x=(width-w)*.5f,y=height*.19f;
+            // Restore the original upper-centre anchor. Card width and type
+            // sizes remain unchanged; visibility is still owned by the host.
+            const float w=550*scale,x=(width-w)*.5f,y=height*.19f;
             rect(x,y,w,120*scale,{.008f,.018f,.028f,.92f*fade});
             rect(x,y,3*scale,120*scale,accent);
             const float iconX=x+24*scale,iconY=y+23*scale;
@@ -412,7 +414,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
                 break;
             }
             text(Utf8(title),x+111*scale,y+27*scale,.64f*scale,accent);
-            text(Utf8(instruction),x+111*scale,y+62*scale,1.10f*scale,white);
+            text(Utf8(instruction),x+111*scale,y+62*scale,.84f*scale,white);
             text(Utf8(detail),x+111*scale,y+90*scale,.64f*scale,muted);
             if(lesson==Lesson::Lock && !success)
                 text("LOCK "+std::to_string(guide.Locks()),x+w-92*scale,y+27*scale,.62f*scale,accent);
@@ -626,8 +628,8 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
     }
     const size_t gaugeEnd=next.commands.size();
     if((definition.showPlayerHealth || definition.showVehicleIntegrity) &&
-        (!rearPursuitCombat || !input.unlimitedCheckpointRetries)) {
-        text(input.unlimitedCheckpointRetries?Utf8(u8"リトライ 無制限"):Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
+        !input.unlimitedCheckpointRetries) {
+        text(Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
             healthBottom+23*scale,0.54f*scale,muted);
     }
     if(!rearPursuitCombat && hud.showDamageNotice && hud.damageNoticeAlpha>0) {
@@ -680,7 +682,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
             }
         }
         const float x=width-safe-220*scale;
-        if(!rearPursuitCombat || !hud.primaryWeapon.unlimitedAmmo)
+        if(!hud.primaryWeapon.unlimitedAmmo)
             ink(hud.weaponText,x,height-safe-48*scale,0.78f*scale,textColor);
         if(hud.primaryWeapon.overheated || hud.primaryWeapon.reloading ||
            !hud.primaryWeapon.unlimitedAmmo) {
@@ -717,17 +719,6 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
     if(input.shortRun && input.resultSession && !input.startCueActive &&
         input.resultSession->phase==GameSessionPhase::Playing) {
         const float distance=input.resultSession->courseDistance;
-        if(!rearPursuitCombat) {
-            const int stage=distance<380?0:distance<RailBasicTutorial::SpeedStart?1:
-                distance<RailBasicTutorial::SpeedEnd?2:distance<1450?3:4;
-            const char* stages[]={"FIRST CONTACT","LOCK BURST","SPEED CONTROL","INTERCEPT","FINAL PURSUIT"};
-            const int remaining=int((std::max)(0.0f,input.attemptTimeLimitSeconds-input.resultSession->attemptElapsedSeconds));
-            const std::string stageText=input.courseVisualCount>0 ?
-                std::to_string(input.courseVisualIndex+1)+" / "+std::to_string(input.courseVisualCount)+
-                    "   "+input.courseVisualLabel : std::to_string(stage+1)+" / 5   "+stages[stage];
-            text(stageText,safe,height-90*responsive,0.64f*responsive,textColor);
-            text("TIME  "+std::to_string(remaining),safe,height-64*responsive,0.58f*responsive,muted);
-        }
         if(distance>=input.resultSession->courseLength-2.0f && !input.resultSession->combatClearConfirmed && !input.miniBossParts)
             text("CLEAR REMAINING HOSTILES",width*0.5f,height*0.24f,0.85f*responsive,warning,center);
     }

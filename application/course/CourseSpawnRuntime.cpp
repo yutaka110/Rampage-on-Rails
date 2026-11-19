@@ -1,3 +1,4 @@
+#include "RailSideRock.h"
 #include "RailRearPursuitRules.h"
 #include "RailGroundBatteryAttack.h"
 #include "RailTurretGeometry.h"
@@ -1138,7 +1139,7 @@ void CourseSpawnRuntime::PruneDestroyedActors() {
             [](const CourseObstacleActor& obstacle) {
                 return obstacle.age >= obstacle.desc.lifetime ||
                     (obstacle.desc.breakable && obstacle.desc.hitPoints <= 0.0f &&
-                        !RailRouteHazards::IsBarricade(obstacle) && !RailRouteHazards::IsSlab(obstacle));
+                        !RailRouteHazards::IsBarricade(obstacle) && !RailRouteHazards::IsSlab(obstacle) && !RailSideRock::Is(obstacle));
             }),
         obstacles_.end());
     vfxCues_.erase(

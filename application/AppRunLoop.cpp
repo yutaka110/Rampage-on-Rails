@@ -1,3 +1,6 @@
+#include "course/RailSceneryImpact.h"
+#include "course/RailVisualOcclusion.h"
+#include "course/RailSideRock.h"
 #include "course/RailShortCourse.h"
 #include "AppRunLoop.h"
 #include "AppLogFile.h"
@@ -4466,56 +4469,10 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 }
             }
         }
-        uint64_t markedShell=0;
-        Vector2 markedShellPoint{};
+        // Operation callouts are intentionally absent during route combat.
+        // Keep zero in the legacy HUD audit's shell column.
+        constexpr uint64_t markedShell=0;
         const float cartSpeed=railShooterVehicleMovement_.State().speed;
-        const bool braking=railShooterSpeedDirector_.ManualBrake().Held();
-        if(routeBrakeCues) {
-            const auto cue=RailAttackWarningPresentation::BrakeIncoming(railShooterSpawnRuntime_,railPath_,
-                railShooterCollisionSystem_.PlayerHitbox().State(),cartSpeed,braking);
-            if(cue.active) {
-                const auto p=ProjectRailOverlayPoint(cue.world,frameState_.viewProjectionMatrix,hudWidth,hudHeight);
-                const float s=warningScale;
-                const auto delta=Subtract(cue.world,frameState_.cameraWorldPosition);
-                const float range=std::hypot(delta.x,delta.y,delta.z);
-                if(p.onscreen && p.inDepth && range>.2f && p.screen.y>44*s && p.screen.y<hudHeight-56*s) {
-                    RailAimState ray{};
-                    ray.valid=true;
-                    ray.worldRayOrigin=frameState_.cameraWorldPosition;
-                    ray.worldRayDirection=Scale(delta,1/range);
-                    ray.maxDistance=range-.15f;
-                    RailWorldRaycastInput visibility{};
-                    visibility.aim=&ray;visibility.railPath=&railPath_;visibility.course=&railShooterCourse_;
-                    visibility.terrainSettings=&runtimeState_.terrain.settings;
-                    visibility.terrainEdits=&railShooterCourse_.terrainEditLayer;
-                    visibility.terrainCollision=&terrainCollisionWorld_;visibility.playerDistance=railShooterDistance_;
-                    visibility.includeVisualColumns=true;
-                    if(!RailWorldRaycast::Query(visibility).hit) {
-                        const auto point=p.screen;
-                        const Vector4 mint{.39f,1.0f,.85f,1.0f};
-                        const auto trace=[&](Vector2 a,Vector2 b) {
-                            addLine(a,b,4.6f*s,{.013f,.045f,.042f,.96f});
-                            addLine(a,b,2.1f*s,mint);
-                        };
-                        const float r=(std::clamp)(cue.radius*float(hudHeight)*.6f/range+7,12.0f*s,33.0f*s);
-                        for(float side:{-1.0f,1.0f}) {
-                            const Vector2 corner{point.x+side*r,point.y+r*.69f};
-                            trace({corner.x,point.y-r*.33f},corner);
-                            trace(corner,{corner.x-side*5*s,corner.y});
-                        }
-                        const float dir=point.x<hudWidth*.5f?-1.0f:1.0f;
-                        const float x=(std::clamp)(point.x+dir*(r+35*s),42*s,hudWidth-42*s);
-                        const float y=point.y+(r*.69f+14*s);
-                        trace({point.x+dir*r,point.y+r*.69f},{x,y-10*s});
-                        addQuad(x-31*s,y-10*s,62*s,23*s,uvWhite,
-                            braking?Vector4{.035f,.24f,.19f,.96f}:Vector4{.012f,.057f,.052f,.95f});
-                        addCenteredText(HudUtf8(u8"Q 減速"),x,y+7*s,.77f*s,mint);
-                        markedShell=cue.projectileId;
-                        markedShellPoint=point;
-                    }
-                }
-            }
-        }
         static const bool auditRouteBattery=ReadEnvironmentUInt("GE3_ROUTE_BATTERY_EVENT",0)!=0;
         if(auditRouteBattery && routeBrakeCues) {
             static std::ofstream audit("logs/route_battery_hud.csv");
@@ -4539,8 +4496,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             const bool onScreen=w>0 && std::abs(nx)<.9f && std::abs(ny)<.85f;
             const Vector4 c=incoming.critical?Vector4{1,.20f,.05f,.95f}:Vector4{1,.75f,.25f,.8f};
             Vector2 point{(nx*.5f+.5f)*hudWidth,(ny*.5f+.5f)*hudHeight};
-            const bool overlapsBrake=markedShell && std::hypot(point.x-markedShellPoint.x,point.y-markedShellPoint.y)<57*warningScale;
-            if(onScreen && !overlapsBrake) {
+            if(onScreen) {
                 const float radius=(std::clamp)(incoming.radius*float(hudHeight)*std::abs(frameState_.projMatrix.m[1][1])/(2*w)+8*hudScale,12*hudScale,42*hudScale);
                 for(float side:{-1.0f,1.0f}) {
                     const Vector2 tip{point.x+side*radius,point.y};
@@ -4941,8 +4897,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         const float barHeight = 13.0f * sessionScale;
         const float left = safeArea;
         const float top = safeArea;
-        const bool showRetries=!rearPursuitCombat ||
-            !railShooterGameSession_.Definition().unlimitedCheckpointRetries;
+        const bool showRetries=!railShooterGameSession_.Definition().unlimitedCheckpointRetries;
         const Vector4 sessionPanel{0.012f, 0.022f, 0.030f, opacity * 0.78f};
         const Vector4 sessionCyan{0.24f, 0.90f, 1.0f, opacity};
         const Vector4 healthColor = sessionHud.healthNormalized > 0.30f
@@ -4960,8 +4915,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 uvWhite, healthColor);
         if(showRetries) {
             addText(
-                railShooterGameSession_.Definition().unlimitedCheckpointRetries?HudUtf8(u8"リトライ 無制限"):
-                    HudUtf8(u8"\u6b8b\u6a5f ") + std::to_string(sessionHud.retriesRemaining),
+                HudUtf8(u8"\u6b8b\u6a5f ") + std::to_string(sessionHud.retriesRemaining),
                 left + 10.0f * sessionScale,
                 top + 58.0f * sessionScale,
                 0.62f * sessionScale,
@@ -5037,7 +4991,12 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     }
 
     RailShooterHudRenderInput hudRenderInput{};
-    hudRenderInput.basicTutorial=&railBasicTutorial_;
+    // Acceleration uses the persistent controls legend, without a large
+    // operation card. Brake guidance ends with the introductory runway.
+    const auto hudLesson=railBasicTutorial_.Current();
+    hudRenderInput.basicTutorial=hudLesson==RailBasicTutorial::Lesson::Boost ||
+        (railShooterDistance_>=RailBasicTutorial::SpeedEnd && hudLesson==RailBasicTutorial::Lesson::Brake)
+        ? nullptr : &railBasicTutorial_;
     if(titleEntry.blockingGameplay) {
         for(uint32_t index=0;index<railLockOnHudAtlasVertexCount_;++index) {
             const bool aiming=(index>=entryPipBegin && index<entryPipEnd) ||
@@ -5457,8 +5416,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     defensePromptInput.viewportWidth = hudWidth;
     defensePromptInput.viewportHeight = hudHeight;
     defensePromptInput.settings = railShooterDefensePromptRendererSettings_;
-    defensePromptInput.compactOutcome=hudRenderInput.shortRun && railShooterDistance_>=1470 &&
-        railShooterDistance_<RailMothership::BattleStart;
+    defensePromptInput.compactOutcome=hudRenderInput.shortRun;
     railShooterDefensePromptRenderer_.Update(defensePromptInput);
     if(!railGameOverScene_.Active()) emitHudCommands(railShooterDefensePromptRenderer_.Frame().commands);
     if(!railTitleScreenVisible_ && !railGameOverScene_.Active()) {
@@ -5513,16 +5471,6 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             }
         }
     }
-    if(routeSlab && !titleEntry.blockingGameplay && RailRouteHazards::SlabCanBeReleased(*routeSlab)) {
-        const auto strike=RailRouteHazards::Strike(*routeSlab);
-        const auto point=ProjectRailOverlayPoint(RailLocalPoint(railPath_,strike.z,strike.x,strike.y,0),
-            frameState_.viewProjectionMatrix,hudWidth,hudHeight);
-        if(point.onscreen && point.inDepth && !point.behind) {
-            const Vector4 ink{1.0f,.82f,.51f,.95f};
-            addBracket(point.screen,23*hudScale,7*hudScale,2*hudScale,ink);
-            addCenteredText(HudUtf8(u8"撃つと落石"),point.screen.x,point.screen.y-27*hudScale,.72f*hudScale,ink);
-        }
-    }
     const bool hasBatteryThermals=!railTitleScreenVisible_ && !railGameOverScene_.Active() &&
         std::any_of(railEnemyCombatPresentationBridge_.Frame().actors.begin(),railEnemyCombatPresentationBridge_.Frame().actors.end(),
             [](const auto& p){return p.batteryThermal.valid && (p.batteryThermal.charge>0 || p.batteryThermal.heat>0);});
@@ -5547,7 +5495,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         (crossfireWarning || crossfire.AimVolleyPreparing() ||
             (crossfire.phase==CrossfirePhase::Volley && crossfire.age<.32f));
     const auto impactMarks=railCombatImpactMarks_.Items();
-    const bool impactSpall=std::any_of(impactMarks.begin(),impactMarks.end(),[](const auto& mark){return mark.age<.33f;});
+    const bool impactSpall=std::any_of(impactMarks.begin(),impactMarks.end(),[](const auto& mark){return mark.age<(RailCombatImpact::WorldSurface(mark.kind)?.38f:.33f);});
     const bool showPursuerSmoke=!railTitleScreenVisible_ && !railGameOverScene_.Active() && crossfireCombat &&
         (railPostBossSequence_.HullSmoke(0).Stage()>0 || railPostBossSequence_.HullSmoke(1).Stage()>0);
     const CourseEnemyActor* fangExhaust=nullptr;
@@ -5572,7 +5520,11 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const bool hasLocalCartImpact=cartVisible && std::any_of(cartMarks.begin(),cartMarks.end(),[](const auto& mark) {
         return mark.owner==RailCombatImpact::CartOwner && RailCombatImpact::LocalCart(mark.kind);
     });
-    const bool hasWorldEffects=hasLocalCartImpact || fangInterceptVisible || fangExhaust || barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || gatlingDischarge || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    const bool sideRockVfx=!railTitleScreenVisible_ && std::any_of(railShooterSpawnRuntime_.Obstacles().begin(),
+        railShooterSpawnRuntime_.Obstacles().end(),[](const auto& rock) {
+            return RailSideRock::Is(rock) && !rock.desc.payload.empty() && rock.age<1.25f;
+        });
+    const bool hasWorldEffects=sideRockVfx || hasLocalCartImpact || fangInterceptVisible || fangExhaust || barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || gatlingDischarge || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     const bool hasWingCartImpact=cartVisible && std::any_of(cartMarks.begin(),cartMarks.end(),[](const auto& mark) {
         return mark.owner==RailCombatImpact::CartOwner && mark.kind==RailCombatImpact::Kind::WingCart;
     });
@@ -5820,6 +5772,43 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     billboards.push_back({Add(muzzle,drift),Scale(right,radius*1.3f),Scale(up,radius),
                         {.48f,.45f,.39f,fade*.48f},float(2*(3+puff*11))});
                 }
+            }
+        }
+        if(!railTitleScreenVisible_)for(const auto& mark:impactMarks) {
+            if(!RailCombatImpact::WorldSurface(mark.kind) || mark.age>.38f)continue;
+            const bool sand=mark.kind==RailCombatImpact::Kind::Sand;
+            for(int puff=0;puff<(sand?3:2);++puff) {
+                const float t=mark.age-.012f*puff;
+                if(t<=0)continue;
+                const float life=sand?.38f:.22f;
+                const float fade=RailSideRock::Smooth(t,0,.025f)*(1-RailSideRock::Smooth(t,.06f,life));
+                const auto tangent=NormalizeOr(Cross(mark.normal,up),right);
+                auto center=Add(mark.origin,Add(Scale(mark.normal,.07f+t*(sand?.85f:1.3f)),
+                    Scale(tangent,std::sin(float(puff)*2.4f+float(mark.seed%11))*t*.9f)));
+                const float radius=sand?.17f+.75f*t:.075f+.26f*t;
+                billboards.push_back({center,Scale(right,radius*1.2f),Scale(up,radius),
+                    {sand?.40f:.30f,sand?.32f:.28f,sand?.23f:.25f,fade*(sand?.16f:.12f)},
+                    200.0f+2.0f*float((mark.seed+uint64_t(puff)*5)%64)});
+            }
+        }
+        if(sideRockVfx)for(const auto& rock:railShooterSpawnRuntime_.Obstacles()) {
+            if(!RailSideRock::Is(rock) || rock.desc.payload.empty())continue;
+            const bool broken=rock.desc.hitPoints<=0;
+            const float age=rock.age;
+            if(age<0 || age>(broken?1.10f:.30f))continue;
+            const auto hit=RailSideRock::Impact(rock);
+            for(int puff=0;puff<(broken?6:2);++puff) {
+                const float t=age-float(puff)*.018f;
+                if(t<0)continue;
+                const float life=broken?1.10f:.30f;
+                const float fade=RailSideRock::Smooth(t,0,.045f)*(1-RailSideRock::Smooth(t,life*.35f,life));
+                const float side=std::copysign(1.0f,rock.desc.lateralOffset);
+                auto center=broken?RailLocalPoint(railPath_,rock.desc.spawnDistance+rock.desc.distanceOffset,
+                    rock.desc.lateralOffset+side*(.5f+.22f*puff+t),rock.desc.verticalOffset-1.2f+t*.6f,0):hit.point;
+                center=Add(center,Add(Scale(right,std::sin(float(puff)*2.4f)*t),Scale(up,t*.45f)));
+                const float radius=broken?.38f+.75f*t:.13f+.33f*t;
+                billboards.push_back({center,Scale(right,radius*1.2f),Scale(up,radius),
+                    {.31f,.255f,.185f,fade*(broken?.19f:.16f)},200.0f+2.0f*float(puff*5)});
             }
         }
         if(!railTitleScreenVisible_) for(const auto& burst:enemyBulletFrame.lifecycleBursts) {
@@ -6451,6 +6440,14 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     glowQuad(Subtract(tip,tail),tail,Scale(across,.11f+.025f*(i%4)),32,{5.6f,2.25f,.93f,fade});
                 }
             }
+        }
+        if(sideRockVfx)for(const auto& rock:railShooterSpawnRuntime_.Obstacles()) {
+            if(!RailSideRock::Is(rock))continue;
+            const auto contact=RailSideRock::Impact(rock);
+            if(!contact.valid || rock.age>=.09f)continue;
+            const float flash=1-RailSideRock::Smooth(rock.age,.008f,.09f);
+            const auto center=Add(contact.point,Scale(contact.normal,.04f));
+            glowQuad(center,Scale(right,.26f),Scale(up,.23f),104,{3.0f,2.6f,1.9f,flash*.65f});
         }
         if(cartVisible)for(const auto& mark:cartMarks) {
             if(mark.owner!=RailCombatImpact::CartOwner || !RailCombatImpact::LocalCart(mark.kind))continue;
@@ -7332,7 +7329,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
         if(!railTitleScreenVisible_)for(const auto& mark:impactMarks) {
             using RailCombatImpact::Kind;
-            if(RailCombatImpact::TransientCart(mark.kind) || mark.age>=.33f)continue;
+            if(RailCombatImpact::WorldSurface(mark.kind) || RailCombatImpact::TransientCart(mark.kind) || mark.age>=.33f)continue;
             if(mark.arc!=RailCombatImpact::Arc::None && !mark.needsSurfaceBinding && mark.age<RailCombatImpact::ArcLifetime) {
                 const auto meshes=scene_.CourseMeshes().Items();
                 const auto part=std::find_if(meshes.begin(),meshes.end(),[&](const auto& item) {
@@ -10544,9 +10541,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
         const float dt = railTitleHasLastUpdate_ ? std::chrono::duration<float>(updateStart-railTitleLastUpdate_).count() : 0.0f;
         railTitleLastUpdate_ = updateStart;
         railTitleHasLastUpdate_ = true;
-        const bool focused = hwnd_ == nullptr || GetForegroundWindow() == hwnd_;
+        const bool focused = hwnd_ == nullptr || GetForegroundWindow() == hwnd_ || ReadEnvironmentUInt("GE3_OPENING_REVIEW",0)!=0;
         const float titleDt = focused ? (std::clamp)(dt,0.0f,0.05f) : 0.0f;
         railTitleScene_.Update(titleDt);
+        if(ReadEnvironmentUInt("GE3_OPENING_REVIEW",0) && !railTitleScene_.Starting() && railTitleScene_.Age()>=1.20f)
+            railTitleScene_.BeginStart();
         const auto titleSample = railTitleScene_.Path().Evaluate(railTitleScene_.Distance());
         // Stable warm key light follows the title composition; restore the
         // authored gameplay light only under the fully opaque transition.
@@ -10636,6 +10635,30 @@ void AppRunLoop::UpdateRailShooterFrame() {
     ++railShooterFrameIndex_;
     ResetRailPerfFrame(railShooterFrameIndex_, railShooterDistance_);
     const RailWorldRaycast::FrameCacheScope raycastFrameCache(&terrainCollisionWorld_);
+    const RailVisualOcclusion::Scope visualVisibility([this](Vector3 eye,Vector3 target) {
+        const auto delta=Subtract(target,eye);
+        const float range=std::hypot(delta.x,delta.y,delta.z);
+        if(range<.8f || range>600.0f)return false;
+        const auto direction=Scale(delta,1.0f/range);
+        const float limit=range-.55f;
+        RailAimState ray{};ray.valid=true;ray.worldRayOrigin=eye;
+        ray.worldRayDirection=direction;ray.maxDistance=limit;
+        RailWorldRaycastInput world{};world.aim=&ray;world.railPath=&railPath_;
+        world.course=&railShooterCourse_;world.terrainSettings=&runtimeState_.terrain.settings;
+        world.terrainEdits=&railShooterCourse_.terrainEditLayer;
+        world.terrainCollision=&terrainCollisionWorld_;world.playerDistance=railShooterDistance_;
+        if(RailWorldRaycast::Query(world).hit)return true;
+        for(const auto& item:scene_.CourseMeshes().Items()) {
+            if(!item.visible || !item.transformData || !RailSceneryImpact::IsStone(item.meshId))continue;
+            const auto* model=scene_.FindManagedModel(item.modelIndex);if(!model)continue;
+            const auto inverse=Inverse(item.transformData->World);
+            const auto start=RailSceneryImpact::TransformPoint(eye,inverse,1);
+            const auto axis=RailSceneryImpact::TransformPoint(direction,inverse,0);
+            float nearest=limit;Vector3 normal{};
+            if(RailSceneryImpact::Prepare(model->model).Trace(start,axis,nearest,normal))return true;
+        }
+        return false;
+    },frameState_.cameraWorldPosition);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.begin");
 
     // The review capture ran at 30 fps, so advancing a fixed 16 ms only once
@@ -10666,7 +10689,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool coursePreviewFrozen =
         runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance ||
         coursePreviewOwnsRail;
-    const bool entryFocused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
+    const bool entryFocused=hwnd_==nullptr || GetForegroundWindow()==hwnd_ || ReadEnvironmentUInt("GE3_OPENING_REVIEW",0)!=0;
     const float previousEntryElapsed=railTitleGameplayEntry_.Elapsed();
     railTitleGameplayEntry_.Update(!titleHandoffThisFrame && !coursePreviewFrozen && entryFocused?
         realGameplayDeltaTime:0.0f);
@@ -11524,6 +11547,19 @@ void AppRunLoop::UpdateRailShooterFrame() {
         encounterOutput.dispatchEvents,
         railShooterSpawnRuntime_,
         railShooterDistance_);
+
+    // Opt-in asset review uses the production actors, AI, camera and clock.
+    // No commercial spawn/attack/camera settings are changed by this fixture.
+    if(ReadEnvironmentUInt("GE3_AIRFRAME_REVIEW",0) && !titleEntryBlocked && gameplayDeltaTime>0) {
+        static bool spawned=false;
+        if(!spawned) {
+            spawned=true;
+            railShooterEventDispatcher_.SpawnAuthoredEnemy("short_sniper","airframe-review-sniper",
+                railShooterDistance_+65,-7,8,railShooterSpawnRuntime_);
+            railShooterEventDispatcher_.SpawnAuthoredEnemy("short_interceptor","airframe-review-interceptor",
+                railShooterDistance_+60,7,7,railShooterSpawnRuntime_);
+        }
+    }
 
     const bool postBossEnabled=IsRailShortCourse(railShooterCoursePath_) &&
         RailPostBossSequence::Enabled(railShooterCourse_);
@@ -12829,6 +12865,64 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     const bool batteryApproachReview=routeReviewBoost && (railShooterDistance_<batteryReviewRecognition+10.0f ||
         (bridgeEscortReview>=3 && railShooterDistance_>=2220.0f && railShooterDistance_<2315.0f));
+    const unsigned sideRockReview=ReadEnvironmentUInt("GE3_SIDE_ROCK_REVIEW",0);
+    if(sideRockReview && !titleEntryBlocked && gameplayDeltaTime>0) {
+        lockOnInput.hasLockHeldOverride=true;lockOnInput.lockHeldOverride=false;
+        lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition={metrics.width*.5f,metrics.height*.45f};
+        lockOnInput.gamepadConnected=false;basicAuditAiming=true;basicAuditPrimary=false;
+        for(const auto& rock:railShooterSpawnRuntime_.Obstacles()) {
+            if(!RailSideRock::Is(rock) || rock.desc.hitPoints<=0)continue;
+            const float distance=rock.desc.spawnDistance+rock.desc.distanceOffset;
+            const auto p=ProjectRailOverlayPoint(RailLocalPoint(railPath_,distance,rock.desc.lateralOffset,
+                rock.desc.verticalOffset,0),gameplayViewProjectionMatrix,metrics.width,metrics.height);
+            if(sideRockReview==1 && p.onscreen && p.inDepth && distance-railShooterDistance_<65 && distance>railShooterDistance_) {
+                lockOnInput.cursorPosition=p.screen;basicAuditPrimary=true;
+            }
+        }
+    }
+    const unsigned airframeReview=ReadEnvironmentUInt("GE3_AIRFRAME_REVIEW",0);
+    if(airframeReview>=2 && !titleEntryBlocked && gameplayDeltaTime>0) {
+        static float reviewAge=0;reviewAge+=gameplayDeltaTime;
+        const char* wave=airframeReview==2?"airframe-review-sniper":"airframe-review-interceptor";
+        for(const auto& item:scene_.CourseMeshes().Items()) {
+            if(!item.visible || !item.transformData || !item.sourceActorId)continue;
+            const auto& actors=railShooterSpawnRuntime_.Enemies();
+            const auto actor=std::find_if(actors.begin(),actors.end(),[&](const auto& a){return a.actorId==item.sourceActorId;});
+            if(actor==actors.end() || actor->desc.waveId!=wave || actor->desc.hitPoints<=0)continue;
+            const auto point=RailSceneryImpact::TransformPoint(airframeReview==4?Vector3{1.70f,.1404f,-.68f}:Vector3{},
+                item.transformData->World,1);
+            const auto p=ProjectRailOverlayPoint(point,gameplayViewProjectionMatrix,metrics.width,metrics.height);
+            lockOnInput.hasLockHeldOverride=true;lockOnInput.lockHeldOverride=false;
+            lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=p.screen;
+            lockOnInput.gamepadConnected=false;basicAuditAiming=true;
+            basicAuditPrimary=p.onscreen && p.inDepth && reviewAge>3.0f && reviewAge<3.21f;
+            break;
+        }
+    }
+    const unsigned worldReview=ReadEnvironmentUInt("GE3_WORLD_IMPACT_REVIEW",0);
+    if(worldReview && !titleEntryBlocked && gameplayDeltaTime>0) {
+        static float reviewAge=0;
+        if(railShooterDistance_>=(worldReview==5?470.0f:worldReview==6?620.0f:worldReview==3?2260.0f:2210.0f))reviewAge+=gameplayDeltaTime;
+        const bool sandReview=worldReview==1 || worldReview==4;
+        auto target=RailLocalPoint(railPath_,worldReview==3?2320.0f:2275.0f,
+            sandReview?-14.0f:worldReview==2?-32.0f:-9.0f,sandReview?-.4f:worldReview==2?8.0f:2.5f,0);
+        if(worldReview==5 || worldReview==6) {
+            const char* name=worldReview==5?"blockout-exit-portal":"blockout-spire-left";
+            for(const auto& item:scene_.CourseMeshes().Items())if(item.name==name && item.transformData) {
+                target=RailSceneryImpact::TransformPoint(worldReview==5?Vector3{.75f,-.30f,0}:Vector3{0,0,0},item.transformData->World,1);
+                break;
+            }
+        }
+        const auto p=ProjectRailOverlayPoint(target,gameplayViewProjectionMatrix,metrics.width,metrics.height);
+        lockOnInput.hasLockHeldOverride=true;lockOnInput.lockHeldOverride=false;
+        lockOnInput.hasCursorPosition=true;lockOnInput.cursorPosition=p.screen;
+        lockOnInput.gamepadConnected=false;basicAuditAiming=true;
+        basicAuditPrimary=p.onscreen && p.inDepth && reviewAge>.45f && reviewAge<(worldReview==4?1.70f:.60f);
+        static std::ofstream log("logs/world_impact_input.csv");
+        static const bool header=bool(log<<"distance,age,x,y,onscreen,depth,fire\n");
+        if(header && reviewAge<2.0f)log<<railShooterDistance_<<','<<reviewAge<<','<<p.screen.x<<','<<p.screen.y
+            <<','<<p.onscreen<<','<<p.inDepth<<','<<basicAuditPrimary<<std::endl;
+    }
     const bool barricadeShotReview=batteryApproachReview || (carrierFinishAudit && railShooterDistance_<RailMothership::BattleStart) ||
         ((routeHazardAudit==1 || routeHazardAudit==9 || routeHazardAudit==24) &&
          railShooterDistance_>=float(ReadEnvironmentUInt("GE3_BARRICADE_REVIEW_FIRE_DISTANCE",2254)));
@@ -13263,8 +13357,56 @@ void AppRunLoop::UpdateRailShooterFrame() {
         collisionInput.bonusDamageMultiplier=1.5f;
     }
     const auto collisionStart = RailPerfClock::now();
-    CourseCollisionFrameStats collisionStats =
-        railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
+    const auto queryScenery=[this](Vector3 origin,Vector3 direction,float limit) {
+        RailAimHit hit;float nearest=limit;std::string_view hitMesh;Vector3 hitLocal{};
+        for(const auto& item:scene_.CourseMeshes().Items()) {
+            if(!item.visible || !item.transformData)continue;
+            const bool airframe=item.kind==CourseMeshRenderKind::Enemy &&
+                (item.meshId=="combat_sniper_hull" || item.meshId=="combat_interceptor_hull");
+            if(!airframe && !RailSceneryImpact::IsStone(item.meshId))continue;
+            const auto& placements=railShooterCourse_.terrainPlacements;
+            const auto placement=std::find_if(placements.begin(),placements.end(),[&](const auto& p){return p.id==item.name;});
+            if(airframe) {
+                const auto& actors=railShooterSpawnRuntime_.Enemies();
+                const auto actor=std::find_if(actors.begin(),actors.end(),[&](const auto& a){return a.actorId==item.sourceActorId;});
+                if(actor==actors.end() || actor->desc.hitPoints<=0 ||
+                    (actor->combatState.initialized && !actor->combatState.canBeTargeted) ||
+                    (actor->entranceExitState.initialized && !actor->entranceExitState.targetable))continue;
+            } else if(placement==placements.end())continue;
+            const auto* model=scene_.FindManagedModel(item.modelIndex);if(!model)continue;
+            const auto inverse=Inverse(item.transformData->World);
+            const auto start=RailSceneryImpact::TransformPoint(origin,inverse,1);
+            const auto axis=RailSceneryImpact::TransformPoint(direction,inverse,0);
+            Vector3 normal{};
+            if(!RailSceneryImpact::Prepare(model->model).Trace(start,axis,nearest,normal))continue;
+            // Keep the existing forgiving central aim sphere; additionally
+            // receive normal shots on the real wing tips/engines/armour.
+            hit.hit=true;hit.kind=airframe?RailAimHitKind::Enemy:RailAimHitKind::TerrainPlacement;hit.distance=nearest;
+            hit.actorId=airframe?item.sourceActorId:0;
+            hit.sourceIndex=airframe?UINT32_MAX:uint32_t(placement-placements.begin());
+            hitMesh=item.meshId;
+            hit.position=Add(origin,Scale(direction,nearest));
+            hitLocal=Add(start,Scale(axis,nearest));
+            hit.normal=NormalizeOr(RailSceneryImpact::TransformPoint(normal,item.transformData->WorldInverseTranspose,0),{0,1,0});
+        }
+        if(ReadEnvironmentUInt("GE3_AIRFRAME_REVIEW",0) && hit.hit && hit.kind==RailAimHitKind::Enemy) {
+            static std::ofstream audit("logs/airframe_surface_hits.csv");
+            static const bool header=bool(audit<<"mesh,actor,x,y,z,range\n");
+            if(header)audit<<hitMesh<<','<<hit.actorId<<','<<hitLocal.x<<','<<hitLocal.y<<','<<hitLocal.z<<','<<hit.distance<<std::endl;
+        }
+        if(ReadEnvironmentUInt("GE3_WORLD_IMPACT_AUDIT",0)) {
+            static std::ofstream log("logs/scenery_impact_rays.csv");
+            static const bool header=bool(log<<"frame,distance,limit,hit,source,mesh,range,x,y,z\n");
+            if(header)log<<railShooterFrameIndex_<<','<<railShooterDistance_<<','<<limit<<','<<hit.hit<<','<<hit.sourceIndex
+                <<','<<hitMesh<<','<<hit.distance
+                <<','<<hit.position.x<<','<<hit.position.y<<','<<hit.position.z<<std::endl;
+        }
+        return hit;
+    };
+    CourseCollisionFrameStats collisionStats = [&] {
+        const RailSceneryImpact::Scope scenery(queryScenery);
+        return railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
+    }();
     bool fangCounterAudioPlayed=false;
     const auto& shootDownResults=railShooterCollisionSystem_.ProjectileShootDown().Frame().results;
     const auto* finalIntercept=railPostBossSequence_.OnFangIntercepts(shootDownResults,railShooterSpawnRuntime_);
@@ -14063,11 +14205,23 @@ void AppRunLoop::UpdateRailShooterFrame() {
         (void)audio_.PlaySpatial(railPulseFireSound_,pulseMuzzleGain,reticleNormX*.20f,pitch);
     }
     const auto flights=railPulseShots_.Shots();
+    if(worldReview) {
+        static std::ofstream log("logs/world_impact_feedback.csv");
+        static const bool header=bool(log<<"distance,shots,feedback,aim_kind,valid,ray_hit,normal_fire\n");
+        if(header && railShooterDistance_<2320)log<<railShooterDistance_<<','<<pulseTraces.size()<<','<<weaponFeedback.size()
+            <<','<<int(worldAim.hitKind)<<','<<worldAim.valid<<','<<worldAim.hasWorldHit<<','<<normalShotTriggerHeld<<std::endl;
+    }
     for(const auto& feedback:weaponFeedback) {
         if(feedback.sequence<=railPrimaryKills_.LastObservedSequence())continue;
         const auto flight=std::find_if(flights.begin(),flights.end(),[&](const auto& shot){return shot.shotId==feedback.shotId;});
         railPrimaryKills_.QueueFeedback(feedback,flight==flights.end()?0.0f:flight->length,
             flight==flights.end()?0.0f:flight->Duration(),pulseMuzzleGain);
+        if(worldReview) {
+            static std::ofstream log("logs/world_impact_queue.csv");
+            static const bool header=bool(log<<"shot,kind,type,lock,pending,nx,ny,nz\n");
+            if(header)log<<feedback.shotId<<','<<int(feedback.hitKind)<<','<<int(feedback.damageType)<<','<<feedback.lockOnContact
+                <<','<<(railPrimaryKills_.FindPending(feedback.shotId)!=nullptr)<<','<<feedback.worldNormal.x<<','<<feedback.worldNormal.y<<','<<feedback.worldNormal.z<<std::endl;
+        }
     }
     const auto primaryArrivals=railPrimaryKills_.TakeArrivals();
     for(const auto& arrival:primaryArrivals)railPrimaryKills_.PresentContact(arrival.event);
@@ -14204,6 +14358,48 @@ void AppRunLoop::UpdateRailShooterFrame() {
     unsigned primaryContacts=0;
     for(const auto& arrival:primaryArrivals) {
         const auto& feedback=arrival.event;
+        if(!feedback.lockOnContact && feedback.damageType==WeaponDamageType::Energy) {
+            using namespace RailCombatImpact;
+            const bool terrain=feedback.hitKind==RailAimHitKind::ProceduralTerrain ||
+                feedback.hitKind==RailAimHitKind::TerrainPlacement;
+            const auto& obstacles=railShooterSpawnRuntime_.Obstacles();
+            const bool stone=feedback.hitKind==RailAimHitKind::Obstacle && !feedback.destroyed &&
+                std::any_of(obstacles.begin(),obstacles.end(),[&](const auto& o) {
+                    return o.actorId==feedback.targetActorId && o.desc.hitPoints>0 &&
+                        (RailSideRock::Is(o) || RailRouteHazards::IsSlab(o));
+                });
+            if(terrain || stone) {
+                auto point=feedback.worldPosition;
+                auto normal=NormalizeOr(feedback.worldNormal,{0,1,0});
+                if(stone) {
+                    // Gameplay uses a conservative hull; project only the ink
+                    // onto the actual faceted stone, without changing damage.
+                    const auto incoming=NormalizeOr(feedback.incomingDirection,Scale(normal,-1));
+                    const auto rayOrigin=Subtract(point,Scale(incoming,3));
+                    float nearest=7.5f;
+                    for(const auto& item:scene_.CourseMeshes().Items()) {
+                        if(item.kind!=CourseMeshRenderKind::Obstacle || item.sourceActorId!=feedback.targetActorId || !item.transformData)continue;
+                        const auto* model=scene_.FindManagedModel(item.modelIndex);
+                        Vector3 local{},facing{};
+                        if(model && ProjectPrimaryContactToMesh(model->model,item.transformData->World,rayOrigin,incoming,nearest,local,facing)) {
+                            point=RailCombatImpact::Transform(local,item.transformData->World,1);
+                            normal=NormalizeOr(RailCombatImpact::Transform(facing,item.transformData->WorldInverseTranspose,0),normal);
+                        }
+                    }
+                }
+                const auto kind=stone || feedback.hitKind==RailAimHitKind::TerrainPlacement?Kind::Rock:TerrainSurface(normal);
+                Mark mark{terrain?UINT32_MAX:feedback.targetActorId,feedback.shotId,{},{},point,
+                    normal,{.08f,.68f,2.65f},kind,0,kind==Kind::Sand?1.70f:1.40f};
+                mark.incoming=NormalizeOr(feedback.incomingDirection,Scale(normal,-1));
+                if(railCombatImpactMarks_.AddWorld(std::move(mark)) && ReadEnvironmentUInt("GE3_WORLD_IMPACT_AUDIT",0)) {
+                    static std::ofstream log("logs/world_impact_contacts.csv");
+                    static const bool header=bool(log<<"shot,distance,kind,owner,x,y,z,nx,ny,nz,travel,age\n");
+                    if(header)log<<feedback.shotId<<','<<railShooterDistance_<<','<<(kind==Kind::Sand?"sand":"rock")
+                        <<','<<(terrain?UINT32_MAX:feedback.targetActorId)<<','<<point.x<<','<<point.y
+                        <<','<<point.z<<','<<normal.x<<','<<normal.y<<','<<normal.z<<','<<arrival.duration<<','<<arrival.age<<std::endl;
+                }
+            }
+        }
         const auto wreck=std::find_if(primaryWrecks.begin(),primaryWrecks.end(),
             [&](const auto& burst){return burst.actorId==feedback.targetActorId;});
         const TwinShieldDronePose* pose= wreck!=primaryWrecks.end() && wreck->twinShield ? &wreck->frozenPose : nullptr;
@@ -14226,6 +14422,16 @@ void AppRunLoop::UpdateRailShooterFrame() {
         }
         if(feedback.hitKind==RailAimHitKind::Obstacle && feedback.appliedDamage>0) {
             const auto& obstacles=railShooterSpawnRuntime_.Obstacles();
+            if(std::any_of(obstacles.begin(),obstacles.end(),[&](const auto& o) {
+                return o.actorId==feedback.targetActorId && RailSideRock::Is(o);
+            })) {
+                static const auto stoneHit=audio_.LoadWave("Resources/audio/side_rock_hit.wav");
+                static const auto stoneBreak=audio_.LoadWave("Resources/audio/side_rock_break.wav");
+                const float pan=(std::clamp)(Dot(Subtract(feedback.worldPosition,cameraPosition),projectileCameraRight)/35.0f,-.65f,.65f);
+                audio_.PlaySpatial(feedback.destroyed?stoneBreak:stoneHit,feedback.destroyed?.56f:.34f,pan,
+                    .96f+.018f*float(feedback.shotId%5));
+            }
+
             if(feedback.destroyed && std::any_of(obstacles.begin(),obstacles.end(),[&](const auto& o) {
                 return o.actorId==feedback.targetActorId && RailRouteHazards::IsSlab(o);
             }))audio_.PlaySpatial(railEscapeSounds_[5],.40f,0,.92f);
@@ -14297,7 +14503,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         const bool introFormation=actor.desc.waveId=="short_lock";
         if(introFormation)++lockFormationAlive;
         const auto* proxy=railEnemyEncounterReadabilityDirector_.FindActor(actor.actorId);
-        if(!proxy || !proxy->onScreen || !proxy->targetable)continue;
+        if(!proxy || !proxy->onScreen || !proxy->targetable || !proxy->screenReadable ||
+            proxy->projectedDiameterPixels<30.0f*float(metrics.height)/720.0f ||
+            RailVisualOcclusion::Blocked(frameState_.cameraWorldPosition,proxy->worldPosition))continue;
         tutorialInput.targetVisible=true;
         if(!introFormation && !(speedLessonsLearned && actor.desc.waveId=="short_intercept"))continue;
         tutorialInput.lockTargetAvailable|=std::any_of(tutorialCandidates.begin(),tutorialCandidates.end(),
@@ -15635,6 +15843,10 @@ void AppRunLoop::UpdateTerrainAuthoring(float deltaTime) {
     }
 
     auto streamedTerrainSettings=terrain.settings;
+    // READY orbits backwards toward the arriving pair. Keep the whole
+    // introductory cave resident before the orbit starts, including its floor.
+    if(IsRailShortCourse(railShooterCoursePath_) && railShooterDistance_<360.0f)
+        streamedTerrainSettings.visibleBehindChunks=(std::max)(streamedTerrainSettings.visibleBehindChunks,4u);
     // The chase rig normally needs only two chunks behind. Prepare the rear
     // horizon throughout the breather, before the 180-degree camera turn.
     if(IsRailShortCourse(railShooterCoursePath_) && railPostBossSequence_.Started())
@@ -15976,7 +16188,7 @@ std::vector<RailShadowCaster> AppRunLoop::CollectRailShadowCasters() const {
             (item.kind==CourseMeshRenderKind::Enemy &&
                 (IsCarrierBatterySurfaceMesh(item.meshId) || item.meshId=="gatling_turret" ||
                  item.meshId=="carrier_heavy_turret"));
-        const bool rock=item.meshId.starts_with("route_arch_") ||
+        const bool rock=item.meshId.starts_with("side_rock") || item.meshId.starts_with("route_arch_") ||
             (item.name==RailRouteHazards::SlabId &&
                 (item.meshId=="rail_hazard_block" || item.meshId=="rail_hazard_solid"));
         if(carrier || rock) add(item.modelIndex,item.transformData,item.transformResource.Get(),carrier?220.0f:145.0f);
@@ -19213,7 +19425,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         enemyCombatPresentation,
         enemyEncounterReadability, nullptr,
         UsesCanyonPresentation(railShooterCoursePath_) &&
-            railShooterCourseRuntime_.Distance() < 180.0f,
+            railShooterCourseRuntime_.Distance() < 330.0f,
         IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr,
         IsRailShortCourse(railShooterCoursePath_)?railPostBossSequence_.Scenery():std::span<const CourseTerrainPlacement>{},
         &railVeilModel_.Frame(), &railEliteFire_,{railShooterPlayerLateralOffset_,railShooterPlayerVerticalOffset_});
@@ -19419,7 +19631,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         enemyCombatPresentation,
         enemyEncounterReadability, nullptr,
         UsesCanyonPresentation(railShooterCoursePath_) &&
-            railShooterCourseRuntime_.Distance() < 180.0f,
+            railShooterCourseRuntime_.Distance() < 330.0f,
         IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr,
         IsRailShortCourse(railShooterCoursePath_)?railPostBossSequence_.Scenery():std::span<const CourseTerrainPlacement>{},
         &railVeilModel_.Frame(), &railEliteFire_,{railShooterPlayerLateralOffset_,railShooterPlayerVerticalOffset_});
@@ -19707,7 +19919,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             }
             for(auto it=railCombatImpactMarks_.Items().rbegin();it!=railCombatImpactMarks_.Items().rend();++it) {
                 auto& mark=*it;
-                if(TransientCart(mark.kind))continue;
+                if(WorldSurface(mark.kind) || TransientCart(mark.kind))continue;
                 if(mark.kind==Kind::Heavy || mark.kind==Kind::Kill) {
                     const float strength=(mark.kind==Kind::Heavy?2.5f:1.45f)*
                         (1.0f-TwinShieldDestructionSmooth(mark.age,.012f,.115f));
@@ -19839,6 +20051,28 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                         <<point.x<<','<<point.y<<','<<point.z<<','<<mark.localPoint.x<<','<<mark.localPoint.y<<','
                         <<mark.localPoint.z<<','<<mark.smokeEmitted<<','<<mark.receiverMesh<<','<<electric
                         <<','<<blue<<','<<mark.surfaceProjected<<','<<mark.seed<<std::endl;
+                }
+            }
+            // Combat receivers reserve their slots first. Scenery only consumes
+            // the remaining budget and never replaces a cart/enemy hit response.
+            for(auto it=railCombatImpactMarks_.Items().rbegin();it!=railCombatImpactMarks_.Items().rend() && slots<DrawCapacity;++it) {
+                const auto& mark=*it;
+                if(!WorldSurface(mark.kind))continue;
+                if(mark.owner!=UINT32_MAX && std::none_of(railShooterSpawnRuntime_.Obstacles().begin(),
+                    railShooterSpawnRuntime_.Obstacles().end(),[&](const auto& o){return o.actorId==mark.owner && o.desc.hitPoints>0;}))continue;
+                const auto p=ProjectRailOverlayPoint(mark.origin,frameState_.viewProjectionMatrix,windowWidth_,windowHeight_);
+                if(!p.onscreen || !p.inDepth || p.behind)continue;
+                camera.combatMarkPosition[slots]={mark.origin.x,mark.origin.y,mark.origin.z,mark.kind==Kind::Sand?-2.0f:-3.0f};
+                camera.combatMarkNormalAge[slots]={mark.normal.x,mark.normal.y,mark.normal.z,mark.age};
+                // Scenery RGB lanes carry the fixed bolt projection axis.
+                camera.combatMarkTintRadius[slots]={mark.incoming.x,mark.incoming.y,mark.incoming.z,mark.radius};
+                ++slots;
+                if(ReadEnvironmentUInt("GE3_WORLD_IMPACT_AUDIT",0)) {
+                    static std::ofstream log("logs/world_impact_draw.csv");
+                    static const bool header=bool(log<<"frame,distance,shot,kind,age,speed,slots,projectiles,screen_x,screen_y\n");
+                    if(header)log<<railShooterFrameIndex_<<','<<railShooterDistance_<<','<<mark.seed<<','
+                        <<(mark.kind==Kind::Sand?"sand":"rock")<<','<<mark.age<<','<<railShooterVehicleMovement_.State().speed
+                        <<','<<slots<<','<<railShooterSpawnRuntime_.Bullets().size()<<','<<p.screen.x<<','<<p.screen.y<<std::endl;
                 }
             }
         }
@@ -20362,6 +20596,120 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         }
     }
     std::wstring frameExportPath=frameExportBasePath;
+    const unsigned openingReview=frameExportBasePath.empty()?0:ReadEnvironmentUInt("GE3_OPENING_REVIEW",0);
+    static size_t openingShot=0;
+    bool openingCapture=false;
+    constexpr std::array<float,11> openingDistances{295,340,420,505,590,700,850,1040,1155,1370,1735};
+    if(openingReview && !frameExportDone) {
+        const float entry=railTitleGameplayEntry_.Elapsed();
+        openingCapture=openingShot==0?railTitleScreenVisible_ && railTitleScene_.Age()>=.75f:
+            openingShot==1?!railTitleScreenVisible_ && entry>=1.35f:
+            openingShot==2?!railTitleScreenVisible_ && entry>=3.90f:
+            openingShot==3?!railTitleScreenVisible_ && entry>=5.45f:
+            openingShot<15 && !railTitleScreenVisible_ && railShooterDistance_>=openingDistances[openingShot-4];
+        if(openingCapture) {
+            const auto base=std::filesystem::path(frameExportBasePath);
+            frameExportPath=(base.parent_path()/(base.stem().wstring()+L"-"+std::to_wstring(openingShot)+L".png")).wstring();
+            static std::ofstream audit("logs/opening_review.csv");
+            if(!openingShot)audit<<"sample,title,entry,distance,speed,hp,lesson,locks,visible,blocked,readable,bullets\n";
+            size_t clear=0,blocked=0,readable=0;
+            for(const auto& actor:railEnemyEncounterReadabilityDirector_.Frame().actors) {
+                if(actor.onScreen)++clear;
+                if(actor.screenReadable)++readable;
+                if(!actor.onScreen && !actor.behindCamera)++blocked;
+            }
+            audit<<openingShot<<','<<railTitleScreenVisible_<<','<<entry<<','<<railShooterDistance_<<','
+                <<railShooterVehicleMovement_.State().speed<<','<<railShooterGameSession_.State().playerHealth<<','
+                <<int(railBasicTutorial_.Current())<<','<<railShooterLockOnSystem_.Tokens().size()<<','<<clear<<','<<blocked<<','<<readable
+                <<','<<railShooterSpawnRuntime_.Bullets().size()<<std::endl;
+            ++openingShot;
+        }
+    }
+    const unsigned airframeCaptureMode=frameExportBasePath.empty()?0:ReadEnvironmentUInt("GE3_AIRFRAME_REVIEW",0);
+    static size_t airframeShot=0;
+    static float airframeAge=0;
+    bool airframeCapture=false;
+    if(airframeCaptureMode && !frameExportDone) {
+        airframeAge+=(std::max)(0.0f,frameState_.deltaTime);
+        constexpr std::array<float,7> ages{1.1f,2.3f,3.15f,3.5f,4.3f,6.0f,8.0f};
+        airframeCapture=airframeShot<ages.size() && airframeAge>=ages[airframeShot];
+        if(airframeCapture) {
+            const auto base=std::filesystem::path(frameExportBasePath);
+            frameExportPath=(base.parent_path()/(base.stem().wstring()+L"-"+std::to_wstring(airframeShot)+L".png")).wstring();
+            static std::ofstream audit("logs/airframe_review.csv");
+            if(!airframeShot)audit<<"sample,age,distance,speed,actor,hp,charge,fire,onscreen,mesh,material\n";
+            for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
+                if(!actor.desc.waveId.starts_with("airframe-review-"))continue;
+                const auto* pose=railEnemyCombatPresentationBridge_.FindActor(actor.actorId);
+                for(const auto& item:scene_.CourseMeshes().Items()) {
+                    if(!item.visible || item.sourceActorId!=actor.actorId || !item.transformData)continue;
+                    const auto center=RailSceneryImpact::TransformPoint({0,0,0},item.transformData->World,1);
+                    const auto p=ProjectRailOverlayPoint(center,frameState_.viewProjectionMatrix,windowWidth_,windowHeight_);
+                    audit<<airframeShot<<','<<airframeAge<<','<<railShooterDistance_<<','<<railShooterVehicleMovement_.State().speed
+                        <<','<<actor.desc.actorAssetId<<','<<actor.desc.hitPoints<<','<<(pose?pose->weaponCharge:0)<<','<<actor.fireSequence
+                        <<','<<p.onscreen<<','<<item.meshId<<','<<(item.materialData?item.materialData->specularMode:-1)<<std::endl;
+                }
+            }
+            ++airframeShot;
+        }
+    }
+    const unsigned rockReview=frameExportBasePath.empty()?0:ReadEnvironmentUInt("GE3_SIDE_ROCK_REVIEW",0);
+    static size_t rockShot=0;
+    bool rockCapture=false;
+    if(rockReview && !frameExportDone) {
+        const auto& rocks=railShooterSpawnRuntime_.Obstacles();
+        const auto rock=std::find_if(rocks.begin(),rocks.end(),[](const auto& o){return RailSideRock::Is(o);});
+        const float gap=rock==rocks.end()?1000:rock->desc.spawnDistance+rock->desc.distanceOffset-railShooterDistance_;
+        const bool destroyed=rock!=rocks.end() && rock->desc.hitPoints<=0;
+        constexpr std::array<float,5> ages{.035f,.14f,.31f,.66f,1.12f};
+        rockCapture=rockShot==0?rock!=rocks.end() && gap<=95 && gap>0:
+            rockReview==2?(rockShot==1?gap<=65 && gap>0:rockShot==2?gap<=20 && gap>0:railShooterDistance_>=2340):
+            rockShot==1?rock!=rocks.end() && rock->desc.hitPoints>0 && rock->desc.hitPoints<RailSideRock::Health:
+            rockShot<7?destroyed && rock->age>=ages[rockShot-2]:rock==rocks.end() && railShooterDistance_>=2340;
+        if(rockCapture) {
+            const auto base=std::filesystem::path(frameExportBasePath);
+            frameExportPath=(base.parent_path()/(base.stem().wstring()+L"-"+std::to_wstring(rockShot)+L".png")).wstring();
+            static std::ofstream log("logs/side_rock_review.csv");
+            if(rockShot==0)log<<"shot,distance,speed,hp,age,locks,boost_serial,phase,exists\n";
+            log<<rockShot<<','<<railShooterDistance_<<','<<railShooterVehicleMovement_.State().speed<<','
+                <<(rock==rocks.end()?-1:rock->desc.hitPoints)<<','<<(rock==rocks.end()?-1:rock->age)<<','
+                <<railShooterLockOnSystem_.Tokens().size()<<','<<railShooterSpeedDirector_.KillBoost().Serial()<<','
+                <<int(railShooterGameSession_.State().phase)<<','<<(rock!=rocks.end())<<std::endl;
+            ++rockShot;
+        }
+    }
+
+    const unsigned worldReview=frameExportBasePath.empty()?0:ReadEnvironmentUInt("GE3_WORLD_IMPACT_REVIEW",0);
+    static size_t worldShot=0;
+    static uint64_t worldSeed=0;
+    static float worldCaptureAge=0;
+    bool worldCapture=false;
+    if(worldReview && !frameExportDone) {
+        const auto marks=railCombatImpactMarks_.Items();
+        for(const auto& mark:marks)if(RailCombatImpact::WorldSurface(mark.kind) && !worldSeed)worldSeed=mark.seed;
+        constexpr std::array<float,7> ages{.02f,.08f,.20f,.38f,.75f,1.30f,2.05f};
+        auto first=std::find_if(marks.begin(),marks.end(),[&](const auto& mark){return mark.seed==worldSeed && RailCombatImpact::WorldSurface(mark.kind);});
+        if(first==marks.end() && worldCaptureAge<2.8f) {
+            first=std::find_if(marks.begin(),marks.end(),[](const auto& mark){return RailCombatImpact::WorldSurface(mark.kind);});
+            if(first!=marks.end())worldSeed=first->seed;
+        }
+        if(first!=marks.end())worldCaptureAge=first->age;
+        else if(worldSeed)worldCaptureAge+=(std::max)(.001f,frameState_.deltaTime);
+        worldCapture=worldSeed && (worldShot<ages.size()?worldCaptureAge>=ages[worldShot]:worldCaptureAge>=2.95f);
+        if(worldCapture) {
+            const auto base=std::filesystem::path(frameExportBasePath);
+            frameExportPath=(base.parent_path()/(base.stem().wstring()+L"-"+std::to_wstring(worldShot)+L".png")).wstring();
+            static std::ofstream log("logs/world_impact_review.csv");
+            if(!worldShot)log<<"shot,distance,kind,age,speed,marks,projectiles,x,y,z\n";
+            log<<worldShot<<','<<railShooterDistance_<<','<<(first==marks.end()?"expired":first->kind==RailCombatImpact::Kind::Sand?"sand":"rock")
+                <<','<<worldCaptureAge<<','<<railShooterVehicleMovement_.State().speed<<','
+                <<std::count_if(marks.begin(),marks.end(),[](const auto& m){return RailCombatImpact::WorldSurface(m.kind);})
+                <<','<<railShooterSpawnRuntime_.Bullets().size()<<','<<(first==marks.end()?0:first->origin.x)
+                <<','<<(first==marks.end()?0:first->origin.y)<<','<<(first==marks.end()?0:first->origin.z)<<std::endl;
+            ++worldShot;
+        }
+    }
+
     const unsigned localCartCapture=frameExportBasePath.empty()?0:ReadEnvironmentUInt("GE3_LOCAL_CART_CAPTURE",0);
     static size_t localCartSample=0;
     static uint64_t localCartSequence=0;
@@ -20781,7 +21129,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         const auto distanceName=std::to_wstring(static_cast<int>(needlesShots[needlesShot++]));
         frameExportPath=(base.parent_path()/(base.stem().wstring()+L"-"+distanceName+L".png")).wstring();
     }
-    if(localCartReady || needlesCaptureReady || (!localCartCapture && !frameExportPath.empty() && !frameExportDone && ++frameExportWait>=frameExportMinimum &&
+    if(openingCapture || airframeCapture || worldCapture || rockCapture || localCartReady || needlesCaptureReady || (!openingReview && !airframeCaptureMode && !worldReview && !rockReview && !localCartCapture && !frameExportPath.empty() && !frameExportDone && ++frameExportWait>=frameExportMinimum &&
         killBoostCaptureReady && shieldCaptureReady && postBossCaptureReady && (heavyCaptureReady || carrierFinishCapture) &&
         (carrierContinuityCapture?carrierCaptureReady:basicCaptureReady) && hazardCaptureReady &&
         railShooterDistance_>=float(speedFeelCaptureDistance) &&
@@ -20918,6 +21266,10 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 <<(actor.desc.hitPoints>0)<<','<<actor.combatState.canBeTargeted<<','<<std::quoted(actor.fireSafetyReason)<<'\n';
         }
         if(localCartCapture)frameExportDone=localCartSample>=6;
+        if(rockReview)frameExportDone=rockShot>=(rockReview==2?4u:8u);
+        if(worldReview)frameExportDone=worldShot>=8;
+        if(airframeCaptureMode)frameExportDone=airframeShot>=7;
+        if(openingReview)frameExportDone=openingShot>=15;
         if(frameExportDone)PostMessageW(hwnd_,WM_CLOSE,0,0);
     }
     const auto presentStart = RailPerfClock::now();

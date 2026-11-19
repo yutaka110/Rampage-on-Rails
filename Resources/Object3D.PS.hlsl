@@ -1,4 +1,4 @@
-﻿#include "Object3d.hlsli"
+#include "Object3d.hlsli"
 
 // ------------------------------------------------------------
 // Material / Light
@@ -107,6 +107,7 @@ static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int
 }
 
 #include "TitleLighting.hlsli"
+#include "WorldImpact.hlsli"
 #include "SunfallLighting.hlsli"
 #include "CaveLighting.hlsli"
 #include "RailShadowReceiver.hlsli"
@@ -543,7 +544,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         float facing=saturate(dot(bumped,hit/max(distanceToHit,.05f))*.7f+.32f);
         lit+=gMaterial.railLightingOrigin.w*falloff*falloff*facing*float3(3.9f,.96f,1.21f)*(.44f+base);
         if(titleSubject.w>.5f)lit=TitleAtmosphere(lit*TitleCaveExposure(),input.worldPosition);
-        output.color=float4(lit,gMaterial.color.a);
+        output.color=float4(ApplyWorldScorch(lit,input.worldPosition,N,false),gMaterial.color.a);
         return output;
     }
 
@@ -585,7 +586,10 @@ PixelShaderOutput main(VertexShaderOutput input)
         rough=clamp(rough,.30f,.95f);
         float3 N=SafeNormalize(input.normal),V=SafeNormalize(cameraWorldPosition-input.worldPosition);
         float3 impactEmission=CombatScorch(gMaterial.primaryImpactReceiver,input.worldPosition,N,base,rough);
-        float3 lit=RailSurfaceLighting(base,metal,rough,N,V,input.worldPosition,.92f,GameplayCaveWeight(input.worldPosition));
+        float hullContact=lerp(.92f,lerp(.48f,.94f,smoothstep(-.70f,.60f,N.y)),hull);
+        float panelEdge=1-smoothstep(.012f,.075f,min(min(detail.x,1-detail.x),min(detail.y,1-detail.y)));
+        hullContact*=1-.15f*panelEdge*hull*(painted?1:0);
+        float3 lit=RailSurfaceLighting(base,metal,rough,N,V,input.worldPosition,hullContact,GameplayCaveWeight(input.worldPosition));
         // Retain readable dark steel in shadow without the old orange outline.
         lit=max(lit,base*.16f);
         float counter=saturate(gMaterial.caveSurface.x);
@@ -606,6 +610,66 @@ PixelShaderOutput main(VertexShaderOutput input)
         // pass so the carrier can cast onto the deck without self-stippling.
         float sceneAlpha=railCanyonGrade.z>.5f ? kRailShadowCasterOnly : gMaterial.color.a;
         output.color=float4(lit+impactEmission,sceneAlpha);return output;
+    }
+
+    if(gMaterial.specularMode==21) {
+        // UV bands are authored per surface, not sampled from a shared palette.
+        // Hard surface bevels and recessed optics stay physical geometry.
+        int band=(int)floor(input.texcoord.x/4);
+        float2 face=float2(frac(input.texcoord.x),input.texcoord.y);
+        float grain=FilteredCarrierNoise(face,float2(33,47),5.1f);
+        float broad=FilteredCarrierNoise(face,float2(3,5),1.7f);
+        float3 base=float3(.49f,.54f,.57f);
+        float metal=.16f,rough=.59f;
+        if(band==1){base=float3(.026f,.043f,.063f);metal=.58f;rough=.48f;}
+        if(band==2){base=float3(.24f,.28f,.31f);metal=.83f;rough=.37f;}
+        if(band==3){base=float3(.13f,.008f,.003f);metal=.20f;rough=.25f;}
+        if(band==4){base=float3(.009f,.014f,.020f);metal=.10f;rough=.88f;}
+        if(band==5){base=float3(.22f,.038f,.025f);metal=.15f;rough=.64f;}
+        if(band==6){base=float3(.07f,.018f,.006f);metal=.40f;rough=.35f;}
+        if(band==7){base=float3(.19f,.20f,.20f);metal=.22f;rough=.79f;}
+        base*=.92f+.10f*broad+.035f*grain;
+        // Restrained edge wear breaks up paint without turning every panel
+        // border into a bright outline. Filtered noise remains quiet at range.
+        float edge=min(min(face.x-.125f,.875f-face.x),min(face.y-.125f,.875f-face.y));
+        float wear=(1-smoothstep(.003f,.018f,edge))*smoothstep(.56f,.78f,grain+.5f);
+        if(band==0 || band==5) {
+            base=lerp(base,float3(.29f,.32f,.34f),wear*.27f);
+            rough=lerp(rough,.42f,wear*.35f);
+        }
+        float3 N=SafeNormalize(input.normal),V=SafeNormalize(cameraWorldPosition-input.worldPosition);
+        float3 emission=CombatScorch(gMaterial.primaryImpactReceiver,input.worldPosition,N,base,rough);
+        float3 lit=RailSurfaceLighting(base,metal,rough,N,V,input.worldPosition,.85f,GameplayCaveWeight(input.worldPosition));
+        lit=max(lit,base*.20f);
+        float charge=saturate(gMaterial.caveSurface.x);
+        if(band==3)emission+=float3(1.85f,.15f,.028f)*(.45f+charge*1.7f);
+        if(band==6)emission+=float3(.95f,.19f,.035f);
+        lit=lerp(lit,float3(1.35f,1.20f,.96f),saturate(gMaterial.pad_)*.65f);
+        if(CartSurfaceNoise(input.position.xy*.73f)>gMaterial.color.a)discard;
+        output.color=float4(lit+emission,1);return output;
+    }
+
+    if(gMaterial.specularMode==20) {
+        // Original dry stone: broad mineral variation, fine pits, matte fresh
+        // fracture planes. UVs travel with every independently rotating chunk.
+        float2 stoneUv=input.texcoord;
+        const float interior=abs(stoneUv.y)>1.5f?1.0f:0.0f;
+        stoneUv.y=frac(stoneUv.y);
+        const float broad=CartSurfaceNoise(stoneUv*6.3f+4.1f);
+        const float grain=CartSurfaceNoise(stoneUv*91.0f+17.0f);
+        const float pits=smoothstep(.62f,.84f,CartSurfaceNoise(stoneUv*38.0f));
+        const float strata=.5f+.5f*sin(stoneUv.y*37.0f+5.0f*broad);
+        float3 base=lerp(float3(.31f,.245f,.17f),float3(.49f,.405f,.30f),interior);
+        base*=lerp(.70f,1.24f,broad)*lerp(.88f,1.10f,grain)*(1-.14f*pits)*lerp(.93f,1.04f,strata);
+        float3 N=SafeNormalize(input.normal),V=SafeNormalize(cameraWorldPosition-input.worldPosition);
+        float3 lit=RailSurfaceLighting(base,0,.91f,N,V,input.worldPosition,.91f,GameplayCaveWeight(input.worldPosition));
+        lit=max(lit,base*.22f);
+        float hitDistance=length(input.worldPosition-gMaterial.caveSurface.xyz);
+        float flash=(1-smoothstep(.10f,.78f,hitDistance))*gMaterial.caveSurface.w;
+        lit+=float3(2.6f,1.85f,.94f)*flash;
+        // Opaque fragments dissolve as fine coverage instead of transparent stones.
+        if(CartSurfaceNoise(input.position.xy*.73f)>gMaterial.color.a)discard;
+        output.color=float4(ApplyWorldScorch(lit,input.worldPosition,N,false),1);return output;
     }
 
     // Only the forward surfaces of exposed pursuit hardware use the extra U band.
@@ -670,8 +734,22 @@ PixelShaderOutput main(VertexShaderOutput input)
             }
             const float3 impactEmission=CombatScorch(profile==1 || profile==3?-1.0f:gMaterial.primaryImpactReceiver,
                 input.worldPosition,N,base,rough);
+            if(profile<=3) {
+                float skyFace=smoothstep(-.50f,.85f,N.y);
+                contact*=profile==2?lerp(.55f,.84f,skyFace):lerp(.80f,1.0f,skyFace);
+            }
             float3 lit=RailSurfaceLighting(base,metal,rough,N,V,input.worldPosition,contact,caveWeight);
-            float fill=profile<=3?.39f:profile==7?.33f:.22f;
+            if(profile<=3) {
+                // Broad upper-side reflection reveals bevels and paint planes;
+                // the back and running gear keep their lower illumination.
+                float3 side=SafeNormalize(cross(float3(0,1,0),V));
+                float3 skyKey=SafeNormalize(V*.32f+side*.90f+float3(0,.95f,0));
+                lit+=DroneDirect(base,metal,max(rough,.42f),N,V,skyKey,
+                    float3(.70f,.88f,1.08f)*lerp(1.0f,.30f,caveWeight))*contact;
+            }
+            // Subdued support light preserves the difference between sunlit
+            // paint, side panels and the shaded running gear.
+            float fill=profile<=3?.14f:profile==7?.23f:.22f;
             lit=max(lit,base*fill*contact);
             if(profile==4 || profile==5 || profile==8)lit*=lerp(.69f,1.0f,contact);
             output.color=float4(lit+impactEmission,baseA);
@@ -716,7 +794,10 @@ PixelShaderOutput main(VertexShaderOutput input)
         float rough = clamp(surface.a,0.30f,0.90f);
         float3 impactEmission=CombatScorch(gMaterial.primaryImpactReceiver,input.worldPosition,SafeNormalize(input.normal),baseRgb,rough);
         float painted = saturate((texColor.r-texColor.b)*4.0f);
-        float metal = lerp(saturate(gMaterial.environmentCoefficient),0.10f,painted);
+        float armour=smoothstep(.045f,.15f,dot(baseRgb,float3(.2126f,.7152f,.0722f)))*(1-painted);
+        baseRgb*=lerp(float3(.75f,.86f,.98f),float3(.76f,.91f,1.13f),armour);
+        rough=max(rough,lerp(.50f,.60f,armour));
+        float metal = lerp(saturate(gMaterial.environmentCoefficient),0.10f,saturate(painted+armour*.72f));
         float caveAmount = GameplayCaveWeight(input.worldPosition);
         float3 lit = 0.0f;
         [branch] if (caveAmount < 0.999f) {
@@ -740,11 +821,11 @@ PixelShaderOutput main(VertexShaderOutput input)
                 // Keep the mapped GGX response so opposing faces stay distinct.
                 float3 right=SafeNormalize(cross(float3(0,1,0),V));
                 float3 fill=SafeNormalize(V+right*0.70f+float3(0,0.85f,0));
-                lit += DroneDirect(baseRgb,metal,rough,N,V,fill,float3(4.2f,4.9f,5.8f));
+                lit += DroneDirect(baseRgb,metal,rough,N,V,fill,float3(2.0f,2.5f,3.2f));
                 // A broad soft frontal source reveals the sensor housing and shield
                 // faces at gameplay distance, rather than lighting only the bevels.
                 float3 front=SafeNormalize(V+right*0.20f+float3(0,0.25f,0));
-                lit += DroneDirect(baseRgb,metal,max(rough,0.55f),N,V,front,float3(2.2f,2.4f,2.7f));
+                lit += DroneDirect(baseRgb,metal,max(rough,0.55f),N,V,front,float3(.20f,.26f,.34f));
                 float3 bounce=SafeNormalize(V*0.45f-right*0.65f-float3(0,0.40f,0));
                 lit += DroneDirect(baseRgb,metal,rough,N,V,bounce,float3(0.90f,0.73f,0.57f));
 
@@ -752,13 +833,13 @@ PixelShaderOutput main(VertexShaderOutput input)
                 // map scratches must not become a noisy glowing outline.
                 float3 shapeN=SafeNormalize(input.normal);
                 float skyFacing=saturate(shapeN.y*0.5f+0.5f);
-                float ambient=lerp(0.15f,0.34f,skyFacing);
+                float ambient=lerp(0.085f,0.21f,skyFacing);
                 lit += baseRgb*ambient + reflected*f0*(0.55f-rough*0.12f);
                 lit += f0*float3(0.18f,0.22f,0.28f)*lerp(0.50f,1.0f,skyFacing);
                 float3 edgeLight=SafeNormalize(-V*0.45f+right*0.90f+float3(0,0.70f,0));
                 float edge=pow(1.0f-saturate(abs(dot(shapeN,V))),2.8f);
                 edge *= smoothstep(-0.20f,0.65f,dot(shapeN,edgeLight));
-                lit += float3(0.20f,0.30f,0.40f)*edge*lerp(0.65f,1.0f,skyFacing);
+                lit += float3(.18f,.29f,.44f)*edge*lerp(.65f,1.0f,skyFacing);
             }
         }
         [branch] if (caveAmount > 0.001f) {
@@ -770,7 +851,7 @@ PixelShaderOutput main(VertexShaderOutput input)
             float3 right = SafeNormalize(cross(float3(0,1,0), V));
             float3 key = SafeNormalize(V * 0.65f + right * 0.85f + float3(0,1.30f,0));
             caveLit += DroneDirect(baseRgb, metal, max(rough, 0.48f), N, V, key,
-                float3(1.90f,2.10f,2.20f) * lerp(0.78f, 1.0f, contact));
+                float3(1.65f,2.05f,2.55f) * lerp(0.78f, 1.0f, contact));
             lit = lerp(lit, caveLit, caveAmount);
         }
         float3 impactDirection;
@@ -842,6 +923,12 @@ PixelShaderOutput main(VertexShaderOutput input)
         if(!wheel) paint *= max(gMaterial.pad_,0.0001f);
         paint+=RailWorldEffectSurfaceLighting(surfaceBase,metal,rough,N,V,input.worldPosition);
         if (titleSubject.w > 0.5f) {
+            // The menu has an oblique cool softbox, keeping the real teal
+            // albedo legible beneath the warm sun without baking highlights.
+            float3 heroRight=SafeNormalize(cross(float3(0,1,0),V));
+            float3 heroKey=SafeNormalize(V*.65f+heroRight*.72f+float3(0,1.15f,0));
+            paint+=DroneDirect(surfaceBase,metal,rough,N,V,heroKey,float3(2.4f,3.25f,3.8f));
+            paint+=surfaceBase*float3(.06f,.095f,.13f)*(1-metal);
             paint *= TitleCaveExposure();
             paint += DroneDirect(surfaceBase,metal,rough,N,V,TitleImpactDirection(input.worldPosition),
                 TitleImpactRadiance(input.worldPosition));

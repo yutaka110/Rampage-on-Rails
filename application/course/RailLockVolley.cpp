@@ -1,4 +1,4 @@
-﻿#include "RailLockVolley.h"
+#include "RailLockVolley.h"
 #include "CourseSpawnRuntime.h"
 #include "CourseCollisionSystem.h"
 #include "../terrain/RailPath.h"

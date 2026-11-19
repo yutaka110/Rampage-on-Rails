@@ -164,7 +164,11 @@ void RailLockResolver::Update(const RailLockResolverFrameInput& input) {
         });
         if(anchor==input.anchors->end()) return true;
         const auto point=ProjectToScreen(anchor->worldPosition,*input.viewProjection,input.viewportWidth,input.viewportHeight);
-        token.acquiredScreenPosition=point.behind?Vector2{-100000,-100000}:point.screen;
+        // Retain an acquired target across a short bend, but never paint its
+        // confirmed bracket on the foreground cliff. New acquisition is gated
+        // below and the real volley still resolves physical occlusion.
+        token.acquiredScreenPosition=point.behind || anchor->lineOfSightBlocked
+            ? Vector2{-100000,-100000}:point.screen;
         return false;
     });
 

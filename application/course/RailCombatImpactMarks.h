@@ -18,7 +18,10 @@ inline constexpr uint32_t CartOwner=0;
 inline constexpr float ArcLifetime=.18f;
 inline constexpr float BlueArcDelay=.018f;
 enum class Arc { None, Blue, Green };
-enum class Kind { Hull, Plate, Cart, Heavy, Kill, GatlingCart, VeilLightningCart, VeilBeamCart, WingCart, BatteryCart };
+enum class Kind { Hull, Plate, Cart, Heavy, Kill, GatlingCart, VeilLightningCart, VeilBeamCart, WingCart, BatteryCart, Sand, Rock };
+inline bool WorldSurface(Kind kind) {return kind==Kind::Sand || kind==Kind::Rock;}
+inline constexpr float WorldLifetime=2.8f;
+inline Kind TerrainSurface(Vector3 normal) {return normal.y>=.72f?Kind::Sand:Kind::Rock;}
 
 inline bool LocalCart(Kind kind) {return kind==Kind::Cart || kind==Kind::BatteryCart;}
 
@@ -87,7 +90,7 @@ public:
             mark.age+=bossCart && cartPresentationDt>=0.0f?cartPresentationDt:dt;
         }
         std::erase_if(marks_,[](const auto& mark){
-            return mark.age>=(TransientCart(mark.kind)?CartDischargeDuration(mark):3.4f);
+            return mark.age>=(WorldSurface(mark.kind)?WorldLifetime:TransientCart(mark.kind)?CartDischargeDuration(mark):3.4f);
         });
     }
     bool AcceptCart(uint64_t sequence) {
@@ -98,6 +101,31 @@ public:
     void Add(Mark mark) {
         if(marks_.size()>=18)marks_.erase(marks_.begin());
         marks_.push_back(mark);
+    }
+    bool AddWorld(Mark mark) {
+        const auto finite=[](Vector3 p){return std::isfinite(p.x)&&std::isfinite(p.y)&&std::isfinite(p.z);};
+        const float length=std::hypot(mark.normal.x,mark.normal.y,mark.normal.z);
+        if(!WorldSurface(mark.kind) || !mark.seed || !finite(mark.origin) || !finite(mark.normal) ||
+            !std::isfinite(mark.radius) || mark.radius<=0 || !std::isfinite(length) || length<.001f)return false;
+        mark.normal={mark.normal.x/length,mark.normal.y/length,mark.normal.z/length};
+        for(auto& old:marks_) {
+            if(!WorldSurface(old.kind))continue;
+            if(old.seed==mark.seed)return false;
+            const auto d=Vector3{old.origin.x-mark.origin.x,old.origin.y-mark.origin.y,old.origin.z-mark.origin.z};
+            const float facing=old.normal.x*mark.normal.x+old.normal.y*mark.normal.y+old.normal.z*mark.normal.z;
+            // Refresh one patch under sustained fire, rather than stacking emissive layers.
+            if(old.owner==mark.owner && old.kind==mark.kind && facing>.94f &&
+                d.x*d.x+d.y*d.y+d.z*d.z<mark.radius*mark.radius*.30f) {
+                old=std::move(mark);return true;
+            }
+        }
+        const auto first=std::find_if(marks_.begin(),marks_.end(),[](const auto& m){return WorldSurface(m.kind);});
+        const auto count=std::count_if(marks_.begin(),marks_.end(),[](const auto& m){return WorldSurface(m.kind);});
+        if(count>=8 || marks_.size()>=18) {
+            if(first==marks_.end())return false;
+            marks_.erase(first);
+        }
+        marks_.push_back(std::move(mark));return true;
     }
     std::span<Mark> Items() {return marks_;}
     std::span<const Mark> Items() const {return marks_;}

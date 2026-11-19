@@ -180,7 +180,9 @@ public:
         if(event.sequence<=lastSequence_)return;
         lastSequence_=event.sequence;
         if(RailPrimaryContact::Matches(event) || RailPrimaryKill::Matches(event) ||
-            (event.hitKind==RailAimHitKind::Obstacle && event.appliedDamage>0))
+            (event.hitKind==RailAimHitKind::Obstacle && event.appliedDamage>0) ||
+            (!event.lockOnContact && event.damageType==WeaponDamageType::Energy &&
+                (event.hitKind==RailAimHitKind::ProceduralTerrain || event.hitKind==RailAimHitKind::TerrainPlacement)))
             pending_.push_back({event,distance,duration,muzzleGain});
     }
     uint64_t LastObservedSequence() const { return lastSequence_; }

@@ -1,3 +1,5 @@
+#include "RailSceneryImpact.h"
+#include "RailSideRock.h"
 #include "RailRearPursuitRules.h"
 #include "WeaponDamageSystem.h"
 #include "RailRouteHazards.h"
@@ -232,6 +234,7 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
                 return result;
             }
             ApplyHitPoints(obstacle.desc.hitPoints, result);
+            if(RailSideRock::Is(obstacle))RailSideRock::Hit(obstacle,request.hitPoint,request.hitNormal);
             if(obstacle.desc.hitPoints<=0) {
                 if(RailRouteHazards::IsBarricade(obstacle))RailRouteHazards::OpenBarricade(obstacle);
                 if(RailRouteHazards::IsSlab(obstacle))RailRouteHazards::ReleaseSlab(obstacle,request.shotId);
@@ -246,10 +249,11 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
             result.rejectReason = DamageRejectReason::TargetNotFound;
             return result;
         }
-        if (course->terrainPlacements[request.sourceIndex].layer !=
+        if (!RailSceneryImpact::IsStone(course->terrainPlacements[request.sourceIndex].meshId) &&
+            (course->terrainPlacements[request.sourceIndex].layer !=
                 CourseTerrainLayer::GameplayCollision ||
             course->terrainPlacements[request.sourceIndex].collisionMode ==
-                CourseTerrainCollisionMode::None) {
+                CourseTerrainCollisionMode::None)) {
             result.rejectReason = DamageRejectReason::TargetNotFound;
             return result;
         }

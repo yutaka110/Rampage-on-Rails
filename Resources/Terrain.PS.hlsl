@@ -85,6 +85,7 @@ ConstantBuffer<SpotLight> gSpotLight : register(b4);
 ConstantBuffer<CascadeShadowData> gCascadeShadow : register(b5);
 ConstantBuffer<TerrainPbrLibraryConstants> gTerrainPbr : register(b8);
 #include "TitleLighting.hlsli"
+#include "WorldImpact.hlsli"
 #include "SunfallLighting.hlsli"
 #include "CaveLighting.hlsli"
 
@@ -1139,7 +1140,7 @@ PixelShaderOutput main(VertexShaderOutput input)
 
     if (gMaterial.enableLighting == 0)
     {
-        output.color = float4(saturate(rockColor * ao), 1.0f);
+        output.color = float4(saturate(ApplyWorldScorch(rockColor * ao,input.worldPosition,SafeNormalize(input.normal),true)), 1.0f);
         return output;
     }
 
@@ -1329,6 +1330,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         }
     }
     if(!titleLandscape)lit*=GroundBatteryContactVisibility(input.worldPosition);
+    lit=ApplyWorldScorch(lit,input.worldPosition,SafeNormalize(input.normal),true);
     output.color = float4(saturate(lit), texColor.a);
     return output;
 }
