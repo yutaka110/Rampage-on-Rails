@@ -1,0 +1,7 @@
+# Light scout for short encounters between the main formations.
+actor|short_patrol_pass|Short Run Patrol Scout|twin_shield_hull|1.15|18|3.55|0.8|0.75|0.65|1|assault_magenta_single
+combat|3.4|0.34|40|assault_magenta_single
+movement|1
+behavior|assault|0.22|0.20|0.26|1.35|3.4|0.20|0.36|0|0|0|true
+engagement_band|true|30|48|72|14|2.2|40|10
+attack_pass|true|0.34|0.20

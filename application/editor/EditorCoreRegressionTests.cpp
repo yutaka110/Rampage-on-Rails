@@ -38265,7 +38265,7 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
     std::vector<CourseEventMarker> markers;
     for(const auto& event:course.events)if(event.payload=="route:turret" && !RailRouteHazards::IsRockfallBattery(event.id) &&
         (allBatteries || event.id=="short_turret_left"))markers.push_back(event);
-    runner.Expect(markers.size()==(allBatteries?4u:1u),"authored battery markers exist");
+    runner.Expect(markers.size()==(allBatteries?5u:1u),"authored battery markers exist");
     std::vector<std::string> failures;
     const auto check=[&](bool success,const std::string& message){
         if(allBatteries){if(!success)failures.push_back(message);}else runner.Expect(success,message);
@@ -38592,7 +38592,7 @@ void TestFirstGroundBatteryForecast(RegressionRunner& runner,bool allBatteries=f
     std::vector<CourseEventMarker> markers;
     for(const auto& event:course.events)if(event.payload=="route:turret" && !RailRouteHazards::IsRockfallBattery(event.id) &&
         (allBatteries || event.id=="short_turret_left"))markers.push_back(event);
-    runner.Expect(markers.size()==(allBatteries?4u:1u),"forecast markers exist");
+    runner.Expect(markers.size()==(allBatteries?5u:1u),"forecast markers exist");
     for(const auto& marker:markers) {
     const float start=marker.distance+5;
     for(int fps:{30,60,120})for(float initialSpeed:{10.0f,30.0f,64.0f}) {
@@ -38712,6 +38712,10 @@ void TestOverheadRockfall(RegressionRunner& runner) {
 
 void TestShortRunGroundBatteries(RegressionRunner& runner) {
     CourseAsset course;std::string error;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"battery course loads");
+    RailVehicleControlDefinitionAsset controls;
+    runner.Expect(controls.LoadFromFile("Resources/rail_vehicle/mine_cart_standard.railvehicle",&error),
+        "battery clearance uses the production cart and dodge width");
+    const float cartClearance=controls.vehicle.collisionHalfExtents.x+controls.evasion.lateralDistance;
     RailPath rail;course.ApplyToRailPath(rail);TerrainGenerationSettings terrain;
     // Exercise the real 80-metre streaming chunks, including distant LODs.
     // A short, high-detail patch alone misses late ground-placement failures.
@@ -38719,11 +38723,11 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
     streamingReport<<"event,lod,supported_samples,total_samples,prepared_height\n";
     CourseEventDispatcher placementDispatcher;
     const auto placements=placementDispatcher.GroundBatteryPlacements(course);
-    runner.Expect(placements.size()==4,"all terrain-mounted foundations can be prepared without spawning enemies");
+    runner.Expect(placements.size()==5,"all terrain-mounted foundations can be prepared without spawning enemies");
     {
         CourseSpawnRuntime preplaced;
         placementDispatcher.PlaceGroundBatteries(course,preplaced);
-        runner.Expect(preplaced.Enemies().size()==6 && preplaced.ActiveEnemyCount()==0,
+        runner.Expect(preplaced.Enemies().size()==7 && preplaced.ActiveEnemyCount()==0,
             "all stationary batteries exist before combat and do not consume encounter capacity");
         CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.terrainSettings=&terrain;
         safety.course=&course;safety.playerDistance=1000;
@@ -38755,7 +38759,7 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
         safety.playerDistance=dormant.desc.stationaryActivationDistance;
         preplaced.Update(1.0f/60,safety);presentation.Update(pi);
         const auto& active=preplaced.Enemies().front();drawn=presentation.FindActor(active.actorId);
-        runner.Expect(preplaced.Enemies().size()==6 && preplaced.ActiveEnemyCount()==1 && !active.stationaryDormant &&
+        runner.Expect(preplaced.Enemies().size()==7 && preplaced.ActiveEnemyCount()==1 && !active.stationaryDormant &&
             active.entranceExitState.targetable && active.desc.verticalOffset==installed &&
             drawn && drawn->visible && drawn->materialColor.w==1 && drawn->scaleMultiplier==1,
             "combat activation preserves the already visible tower without duplication, fade or foundation movement");
@@ -38791,7 +38795,7 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
         runner.Expect(slamCount()==1,"the falling head produces one impact");
         presentation.Update(pi);runner.Expect(slamCount()==0,"the settled head does not replay its impact");
     }
-    const float fixedDistances[]={1325,1615,2220,3014};
+    const float fixedDistances[]={1192,1615,2220,2880,3014};
     size_t placementIndex=0;
     for(const auto& event:course.events) if(event.payload=="route:turret" && !RailRouteHazards::IsRockfallBattery(event.id)) {
         CourseSpawnRuntime probe;CourseEventDispatcher dispatcher;
@@ -38799,8 +38803,9 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
         if(probe.Enemies().empty()) continue;
         const auto& actor=probe.Enemies().front();
         const float distance=actor.desc.spawnDistance+actor.desc.distanceOffset;
-        runner.Expect(placementIndex<4 && std::abs(distance-fixedDistances[placementIndex])<0.001f &&
-            actor.desc.distanceOffset>=160,"ground preparation preserves the four authored installation positions");
+        runner.Expect(placementIndex<std::size(fixedDistances) &&
+            std::abs(distance-fixedDistances[placementIndex])<0.001f,
+            "ground preparation preserves each authored installation position");
         ++placementIndex;
         auto anchor=rail.Evaluate(distance);
         anchor.position=RailMothership::Add(anchor.position,RailMothership::Scale(anchor.right,actor.desc.lateralOffset));
@@ -38900,7 +38905,9 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
     std::vector<CourseEventMarker> markers;
     for(const auto& event:course.events) if(event.type=="enemy_wave" && event.payload=="route:turret" &&
         !RailRouteHazards::IsRockfallBattery(event.id))markers.push_back(event);
-    runner.Expect(markers.size()==4,"four terrain-mounted batteries leave the ridge crest open");
+    runner.Expect(markers.size()==5 && std::none_of(markers.begin(),markers.end(),[](const auto& marker) {
+        return marker.distance>=RailRidgeCombatFlow::CrestBegin && marker.distance<RailRidgeCombatFlow::CrestEnd;
+    }),"five terrain-mounted batteries leave the ridge crest open");
     std::ofstream report("logs/short_run_ground_batteries.csv");report<<"fps,speed,event,ground_vertical,volleys,lockable_frames\n";
     for(int fps:{30,60,120}) for(float speed:{30.0f,60.0f}) for(const auto& marker:markers) {
         CourseSpawnRuntime spawn;CourseEventDispatcher dispatcher;EncounterDirector director;
@@ -38938,9 +38945,10 @@ void TestShortRunGroundBatteries(RegressionRunner& runner) {
             "battery is planted on the production terrain instead of floating or entering through a wall");
         if(spawn.Enemies().empty()) continue;
         const auto initial=spawn.Enemies()[0];
-        runner.Expect(initial.desc.radius==5.0f && std::abs(initial.desc.lateralOffset)>=20,
-            "large tower remains outside the cart lane");
         const auto geometry=RailTurret::ForMesh(initial.desc.meshId);
+        const float footprint=initial.desc.radius*geometry.halfFootprint;
+        runner.Expect(initial.desc.radius==5.0f && std::abs(initial.desc.lateralOffset)-footprint>cartClearance,
+            "large tower remains outside the cart lane");
         auto anchor=rail.Evaluate(where);anchor.position=RailMothership::Add(anchor.position,RailMothership::Scale(anchor.right,initial.desc.lateralOffset));
         const float footing=initial.desc.verticalOffset+geometry.groundFootY*initial.desc.radius;
         for(float x:{-5.5f,0.0f,5.5f}) for(float z:{-5.5f,0.0f,5.5f}) {
@@ -39560,8 +39568,36 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
                 "roadside positions respect the sky reveal, first boost lane and boss introduction");
         }
     }
-    runner.Expect(events.size()==7 && towers==5 && patrols==2 && pairs==1,
+    runner.Expect(events.size()==11 && towers==6 && patrols==5 && pairs==1,
         "route has roadside guns, the original arch pair, singles and one staggered two-unit arrival");
+    for (const auto& event : events) if (event.payload=="route:skirmish") {
+        CourseSpawnRuntime route;
+        CourseEventDispatcher dispatcher;
+        EncounterDirector director;
+        EncounterDirectorFrameInput arrival;
+        arrival.currentDistance=event.distance;
+        arrival.deltaTime=0.1f;
+        arrival.triggeredEvents={event};
+        arrival.spawnRuntime=&route;
+        arrival.suppressRouteEncounters=true;
+        const auto release=director.Update(arrival);
+        dispatcher.Dispatch(release.dispatchEvents,route,event.distance);
+        runner.Expect(route.Enemies().size()==1 && route.Enemies().front().desc.establishedEntrance &&
+            route.Enemies().front().behaviorDefinition.choreographedAttackPass &&
+            !route.Enemies().front().HoldsCombatPositionUntilResolved(),
+            "authored skirmish fills an empty lane with one short attack pass: "+event.id);
+
+        EncounterDirector crowdedDirector;
+        auto primary=cooked.program.actors.front().actor;
+        route.SpawnEnemyActor(std::move(primary));
+        runner.Expect(crowdedDirector.Update(arrival).dispatchEvents.empty(),
+            "authored skirmish yields to an active primary wave: "+event.id);
+        route.ClearEnemies();
+        arrival.triggeredEvents.clear();
+        arrival.currentDistance+=25.0f;
+        runner.Expect(crowdedDirector.Update(arrival).dispatchEvents.empty(),
+            "missed skirmish does not spawn late: "+event.id);
+    }
     runner.Expect(std::none_of(events.begin(),events.end(),[](const auto& event) {
         return event.id==RailRouteHazards::ShelfBatteryWave;
     }),"the removed rock shelf has no battery on the route");

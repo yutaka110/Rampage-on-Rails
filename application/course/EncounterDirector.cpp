@@ -13,6 +13,7 @@ namespace {
 bool IsRoute(const CourseEventMarker& event) {
     return event.type=="enemy_wave" && event.payload.starts_with("route:");
 }
+bool IsRouteSkirmish(const CourseEventMarker& event) { return event.payload == "route:skirmish"; }
 size_t RouteSlots(const CourseEventMarker& event) { return event.payload=="route:pair" ? 2u : 1u; }
 size_t PrioritySlots(const CourseEventMarker& event) {
     return event.payload=="route:turret" || event.id.starts_with("route_sniper_") ||
@@ -82,7 +83,9 @@ EncounterDirectorFrameOutput EncounterDirector::Update(const EncounterDirectorFr
     for (PendingEvent& pending : pendingEvents_) {
         pending.age += dt;
         if(IsRoute(pending.event)) {
-            if(input.suppressRouteEncounters) {
+            // Authored skirmishes can fill a quiet gap even where the course
+            // suppresses unscripted reinforcements. Admission still protects active fights.
+            if(input.suppressRouteEncounters && !IsRouteSkirmish(pending.event)) {
                 ++lastStats_.suppressedThisFrame;
                 lastStats_.lastDecision="Authored recovery discards roadside arrivals without a catch-up queue.";
                 continue;
@@ -296,6 +299,10 @@ bool EncounterDirector::CanRelease(
     std::string& reason) const {
     if(IsRoute(event)) {
         const auto slots=RouteSlots(event);
+        if (IsRouteSkirmish(event) && (stats.activePrimaryEnemies > 0 || stats.activePriorityEnemies > 0)) {
+            reason = "Skirmish waits for the main fire lane to clear.";
+            return false;
+        }
         if(stats.activeEnemies+slots>settings_.maxActiveEnemies ||
             stats.activeAuxiliaryEnemies+slots>settings_.maxAuxiliaryEnemies ||
             (stats.activePrimaryEnemies>=6 && event.payload!="route:adaptive" &&

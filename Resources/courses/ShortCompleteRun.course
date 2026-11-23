@@ -133,7 +133,9 @@ terrain_material|180.000|first_contact_readable_strata|80.000|0.860|0.740|0.620|
 # Cinematic shot sets bind landmarks, camera, lighting, fog, and material into authored distance shots.
 
 event|390.000|enemy_wave|route_patrol_left|route:single|short-route-0390|1|0
+event|465.000|enemy_wave|short_lock_approach|route:skirmish|short-route-lock-approach|1|0
 event|1040.000|enemy_wave|short_turret_left|route:turret|short-ground-battery-left|1|0
+event|1178.000|enemy_wave|short_battery_escort|route:skirmish|short-route-battery-escort|1|0
 event|1455.000|enemy_wave|short_turret_right|route:turret|short-ground-battery-right|1|0
 event|1568.000|obstacle|route_arch_slab||short-route-arch-collapse|1|0
 event|1615.000|obstacle|route_break_barricade||short-route-fence-bridge-exit|1|0
@@ -141,7 +143,9 @@ event|1638.000|enemy_wave|arch_inner_batteries|route:turret|short-arch-inner-bat
 event|1895.000|obstacle|route_break_barricade||short-route-break-barricade|1|0
 event|2060.000|enemy_wave|ridge_ground_battery|route:turret|short-route-2060|1|0
 event|2140.000|obstacle|side_breakable_rock||optional-side-rock-2320|1|0
+event|2210.000|enemy_wave|short_ridge_scout|route:skirmish|short-route-ridge-scout|1|0
 event|2530.000|obstacle|route_break_barricade||short-route-fence-dive|1|0
+event|2720.000|enemy_wave|short_dive_battery|route:turret|short-route-dive-battery|1|0
 event|2840.000|enemy_wave|route_turret_left|route:turret|short-route-2840|1|0
 event|3065.000|enemy_wave|route_scout_sniper_pair|route:pair|short-route-3100|1|0
 

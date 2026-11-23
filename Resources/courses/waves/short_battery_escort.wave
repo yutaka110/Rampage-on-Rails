@@ -1,0 +1,4 @@
+wave|short_battery_escort|Ground Battery Escort Scout
+deployment|local_approach
+formation|authored|right|split|1|8|3|5|2|0.4|0.70|0|12|8|0.72|14|16
+unitAsset|battery_escort_scout|short_patrol_pass|assault_magenta_single|50|9|8|0|1.15|3.55|0.8|0.75|0.65|1
