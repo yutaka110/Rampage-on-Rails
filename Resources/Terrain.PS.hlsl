@@ -304,6 +304,55 @@ static float ValueNoise(float3 p)
     return lerp(nxy0, nxy1, f.z);
 }
 
+static float3 CrystalGroundEmission(float3 worldPosition, float3 normal) {
+    if (railBounceControl.z < .01f) return 0.0f;
+    float footprint = min(.11f, length(fwidth(worldPosition.xz)) * .13f);
+    if (normal.y < .11f) return 0.0f;
+    float3 emission = 0.0f;
+    [loop] for (uint i = 0; i < (uint)railBounceControl.x; ++i) {
+        RailBouncePatch patch = railBouncePatches[i];
+        if (patch.normal.w < .5f) continue;
+        float3 root = patch.normal.xyz;
+        float3 delta = worldPosition - root;
+        float radius = patch.positionRadius.w * .33f;
+        float r = length(delta.xz) / radius;
+        float relief = abs(delta.y) / max(radius * .52f, 1.0f);
+        float surgeAge = patch.radiance.w - 1.0f;
+        float surge = smoothstep(0.0f, .045f, surgeAge) * (1.0f - smoothstep(.52f, 1.04f, surgeAge));
+        if (r >= (surge > 0.0f ? 1.50f : 1.0f) || relief >= 1.0f) continue;
+
+        float angle = atan2(delta.z, delta.x + .0001f);
+        float seed = frac(root.x * .031f + root.z * .081f) * 6.2831853f;
+        float noise = ValueNoise(worldPosition * .57f + seed);
+        float drift = .75f * sin(r * 9.6f + seed * 1.4f) + (noise - .5f) * 1.65f;
+        float spokes = abs(sin(angle * 5.0f + drift));
+        float forks = abs(sin(angle * 11.0f - r * 12.0f + drift * .8f + seed));
+        float veins = 1.0f - smoothstep(.026f, .14f + footprint, spokes);
+        float branches = (1.0f - smoothstep(.015f, .078f + footprint, forks)) * .42f *
+            smoothstep(.30f, .65f, noise);
+        float pulse = frac(railBounceControl.w * .39f + seed * .15915f);
+        float wave = 1.0f - smoothstep(.035f, .17f, abs(r - pulse));
+        float surfaceWeight = (1.0f - smoothstep(.28f, 1.0f, relief)) * smoothstep(.11f, .68f, normal.y);
+        float cover = (1.0f - smoothstep(.20f, 1.0f, r)) * surfaceWeight;
+        float fissures = (veins + branches) * (.43f + .57f * wave) * smoothstep(.08f, .24f, r);
+        float deposit = exp(-r * r * 9.8f) * (.35f + .65f * noise) * .40f;
+        float power = saturate(patch.radiance.b * .18f);
+        emission += (float3(.21f, 1.05f, 2.15f) * fissures + float3(.038f, .32f, .91f) * deposit) *
+            (cover * power);
+        if (surge <= 0.0f) continue;
+        float front = lerp(.02f, 1.38f, smoothstep(0.0f, .73f, surgeAge));
+        float waveDistance = abs(r - front - (noise - .5f) * .15f);
+        float waveCore = (1.0f - smoothstep(.021f, .093f + footprint, waveDistance)) *
+            smoothstep(.13f, .78f, .45f * noise + .55f * veins);
+        float waveHalo = (1.0f - smoothstep(.063f, .23f + footprint, waveDistance)) * (.24f + .76f * noise);
+        float chargedVeins = (veins + branches) * (1.0f - smoothstep(front, front + .18f, r)) *
+            (1.0f - smoothstep(.64f, 1.4f, r));
+        emission += surge * surfaceWeight * (float3(1.25f, 3.6f, 6.3f) * waveCore +
+            float3(.12f, .67f, 1.8f) * waveHalo + float3(.35f, 1.3f, 2.65f) * chargedVeins);
+    }
+    return emission;
+}
+
 static float TerrainNoise(float3 worldPosition)
 {
     float n0 = ValueNoise(worldPosition * 0.045f);
@@ -1233,7 +1282,8 @@ PixelShaderOutput main(VertexShaderOutput input)
     float caveInteriorFill = 1.0f - smoothstep(0.12f, 0.65f, openingProximity);
     float caveSurfaceVisibility = smoothstep(0.20f, 0.80f, ao) * (1.0f - rootContact * 0.65f);
     float caveFillHemisphere = lerp(0.65f, 1.0f, saturate(input.normal.y * 0.5f + 0.5f));
-    float3 caveBounce = float3(0.43f, 0.41f, 0.37f) * caveBounceHemisphere;
+    float3 caveBounce = lerp(float3(0.43f, 0.41f, 0.37f), float3(0.35f, 0.55f, 0.73f),
+        saturate(railBounceControl.z)) * caveBounceHemisphere;
     caveBounce += float3(0.12f, 0.12f, 0.12f) * caveInteriorFill * caveSurfaceVisibility * caveFillHemisphere;
     lit += caveAmount * caveAlbedo * lerp(0.70f, 1.0f, ao) *
         (caveBounce + openingIrradiance);
@@ -1255,6 +1305,7 @@ PixelShaderOutput main(VertexShaderOutput input)
         lit+=reflectedSky*(f0*envBrdf.x+envBrdf.y)*sunfallSky.y*0.32f*lerp(0.55f,1.0f,ao);
     }
     float3 canyonAirLight = lerp(float3(0.42f, 0.46f, 0.47f), float3(0.76f, 0.78f, 0.76f), distanceAir);
+    lit += CrystalGroundEmission(input.worldPosition, input.normal) * railBounceControl.z;
     if(sunfallSky.x<0.5f) lit = lerp(lit, canyonAirLight, distantWallAtmosphere * 0.26f);
     else if(titleSubject.w<.5f) lit=lerp(lit,lit*float3(.85f,.94f,1.08f),
         distantWallAtmosphere*(1.0f-caveAmount)*.66f);

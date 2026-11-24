@@ -354,7 +354,8 @@ void AppendLifecyclePrimitive(
     }
 
     const bool intercepted = burst.kind == EnemyProjectileLifecycleVisualKind::Intercepted ||
-        burst.kind == EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept;
+        burst.kind == EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept ||
+        burst.kind == EnemyProjectileLifecycleVisualKind::OrdinaryIntercept;
     const int rayCount = intercepted ? 12 : 10;
     const float expansion = intercepted
         ? 0.55f + age * 2.65f
@@ -778,6 +779,19 @@ void EnemyProjectileVfxRenderer::Update(
             if (RailGroundBattery::IsProjectile(event.definitionId)) {
                 burst.kind = EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept;
                 burst.durationSeconds = 0.20f;
+            } else if (!event.definitionId.empty() &&
+                       burst.batteryKind == RailEnemyEnergy::BatteryKind::None &&
+                       !IsFangChaseRound(event.definitionId) &&
+                       event.definitionId != "enemy_boss_arc" &&
+                       event.definitionId != "enemy_mothership_energy") {
+                burst.kind = EnemyProjectileLifecycleVisualKind::OrdinaryIntercept;
+                burst.durationSeconds = 0.22f;
+                if (const auto* visual = FindVisual(event.definitionId);
+                    visual && visual->style != EnemyProjectileVisualStyle::Orb) {
+                    burst.color = visual->trailColor;
+                } else {
+                    burst.color = RailEnemyEnergy::Trail;
+                }
             } else {
                 burst.kind = EnemyProjectileLifecycleVisualKind::Intercepted;
                 burst.durationSeconds = (std::max)(
@@ -836,7 +850,8 @@ void EnemyProjectileVfxRenderer::Update(
         const bool roadBattery = burst.kind == EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept ||
             burst.kind == EnemyProjectileLifecycleVisualKind::RoadBatteryLaunch;
         proxy.spriteBacked=input.settings.orbSpritesEnabled &&
-            (burst.fangImpact || roadBattery || burst.batteryKind!=RailEnemyEnergy::BatteryKind::None);
+            (burst.fangImpact || roadBattery || burst.batteryKind!=RailEnemyEnergy::BatteryKind::None ||
+             burst.kind == EnemyProjectileLifecycleVisualKind::OrdinaryIntercept);
         if (roadBattery) {
             proxy.radius = (std::max)(0.42f, burst.bodyRadius);
         }
@@ -861,8 +876,14 @@ void EnemyProjectileVfxRenderer::Update(
             proxy.secondaryColor = {1.0f, 0.12f, 0.02f, 0.92f};
             ++frame_.impactBursts;
             break;
-        case EnemyProjectileLifecycleVisualKind::Intercepted:
+        case EnemyProjectileLifecycleVisualKind::OrdinaryIntercept:
         case EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept:
+            proxy.primaryColor = {0.10f, 1.72f, 4.35f, 1.0f};
+            proxy.secondaryColor = burst.kind == EnemyProjectileLifecycleVisualKind::OrdinaryIntercept
+                ? burst.color : RailEnemyEnergy::Trail;
+            ++frame_.interceptBursts;
+            break;
+        case EnemyProjectileLifecycleVisualKind::Intercepted:
             proxy.primaryColor = {0.88f, 1.0f, 1.0f, 1.0f};
             proxy.secondaryColor = {0.08f, 0.92f, 1.0f, 0.94f};
             ++frame_.interceptBursts;

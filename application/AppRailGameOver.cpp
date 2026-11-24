@@ -304,6 +304,7 @@ bool AppRunLoop::RetryRailCheckpoint() {
         } else {
             OutputDebugStringA("[GameSessionRetry] Follow-state snapshot unavailable; followers were reset.\n");
         }
+        if (!railPostBossSequence_.Escape().Active()) RemoveCrystalCavern();
         PrimeRailRetrySessionPresentation(railShooterSessionPresentation_,railShooterGameSession_,railShooterSessionPresentationSettings_);
         railPulseShots_.Reset(); railPrimaryKills_.Reset(); railBoostVfx_.Reset(); audio_.Stop(railBoostIgnitionSound_);
         OutputDebugStringA(("[GameSessionRetry] " + retry.message + "\n").c_str());

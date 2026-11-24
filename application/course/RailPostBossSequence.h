@@ -469,6 +469,7 @@ private:
         for(int i=0;i<=int(BridgeLength/20);++i) {
             CourseTerrainPlacement p;p.id="postboss-white-bridge-"+std::to_string(i);
             p.meshId="course_blockout_bridge";p.distance=anchor_+BridgeStart+float(i)*20;
+            if(escape_.Active() && p.distance-10>=escape_.Arc().Landing()+RailBridgeEscape::DepartureRunout)break;
             if(escape_.GapOpen() && p.distance+10>escape_.Arc().start && p.distance-10<escape_.Arc().Landing())continue;
             p.cullAheadDistance=1050;p.cullBehindDistance=340;p.renderPriority=14;
             scenery_.push_back(std::move(p));

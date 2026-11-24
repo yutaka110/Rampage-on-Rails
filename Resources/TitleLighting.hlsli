@@ -35,7 +35,7 @@ cbuffer Camera : register(b2)
     float4 combatMarkTintRadius[6];
     float4 combatImpactLight;
     float4 combatImpactTint;
-    float4 railBounceControl; // active patch count and distance fade
+    float4 railBounceControl; // patch count, distance fade, cavern weight, cavern time
     RailBouncePatch railBouncePatches[5];
     float4 railCanyonGrade; // bridge blend, carrier arena blend, near-shadow receiver tagging
     float4 roadBatteryLights[2]; // live shell position and amber light strength

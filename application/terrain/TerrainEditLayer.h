@@ -11,6 +11,7 @@ enum class TerrainEditOperation : uint32_t {
     Smooth = 1,
     Flatten = 2,
     Paint = 3,
+    CloseCeiling = 4,
 };
 
 struct TerrainBrushStamp {
@@ -61,6 +62,7 @@ public:
     void Clear();
 
     TerrainEditEvaluation Evaluate(float distance, float angle) const noexcept;
+    float CeilingClosure(float distance) const noexcept;
     TerrainEditDirtyRegion DirtyRegionForStroke(
         std::string_view strokeGuid) const noexcept;
     TerrainEditDirtyRegion DirtyRegionFor(

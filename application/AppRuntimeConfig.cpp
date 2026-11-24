@@ -1,4 +1,5 @@
 #include "AppRuntimeConfig.h"
+#include "course/RailCrystalCavern.h"
 #include "course/RailShortCourse.h"
 
 #include "AppRuntimeState.h"
@@ -570,8 +571,12 @@ void ApplyEnvironmentRuntimeConfig(AppVfxRuntimeState& runtimeState) {
 }
 
 std::string ParseRailCourseArguments(int count,const wchar_t* const* args) {
-    for(int i=1;args && i<count;++i) if(args[i] && std::wstring_view(args[i])==L"--full-course")
-        return "Resources/courses/CanyonAssaultRoute01.course";
+    for (int i = 1; args && i < count; ++i) {
+        if (!args[i]) continue;
+        const std::wstring_view argument = args[i];
+        if (argument == L"--full-course") return "Resources/courses/CanyonAssaultRoute01.course";
+        if (argument == L"--crystal-cavern") return RailCrystalCavern::CoursePath;
+    }
     return RailShortCoursePath;
 }
 std::string ResolveRailCoursePathFromCommandLine() {

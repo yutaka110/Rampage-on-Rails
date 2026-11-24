@@ -42,6 +42,109 @@ float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
 }
 
 float4 main(PixelInput input) : SV_TARGET0 {
+    if (input.texcoord.x >= 132.0f && input.texcoord.x <= 133.0f) {
+        float2 p;
+        float phase, seed;
+        ImpactCoordinates(input.texcoord, 132.0f, p, phase, seed);
+        float height = saturate(.5f - .5f * p.y);
+        float upperFade = smoothstep(.30f, .96f, height);
+        float curl = sin(height * 8.7f - phase * 5.8f + seed) * smoothstep(.05f, .63f, height);
+        float2 field = float2(p.x * 4.1f + seed, height * 5.2f - phase * 4.4f);
+        float eddy = ImpactNoise(field * .67f + float2(13.8f, 3.4f)) - .5f;
+        float center = curl * .32f + eddy * (.19f + .24f * height);
+        float extent = lerp(.16f, .40f, height);
+        float coreDist = (p.x - center) / extent;
+        float core = exp2(-2.4f * coreDist * coreDist);
+        // The higher stream peels away from the core and breaks into fine wisps.
+        float split = sin(height * 6.5f - phase * 5.8f + seed + 1.9f) * (.12f + .38f * height);
+        float strandDist = (p.x - center - split) / (.10f + .16f * height);
+        float strand = exp2(-2.9f * strandDist * strandDist);
+        float silhouettes = core + strand * smoothstep(.17f, .61f, height) * .84f;
+
+        field.x += curl * .88f + eddy * 1.41f;
+        float noise = ImpactNoise(field) * .52f + ImpactNoise(field * 2.0f + 7.3f) * .31f +
+            ImpactNoise(field * 4.8f + 2.7f) * .17f;
+        float breakup = smoothstep(.24f + height * .145f, .66f + height * .09f, noise);
+        float edge = smoothstep(0.0f, .13f, height) * (1.0f - smoothstep(.82f, 1.0f, height)) *
+            (1.0f - smoothstep(.75f, .99f, abs(p.x)));
+        float density = silhouettes * breakup * edge * lerp(.72f, .20f, upperFade) * (1.0f - phase * .30f);
+        float3 tint = lerp(float3(.46f, .77f, .98f), float3(.39f, .62f, .89f), upperFade);
+        return float4(input.color.rgb * tint, density * input.color.a);
+    }
+    if (input.texcoord.x >= 128.0f && input.texcoord.x <= 129.0f) {
+        const float2 p = float2(input.texcoord.x - 128.5f, input.texcoord.y - .5f) * 2.0f;
+        const float distance = abs(p.x + p.y * .19f) * 1.30f + abs(p.y - .10f) * 1.13f;
+        const float antialias = min(fwidth(distance), .38f);
+        const float face = 1.0f - smoothstep(.78f, .92f + antialias, distance);
+        const float glint = 1.0f - smoothstep(.055f, .29f, abs(p.x + p.y * .32f));
+        const float facet = smoothstep(-.12f, .09f, p.x + p.y * .30f);
+        const float halo = (1.0f - smoothstep(.74f, 1.18f, distance)) * .18f;
+        const float3 color = input.color.rgb * (.54f + .46f * facet) + float3(1.72f, 1.85f, 2.0f) * glint;
+        return float4(color, max(face, halo) * input.color.a);
+    }
+    if (input.texcoord.x >= 130.0f && input.texcoord.x <= 131.0f) {
+        const float2 p = float2(input.texcoord.x - 130.5f, input.texcoord.y - .5f) * 2.0f;
+        const float radiusSquared = dot(p, p);
+        const float core = exp(-radiusSquared * 42.0f);
+        const float halo = exp(-radiusSquared * 5.9f) * .53f;
+        const float rays = exp(-abs(p.y) * 42.0f - abs(p.x) * 2.5f) * .33f;
+        const float edge = 1.0f - smoothstep(.63f, 1.0f, radiusSquared);
+        return float4(lerp(input.color.rgb, float3(7.4f, 9.6f, 13.2f), core),
+            (core + halo + rays) * edge * input.color.a);
+    }
+    if (input.texcoord.x >= 124.0f && input.texcoord.x <= 125.0f) {
+        float2 p;
+        float phase, seed;
+        ImpactCoordinates(input.texcoord, 124.0f, p, phase, seed);
+        float angle = phase * 6.2831853f;
+        float2 drift = float2(cos(angle), sin(angle));
+        float2 field = p * float2(4.2f, 2.8f) + seed;
+        float turbulence = ImpactNoise(field + drift * .72f) * .58f +
+            ImpactNoise(field * 2.3f - drift * .52f) * .29f + ImpactNoise(field * 5.4f + drift) * .13f;
+        float envelope = 1.0f - smoothstep(.21f, 1.0f, length(p));
+        float wisps = smoothstep(.32f, .78f, turbulence) * envelope * envelope;
+        return float4(input.color.rgb * lerp(.48f, 1.18f, turbulence), wisps * input.color.a);
+    }
+    if (input.texcoord.x >= 126.0f && input.texcoord.x <= 127.0f) {
+        float2 p = abs(float2(input.texcoord.x - 126.5f, input.texcoord.y - .5f)) * 2.0f;
+        float shape = p.x * 1.22f + p.y * .90f;
+        float core = 1.0f - smoothstep(.12f, .56f, shape);
+        float halo = (1.0f - smoothstep(.38f, 1.0f, length(p))) * .28f;
+        return float4(lerp(input.color.rgb, float3(2.5f, 4.1f, 6.0f), core),
+            (core + halo) * input.color.a);
+    }
+    if (input.texcoord.x >= 120.0f && input.texcoord.x <= 121.0f) {
+        // The shock front expands in world space, exposing larger gaps as it cools.
+        float2 p;
+        float phase, seed;
+        ImpactCoordinates(input.texcoord, 120.0f, p, phase, seed);
+        const float radius = length(p);
+        const float2 radial = p / max(radius, .0001f);
+        const float angle = atan2(radial.y, radial.x + .0001f);
+        const float roughness = ImpactNoise(radial * 8.0f + seed);
+        const float distance = radius - (.79f + .028f * sin(angle * 5.0f + seed)
+            + lerp(.028f, .082f, phase) * (roughness - .5f));
+        const float erosion = .69f * sin(angle * 4.0f + seed)
+            + .34f * sin(angle * 9.0f - seed) + .38f * (roughness - .5f);
+        const float threshold = lerp(-.54f, .44f, phase);
+        const float arcs = smoothstep(threshold, threshold + .20f, erosion);
+        const float width = lerp(.048f, .015f, phase) + min(.063f, fwidth(distance) * .63f);
+        const float edge = 1.0f - smoothstep(width * .25f, width * 1.20f, abs(distance));
+        const float shoulder = (1.0f - smoothstep(width, width * 2.05f, abs(distance))) * .22f;
+        const float3 color = input.color.rgb * (.80f + .35f * roughness + .18f * edge);
+        return float4(color, (edge + shoulder) * arcs * input.color.a);
+    }
+    if (input.texcoord.x >= 122.0f && input.texcoord.x <= 123.0f) {
+        // A tapered streak with a bright tip and a saturated wake.
+        const float head = saturate(input.texcoord.x - 122.0f);
+        const float cross = abs(input.texcoord.y * 2.0f - 1.0f);
+        const float profile = cross / lerp(.19f, .79f, sqrt(head));
+        const float core = exp(-profile * profile * 11.0f);
+        const float halo = exp(-profile * profile * 2.8f) * .32f;
+        const float taper = smoothstep(0.0f, .42f, head) * (1.0f - smoothstep(.79f, 1.0f, head));
+        const float3 color = input.color.rgb * 1.35f + (.58f * core * head);
+        return float4(color, (core * .80f + halo) * taper * input.color.a);
+    }
     if(input.texcoord.x>=118.0f && input.texcoord.x<=119.0f) {
         // Red rims border the alpha-blended dark channel. Only the moving
         // leader and the impact glint carry white heat.

@@ -728,7 +728,9 @@ void AppSceneRenderPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
         0,
         D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-    if ((ctx.runtimeState->showSkybox || ctx.runtimeState->showProceduralBackdrop) &&
+    const bool enclosedCavern = ctx.scene->mappedCamera != nullptr &&
+        ctx.scene->mappedCamera->railBounceControl.z >= 0.99f;
+    if (!enclosedCavern && (ctx.runtimeState->showSkybox || ctx.runtimeState->showProceduralBackdrop) &&
         ctx.scene->skybox.cbvResource &&
         ctx.scene->skyboxTextureSrvHandleGPU.ptr != 0) {
         ctx.renderGraph->AddPass({

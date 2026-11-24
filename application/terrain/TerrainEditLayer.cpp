@@ -159,6 +159,10 @@ TerrainEditEvaluation TerrainEditLayer::Evaluate(float distance, float angle) co
     TerrainEditEvaluation result{};
     for (std::size_t index = 0; index < stamps_.size();) {
         const TerrainBrushStamp& stamp = stamps_[index];
+        if (stamp.operation == TerrainEditOperation::CloseCeiling) {
+            ++index;
+            continue;
+        }
         if (stamp.operation == TerrainEditOperation::Smooth) {
             const std::string& strokeGuid = stamp.strokeGuid;
             float weightedCorrection = 0.0f;
@@ -197,6 +201,16 @@ TerrainEditEvaluation TerrainEditLayer::Evaluate(float distance, float angle) co
     }
     result.radialOffset = (std::clamp)(result.radialOffset, -64.0f, 64.0f);
     return result;
+}
+
+float TerrainEditLayer::CeilingClosure(float distance) const noexcept {
+    float closure = 0.0f;
+    for (const auto& stamp : stamps_) {
+        if (stamp.operation != TerrainEditOperation::CloseCeiling) continue;
+        const float weight = StampWeight(stamp, distance, stamp.angle);
+        closure = (std::max)(closure, weight * std::clamp(stamp.strength, 0.0f, 1.0f));
+    }
+    return closure;
 }
 
 TerrainEditDirtyRegion TerrainEditLayer::DirtyRegionForStroke(
@@ -293,6 +307,7 @@ const char* ToString(TerrainEditOperation operation) noexcept {
     case TerrainEditOperation::Smooth: return "Smooth";
     case TerrainEditOperation::Flatten: return "Flatten";
     case TerrainEditOperation::Paint: return "Paint";
+    case TerrainEditOperation::CloseCeiling: return "CloseCeiling";
     }
     return "Sculpt";
 }
@@ -304,6 +319,7 @@ bool ParseTerrainEditOperation(
     else if (text == "Smooth") operation = TerrainEditOperation::Smooth;
     else if (text == "Flatten") operation = TerrainEditOperation::Flatten;
     else if (text == "Paint") operation = TerrainEditOperation::Paint;
+    else if (text == "CloseCeiling") operation = TerrainEditOperation::CloseCeiling;
     else return false;
     return true;
 }

@@ -14,9 +14,10 @@ struct Material
     float environmentCoefficient;
     int32_t specularMode;
     float pad_; // Mode 8: gameplay/title exposure ratio; otherwise padding.
-    float4 caveSurface; // Mode 15: colour/roughness; mode 10: world-to-part X column.
-    float4 caveResponse; // Mode 15: response; mode 10: world-to-part Y column.
-    float4 railLightingOrigin; // Mode 15: rail origin/distance; mode 10: world-to-part Z column.
+    // Modes 10 and 27: world-to-local columns, including translation.
+    float4 caveSurface; // Mode 15: colour/roughness.
+    float4 caveResponse; // Mode 15: response.
+    float4 railLightingOrigin; // Mode 15: rail origin/distance.
     float3 railLightingAxis; // Mode 15: rail gradient; mode 10: shield side, left/right attachment.
 };
 
@@ -411,6 +412,82 @@ static float FilteredCarrierNoise(float2 uv, float2 frequency, float seed)
     return (CartSurfaceNoise(position + seed) - .5f) * visibility;
 }
 
+static float2 CrystalVein(float3 localPosition, float footprint) {
+    // A folded cellular field produces branching fractures through the volume.
+    float2 q = float2(localPosition.x * 8.8f + localPosition.z * 5.4f,
+        localPosition.y * 5.8f - localPosition.z * 3.7f);
+    q += .23f * sin(q.yx * 2.23f + localPosition.z * float2(4.3f, -3.1f));
+    float2 cell = floor(q);
+    float2 cellPosition = frac(q);
+    float nearDistance = 8.0f;
+    float secondDistance = 8.0f;
+    float nearEnergy = 0.0f;
+    float secondEnergy = 0.0f;
+    [unroll] for (int y = -1; y <= 1; ++y) {
+        [unroll] for (int x = -1; x <= 1; ++x) {
+            float2 offset = float2(x, y);
+            float2 seed = cell + offset;
+            float3 hash = frac(float3(seed.xyx) * float3(.1031f, .11369f, .13787f));
+            hash += dot(hash, hash.yzx + 19.19f);
+            float2 jitter = frac((hash.xx + hash.yz) * hash.zy);
+            float2 delta = offset + .16f + .68f * jitter - cellPosition;
+            float distanceSquared = dot(delta, delta);
+            float energy = frac(jitter.x * 1.67f + jitter.y * 2.37f);
+            if (distanceSquared < nearDistance) {
+                secondDistance = nearDistance;
+                secondEnergy = nearEnergy;
+                nearDistance = distanceSquared;
+                nearEnergy = energy;
+            } else if (distanceSquared < secondDistance) {
+                secondDistance = distanceSquared;
+                secondEnergy = energy;
+            }
+        }
+    }
+    float edge = sqrt(secondDistance) - sqrt(nearDistance);
+    // Both sides of a fracture use the same pair, avoiding hard changes across it.
+    float charge = lerp(.09f, 1.0f, smoothstep(.65f, 1.34f, nearEnergy + secondEnergy));
+    float halo = 1.0f - smoothstep(.02f, .15f + footprint, edge);
+    float core = 1.0f - smoothstep(.006f, .037f + footprint, edge);
+    return float2(halo, core) * charge * (1.0f - smoothstep(.045f, .27f, footprint));
+}
+
+static float3 CrystalLighting(float3 worldPosition, float3 N, float3 V, float height) {
+    const float4 position = float4(worldPosition, 1.0f);
+    float3 local = float3(dot(position, gMaterial.caveSurface), dot(position, gMaterial.caveResponse),
+        dot(position, gMaterial.railLightingOrigin));
+    float3 refracted = refract(-V, N, 1.0f / 1.46f);
+    float3 internalRay = SafeNormalize(float3(dot(refracted, gMaterial.caveSurface.xyz),
+        dot(refracted, gMaterial.caveResponse.xyz), dot(refracted, gMaterial.railLightingOrigin.xyz)));
+    float thickness = lerp(.23f, .048f, smoothstep(.67f, 1.0f, height));
+    float footprint = min(.30f, length(fwidth(local)) * 3.55f);
+    float2 front = CrystalVein(local + internalRay * (thickness * .28f), footprint);
+    float2 rear = CrystalVein(local + internalRay * (thickness * .91f) + float3(.29f, .035f, -.20f), footprint);
+    float pulse = .87f + .13f * sin(railBounceControl.w * 2.35f + worldPosition.x * .153f + worldPosition.z * .069f);
+    float flash = CrystalSurgeAt(worldPosition);
+    float rootGlow = exp(-height * 3.9f) * smoothstep(.01f, .14f, height);
+    float rootFlash = flash * exp(-height * 15.0f);
+    float strength = (pulse + flash * (.12f + .32f * exp(-height * 6.0f))) *
+        smoothstep(.018f, .21f, height) * lerp(1.32f, .83f, height);
+    float facing = saturate(dot(N, V));
+    float fresnel = .036f + .964f * pow(1.0f - facing, 5.0f);
+    float mineral = .5f + .5f * sin(local.y * 18.0f + local.z * 9.0f + sin(local.x * 16.0f));
+    float3 body = lerp(float3(.012f, .032f, .115f), float3(.020f, .125f, .34f),
+        saturate(height * .72f + mineral * .27f));
+    float3 inside = body + strength * (
+        front.x * float3(.10f, .46f, 1.20f) + front.y * float3(.83f, 2.30f, 4.40f) +
+        rear.x * float3(.026f, .12f, .55f) + rear.y * float3(.075f, .38f, 1.45f)) +
+        rootGlow * float3(.29f, .96f, 2.08f) * pulse + rootFlash * float3(3.25f, 6.4f, 10.6f);
+
+    // Wide studio-like reflections stand on the flat facets and travel with the view.
+    float3 reflected = reflect(-V, N);
+    float highlight = pow(saturate(dot(reflected, normalize(float3(-.31f, .48f, -.81f)))), 26.0f);
+    float secondary = pow(saturate(dot(reflected, normalize(float3(.82f, .24f, -.53f)))), 11.0f);
+    float3 surface = float3(.27f, .71f, 1.58f) * fresnel * .78f +
+        float3(.73f, .98f, 1.30f) * highlight * 1.05f + float3(.06f, .21f, .50f) * secondary * .47f;
+    return inside * (1.0f - fresnel * .57f) + surface;
+}
+
 PixelShaderOutput main(VertexShaderOutput input)
 {
     PixelShaderOutput output;
@@ -670,6 +747,13 @@ PixelShaderOutput main(VertexShaderOutput input)
         // Opaque fragments dissolve as fine coverage instead of transparent stones.
         if(CartSurfaceNoise(input.position.xy*.73f)>gMaterial.color.a)discard;
         output.color=float4(ApplyWorldScorch(lit,input.worldPosition,N,false),1);return output;
+    }
+
+    if (gMaterial.specularMode == 27) {
+        float3 normal = SafeNormalize(input.normal);
+        float3 toEye = SafeNormalize(cameraWorldPosition - input.worldPosition);
+        output.color = float4(CrystalLighting(input.worldPosition, normal, toEye, saturate(uv.y)), 1.0f);
+        return output;
     }
 
     // Only the forward surfaces of exposed pursuit hardware use the extra U band.

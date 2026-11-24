@@ -1,0 +1,185 @@
+# Rail shooter course DSL
+# editor-schema:13
+# Play with GE3.exe --crystal-cavern. Distances below follow the rail arc length.
+course|Crystal Cavern
+rail_track|mine_cart_standard
+
+# The low, straight approach is a handoff from the white bridge. The grade
+# crests before the steep descent, catches at the bottom and unwinds on exit.
+rail|0|24|0|23|26|crystal-rail-entry|0|0|0|0|0|0|0
+rail|0|24|65|23|26|crystal-rail-mouth|0|0|0|0|0|0|0
+rail|14|35|127|24|25|crystal-rail-climb-one|0|0|0|0|0|0|0
+rail|49|57|207|27|26|crystal-rail-climb-two|0|0|0|0|0|0|0
+rail|78|72|275|31|27|crystal-rail-crest|0|0|0|0|0|0|0
+rail|72|61|323|34|32|crystal-rail-breakover|0|0|0|0|0|0|0
+rail|41|31|390|40|38|crystal-rail-dive|0|0|0|0|0|0|0
+rail|-14|-2|460|47|40|crystal-rail-pullout|0|0|0|0|0|0|0
+rail|-57|-8|520|51|36|crystal-rail-floor|0|0|0|0|0|0|0
+rail|-80|-5|587|53|33|crystal-rail-outer-bend|0|0|0|0|0|0|0
+rail|-70|0|660|49|34|crystal-rail-reverse|0|0|0|0|0|0|0
+rail|-22|8|737|41|35|crystal-rail-traverse|0|0|0|0|0|0|0
+rail|35|13|813|35|31|crystal-rail-exit-bend|0|0|0|0|0|0|0
+rail|47|15|875|31|29|crystal-rail-clear|0|0|0|0|0|0|0
+rail|45|15|938|30|27|crystal-rail-second-approach|0|0|0|0|0|0|0
+rail|12|32|1015|34|28|crystal-rail-bowl-climb|0|0|0|0|0|0|0
+rail|-52|49|1075|45|30|crystal-rail-bowl-rim|0|0|0|0|0|0|0
+rail|-110|41|1145|49|35|crystal-rail-bowl-bank|0|0|0|0|0|0|0
+rail|-122|17|1226|52|38|crystal-rail-bowl-dive|0|0|0|0|0|0|0
+rail|-87|3|1296|47|37|crystal-rail-bowl-floor|0|0|0|0|0|0|0
+rail|-19|9|1370|39|32|crystal-rail-bowl-return|0|0|0|0|0|0|0
+rail|30|14|1428|33|28|crystal-rail-runout|0|0|0|0|0|0|0
+rail|45|14|1498|32|26|crystal-rail-lower-crossing|0|0|0|0|0|0|0
+
+# Climb along the high wall, dive across the basin, then alternate low
+# crests before opening the final curve and straightening for the finish.
+rail|80|27|1568|35|27|crystal-rail-traverse-entry|0|0|0|0|0|0|0
+rail|145|55|1637|39|27|crystal-rail-traverse-rise|0|0|0|0|0|0|0
+rail|212|82|1714|42|28|crystal-rail-traverse-crest|0|0|0|0|0|0|0
+rail|234|79|1796|48|31|crystal-rail-ravine-turn|0|0|0|0|0|0|0
+rail|207|52|1870|52|37|crystal-rail-ravine-descent|0|0|0|0|0|0|0
+rail|135|18|1932|54|40|crystal-rail-ravine-crossing|0|0|0|0|0|0|0
+rail|58|-1|2004|49|38|crystal-rail-ravine-floor|0|0|0|0|0|0|0
+rail|-10|18|2076|45|33|crystal-rail-roll-rise|0|0|0|0|0|0|0
+rail|-34|34|2154|39|33|crystal-rail-roll-crest|0|0|0|0|0|0|0
+rail|-29|22|2226|37|36|crystal-rail-roll-descent|0|0|0|0|0|0|0
+rail|9|2|2296|41|38|crystal-rail-roll-floor|0|0|0|0|0|0|0
+rail|79|9|2372|47|35|crystal-rail-final-rise-entry|0|0|0|0|0|0|0
+rail|144|31|2450|48|33|crystal-rail-final-rise|0|0|0|0|0|0|0
+rail|163|41|2528|51|34|crystal-rail-final-crest|0|0|0|0|0|0|0
+rail|143|24|2608|49|39|crystal-rail-final-descent|0|0|0|0|0|0|0
+rail|83|8|2690|44|38|crystal-rail-final-pullout|0|0|0|0|0|0|0
+rail|37|12|2774|39|33|crystal-rail-exit-align|0|0|0|0|0|0|0
+rail|20|14|2860|34|28|crystal-rail-exit-straight|0|0|0|0|0|0|0
+rail|20|14|2945|34|26|crystal-rail-extended-end|0|0|0|0|0|0|0
+
+section|0|130|CAVE APPROACH|Transition
+section|130|296|ASCENT|High Speed
+section|296|596|CRYSTAL DROP|High Speed
+section|596|900|GROTTO SWEEP|High Speed
+section|900|1195|RIM CLIMB|Transition
+section|1195|1510|BANKED DESCENT|High Speed
+section|1510|1740|LOWER CROSSING|Transition
+section|1740|2030|HIGH TRAVERSE|Transition
+section|2030|2410|RAVINE DIVE|High Speed
+section|2410|2940|ROLLING RIDGE|High Speed
+section|2940|3250|FINAL SWEEP|High Speed
+section|3250|3494|EXIT RUNOUT|Transition
+
+# Give the crest time to read, accelerate down the face and limit bank for aim.
+ride_profile|crystal-ride-approach|0|263|CAVE APPROACH|HighSpeed|1|26|1|1|105|40|1|32|0.85|12|0|28|-|1|1|0
+ride_profile|crystal-ride-crest|263|330|ASCENT CREST|HighSpeed|1|28|1|1|105|42|1|36|0.85|12|12|17|-|1|1|0
+ride_profile|crystal-ride-drop|330|570|CRYSTAL DROP|HighSpeed|1|39|1.15|1|115|48|1|38|0.90|13|26|35|-|1|1|0
+ride_profile|crystal-ride-sweep|570|900|GROTTO SWEEP|HighSpeed|1|34|1|1|110|46|1|38|0.90|13|24|30|-|1|1|0
+ride_profile|crystal-ride-rim|900|1215|RIM CLIMB|HighSpeed|1|28|1|1|100|40|1|36|0.85|12|0|0|-|1|1|0
+ride_profile|crystal-ride-bowl|1215|1510|BANKED DESCENT|HighSpeed|1|36|1|1.05|100|48|1|39|0.94|15|0|0|-|1|1|0
+ride_profile|crystal-ride-crossing|1510|1740|LOWER CROSSING|HighSpeed|1|26|1|1|100|40|1|34|0.85|12|0|0|-|1|1|0
+ride_profile|crystal-ride-traverse|1740|2055|HIGH TRAVERSE|HighSpeed|1|28|0.9|1|92|44|1|38|0.86|13|0|0|-|1|1|0
+ride_profile|crystal-ride-ravine|2055|2410|RAVINE DIVE|HighSpeed|1|40|1.15|1.08|108|56|1|44|0.94|15|0|0|-|1|1|0
+ride_profile|crystal-ride-rolls|2410|2940|ROLLING RIDGE|HighSpeed|1|34|1|1|96|48|1|40|0.87|13|0|0|-|1|1|0
+ride_profile|crystal-ride-final-sweep|2940|3250|FINAL SWEEP|HighSpeed|1|38|1.05|1.07|104|52|1|44|0.93|15|0|0|-|1|1|0
+ride_profile|crystal-ride-exit|3250|3494|EXIT RUNOUT|HighSpeed|1|26|1|1.1|92|42|1|34|0.80|11|0|0|-|1|1|0
+
+camera|0|18|6|0|45|1|7|54|0|crystal-camera-approach|1|0
+camera|168|17|6|0|43|1|6|53|0|crystal-camera-climb|1|0
+camera|285|18|7|0|55|-2|7|55|0|crystal-camera-crest|1|0
+camera|375|20|7|0|65|-1|8|60|0|crystal-camera-dive|1|0
+camera|558|20|8|0|57|1|8|57|0|crystal-camera-pullout|1|0
+camera|692|20|8|0|59|1|8|57|0|crystal-camera-sweep|1|0
+camera|931|21|8|0|62|2|7|55|0|crystal-camera-rim-entry|1|0
+camera|1170|19|7|0|54|0|7|54|0|crystal-camera-rim|1|0
+camera|1260|20|8|0|61|-2|8|58|0|crystal-camera-bowl-bank|1|0
+camera|1440|20|8|0|61|0|8|58|0|crystal-camera-bowl-floor|1|0
+camera|1585|21|8|0|60|2|7|54|0|crystal-camera-exit|1|0
+camera|1740|21|8|0|60|2|7|54|0|crystal-camera-traverse-entry|1|0
+camera|1940|20|8|0|57|1|7|55|0|crystal-camera-traverse-rise|1|0
+camera|2070|22|9|0|70|-2|8|60|0|crystal-camera-ravine-crest|1|0
+camera|2220|22|8|0|68|-1|8|61|0|crystal-camera-ravine-dive|1|0
+camera|2390|21|8|0|60|0|7|58|0|crystal-camera-ravine-floor|1|0
+camera|2530|20|8|0|58|0|8|56|0|crystal-camera-rolls-entry|1|0
+camera|2750|20|8|0|62|0|8|57|0|crystal-camera-rolls-floor|1|0
+camera|2950|20|8|0|61|1|7|56|0|crystal-camera-final-rise|1|0
+camera|3080|22|9|0|67|-1|8|59|0|crystal-camera-final-dive|1|0
+camera|3260|21|8|0|61|1|7|55|0|crystal-camera-extended-runout|1|0
+camera|3494|20|7|0|58|1|7|54|0|crystal-camera-end|1|0
+
+# The saturated chambers alternate with quieter blue-grey passages.
+lighting|0|crystal-entrance|0|0.68|0.79|1|1.35|-0.40|-0.52|0.75|0.025|0.047|0.088|0.060|0.118|0.190|0.25|68|620|0.12|0.13|0.20|0.46|0.10|0.18
+lighting|260|crystal-crest|75|0.60|0.78|1|1.50|-0.58|-0.50|0.62|0.035|0.077|0.126|0.078|0.190|0.258|0.30|88|680|0.14|0.17|0.30|0.46|0.11|0.20
+lighting|428|crystal-chamber|130|0.60|0.94|1|1.95|-0.54|-0.60|0.58|0.040|0.094|0.143|0.080|0.208|0.279|0.30|110|740|0.12|0.21|0.28|0.44|0.12|0.20
+lighting|1195|crystal-rim|160|0.72|0.82|1|1.65|-0.46|-0.58|0.67|0.055|0.080|0.150|0.100|0.148|0.262|0.26|105|700|0.12|0.20|0.27|0.44|0.10|0.19
+lighting|1550|crystal-lower-crossing|115|0.82|0.90|1|1.90|-0.42|-0.51|0.75|0.087|0.139|0.190|0.143|0.231|0.302|0.22|130|820|0.10|0.24|0.30|0.35|0.09|0.16
+lighting|2020|crystal-high-traverse|155|0.69|0.86|1|1.80|-0.45|-0.55|0.70|0.064|0.122|0.204|0.108|0.195|0.293|0.22|118|900|0.10|0.24|0.32|0.38|0.09|0.16
+lighting|2710|crystal-rolling-ridge|180|0.65|0.90|1|1.65|-0.52|-0.56|0.62|0.052|0.094|0.170|0.097|0.175|0.264|0.24|100|750|0.10|0.20|0.28|0.42|0.10|0.17
+lighting|3330|crystal-exit|160|0.88|0.94|1|1.95|-0.45|-0.49|0.75|0.102|0.155|0.202|0.160|0.238|0.299|0.20|145|880|0.09|0.22|0.29|0.33|0.08|0.15
+
+terrain_material|0|crystal-basalt|0|0.18|0.23|0.30|0.95|0.30|0.41|0.32|0.16|0.16|0.22|0.25|0.48|0.18|0.65|0.19
+terrain_material|428|crystal-wet-stone|125|0.20|0.30|0.37|1.02|0.28|0.39|0.32|0.23|0.23|0.26|0.21|0.54|0.19|0.58|0.29
+terrain_material|1550|crystal-lower-stone|115|0.26|0.32|0.40|1.05|0.28|0.38|0.30|0.19|0.19|0.22|0.22|0.46|0.17|0.58|0.30
+terrain_material|2440|crystal-ravine-stone|165|0.20|0.28|0.36|1.02|0.30|0.40|0.32|0.19|0.21|0.24|0.23|0.48|0.18|0.60|0.26
+terrain_material|3330|crystal-exit-stone|150|0.29|0.36|0.43|1.05|0.28|0.38|0.30|0.19|0.20|0.22|0.21|0.46|0.17|0.58|0.30
+
+# Restore the ceiling as the cart enters, then keep the entire mountain ride underground.
+terrain_brush|crystal-roof|crystal-roof-00|CloseCeiling|230|0|256|1|1|0.85|0
+terrain_brush|crystal-roof|crystal-roof-01|CloseCeiling|630|0|256|1|1|0.85|0
+terrain_brush|crystal-roof|crystal-roof-02|CloseCeiling|1030|0|256|1|1|0.85|0
+terrain_brush|crystal-roof|crystal-roof-03|CloseCeiling|1430|0|256|1|1|0.85|0
+terrain_brush|crystal-roof|crystal-roof-04|CloseCeiling|1830|0|256|1|1|0.85|0
+terrain_brush|crystal-roof|crystal-roof-05|CloseCeiling|2230|0|256|1|1|0.85|0
+terrain_brush|crystal-roof|crystal-roof-06|CloseCeiling|2630|0|256|1|1|0.85|0
+terrain_brush|crystal-roof|crystal-roof-07|CloseCeiling|3030|0|256|1|1|0.85|0
+terrain_brush|crystal-roof|crystal-roof-08|CloseCeiling|3430|0|256|1|1|0.85|0
+
+# Hollow out taller chambers where the track tips over to reveal the next drop.
+terrain_brush|crystal-chambers|crystal-chamber-early|Sculpt|410|1.570796|126|68|29|0.38|0
+terrain_brush|crystal-chambers|crystal-chamber-early-tail|Sculpt|510|1.570796|116|72|22|0.36|0
+terrain_brush|crystal-chambers|crystal-chamber-bowl|Sculpt|1295|1.570796|140|73|25|0.39|0
+terrain_brush|crystal-chambers|crystal-chamber-deep|Sculpt|2145|1.570796|154|72|34|0.42|0
+terrain_brush|crystal-chambers|crystal-chamber-deep-tail|Sculpt|2270|1.570796|136|74|24|0.36|0
+terrain_brush|crystal-chambers|crystal-chamber-finale|Sculpt|3090|1.570796|132|74|27|0.40|0
+
+# Crystal veins mark the inside and outside walls while keeping the rail in view.
+terrain|74|hero_landmark|crystal-entry-vein|crystal_cavern_cluster|-14|-13|0|5|15|6|0|21|0|none|13|75|130|crystal-prop-entry-vein|1|0
+terrain|162|hero_landmark|crystal-climb-vein|crystal_cavern_cluster|16|-15|0|5|17|6|0|-32|0|none|13|90|155|crystal-prop-climb-vein|1|0
+terrain|137|hero_landmark|crystal-entrance-left|root_spire_column|-22|-7|0|5|9|6|0|23|0|none|12|80|120|crystal-prop-mouth-left|1|0
+terrain|205|hero_landmark|crystal-entrance-right|root_spire_column|24|-7|0|7|13|8|0|-24|0|none|12|80|140|crystal-prop-mouth-right|1|0
+terrain|304|hero_landmark|crystal-crest-vein|crystal_cavern_cluster|-18|-14|0|4|16|5|0|16|0|none|13|100|150|crystal-prop-crest-vein|1|0
+terrain|423|hero_landmark|crystal-grotto-tall|crystal_cavern_cluster|19|-16|0|10|29|10|0|29|-7|none|13|130|240|crystal-prop-grotto-tall|1|0
+terrain|486|hero_landmark|crystal-grotto-twin|crystal_cavern_cluster|26|-16|0|8|19|10|0|-31|7|none|13|130|235|crystal-prop-grotto-twin|1|0
+terrain|543|hero_landmark|crystal-grotto-west|crystal_cavern_cluster|-21|-16|0|7|24|8|0|21|-8|none|13|110|195|crystal-prop-grotto-west|1|0
+terrain|620|hero_landmark|crystal-grotto-bank|root_spire_column|34|-12|0|10|16|12|0|46|0|none|12|95|175|crystal-prop-grotto-bank|1|0
+terrain|710|hero_landmark|crystal-sweep-high|crystal_cavern_cluster|-22|-16|0|6|23|7|0|-23|8|none|13|100|185|crystal-prop-sweep-high|1|0
+terrain|853|hero_landmark|crystal-outflow-edge|root_spire_column|31|-10|0|8|15|11|0|23|0|none|12|100|175|crystal-prop-outflow-edge|1|0
+terrain|966|hero_landmark|crystal-rim-entry-vein|crystal_cavern_cluster|18|-16|0|5|17|6|0|-27|5|none|13|90|160|crystal-prop-rim-entry-vein|1|0
+terrain|1120|hero_landmark|crystal-rim-rise-vein|crystal_cavern_cluster|-19|-16|0|6|21|7|0|12|0|none|13|90|160|crystal-prop-rim-rise-vein|1|0
+
+# Near-rail landmarks give the rider motion cues on approach and after the drop.
+terrain|46|hero_landmark|crystal-marker-approach|rail_speed_marker|7|0|0|1|1|1|0|0|0|none|14|60|100|crystal-prop-marker-approach|1|0
+terrain|112|hero_landmark|crystal-marker-mouth|rail_speed_marker|-7|0|0|1|1|1|0|180|0|none|14|60|100|crystal-prop-marker-mouth|1|0
+terrain|535|hero_landmark|crystal-marker-pullout|rail_speed_marker|7|0|0|1|1|1|0|0|0|none|14|60|100|crystal-prop-marker-pullout|1|0
+terrain|590|hero_landmark|crystal-marker-sweep|rail_speed_marker|-7|0|0|1|1|1|0|180|0|none|14|60|100|crystal-prop-marker-sweep|1|0
+terrain|910|hero_landmark|crystal-marker-rim-entry|rail_speed_marker|7|0|0|1|1|1|0|0|0|none|14|60|100|crystal-prop-marker-rim-entry|1|0
+terrain|1175|hero_landmark|crystal-rim-outside|root_spire_column|33|-12|0|12|28|16|0|23|0|none|12|130|220|crystal-prop-rim-outside|1|0
+terrain|1335|hero_landmark|crystal-dive-inside|crystal_cavern_cluster|-23|-16|0|10|28|12|0|-22|8|none|13|110|190|crystal-prop-dive-inside|1|0
+terrain|1410|hero_landmark|crystal-bowl-vein|crystal_cavern_cluster|21|-16|0|7|21|8|0|20|-5|none|13|100|185|crystal-prop-bowl-vein|1|0
+terrain|1455|hero_landmark|crystal-marker-bowl-floor|rail_speed_marker|-8|0|0|1|1|1|0|180|0|none|14|65|100|crystal-prop-marker-bowl-floor|1|0
+terrain|1590|hero_landmark|crystal-marker-lower-crossing|rail_speed_marker|8|0|0|1|1|1|0|0|0|none|14|65|100|crystal-prop-marker-lower-crossing|1|0
+terrain|1628|hero_landmark|crystal-low-crossing-vein|crystal_cavern_cluster|-16|-14|0|5|15|6|0|44|0|none|13|90|150|crystal-prop-low-crossing-vein|1|0
+terrain|1820|hero_landmark|crystal-traverse-shoulder|root_spire_column|-34|-10|0|11|19|13|0|26|0|none|12|105|200|crystal-prop-traverse-shoulder|1|0
+terrain|1865|hero_landmark|crystal-traverse-vein|crystal_cavern_cluster|18|-16|0|7|21|8|0|-19|3|none|13|100|175|crystal-prop-traverse-vein|1|0
+terrain|1955|hero_landmark|crystal-marker-traverse|rail_speed_marker|-8|0|0|1|1|1|0|180|0|none|14|65|125|crystal-prop-marker-traverse|1|0
+terrain|2105|hero_landmark|crystal-ravine-crest|crystal_cavern_cluster|-19|-15|0|6|21|8|0|-23|3|none|13|100|175|crystal-prop-ravine-crest|1|0
+terrain|2180|hero_landmark|crystal-ravine-outside|crystal_cavern_cluster|24|-17|0|13|35|12|0|21|6|none|13|135|225|crystal-prop-ravine-outside|1|0
+terrain|2242|hero_landmark|crystal-ravine-inner|crystal_cavern_cluster|-23|-17|0|9|27|10|0|-12|-5|none|13|130|210|crystal-prop-ravine-inner|1|0
+terrain|2315|hero_landmark|crystal-marker-ravine|rail_speed_marker|8|0|0|1|1|1|0|0|0|none|14|65|120|crystal-prop-marker-ravine|1|0
+terrain|2370|hero_landmark|crystal-ravine-floor-vein|crystal_cavern_cluster|20|-16|0|7|19|8|0|-36|0|none|13|100|165|crystal-prop-ravine-floor-vein|1|0
+terrain|2505|hero_landmark|crystal-ridge-left|root_spire_column|-31|-10|0|9|21|12|0|-20|0|none|12|105|170|crystal-prop-ridge-left|1|0
+terrain|2570|hero_landmark|crystal-ridge-high-vein|crystal_cavern_cluster|-20|-15|0|6|19|7|0|21|-3|none|13|95|165|crystal-prop-ridge-high-vein|1|0
+terrain|2735|hero_landmark|crystal-marker-ridge|rail_speed_marker|-8|0|0|1|1|1|0|180|0|none|14|65|115|crystal-prop-marker-ridge|1|0
+terrain|2777|hero_landmark|crystal-ridge-low-vein|crystal_cavern_cluster|19|-15|0|7|22|8|0|32|4|none|13|95|165|crystal-prop-ridge-low-vein|1|0
+terrain|2925|hero_landmark|crystal-final-rise-vein|crystal_cavern_cluster|-19|-16|0|6|22|8|0|12|0|none|13|105|170|crystal-prop-final-rise-vein|1|0
+terrain|3085|hero_landmark|crystal-final-shoulder|root_spire_column|36|-14|0|12|22|14|0|17|0|none|12|110|200|crystal-prop-final-shoulder|1|0
+terrain|3072|hero_landmark|crystal-final-tall|crystal_cavern_cluster|24|-17|0|12|32|12|0|-23|8|none|13|125|210|crystal-prop-final-tall|1|0
+terrain|3150|hero_landmark|crystal-final-descend-vein|crystal_cavern_cluster|-23|-16|0|8|25|9|0|-12|0|none|13|110|185|crystal-prop-final-descend-vein|1|0
+terrain|3200|hero_landmark|crystal-marker-final-sweep|rail_speed_marker|8|0|0|1|1|1|0|0|0|none|14|65|115|crystal-prop-marker-final-sweep|1|0
+terrain|3290|hero_landmark|crystal-exit-vein|crystal_cavern_cluster|17|-15|0|5|17|6|0|28|0|none|13|90|155|crystal-prop-exit-vein|1|0
+terrain|3395|hero_landmark|crystal-marker-exit|rail_speed_marker|-8|0|0|1|1|1|0|180|0|none|14|65|115|crystal-prop-marker-exit|1|0

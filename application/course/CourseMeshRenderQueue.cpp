@@ -1,6 +1,7 @@
 #include "RailSideRock.h"
 #include "RailGroundBatteryAttack.h"
 #include "RailRouteHazards.h"
+#include "RailCrystalCavern.h"
 #include "RailRearPursuitRules.h"
 #include "RailRearPanelMaterial.h"
 #include "RailVeilModel.h"
@@ -514,6 +515,21 @@ void CourseMeshRenderQueue::AppendTerrain(std::span<const CourseTerrainPlacement
                 Add(RotationFromRailTangent(sample.tangent), placement.rotation),
                 center,
                 viewProjection);
+            if (placement.meshId == RailCrystalCavern::CrystalMesh && item->materialData != nullptr) {
+                Material crystal{};
+                crystal.color = {1, 1, 1, 1};
+                crystal.uvTransform = MakeIdentity4x4();
+                crystal.specularMode = 27;
+                const auto& local = item->transformData->WorldInverseTranspose;
+                // Mode 27 reads three affine rows from the material constants.
+                for (int axis = 0; axis < 3; ++axis) {
+                    for (int component = 0; component < 4; ++component) {
+                        crystal.padding2[1 + axis * 4 + component] = local.m[axis][component];
+                    }
+                }
+                *item->materialData = crystal;
+                item->useMaterialOverride = true;
+            }
         }
 }
 

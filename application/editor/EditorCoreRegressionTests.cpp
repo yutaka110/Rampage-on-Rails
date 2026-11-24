@@ -27686,6 +27686,29 @@ void TestEnemyProjectileCommercialVisualPipeline(RegressionRunner& runner) {
         "the local Wing burst replaces only that actor's generic interception effect");
     renderInput.localInterceptOwnerActorId=0;
 
+    EnemyProjectileVfxRenderer ordinaryClashes;
+    EnemyProjectilePresentationFrame clashFrame;
+    interceptEvent.definitionId = "enemy_assault_magenta_slow";
+    otherIntercept.definitionId = "enemy_turret_predictive";
+    clashFrame.events = {interceptEvent, otherIntercept};
+    auto clashInput = renderInput;
+    clashInput.presentation = &clashFrame;
+    clashInput.settings.orbSpritesEnabled = true;
+    ordinaryClashes.Update(clashInput);
+    const auto& clashes = ordinaryClashes.Frame().lifecycleBursts;
+    runner.Expect(clashes.size() == 2 && ordinaryClashes.Frame().interceptBursts == 2 &&
+        clashes[0].kind == EnemyProjectileLifecycleVisualKind::OrdinaryIntercept &&
+        clashes[1].kind == EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept &&
+        std::all_of(clashes.begin(), clashes.end(), [&](const auto& clash) {
+            return clash.spriteBacked && clash.worldPosition.z == interceptEvent.worldPosition.z &&
+                clash.primaryColor.z > clash.primaryColor.x && clash.secondaryColor.x > clash.secondaryColor.z;
+        }), "Ordinary air rounds and roadside shells must draw a two-color clash at the intercepted surface");
+    clashFrame.events.clear();
+    clashInput.deltaTime = .23f;
+    ordinaryClashes.Update(clashInput);
+    runner.Expect(ordinaryClashes.Frame().lifecycleBursts.empty(),
+        "Ordinary clashes must clear within a single short burst even during continuous fire");
+
     presentation.events.clear();
     EnemyProjectilePresentationEvent impactEvent{};
     impactEvent.kind = EnemyProjectilePresentationEventKind::Impacted;

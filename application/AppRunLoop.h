@@ -22,6 +22,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -259,6 +260,8 @@ private:
     void DumpRenderGraphDebugFrame();
     void LoadRailShooterCourse();
     void ApplyRailShooterCourse();
+    bool AttachCrystalCavern(float landingDistance);
+    void RemoveCrystalCavern();
     bool SaveRailShooterCourse(std::string* errorMessage = nullptr);
     void TeleportRailShooterCourse(float distance);
     bool BeginEditorGameplaySpawns(std::string* errorMessage);
@@ -953,4 +956,9 @@ private:
     int railAttackChargeWeapon_=-1;
     AppGamepadInput submissionGamepad_{};
     AppGamepadInput railAimGamepad_{};
+    struct CrystalCavernContinuation {
+        CourseAsset originalCourse;
+        float joinDistance = 0.0f;
+    };
+    std::optional<CrystalCavernContinuation> crystalCavern_;
 };

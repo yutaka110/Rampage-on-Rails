@@ -45,6 +45,7 @@ public:
         float vertical) const;
 
 private:
+    float CeilingClosure(float distance) const;
     float Noise3(float distance, float lateral, float vertical, float scale) const;
     float ArchMask(float distance, float angle) const;
     float SubtractiveCarveMask(float distance, float angle) const;

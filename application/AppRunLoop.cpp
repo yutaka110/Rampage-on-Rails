@@ -2,6 +2,7 @@
 #include "course/RailVisualOcclusion.h"
 #include "course/RailSideRock.h"
 #include "course/RailShortCourse.h"
+#include "course/RailCrystalCavern.h"
 #include "AppRunLoop.h"
 #include "AppLogFile.h"
 #include "diagnostics/DronePerformanceProfile.h"
@@ -103,6 +104,22 @@ RailCartImpactEnergy::Frame EvaluateCartImpact(const RailCombatImpact::Mark& hit
 bool IsFangInterceptCue(const CourseVfxCue& cue) {
     return cue.desc.hasWorldPosition &&
         (cue.desc.id==kFangInterceptBurstId || cue.desc.id==kFangCounterBurstId);
+}
+
+constexpr auto kCrystalSurgeCue = "crystal_proximity_surge";
+constexpr float kCrystalSurgeLead = 44.0f;
+constexpr float kCrystalSurgeLifetime = 1.42f;
+
+const CourseVfxCue* FindCrystalSurge(std::span<const CourseVfxCue> cues, const CourseTerrainPlacement& crystal) {
+    const auto found = std::find_if(cues.begin(), cues.end(), [&](const CourseVfxCue& cue) {
+        return cue.desc.id == kCrystalSurgeCue && cue.desc.payload == crystal.id;
+    });
+    return found == cues.end() ? nullptr : &*found;
+}
+
+float CrystalSurgeFlash(float age) {
+    return RailMothership::Smooth(age, 0.0f, .055f) *
+        (1.0f - RailMothership::Smooth(age, .10f, .43f));
 }
 // The gameplay collider is deliberately simpler than the art. Snap the heat
 // stamp to the first visible triangle near the accepted contact, once per hit.
@@ -1923,6 +1940,7 @@ void AppRunLoop::InitializeBeam(
 }
 
 void AppRunLoop::LoadRailShooterCourse() {
+    RemoveCrystalCavern();
     std::string error;
     if (railShooterCourse_.LoadFromFile(railShooterCoursePath_, &error)) {
         railShooterCourseLoadStatus_ =
@@ -2056,7 +2074,44 @@ bool AppRunLoop::ApplyRailVehicleControlPreset(
     return true;
 }
 
+bool AppRunLoop::AttachCrystalCavern(float landingDistance) {
+    if (crystalCavern_) return true;
+
+    CourseAsset cavern;
+    std::string error;
+    if (!cavern.LoadFromFile(RailCrystalCavern::CoursePath, &error)) {
+        OutputDebugStringA(("[Crystal Cavern] " + error + "\n").c_str());
+        return false;
+    }
+    const float joinDistance = landingDistance + RailBridgeEscape::DepartureRunout;
+    CourseAsset extended = railShooterCourse_;
+    if (!RailCrystalCavern::Append(extended, railPath_, cavern, joinDistance)) return false;
+
+    RailPath extendedRail;
+    extended.ApplyToRailPath(extendedRail);
+    if (!railShooterGameSession_.SetCourseLength(extendedRail.Length())) return false;
+
+    crystalCavern_.emplace(CrystalCavernContinuation{std::move(railShooterCourse_), joinDistance});
+    railShooterCourse_ = std::move(extended);
+    railPath_ = std::move(extendedRail);
+    railShooterCourseRuntime_.SetTraversalEndDistance(railPath_.Length());
+    terrainChunkManager_.InvalidateRailFrom(joinDistance);
+    return true;
+}
+
+void AppRunLoop::RemoveCrystalCavern() {
+    if (!crystalCavern_) return;
+
+    terrainChunkManager_.InvalidateRailFrom(crystalCavern_->joinDistance);
+    railShooterCourse_ = std::move(crystalCavern_->originalCourse);
+    crystalCavern_.reset();
+    railShooterCourse_.ApplyToRailPath(railPath_);
+    railShooterCourseRuntime_.SetTraversalEndDistance(ShortRunTravelEndDistance(railPath_.Length()));
+    (void)railShooterGameSession_.SetCourseLength(railPath_.Length());
+}
+
 void AppRunLoop::ApplyRailShooterCourse() {
+    RemoveCrystalCavern();
     // Applying/reloading authoring data invalidates the immutable preview
     // snapshot. Stop first so the next preview starts from the new source.
     coursePreviewSimulationSystem_.Stop();
@@ -2348,7 +2403,7 @@ void AppRunLoop::ApplyRailShooterCourse() {
         ? ShortRunSessionDefinition() : GameSessionDefinition::RailShooterDefaults();
     sessionDefinition.unlimitedCheckpointRetries=true;
     if(IsRailShortCourse(railShooterCoursePath_) && RailPostBossSequence::Enabled(railShooterCourse_))
-        sessionDefinition.timeLimitSeconds+=RailPostBossSequence::TimeBudgetSeconds;
+        sessionDefinition.timeLimitSeconds+=RailPostBossSequence::TimeBudgetSeconds+RailCrystalCavern::TimeBudgetSeconds;
     if (!railShooterCourse_.name.empty()) {
         sessionDefinition.sessionId = railShooterCourse_.name;
     }
@@ -2450,6 +2505,12 @@ void AppRunLoop::ApplyRailShooterCourse() {
 }
 
 bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
+    if (crystalCavern_) {
+        railShooterCourseLoadStatus_ =
+            "The bridge continuation is assembled for gameplay. Open CrystalCavern.course to edit it.";
+        if (errorMessage) *errorMessage = railShooterCourseLoadStatus_;
+        return false;
+    }
     std::string error;
     railShooterCourse_.SortForRuntime();
     const std::string transactionId = editor::EditorFileTransaction::GenerateTransactionId();
@@ -2542,6 +2603,7 @@ bool AppRunLoop::SaveRailShooterCourse(std::string* errorMessage) {
 }
 
 void AppRunLoop::TeleportRailShooterCourse(float distance) {
+    RemoveCrystalCavern();
     editorViewportCamera_.InvalidateInspection();
     const float railLength = railPath_.Length();
     const float clampedDistance = railLength > 0.0f
@@ -5455,6 +5517,10 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const auto isHeavyShell=[](const auto& p) {return p.batteryKind==RailEnemyEnergy::BatteryKind::Heavy;};
     const bool hasEnemyOrbs=!railTitleScreenVisible_ && std::any_of(enemyBulletFrame.proxies.begin(),enemyBulletFrame.proxies.end(),
         [](const auto& p){return p.spriteBacked;});
+    const auto isOrdinaryClash = [](const EnemyProjectileLifecycleVfxProxy& burst) {
+        return burst.kind == EnemyProjectileLifecycleVisualKind::OrdinaryIntercept ||
+            burst.kind == EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept;
+    };
     const bool hasProjectileBursts=!railTitleScreenVisible_ &&
         std::any_of(enemyBulletFrame.lifecycleBursts.begin(),enemyBulletFrame.lifecycleBursts.end(),
             [](const auto& burst){return burst.spriteBacked;});
@@ -5524,7 +5590,18 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         railShooterSpawnRuntime_.Obstacles().end(),[](const auto& rock) {
             return RailSideRock::Is(rock) && !rock.desc.payload.empty() && rock.age<1.25f;
         });
-    const bool hasWorldEffects=sideRockVfx || hasLocalCartImpact || fangInterceptVisible || fangExhaust || barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || gatlingDischarge || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    std::array<const CourseTerrainPlacement*, 4> crystalEffects{};
+    size_t crystalEffectCount = 0;
+    if (!railTitleScreenVisible_ && !railGameOverScene_.Active() &&
+        railShooterCourse_.terrainEditLayer.CeilingClosure(railShooterDistance_) > .7f) {
+        for (const auto& crystal : railShooterCourse_.terrainPlacements) {
+            const float gap = crystal.distance - railShooterDistance_;
+            if (crystal.meshId != RailCrystalCavern::CrystalMesh || gap < -28.0f || gap > 135.0f) continue;
+            crystalEffects[crystalEffectCount++] = &crystal;
+            if (crystalEffectCount == crystalEffects.size()) break;
+        }
+    }
+    const bool hasWorldEffects=crystalEffectCount > 0 || sideRockVfx || hasLocalCartImpact || fangInterceptVisible || fangExhaust || barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || gatlingDischarge || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     const bool hasWingCartImpact=cartVisible && std::any_of(cartMarks.begin(),cartMarks.end(),[](const auto& mark) {
         return mark.owner==RailCombatImpact::CartOwner && mark.kind==RailCombatImpact::Kind::WingCart;
     });
@@ -6198,6 +6275,104 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
             dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
         };
+        const float crystalTime = railShooterGameSession_.State().attemptElapsedSeconds;
+        for (size_t slot = 0; slot < crystalEffectCount; ++slot) {
+            const auto& crystal = *crystalEffects[slot];
+            const float gap = crystal.distance - railShooterDistance_;
+            const float visibility = RailMothership::Smooth(gap, -28.0f, -12.0f) *
+                (1.0f - RailMothership::Smooth(gap, 95.0f, 135.0f));
+            const float scale = std::clamp(crystal.scale.y / 25.0f, .55f, 1.5f);
+            const auto axis = railPath_.Evaluate(crystal.distance + crystal.forwardOffset);
+            const auto root = RailLocalPoint(railPath_, crystal.distance, crystal.lateralOffset,
+                crystal.verticalOffset, crystal.forwardOffset);
+            const float seed = std::fmod(root.x * .113f + root.z * .057f, 6.2831853f);
+            const float shimmer = .80f + .20f * std::sin(crystalTime * 2.0f + seed);
+            const auto haze = Add(root, Scale(axis.up, 1.95f * scale));
+            const unsigned hazePhase = static_cast<unsigned>((crystalTime * .23f -
+                std::floor(crystalTime * .23f)) * 31.0f);
+            for (unsigned layer = 0; layer < 2; ++layer) {
+                const float drift = std::sin(crystalTime * .68f + seed + 2.2f * layer);
+                const auto center = Add(haze, Add(Scale(axis.tangent, (layer == 0 ? -3.2f : 3.9f) * scale),
+                    Scale(axis.right, drift * 2.7f * scale)));
+                glowQuad(center, Scale(right, (10.0f + 2.2f * layer) * scale),
+                    Scale(up, (2.05f + .44f * layer) * scale), 124.0f,
+                    {.12f, .41f, 1.13f, visibility * shimmer * .49f},
+                    float(2u * (hazePhase + 32u * (static_cast<unsigned>(crystal.distance) % 11u + layer))));
+            }
+            glowQuad(Add(root, Scale(axis.up, .8f * scale)), Scale(right, 4.9f * scale),
+                Scale(up, 2.25f * scale), 60.0f, {.29f, 1.28f, 3.2f, visibility * shimmer * .23f});
+
+            for (unsigned i = 0; i < 18; ++i) {
+                const float period = 2.2f + .19f * float(i % 6);
+                const float cycle = crystalTime / period + float(i) * .618034f + seed;
+                const float age = cycle - std::floor(cycle);
+                const float orbit = float(i) * 2.39996f + seed + age * .87f;
+                const float spread = (2.0f + float(i % 7) * .92f + age * 1.8f) * scale;
+                const auto point = Add(root, Add(Scale(axis.right, std::cos(orbit) * spread),
+                    Add(Scale(axis.tangent, std::sin(orbit) * spread),
+                        Scale(axis.up, (1.0f + age * (4.8f + float(i % 5) * 1.34f)) * scale))));
+                const float lifetime = RailMothership::Smooth(age, .02f, .16f) *
+                    (1.0f - RailMothership::Smooth(age, .67f, .98f));
+                const float twinkle = .29f + .71f * std::pow(.5f + .5f * std::sin(crystalTime *
+                    (4.8f + .4f * float(i % 4)) + orbit), 4.0f);
+                const float radius = (.12f + .052f * float(i % 5)) * scale;
+                const auto streak = NormalizeOr(Add(Scale(up, .91f), Scale(right, std::sin(orbit) * .55f)), up);
+                glowQuad(point, Scale(right, radius), Scale(streak, radius * (i % 4 == 0 ? 2.9f : 1.65f)),
+                    126.0f, {1.13f, 2.85f, 5.35f, visibility * lifetime * twinkle * .88f});
+            }
+            const auto* surge = FindCrystalSurge(activeVfx, crystal);
+            if (!surge) continue;
+            const float age = surge->age;
+            const float flash = CrystalSurgeFlash(age);
+            glowQuad(Add(root, Scale(axis.up, 1.7f * scale)), Scale(right, 9.2f * scale),
+                Scale(up, 5.0f * scale), 130.0f, {2.3f, 5.4f, 9.8f, visibility * flash});
+
+            const float trackSide = crystal.lateralOffset > 0.0f ? -1.0f : 1.0f;
+            const float shoulder = (std::max)(crystal.scale.x * .46f, 4.5f * scale);
+            // Launch from both shoulders of the cluster so the crystal doesn't hide the burst.
+            for (unsigned i = 0; i < 8; ++i) {
+                const float layer = float(i / 2);
+                const bool towardTrack = i % 2 == 0;
+                const float direction = towardTrack ? trackSide : -trackSide;
+                const float t = age - (.025f + .051f * layer + (towardTrack ? 0.0f : .045f));
+                constexpr float cloudLife = 1.14f;
+                if (t <= 0.0f || t >= cloudLife) continue;
+                const float spread = shoulder + (13.0f + 2.3f * layer) * t * scale;
+                const float rise = (2.9f + (25.0f + 2.4f * layer) * t - 10.5f * t * t) * scale;
+                const auto cloudCenter = Add(root, Add(Scale(axis.right, direction * spread),
+                    Add(Scale(axis.tangent, (layer * 2.4f - 4.1f) * scale), Scale(axis.up, rise))));
+                const float lean = Dot(axis.right, right) * direction * .38f;
+                const auto cloudUp = NormalizeOr(Add(up, Scale(right, lean)), up);
+                const auto cloudRight = NormalizeOr(Add(right, Scale(up, -lean)), right);
+                const float opacity = RailMothership::Smooth(t, 0.0f, .13f) *
+                    (1.0f - RailMothership::Smooth(t, .38f, cloudLife));
+                const unsigned phase = static_cast<unsigned>(t / cloudLife * 31.0f);
+                glowQuad(cloudCenter, Scale(cloudRight, (4.2f + t * 9.8f) * scale),
+                    Scale(cloudUp, (4.0f + t * 10.8f) * scale), 132.0f,
+                    {.43f, 1.16f, 2.36f, visibility * opacity * (towardTrack ? 1.0f : .72f)},
+                    float(2u * (phase + 32u * i)));
+            }
+            for (unsigned i = 0; i < 40; ++i) {
+                const float t = age - (.038f + float(i % 7) * .021f);
+                const float life = .68f + .094f * float(i % 7);
+                if (t <= 0.0f || t >= life) continue;
+                const float angle = float(i) * 2.39996f + seed;
+                const float direction = i % 3 == 0 ? -trackSide : trackSide;
+                const float spread = shoulder * .82f + (12.0f + 12.5f * std::abs(std::cos(angle))) * t * scale;
+                const float rise = (2.0f + (15.0f + 2.7f * float(i % 8)) * t - 16.0f * t * t) * scale;
+                const auto point = Add(root, Add(Scale(axis.right, direction * spread),
+                    Add(Scale(axis.tangent, (4.2f + 14.4f * t) * std::sin(angle) * scale), Scale(axis.up, rise))));
+                const float spin = angle + t * (4.1f + .78f * float(i % 5));
+                const auto chipRight = Add(Scale(right, std::cos(spin)), Scale(up, std::sin(spin)));
+                const auto chipUp = Add(Scale(up, std::cos(spin)), Scale(right, -std::sin(spin)));
+                const float size = (.17f + .085f * float(i % 6)) * scale;
+                const float opacity = RailMothership::Smooth(t, 0.0f, .045f) *
+                    (1.0f - RailMothership::Smooth(t / life, .57f, 1.0f)) *
+                    (.77f + .23f * std::abs(std::cos(spin * 1.7f)));
+                glowQuad(point, Scale(chipRight, size), Scale(chipUp, size * 1.95f), 128.0f,
+                    {1.92f, 4.58f, 7.35f, visibility * opacity});
+            }
+        }
         const auto drawFireShell=[&](Vector3 center,Vector3 axis,float radius,float heat,float opacity,float phase,
                 float surfaceScale=1.42f,float glintScale=1.0f,bool violet=false) {
             using namespace RailGroundBatteryCharge;
@@ -7088,6 +7263,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             }
             if(p.spriteBacked) orbTail(p.worldPosition,p.trailStart,p.motionDirection,p.coreRadius,1.0f,p.orbAnimationUvY,p.haloRadius);
         }
+        float activeClashes = 0.0f;
+        for (const auto& burst : enemyBulletFrame.lifecycleBursts) {
+            if (burst.spriteBacked && isOrdinaryClash(burst)) {
+                activeClashes += 1.0f - TwinShieldDestructionSmooth(burst.normalizedAge, .29f, .76f);
+            }
+        }
+        const float clashGain = 1.0f / std::sqrt(1.0f + .56f * (std::max)(0.0f, activeClashes - 1.0f));
         if(!railTitleScreenVisible_)for(const auto& burst:enemyBulletFrame.lifecycleBursts) {
             if(!burst.spriteBacked)continue;
             if(cartOwnsProjectileImpact && burst.kind==EnemyProjectileLifecycleVisualKind::PlayerImpact &&
@@ -7148,56 +7330,56 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 }
                 continue;
             }
-            if(burst.kind==EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept) {
-                const auto point=burst.worldPosition;
-                const float flash=1-TwinShieldDestructionSmooth(age,.018f,.22f);
-                if(flash>0)
-                    glowQuad(point,Scale(right,r*.90f),Scale(up,r*.79f),16,{5.5f,5.8f,6.0f,flash});
+            if (isOrdinaryClash(burst)) {
+                const auto point = burst.worldPosition;
+                const float depth = Dot(Subtract(eye, point), towardCamera);
+                if (depth <= 0.0f) continue;
+                const float pixel = 2.0f * depth / ((std::max)(.001f,
+                    std::abs(frameState_.projMatrix.m[1][1])) * (std::max)(1.0f, float(hudHeight)));
+                const float size = (std::clamp)(r * .78f, pixel * 7.0f, pixel * 11.5f);
+                const float seed = float(burst.projectileId % 29) * .43f;
+                const auto heading = burst.motionDirection;
+                const auto across = Subtract(heading, Scale(towardCamera, Dot(heading, towardCamera)));
+                const auto headOnAxis = Add(Scale(right, std::cos(seed)), Scale(up, std::sin(seed)));
+                const auto axis = Dot(across, across) > .025f ? NormalizeOr(across, right) : headOnAxis;
+                const auto fan = NormalizeOr(Cross(towardCamera, axis), up);
 
-                const float expansion=1-fade*fade;
-                const float radius=std::lerp(r*.62f,(std::min)(2.42f,r*2.8f),expansion);
-                const auto axis=burst.motionDirection;
-                const auto waveRight=NormalizeOr(Add(right,Scale(towardCamera,.37f*Dot(axis,right))),right);
-                const auto waveUp=NormalizeOr(Add(up,Scale(towardCamera,-.47f)),up);
-                const float waveFade=1-TwinShieldDestructionSmooth(age,.23f,1);
-                glowQuad(point,Scale(waveRight,radius),Scale(waveUp,radius*.82f),98,
-                    {1.06f,2.30f,3.55f,waveFade*.76f});
-
-                const auto normal=NormalizeOr(burst.impactNormal,towardCamera);
-                const auto shellCenter=Subtract(point,Scale(normal,r));
-                const auto shellRight=NormalizeOr(Cross(normal,up),right);
-                const auto shellUp=NormalizeOr(Cross(shellRight,normal),up);
-                const float shardFade=1-TwinShieldDestructionSmooth(age,.10f,.81f);
-                constexpr unsigned shardCount=5;
-                for(unsigned shard=0;shard<shardCount && shardFade>0;++shard) {
-                    const float angle=float(shard)*6.2831853f/shardCount+float(burst.projectileId%13)*.47f;
-                    const auto radial=Add(Scale(shellRight,std::cos(angle)),Scale(shellUp,std::sin(angle)));
-                    const auto shellNormal=NormalizeOr(Add(radial,Scale(normal,.76f)),normal);
-                    const auto velocity=Add(Scale(radial,.78f+.24f*std::cos(angle*3)),Scale(axis,.71f));
-                    const auto origin=Add(shellCenter,Scale(shellNormal,r*.91f));
-                    const auto center=Add(origin,Scale(velocity,r*expansion));
-                    const float roll=angle+.68f+age*2.4f;
-                    const auto edge=Add(Scale(right,std::cos(roll)),Scale(up,std::sin(roll)));
-                    const auto across=Add(Scale(right,-std::sin(roll)),Scale(up,std::cos(roll)));
-                    const float size=r*(.30f+.06f*std::sin(angle*4))*(1-.48f*age);
-                    glowQuad(center,Scale(edge,size),Scale(across,size*.65f),102,
-                        {3.46f,1.20f,.18f,shardFade});
+                const float flash = 1.0f - TwinShieldDestructionSmooth(age, .028f, .22f);
+                if (flash > 0.0f) {
+                    glowQuad(point, Scale(fan, size * .76f), Scale(axis, size * .47f), 16,
+                        {4.2f, 4.8f, 5.2f, flash * clashGain});
                 }
 
-                const auto fanSide=NormalizeOr(Cross(axis,Vector3{0,1,0}),right);
-                const auto fanUp=NormalizeOr(Cross(fanSide,axis),up);
-                constexpr unsigned sparkCount=7;
-                for(unsigned spark=0;spark<sparkCount;++spark) {
-                    const float angle=float(spark)*6.2831853f/sparkCount+float(burst.projectileId%13)*.47f;
-                    const auto radial=Add(Scale(fanSide,std::cos(angle)),Scale(fanUp,std::sin(angle)));
-                    const auto direction=NormalizeOr(Add(radial,Scale(axis,.92f+.33f*std::cos(angle*3))),axis);
-                    const float spread=std::sin(angle*4);
-                    const float travel=r*expansion*(1.05f+.73f*spread*spread);
-                    const auto head=Add(Add(point,Scale(direction,travel)),Scale(fanUp,-r*age*age*.24f));
-                    const float halfLength=r*(.07f+.31f*fade);
-                    const auto side=NormalizeOr(Cross(direction,Subtract(eye,head)),right);
-                    glowQuad(Subtract(head,Scale(direction,halfLength)),Scale(direction,halfLength),
-                        Scale(side,r*.093f),44,{1.04f,fade*.72f,0,fade*fade});
+                const float expansion = 1.0f - fade * fade;
+                const float radius = size * std::lerp(.80f, 2.70f, expansion);
+                const float wave = (1.0f - TwinShieldDestructionSmooth(age, .19f, .89f)) * clashGain;
+                const auto tilt = Add(Scale(axis, .77f), Scale(towardCamera, .39f));
+                const float clock = float(2 * (uint32_t(age * 31) + 32 * (burst.projectileId % 13)));
+                if (wave > 0.0f) {
+                    glowQuad(point, Scale(fan, radius), Scale(tilt, radius), 120,
+                        {1.25f, 2.75f, 3.65f, wave * .76f}, clock);
+                }
+
+                constexpr unsigned sparkPairs = 8;
+                for (unsigned pair = 0; pair < sparkPairs; ++pair) {
+                    for (float side : {-1.0f, 1.0f}) {
+                        const float variation = std::sin(seed + float(pair) * 8.93f + side * 1.86f);
+                        const float lifetime = .61f + .36f * (.5f + .5f * variation);
+                        const float sparkAge = age / lifetime;
+                        if (sparkAge >= 1.0f) continue;
+                        const float spread = std::lerp(-.94f, .94f, float(pair) / (sparkPairs - 1)) + .17f * variation;
+                        const auto direction = Add(Scale(fan, side * std::cos(spread)), Scale(axis, std::sin(spread)));
+                        const float remaining = 1.0f - sparkAge;
+                        const float travel = size * (.40f + (1.0f - remaining * remaining) * (3.05f + .90f * variation));
+                        const auto tip = Add(point, Scale(direction, travel));
+                        const float halfLength = size * (.14f + .63f * remaining) * (.83f + .26f * variation);
+                        const auto edge = NormalizeOr(Cross(direction, Subtract(eye, tip)), axis);
+                        const auto color = pair % 2 == 0 ? burst.primaryColor : burst.secondaryColor;
+                        const float opacity = std::sqrt(remaining) * clashGain * (.86f + .14f * variation);
+                        glowQuad(Subtract(tip, Scale(direction, halfLength)), Scale(direction, halfLength),
+                            Scale(edge, size * (.091f + .060f * remaining)), 122,
+                            RailEnemyEnergy::Alpha(color, opacity));
+                    }
                 }
                 continue;
             }
@@ -11089,6 +11271,24 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const float speedBeforeMovement=railShooterVehicleMovement_.State().speed;
     const RailVehicleMovementFrame& vehicleFrame =
         railShooterVehicleMovement_.Update(vehicleInput);
+    if (!coursePreviewOwnsRail && !titleEntryBlocked && railTravelDeltaTime > 0.0f &&
+        railShooterCourse_.terrainEditLayer.CeilingClosure(vehicleFrame.state.distance) > .7f) {
+        for (const auto& crystal : railShooterCourse_.terrainPlacements) {
+            if (crystal.meshId != RailCrystalCavern::CrystalMesh) continue;
+            const float trigger = crystal.distance + crystal.forwardOffset - kCrystalSurgeLead;
+            if (vehicleFrame.state.previousDistance >= trigger || vehicleFrame.state.distance < trigger) continue;
+            CourseVfxCueDesc surge;
+            surge.id = kCrystalSurgeCue;
+            surge.payload = crystal.id;
+            surge.effectName.clear();
+            surge.spawnDistance = crystal.distance;
+            surge.lifetime = kCrystalSurgeLifetime;
+            surge.worldPosition = RailLocalPoint(railPath_, crystal.distance, crystal.lateralOffset,
+                crystal.verticalOffset, crystal.forwardOffset);
+            surge.hasWorldPosition = true;
+            railShooterSpawnRuntime_.SpawnVfxCue(std::move(surge));
+        }
+    }
     const float travelPresentationStrength=railShooterSpeedDirector_.TravelPresentationStrength(
         vehicleFrame.state.speed,motionEnvelope.normalRequestedSpeed,rewardSpeedLimit);
     const float manualBoostStrength=escapeActive
@@ -11632,7 +11832,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if(railPostBossSequence_.EscapeActive() && gameplayDeltaTime>0) {
         const auto& escape=railPostBossSequence_.Escape();
         if(previousPursuitPhase!=pursuitPhase) {
-            (void)railShooterGameSession_.SetCourseLength(escape.Arc().Landing());
+            if (!AttachCrystalCavern(escape.Arc().Landing()))
+                (void)railShooterGameSession_.SetCourseLength(escape.Arc().Landing());
             if(findBridgeShooter() || railPostBossSequence_.VeilDefeated()) (void)audio_.PlaySpatial(railEscapeSounds_[3],.30f,0,1);
         }
         if(escape.Current()==RailBridgeEscape::Phase::Boost && escape.PhaseAge()==0)
@@ -15111,7 +15312,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
             railShooterCourse_.waveDefinitions.end(),[](const auto& wave) {
                 return wave.enabled && wave.editorGuid==RailPostBossSequence::MinibossWaveId;
             });
-        const bool bossApproach=postBossEnabled && bossWave!=railShooterCourse_.waveDefinitions.end() &&
+        const bool bossApproach=postBossEnabled && !railPostBossSequence_.Complete() &&
+            bossWave!=railShooterCourse_.waveDefinitions.end() &&
             railShooterDistance_>=bossWave->triggerRailDistance-RailPostBossSequence::MinibossApproachDistance;
         if(bossApproach && gameplayDeltaTime>0 && railShooterDistance_<bossWave->triggerRailDistance &&
             railShooterRetryCoordinator_.Checkpoint().checkpointId!=RailPostBossSequence::MinibossCheckpointId)
@@ -19725,9 +19927,10 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.railShadowAcceleration=&railShadowAcceleration_;
     graphContext.sunfallGroundHeight=railPath_.Evaluate(railShooterDistance_).position.y-1.0f;
     const auto& atmosphereTerrain=runtimeState_.terrain.settings;
+    const float ceilingClosure = railShooterCourse_.terrainEditLayer.CeilingClosure(railShooterDistance_);
     graphContext.sunfallOutdoorBlend=SunfallOutdoorBlend(railShooterDistance_,
         atmosphereTerrain.openCanyonStartDistance,atmosphereTerrain.openCanyonTransitionLength,
-        atmosphereTerrain.openCanyonStrength);
+        atmosphereTerrain.openCanyonStrength) * (1.0f - ceilingClosure);
     static const bool canyonGradeEnabled = ReadEnvironmentUInt("GE3_RAIL_CANYON_GRADE", 1) != 0;
     if (canyonGradeEnabled && graphContext.sunfallActive && !railGameOverScene_.Active() &&
         IsRailShortCourse(railShooterCoursePath_)) {
@@ -19747,7 +19950,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         RailMothership::Smooth(railShooterDistance_,1450,1590)*
         (1-.58f*RailMothership::Smooth(railShooterDistance_,5570,6080)) : 0;
     if(scene_.mappedCamera) scene_.mappedCamera->sunfallSky={graphContext.sunfallActive ? 1.0f : 0.0f,
-        graphContext.sunfallOutdoorBlend,(std::clamp)(runtimeState_.sunfall.skyFill,0.0f,2.0f),valleyLight};
+        graphContext.sunfallOutdoorBlend,(std::clamp)(runtimeState_.sunfall.skyFill,0.0f,2.0f),
+        valleyLight * (1.0f - ceilingClosure)};
     if (!railTitleScreenVisible_ && scene_.mappedCamera) {
         if(IsRailShooterSceneActive() && !railGameOverScene_.Active()) {
             using namespace RailCombatImpact;
@@ -20162,7 +20366,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             }
         }
         camera.caveRange = {atmosphereTerrain.openCanyonStartDistance,
-            atmosphereTerrain.openCanyonTransitionLength, atmosphereTerrain.openCanyonStrength, caveLighting ? 1.0f : 0.0f};
+            atmosphereTerrain.openCanyonTransitionLength,
+            atmosphereTerrain.openCanyonStrength * (1.0f - ceilingClosure), caveLighting ? 1.0f : 0.0f};
         if (caveLighting) {
             const auto sample = railPath_.Evaluate(railShooterDistance_);
             scene_.mappedCamera->caveRailOrigin = {sample.position.x, sample.position.y, sample.position.z, railShooterDistance_};
@@ -20170,6 +20375,30 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             scene_.mappedCamera->caveOpenings = caveOpeningLighting_.Update(railPath_, atmosphereTerrain,
                 railShooterDistance_, &railShooterCourse_.terrainEditLayer, &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer),
                 UsesCanyonPresentation(railShooterCoursePath_));
+            if (ceilingClosure > 0.0f) {
+                camera.railBounceControl = {0, ceilingClosure, ceilingClosure,
+                    railShooterGameSession_.State().attemptElapsedSeconds};
+                size_t patchCount = 0;
+                for (const auto& crystal : railShooterCourse_.terrainPlacements) {
+                    const float distance = std::abs(crystal.distance - railShooterDistance_);
+                    if (crystal.meshId != RailCrystalCavern::CrystalMesh || distance >= 150.0f) continue;
+                    const auto position = RailLocalPoint(railPath_, crystal.distance, crystal.lateralOffset,
+                        crystal.verticalOffset + crystal.scale.y * 0.30f, crystal.forwardOffset);
+                    const auto root = RailLocalPoint(railPath_, crystal.distance, crystal.lateralOffset,
+                        crystal.verticalOffset, crystal.forwardOffset);
+                    const float radius = 20.0f + crystal.scale.y * 1.24f;
+                    const float strength = (.52f + crystal.scale.y * .025f) *
+                        (1.0f - RailMothership::Smooth(distance, 96.0f, 150.0f));
+                    const auto* surge = FindCrystalSurge(railShooterSpawnRuntime_.VfxCues(), crystal);
+                    const float flash = surge ? CrystalSurgeFlash(surge->age) : 0.0f;
+                    const float burstAge = surge ? 1.0f + surge->age : 0.0f;
+                    camera.railBouncePatches[patchCount++] = {{position.x, position.y, position.z, radius},
+                        {root.x, root.y, root.z, 1}, {.34f * strength + 1.5f * flash,
+                            2.35f * strength + 3.8f * flash, 5.1f * strength + 6.8f * flash, burstAge}};
+                    if (patchCount == camera.railBouncePatches.size()) break;
+                }
+                camera.railBounceControl.x = static_cast<float>(patchCount);
+            }
         }
     }
     graphContext.sunfallExposure=sunfallExposure_.Update(frameState_.deltaTime,
@@ -20457,6 +20686,10 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     static unsigned frameExportWait=0;
     static bool frameExportDone=false;
     static const unsigned frameExportMinimum=(std::clamp)(ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_FRAMES",90),1u,1200u);
+    static const unsigned frameExportCount = (std::clamp)(ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_COUNT", 1), 1u, 240u);
+    static unsigned frameExportIndex = 0;
+    static float frameExportElapsed = 0;
+    if (frameExportIndex > 0 && !frameExportDone) frameExportElapsed += frameState_.deltaTime;
     static const bool waitForKillBoost=ReadEnvironmentUInt("GE3_KILL_BOOST_AUDIT",0)!=0;
     static const unsigned killBoostCaptureMs=ReadEnvironmentUInt("GE3_KILL_BOOST_CAPTURE_MS",200);
     static const unsigned speedFeelCaptureDistance=ReadEnvironmentUInt("GE3_SPEED_FEEL_AUDIT",0)!=0?
@@ -21129,17 +21362,25 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         const auto distanceName=std::to_wstring(static_cast<int>(needlesShots[needlesShot++]));
         frameExportPath=(base.parent_path()/(base.stem().wstring()+L"-"+distanceName+L".png")).wstring();
     }
-    if(openingCapture || airframeCapture || worldCapture || rockCapture || localCartReady || needlesCaptureReady || (!openingReview && !airframeCaptureMode && !worldReview && !rockReview && !localCartCapture && !frameExportPath.empty() && !frameExportDone && ++frameExportWait>=frameExportMinimum &&
+    const bool sequenceFrameReady = frameExportIndex == 0 || frameExportElapsed >= 1.0f / 24.0f;
+    if(openingCapture || airframeCapture || worldCapture || rockCapture || localCartReady || needlesCaptureReady || (!openingReview && !airframeCaptureMode && !worldReview && !rockReview && !localCartCapture && !frameExportPath.empty() && !frameExportDone && ++frameExportWait>=frameExportMinimum && sequenceFrameReady &&
         killBoostCaptureReady && shieldCaptureReady && postBossCaptureReady && (heavyCaptureReady || carrierFinishCapture) &&
         (carrierContinuityCapture?carrierCaptureReady:basicCaptureReady) && hazardCaptureReady &&
         railShooterDistance_>=float(speedFeelCaptureDistance) &&
         (carrierContinuityCapture || cartImpactCapture || energyCapture || primaryContactCapture || primaryFlightCapture || primaryPresentationCapture || lockStageCapture || lockContactCapture || scoutContactCapture || rearPanelReviewReady || crossfireReviewReady || rearBeamReviewReady || lightningReviewReady || rearHullReviewReady ||
-            terrainChunkManager_.RenderChunks().size()==terrainChunkManager_.Chunks().size()))) {
+            frameExportIndex > 0 || terrainChunkManager_.RenderChunks().size()==terrainChunkManager_.Chunks().size()))) {
         frameExportDone=!needlesCaptureReady && !captureDefeatedWreck && (!structureReview || structureShot==structureFrameCount) &&
             (!carrierContinuityCapture || carrierCaptureIndex++==lastCarrierCapture);
         if(captureDefeatedDamage)defeatedDamageCaptured=true;
         if(captureDefeatedCharge)defeatedChargeCaptured=true;
         if(structureReview && structureShot>=0)structureShots|=1u<<structureShot;
+        if (frameExportCount > 1 && frameExportDone && frameExportPath == frameExportBasePath) {
+            const auto base = std::filesystem::path(frameExportBasePath);
+            frameExportPath = (base.parent_path() /
+                (base.stem().wstring() + L"-" + std::to_wstring(frameExportIndex++) + L".png")).wstring();
+            frameExportElapsed = 0;
+            frameExportDone = frameExportIndex >= frameExportCount;
+        }
         DirectX::ScratchImage image;
         HRESULT result=E_FAIL;
         if(frameCoordinator_.FlushGpu())
@@ -21159,6 +21400,10 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         const auto& camera=railShooterCameraDirector_.LastFrame();
         state<<"# distance="<<railShooterDistance_<<" eye="<<camera.position.x<<','<<camera.position.y<<','<<camera.position.z
              <<" target="<<camera.target.x<<','<<camera.target.y<<','<<camera.target.z<<" fov="<<camera.fovY<<"\n";
+        for (const auto& cue : railShooterSpawnRuntime_.VfxCues()) {
+            if (cue.desc.id == kCrystalSurgeCue)
+                state << "# crystal_surge=" << cue.desc.payload << " age=" << cue.age << '\n';
+        }
         if(carrierContinuityCapture) {
             const auto& carrier=railMothershipBattle_.Current();
             const auto delta=Subtract(carrier.center,previousCarrierCenter);

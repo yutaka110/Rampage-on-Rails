@@ -164,6 +164,12 @@ float TerrainVolumeField::SubtractiveCarveMask(float distance, float angle) cons
     return (std::clamp)(mask * placementBias * settings_.sdfCarveStrength, 0.0f, 1.2f);
 }
 
+float TerrainVolumeField::CeilingClosure(float distance) const {
+    const float authored = edits_ ? edits_->CeilingClosure(distance) : 0.0f;
+    const float preview = preview_ ? preview_->CeilingClosure(distance) : 0.0f;
+    return (std::max)(authored, preview);
+}
+
 float TerrainVolumeField::OpenCanyonBlend(float distance) const {
     const float strength = (std::clamp)(settings_.openCanyonStrength, 0.0f, 1.0f);
     if (strength <= 0.0f) {
@@ -175,11 +181,12 @@ float TerrainVolumeField::OpenCanyonBlend(float distance) const {
         settings_.openCanyonStartDistance,
         settings_.openCanyonStartDistance + transitionLength,
         distance);
-    return blend * strength;
+    return blend * strength * (1.0f - CeilingClosure(distance));
 }
 
 float TerrainVolumeField::OpeningMask(float distance, float angle) const {
-    const float strength = (std::clamp)(settings_.openingSilhouetteStrength, 0.0f, 1.5f);
+    const float strength = (std::clamp)(settings_.openingSilhouetteStrength, 0.0f, 1.5f) *
+        (1.0f - CeilingClosure(distance));
     const float openCanyonBlend = OpenCanyonBlend(distance);
     if (strength <= 0.0f && openCanyonBlend <= 0.0f) {
         return 0.0f;

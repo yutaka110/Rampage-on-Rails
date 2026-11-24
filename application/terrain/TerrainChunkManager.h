@@ -241,6 +241,7 @@ class TerrainChunkManager {
 public:
     ~TerrainChunkManager();
     void SyncViewProjection(const Matrix4x4& viewProjection);
+    void InvalidateRailFrom(float distance);
 
     void Update(
         ID3D12Device* device,

@@ -4449,6 +4449,21 @@ TerrainChunkManager::~TerrainChunkManager() {
     }
 }
 
+void TerrainChunkManager::InvalidateRailFrom(float distance) {
+    for (auto& job : pendingBuildJobs_) {
+        if (job.endDistance > distance) job.stopSource.request_stop();
+    }
+    std::erase_if(chunks_, [distance](const auto& chunk) { return chunk.endDistance > distance; });
+    std::vector<TerrainRenderChunk> retired;
+    for (auto& chunk : renderChunks_) {
+        if (chunk.endDistance > distance) retired.push_back(std::move(chunk));
+    }
+    std::erase_if(renderChunks_, [distance](const auto& chunk) { return chunk.endDistance > distance; });
+    RetireRenderChunks(std::move(retired));
+    groundSupportCache_.Invalidate();
+    cachedLastChunkIndex_ = -1;
+}
+
 void TerrainChunkManager::Update(
     ID3D12Device* device,
     ge3::core::DescriptorHeap* srvHeap,

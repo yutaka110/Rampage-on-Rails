@@ -16,6 +16,7 @@ public:
     static constexpr float ImpactSeconds=FireSeconds+.14f;
     static constexpr float LandingSeconds=1.2f;
     static constexpr float LaunchSpeed=78.0f;
+    static constexpr float DepartureRunout=160.0f;
     void Begin(float distance,Vector3 source,float bridgeOrigin=0,float entrySpeed=36) {
         *this={};phase_=Phase::Warning;anchor_=distance;source_=source;
         const float stoppingRoom=(std::max)(90.0f,entrySpeed*entrySpeed/84.0f+50);
