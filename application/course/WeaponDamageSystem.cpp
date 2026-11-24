@@ -1,4 +1,5 @@
 #include "RailSceneryImpact.h"
+#include "RailCrystalCavern.h"
 #include "RailSideRock.h"
 #include "RailRearPursuitRules.h"
 #include "WeaponDamageSystem.h"
@@ -249,7 +250,8 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
             result.rejectReason = DamageRejectReason::TargetNotFound;
             return result;
         }
-        if (!RailSceneryImpact::IsStone(course->terrainPlacements[request.sourceIndex].meshId) &&
+        if (course->terrainPlacements[request.sourceIndex].meshId != RailCrystalCavern::CrystalMesh &&
+            !RailSceneryImpact::IsStone(course->terrainPlacements[request.sourceIndex].meshId) &&
             (course->terrainPlacements[request.sourceIndex].layer !=
                 CourseTerrainLayer::GameplayCollision ||
             course->terrainPlacements[request.sourceIndex].collisionMode ==

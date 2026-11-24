@@ -18,9 +18,10 @@ inline constexpr uint32_t CartOwner=0;
 inline constexpr float ArcLifetime=.18f;
 inline constexpr float BlueArcDelay=.018f;
 enum class Arc { None, Blue, Green };
-enum class Kind { Hull, Plate, Cart, Heavy, Kill, GatlingCart, VeilLightningCart, VeilBeamCart, WingCart, BatteryCart, Sand, Rock };
-inline bool WorldSurface(Kind kind) {return kind==Kind::Sand || kind==Kind::Rock;}
+enum class Kind { Hull, Plate, Cart, Heavy, Kill, GatlingCart, VeilLightningCart, VeilBeamCart, WingCart, BatteryCart, Sand, Rock, Crystal };
+inline bool WorldSurface(Kind kind) {return kind==Kind::Sand || kind==Kind::Rock || kind==Kind::Crystal;}
 inline constexpr float WorldLifetime=2.8f;
+inline constexpr float CrystalLifetime=.68f;
 inline Kind TerrainSurface(Vector3 normal) {return normal.y>=.72f?Kind::Sand:Kind::Rock;}
 
 inline bool LocalCart(Kind kind) {return kind==Kind::Cart || kind==Kind::BatteryCart;}
@@ -56,6 +57,13 @@ struct Mark {
     bool surfaceProjected=false;
 };
 
+inline bool SameWorldPatch(const Mark& older, const Mark& newer) {
+    const Vector3 d{older.origin.x-newer.origin.x, older.origin.y-newer.origin.y, older.origin.z-newer.origin.z};
+    const float facing = older.normal.x*newer.normal.x + older.normal.y*newer.normal.y + older.normal.z*newer.normal.z;
+    return older.owner==newer.owner && older.kind==newer.kind && facing>.94f &&
+        d.x*d.x+d.y*d.y+d.z*d.z<newer.radius*newer.radius*.30f;
+}
+
 inline float CartDischargeDuration(const Mark& mark) {
     if (mark.kind==Kind::Cart) return RailLocalCartImpact::EnemyDuration;
     if (mark.kind==Kind::BatteryCart) return RailLocalCartImpact::BatteryDuration;
@@ -90,6 +98,7 @@ public:
             mark.age+=bossCart && cartPresentationDt>=0.0f?cartPresentationDt:dt;
         }
         std::erase_if(marks_,[](const auto& mark){
+            if (mark.kind==Kind::Crystal) return mark.age>=CrystalLifetime;
             return mark.age>=(WorldSurface(mark.kind)?WorldLifetime:TransientCart(mark.kind)?CartDischargeDuration(mark):3.4f);
         });
     }
@@ -111,11 +120,8 @@ public:
         for(auto& old:marks_) {
             if(!WorldSurface(old.kind))continue;
             if(old.seed==mark.seed)return false;
-            const auto d=Vector3{old.origin.x-mark.origin.x,old.origin.y-mark.origin.y,old.origin.z-mark.origin.z};
-            const float facing=old.normal.x*mark.normal.x+old.normal.y*mark.normal.y+old.normal.z*mark.normal.z;
-            // Refresh one patch under sustained fire, rather than stacking emissive layers.
-            if(old.owner==mark.owner && old.kind==mark.kind && facing>.94f &&
-                d.x*d.x+d.y*d.y+d.z*d.z<mark.radius*mark.radius*.30f) {
+            // Crystal bursts keep their own ejected particles during sustained fire.
+            if(mark.kind!=Kind::Crystal && SameWorldPatch(old,mark)) {
                 old=std::move(mark);return true;
             }
         }

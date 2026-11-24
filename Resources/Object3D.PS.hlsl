@@ -485,7 +485,10 @@ static float3 CrystalLighting(float3 worldPosition, float3 N, float3 V, float he
     float secondary = pow(saturate(dot(reflected, normalize(float3(.82f, .24f, -.53f)))), 11.0f);
     float3 surface = float3(.27f, .71f, 1.58f) * fresnel * .78f +
         float3(.73f, .98f, 1.30f) * highlight * 1.05f + float3(.06f, .21f, .50f) * secondary * .47f;
-    return inside * (1.0f - fresnel * .57f) + surface;
+    float3 impactDirection;
+    float3 strike = CombatImpactRadiance(worldPosition, impactDirection) *
+        (.11f + .35f * saturate(dot(N, impactDirection)));
+    return inside * (1.0f - fresnel * .57f) + surface + strike;
 }
 
 PixelShaderOutput main(VertexShaderOutput input)

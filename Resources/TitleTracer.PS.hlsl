@@ -42,6 +42,37 @@ float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
 }
 
 float4 main(PixelInput input) : SV_TARGET0 {
+    if (input.texcoord.x >= 136.0f && input.texcoord.x <= 137.0f) {
+        const float along = input.texcoord.x - 136.0f;
+        const float across = abs(input.texcoord.y - .5f) * 2.0f;
+        const float profile = across / lerp(.37f, 1.0f, along);
+        const float core = exp2(-profile * profile * 12.0f);
+        const float halo = exp2(-profile * profile * 3.5f) * .31f;
+        const float ends = smoothstep(0.0f, .25f, along) * (1.0f - smoothstep(.85f, 1.0f, along));
+        const float head = lerp(.16f, .91f, smoothstep(.24f, .90f, along));
+        const float edge = 1.0f - smoothstep(.69f, 1.0f, across);
+        const float3 color = lerp(input.color.rgb, float3(4.7f, 6.1f, 8.65f), core * head);
+        return float4(color, (core * head + halo) * ends * edge * input.color.a);
+    }
+    if (input.texcoord.x >= 134.0f && input.texcoord.x <= 135.0f) {
+        float2 p;
+        float phase, seed;
+        ImpactCoordinates(input.texcoord, 134.0f, p, phase, seed);
+        float radius = length(p);
+        float bearing = atan2(p.y, p.x + .0001f) + seed;
+        float grain = ImpactNoise(p * 8.0f + seed);
+        float warp = grain * .46f + radius * 1.15f;
+        float fracture = abs(sin(bearing * 3.5f + warp));
+        float lineWidth = max(.040f, min(fwidth(fracture), .23f));
+        float arms = (1.0f - smoothstep(.035f, .055f + lineWidth, fracture)) *
+            (1.0f - smoothstep(.24f, .84f, radius + grain * .12f));
+        float front = abs(radius + (grain - .5f) * .145f - lerp(.14f, .83f, phase));
+        float crest = (1.0f - smoothstep(.014f, .082f, front)) * smoothstep(.34f, .76f, grain);
+        float core = exp2(-radius * radius * 24.0f) * .63f;
+        float edge = 1.0f - smoothstep(.79f, .98f, radius);
+        return float4(lerp(input.color.rgb, float3(3.7f, 5.9f, 8.2f), saturate(core + .49f * arms)),
+            (core + arms * .58f + crest * .71f) * edge * input.color.a);
+    }
     if (input.texcoord.x >= 132.0f && input.texcoord.x <= 133.0f) {
         float2 p;
         float phase, seed;

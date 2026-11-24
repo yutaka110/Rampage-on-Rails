@@ -5561,7 +5561,10 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         (crossfireWarning || crossfire.AimVolleyPreparing() ||
             (crossfire.phase==CrossfirePhase::Volley && crossfire.age<.32f));
     const auto impactMarks=railCombatImpactMarks_.Items();
-    const bool impactSpall=std::any_of(impactMarks.begin(),impactMarks.end(),[](const auto& mark){return mark.age<(RailCombatImpact::WorldSurface(mark.kind)?.38f:.33f);});
+    const bool impactSpall=std::any_of(impactMarks.begin(),impactMarks.end(),[](const auto& mark) {
+        using namespace RailCombatImpact;
+        return mark.kind==Kind::Crystal || mark.age<(WorldSurface(mark.kind)?.38f:.33f);
+    });
     const bool showPursuerSmoke=!railTitleScreenVisible_ && !railGameOverScene_.Active() && crossfireCombat &&
         (railPostBossSequence_.HullSmoke(0).Stage()>0 || railPostBossSequence_.HullSmoke(1).Stage()>0);
     const CourseEnemyActor* fangExhaust=nullptr;
@@ -5852,7 +5855,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             }
         }
         if(!railTitleScreenVisible_)for(const auto& mark:impactMarks) {
-            if(!RailCombatImpact::WorldSurface(mark.kind) || mark.age>.38f)continue;
+            if(!RailCombatImpact::WorldSurface(mark.kind) || mark.kind==RailCombatImpact::Kind::Crystal || mark.age>.38f)continue;
             const bool sand=mark.kind==RailCombatImpact::Kind::Sand;
             for(int puff=0;puff<(sand?3:2);++puff) {
                 const float t=mark.age-.012f*puff;
@@ -6275,6 +6278,74 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
             dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
         };
+        for (size_t index = 0; index < impactMarks.size(); ++index) {
+            const auto& mark = impactMarks[index];
+            if (mark.kind != RailCombatImpact::Kind::Crystal) continue;
+            const float age = mark.age;
+            const float seed = float(mark.seed % 37) * 2.39996f;
+            const auto normal = mark.normal;
+            const auto tangent = NormalizeOr(Cross(up, normal), right);
+            const auto bitangent = NormalizeOr(Cross(normal, tangent), up);
+            const auto origin = Add(mark.origin, Scale(normal, .065f));
+            const auto toEye = Subtract(eye, origin);
+            const float pixel = 2.0f * std::sqrt(Dot(toEye, toEye)) /
+                ((std::max)(.001f, std::abs(frameState_.projMatrix.m[1][1])) * float(hudHeight));
+            const float unit = std::clamp(pixel * 7.1f, .57f, 1.22f) * mark.radius;
+            const float flash = 1.0f - RailMothership::Smooth(age, .020f, .107f);
+            const float charge = 1.0f - RailMothership::Smooth(age, .092f, .32f);
+            const auto newerMarks = impactMarks.subspan(index + 1);
+            const bool currentFlare = charge > 0.0f && std::none_of(newerMarks.begin(), newerMarks.end(),
+                [&](const auto& newer) { return RailCombatImpact::SameWorldPatch(mark, newer); });
+            if (currentFlare && flash > 0.0f) {
+                glowQuad(origin, Scale(right, unit * 1.30f), Scale(up, unit), 130.0f,
+                    {1.8f, 4.3f, 8.2f, flash * .94f});
+            }
+            if (currentFlare) {
+                const float span = unit * std::lerp(1.15f, 3.05f, RailMothership::Smooth(age, 0.0f, .18f));
+                const unsigned phase = static_cast<unsigned>(std::clamp(age / .32f, 0.0f, 1.0f) * 31.0f);
+                glowQuad(origin, Scale(tangent, span), Scale(bitangent, span), 134.0f,
+                    {.78f, 2.35f, 6.9f, charge}, float(2u * (phase + 32u * unsigned(mark.seed % 11))));
+            }
+            const auto reflected = Subtract(mark.incoming, Scale(normal, 2.0f * Dot(mark.incoming, normal)));
+            for (unsigned i = 0; i < 15; ++i) {
+                const float t = age + .017f;
+                const float life = .14f + .023f * float(i % 6);
+                if (t >= life) continue;
+                const float angle = seed + float(i) * 2.39996f;
+                const auto fan = Add(Scale(tangent, std::cos(angle)), Scale(bitangent, std::sin(angle)));
+                const auto launch = NormalizeOr(Add(Scale(normal, .57f),
+                    Add(Scale(reflected, .38f), Scale(fan, 1.18f + .25f * float(i % 4)))), normal);
+                const auto velocity = Scale(launch, (35.0f + 6.5f * float((i * 5u) % 7)) * unit);
+                const auto head = Add(origin, Scale(velocity, t));
+                const float trailTime = (std::min)(t, .041f + .009f * float(i % 4));
+                const auto halfTrail = Scale(velocity, trailTime * .5f);
+                const auto center = Subtract(head, halfTrail);
+                const auto width = NormalizeOr(Cross(halfTrail, Subtract(eye, center)), up);
+                const float radius = std::clamp(pixel * (1.10f + .28f * float(i % 3)), .042f, .29f);
+                const float fade = 1.0f - RailMothership::Smooth(t, life * .34f, life);
+                glowQuad(center, halfTrail, Scale(width, radius), 136.0f,
+                    {1.28f, 3.25f, 7.25f, fade * .94f});
+            }
+            for (unsigned i = 0; i < 30; ++i) {
+                const float t = age - float(i % 5) * .010f;
+                const float life = .37f + float(i % 6) * .047f;
+                if (t < 0.0f || t >= life) continue;
+                const float angle = seed + .49f + float(i) * 2.39996f;
+                const auto fan = Add(Scale(tangent, std::cos(angle)), Scale(bitangent, std::sin(angle)));
+                const auto launch = NormalizeOr(Add(Scale(normal, .62f),
+                    Add(Scale(reflected, .48f), Scale(fan, .82f + .27f * float(i % 5)))), normal);
+                const auto velocity = Scale(launch, (17.0f + 4.2f * float((i * 5u) % 8)) * unit);
+                const auto position = Add(origin, Add(Scale(velocity, t), {0.0f, -9.8f * t * t, 0.0f}));
+                const float spin = angle + (4.3f + float(i % 7)) * t;
+                const auto across = Add(Scale(right, std::cos(spin)), Scale(up, std::sin(spin)));
+                const auto along = Add(Scale(up, std::cos(spin)), Scale(right, -std::sin(spin)));
+                const float size = std::clamp(pixel * (1.40f + .40f * float(i % 6)), .070f, .39f);
+                const float fade = 1.0f - RailMothership::Smooth(t, life * .44f, life);
+                const float twinkle = .64f + .36f * std::abs(std::sin(spin * 1.8f));
+                glowQuad(position, Scale(across, size), Scale(along, size * 1.7f), 128.0f,
+                    {1.25f, 3.50f, 7.9f, fade * twinkle});
+            }
+        }
         const float crystalTime = railShooterGameSession_.State().attemptElapsedSeconds;
         for (size_t slot = 0; slot < crystalEffectCount; ++slot) {
             const auto& crystal = *crystalEffects[slot];
@@ -13124,6 +13195,30 @@ void AppRunLoop::UpdateRailShooterFrame() {
         if(header && reviewAge<2.0f)log<<railShooterDistance_<<','<<reviewAge<<','<<p.screen.x<<','<<p.screen.y
             <<','<<p.onscreen<<','<<p.inDepth<<','<<basicAuditPrimary<<std::endl;
     }
+    const bool crystalImpactReview = ReadEnvironmentUInt("GE3_CRYSTAL_IMPACT_REVIEW", 0) != 0 &&
+        GetEnvironmentVariableW(L"GE3_COURSE_FRAME_EXPORT", nullptr, 0) > 0;
+    if (crystalImpactReview && !titleEntryBlocked && gameplayDeltaTime > 0.0f) {
+        for (const auto& crystal : railShooterCourse_.terrainPlacements) {
+            if (crystal.meshId != RailCrystalCavern::CrystalMesh) continue;
+            const float gap = crystal.distance - railShooterDistance_;
+            if (gap < 61.0f || gap > 73.0f) continue;
+            const auto meshes = scene_.CourseMeshes().Items();
+            const auto item = std::find_if(meshes.begin(), meshes.end(), [&](const auto& mesh) {
+                return mesh.name == crystal.id && mesh.visible && mesh.transformData;
+            });
+            if (item == meshes.end()) continue;
+            const auto point = RailSceneryImpact::TransformPoint({.18f, .64f, .07f}, item->transformData->World, 1);
+            const auto aim = ProjectRailOverlayPoint(point, gameplayViewProjectionMatrix, metrics.width, metrics.height);
+            if (!aim.onscreen || !aim.inDepth) continue;
+            lockOnInput.hasLockHeldOverride = true;
+            lockOnInput.lockHeldOverride = false;
+            lockOnInput.hasCursorPosition = true;
+            lockOnInput.cursorPosition = aim.screen;
+            lockOnInput.gamepadConnected = false;
+            basicAuditAiming = basicAuditPrimary = true;
+            break;
+        }
+    }
     const bool barricadeShotReview=batteryApproachReview || (carrierFinishAudit && railShooterDistance_<RailMothership::BattleStart) ||
         ((routeHazardAudit==1 || routeHazardAudit==9 || routeHazardAudit==24) &&
          railShooterDistance_>=float(ReadEnvironmentUInt("GE3_BARRICADE_REVIEW_FIRE_DISTANCE",2254)));
@@ -13558,13 +13653,15 @@ void AppRunLoop::UpdateRailShooterFrame() {
         collisionInput.bonusDamageMultiplier=1.5f;
     }
     const auto collisionStart = RailPerfClock::now();
-    const auto queryScenery=[this](Vector3 origin,Vector3 direction,float limit) {
+    const auto queryScenery=[this](Vector3 origin,Vector3 direction,float limit,bool crystalOnly=false) {
         RailAimHit hit;float nearest=limit;std::string_view hitMesh;Vector3 hitLocal{};
         for(const auto& item:scene_.CourseMeshes().Items()) {
             if(!item.visible || !item.transformData)continue;
+            const bool crystal=item.meshId==RailCrystalCavern::CrystalMesh;
+            if(crystalOnly && !crystal)continue;
             const bool airframe=item.kind==CourseMeshRenderKind::Enemy &&
                 (item.meshId=="combat_sniper_hull" || item.meshId=="combat_interceptor_hull");
-            if(!airframe && !RailSceneryImpact::IsStone(item.meshId))continue;
+            if(!airframe && !crystal && !RailSceneryImpact::IsStone(item.meshId))continue;
             const auto& placements=railShooterCourse_.terrainPlacements;
             const auto placement=std::find_if(placements.begin(),placements.end(),[&](const auto& p){return p.id==item.name;});
             if(airframe) {
@@ -14588,14 +14685,20 @@ void AppRunLoop::UpdateRailShooterFrame() {
                         }
                     }
                 }
-                const auto kind=stone || feedback.hitKind==RailAimHitKind::TerrainPlacement?Kind::Rock:TerrainSurface(normal);
+                const auto incoming=NormalizeOr(feedback.incomingDirection,Scale(normal,-1));
+                const bool authored=feedback.hitKind==RailAimHitKind::TerrainPlacement;
+                // Feedback preserves the contact and incident ray. A short probe identifies
+                // a crystal at that exact surface without retargeting the shot.
+                const auto crystal=authored ? queryScenery(Subtract(point,Scale(incoming,.18f)),incoming,.20f,true) : RailAimHit{};
+                const bool crystalContact=crystal.hit && std::abs(crystal.distance-.18f)<.012f;
+                const auto kind=crystalContact?Kind::Crystal:stone || authored?Kind::Rock:TerrainSurface(normal);
                 Mark mark{terrain?UINT32_MAX:feedback.targetActorId,feedback.shotId,{},{},point,
-                    normal,{.08f,.68f,2.65f},kind,0,kind==Kind::Sand?1.70f:1.40f};
-                mark.incoming=NormalizeOr(feedback.incomingDirection,Scale(normal,-1));
+                    normal,{.08f,.68f,2.65f},kind,0,crystalContact?1.02f:kind==Kind::Sand?1.70f:1.40f};
+                mark.incoming=incoming;
                 if(railCombatImpactMarks_.AddWorld(std::move(mark)) && ReadEnvironmentUInt("GE3_WORLD_IMPACT_AUDIT",0)) {
                     static std::ofstream log("logs/world_impact_contacts.csv");
                     static const bool header=bool(log<<"shot,distance,kind,owner,x,y,z,nx,ny,nz,travel,age\n");
-                    if(header)log<<feedback.shotId<<','<<railShooterDistance_<<','<<(kind==Kind::Sand?"sand":"rock")
+                    if(header)log<<feedback.shotId<<','<<railShooterDistance_<<','<<(crystalContact?"crystal":kind==Kind::Sand?"sand":"rock")
                         <<','<<(terrain?UINT32_MAX:feedback.targetActorId)<<','<<point.x<<','<<point.y
                         <<','<<point.z<<','<<normal.x<<','<<normal.y<<','<<normal.z<<','<<arrival.duration<<','<<arrival.age<<std::endl;
                 }
@@ -19959,6 +20062,14 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             size_t slots=0;
             const auto& cart=scene_.RailVehicleObject();
             const auto meshes=scene_.CourseMeshes().Items();
+            for (const auto& mark : railCombatImpactMarks_.Items()) {
+                if (mark.kind != Kind::Crystal || mark.age >= .18f) continue;
+                const float strength = 3.65f * (1.0f - RailMothership::Smooth(mark.age, .018f, .18f));
+                if (strength <= camera.combatImpactLight.w) continue;
+                const auto point = Add(mark.origin, Scale(mark.normal, .45f));
+                camera.combatImpactLight = {point.x, point.y, point.z, strength};
+                camera.combatImpactTint = {.26f, 1.45f, 4.7f, 5.0f};
+            }
             std::array<float,2> shellLightDistances{185.0f*185.0f,185.0f*185.0f};
             const auto lightShell=[&](Vector3 position,float strength) {
                 const auto delta=Subtract(position,frameState_.cameraWorldPosition);
@@ -20261,7 +20372,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             // the remaining budget and never replaces a cart/enemy hit response.
             for(auto it=railCombatImpactMarks_.Items().rbegin();it!=railCombatImpactMarks_.Items().rend() && slots<DrawCapacity;++it) {
                 const auto& mark=*it;
-                if(!WorldSurface(mark.kind))continue;
+                if(!WorldSurface(mark.kind) || mark.kind==Kind::Crystal)continue;
                 if(mark.owner!=UINT32_MAX && std::none_of(railShooterSpawnRuntime_.Obstacles().begin(),
                     railShooterSpawnRuntime_.Obstacles().end(),[&](const auto& o){return o.actorId==mark.owner && o.desc.hitPoints>0;}))continue;
                 const auto p=ProjectRailOverlayPoint(mark.origin,frameState_.viewProjectionMatrix,windowWidth_,windowHeight_);
@@ -21403,6 +21514,10 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         for (const auto& cue : railShooterSpawnRuntime_.VfxCues()) {
             if (cue.desc.id == kCrystalSurgeCue)
                 state << "# crystal_surge=" << cue.desc.payload << " age=" << cue.age << '\n';
+        }
+        for (const auto& mark : railCombatImpactMarks_.Items()) {
+            if (mark.kind == RailCombatImpact::Kind::Crystal)
+                state << "# crystal_bullet_impact=" << mark.seed << " age=" << mark.age << '\n';
         }
         if(carrierContinuityCapture) {
             const auto& carrier=railMothershipBattle_.Current();
