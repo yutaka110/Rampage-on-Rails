@@ -43,6 +43,10 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input) {
 }
 
 void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat) {
+    Update(input, rearPursuitCombat, false);
+}
+
+void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat, bool compactReady) {
     RailShooterHudRenderFrame next{};
     next.viewportWidth = input.viewportWidth;
     next.viewportHeight = input.viewportHeight;
@@ -761,23 +765,26 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
     // Keep the start cue and its small progress bar above the aiming area.
     const float readyAlpha = (std::clamp)(input.readyOpacity,0.0f,1.0f)*opacity;
     const float goAlpha = (std::clamp)(input.goOpacity,0.0f,1.0f)*opacity;
-    const float cueY = height*0.25f;
+    const float cueY = height * (compactReady ? .38f : .25f);
+    const float cueScale = (compactReady ? 2.0f : 4.8f) * scale;
     const auto startCue = [&](const char* word, float alpha, Vector4 color) {
         if(alpha<=0.0f) return;
         const size_t begin=next.commands.size();
         // One close, opaque shadow separates the face from both pale sky and
         // dark rock without a glow or a heavy extruded edge.
-        text(word,width*0.5f+2.0f*scale,cueY+3.0f*scale,4.8f*scale,
+        text(word,width*0.5f+2.0f*scale,cueY+3.0f*scale,cueScale,
             {0.025f,0.020f,0.015f,alpha*0.95f},center);
         color.w=alpha;
-        text(word,width*0.5f,cueY,4.8f*scale,color,center);
-        for(size_t i=begin;i<next.commands.size();++i)
-            next.commands[i].textStyle=RailShooterHudTextStyle::StartCue;
+        text(word,width*0.5f,cueY,cueScale,color,center);
+        if (!compactReady) {
+            for(size_t i=begin;i<next.commands.size();++i)
+                next.commands[i].textStyle=RailShooterHudTextStyle::StartCue;
+        }
     };
-    startCue("READY",readyAlpha,{1.0f,0.98f,0.94f,1.0f});
-    startCue("GO",goAlpha,{0.79f,1.0f,0.91f,1.0f});
+    startCue("READY",readyAlpha,compactReady ? Vector4{.82f,.94f,1.0f,1.0f} : Vector4{1.0f,.98f,.94f,1.0f});
+    if (!compactReady) startCue("GO",goAlpha,{0.79f,1.0f,0.91f,1.0f});
     const float cueAlpha=(std::max)(readyAlpha,goAlpha);
-    if(cueAlpha>0.0f) {
+    if(!compactReady && cueAlpha>0.0f) {
         // Use the shared cinematic clock: focus pause freezes the fill, and
         // GO completes it only after the camera and drone are in position.
         const float progress=goAlpha>0.0f ? 1.0f : (std::clamp)(input.readyProgress,0.0f,1.0f);

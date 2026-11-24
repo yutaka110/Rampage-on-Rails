@@ -575,11 +575,32 @@ std::string ParseRailCourseArguments(int count,const wchar_t* const* args) {
         if (!args[i]) continue;
         const std::wstring_view argument = args[i];
         if (argument == L"--full-course") return "Resources/courses/CanyonAssaultRoute01.course";
-        if (argument == L"--crystal-cavern") return RailCrystalCavern::CoursePath;
+        if (argument == L"--crystal-cavern" || argument == L"--crystal-cavern-demo") return RailCrystalCavern::CoursePath;
     }
     return RailShortCoursePath;
 }
+bool IsCrystalCavernDemoMode() {
+    static const bool enabled = [] {
+        int count = 0;
+        auto* args = CommandLineToArgvW(GetCommandLineW(), &count);
+#if defined(GE3_CRYSTAL_CAVERN_DEMO_DEFAULT)
+        bool demo = true;
+#else
+        bool demo = false;
+#endif
+        for (int i = 1; args && i < count; ++i) {
+            const std::wstring_view arg = args[i];
+            if (arg == L"--crystal-cavern-demo") { demo = true; break; }
+            if (arg == L"--crystal-cavern" || arg == L"--full-course" ||
+                arg == L"--combat-loop-10s" || arg == L"--combat-loop-expansion") demo = false;
+        }
+        if (args) LocalFree(args);
+        return demo;
+    }();
+    return enabled;
+}
 std::string ResolveRailCoursePathFromCommandLine() {
+    if (IsCrystalCavernDemoMode()) return RailCrystalCavern::CoursePath;
     int count=0; auto* args=CommandLineToArgvW(GetCommandLineW(),&count);
     auto path=ParseRailCourseArguments(count,args);
     if(args) LocalFree(args);

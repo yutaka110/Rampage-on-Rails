@@ -1807,17 +1807,18 @@ AppRunLoop::AppRunLoop(
         sceneStateManager_.Initialize(std::make_unique<VfxPreviewSceneState>(), *this);
         OutputDebugStringA("[AppRunLoop] Startup scene: VfxPreview (--vfx-preview).\n");
     } else {
+        const bool crystalDemo = IsCrystalCavernDemoMode();
         railDefenseUiProofVariant_ =
             ResolveCombatLoopDefenseUiProofVariantFromCommandLine();
         SetWindowTextW(hwnd_, L"\u30ec\u30fc\u30eb\u3067\u3042\u3070\u30ec\u30fc\u30eb");
-        railDefenseUiProofEnabled_ = railDefenseUiProofVariant_ !=
+        railDefenseUiProofEnabled_ = !crystalDemo && railDefenseUiProofVariant_ !=
             CombatLoopDefenseUiProofVariant::Disabled;
         railShooterCoursePath_=ResolveRailCoursePathFromCommandLine();
         const bool combatLoopExpansionEnabled =
             ResolveCombatLoopExpansionModeFromCommandLine();
-        if (combatLoopExpansionEnabled ||
+        if (!crystalDemo && (combatLoopExpansionEnabled ||
             ResolveCombatLoop10SecondModeFromCommandLine() ||
-            railDefenseUiProofEnabled_) {
+            railDefenseUiProofEnabled_)) {
             railShooterCoursePath_ = combatLoopExpansionEnabled
                 ? "Resources/courses/CombatLoopExpansion.course"
                 : "Resources/courses/CombatLoop10s.course";
@@ -1890,18 +1891,23 @@ AppRunLoop::AppRunLoop(
         terrainPresetStore_.Load(runtimeState_.terrain, &presetError);
         LoadRailShooterCourse();
         if(IsRailShortCourse(railShooterCoursePath_)) runtimeState_.terrain.previewDistance=160.0f;
+        if (crystalDemo) {
+            runtimeState_.terrain.previewDistance = 0.0f;
+            runtimeState_.terrain.freezeCourseRuntime = false;
+            imguiLayer_.SetVisible(false);
+        }
         ApplyRailShooterCourse();
         // Optional direct entry for checking a distant section of the course.
-        const uint32_t sunfallPreviewDistance=ReadEnvironmentUInt("GE3_SUNFALL_PREVIEW_DISTANCE",0);
+        const uint32_t sunfallPreviewDistance = crystalDemo ? 0 : ReadEnvironmentUInt("GE3_SUNFALL_PREVIEW_DISTANCE",0);
         if(sunfallPreviewDistance>0) {
             EnterRailShooterScene();
             TeleportRailShooterCourse(static_cast<float>(sunfallPreviewDistance));
             imguiLayer_.SetVisible(false);
             runtimeState_.terrain.freezeCourseRuntime=ReadEnvironmentUInt("GE3_SUNFALL_PREVIEW_FREEZE",0)!=0;
         }
-        railTitleScreenVisible_ = !combatLoopExpansionEnabled &&
+        railTitleScreenVisible_ = crystalDemo || (!combatLoopExpansionEnabled &&
             !ResolveCombatLoop10SecondModeFromCommandLine() &&
-            !railDefenseUiProofEnabled_ && sunfallPreviewDistance==0;
+            !railDefenseUiProofEnabled_ && sunfallPreviewDistance==0);
         // Continue normal gameplay after READY/GO without the submission
         // replay button or its background freeze.
         railTransitionDemoEnabled_=false;
@@ -1943,6 +1949,14 @@ void AppRunLoop::LoadRailShooterCourse() {
     RemoveCrystalCavern();
     std::string error;
     if (railShooterCourse_.LoadFromFile(railShooterCoursePath_, &error)) {
+        if (IsCrystalCavernDemoMode()) {
+            railShooterCourse_.enemyPlacements.clear();
+            railShooterCourse_.waveDefinitions.clear();
+            railShooterCourse_.encounterBeats.clear();
+            std::erase_if(railShooterCourse_.events, [](const CourseEventMarker& event) {
+                return event.type == "enemy_wave" || event.type == "boss";
+            });
+        }
         railShooterCourseLoadStatus_ =
             "Loaded course \"" + railShooterCourse_.name + "\" from " + railShooterCoursePath_;
         OutputDebugStringA(("[Course] " + railShooterCourseLoadStatus_ + "\n").c_str());
@@ -5130,6 +5144,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.titleMenuSelection = railTitleMenuSelection_;
     hudRenderInput.titleControlsVisible = railTitleControlsVisible_;
     hudRenderInput.titleOpacity = railTitleScene_.MenuOpacity();
+    const bool compactDemoReady = IsCrystalCavernDemoMode();
     hudRenderInput.titleBlackout = railTitleScene_.Blackout();
     hudRenderInput.titleLogoAvailable = railTitleLogoReady_;
     hudRenderInput.startupGaugeProgress=titleEntry.gaugeProgress;
@@ -5165,7 +5180,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 (std::clamp)(projected.y/hudHeight,0.22f,0.62f)};
     }
     hudRenderInput.titleTransitionFocus=transitionFocus;
-    railShooterHudRenderer_.Update(hudRenderInput,rearPursuitCombat);
+    railShooterHudRenderer_.Update(hudRenderInput, rearPursuitCombat, compactDemoReady);
     if(!railGameOverScene_.Active() && railGameOverDiorama_.Ready()) railGameOverDiorama_.Reset();
     const auto emitHudCommands = [&](const auto& commands) {
         for (const RailShooterHudDrawCommand& command : commands) {
@@ -10621,12 +10636,15 @@ void AppRunLoop::BeginRailGameplayEntry() {
     railBasicTutorial_.Reset();
     railNeedlesPatrol_.Reset();
     railRetryPresentation_.Reset();railFirstPlayableCheckpointPending_=true;
-    railTitleGameplayEntry_.Begin();
     railReadyDroneActorIds_ = {};
     railReadyDroneSalvo_.Reset();
     railMothershipReveal_.Reset();
     railMothershipBattle_.Reset();railPostBossSequence_.Reset();railVeilModel_.Reset();
     railMinibossCombat_.Reset();
+    const bool shortDemo = IsCrystalCavernDemoMode();
+    if (shortDemo) railTitleGameplayEntry_.Reset();
+    railTitleGameplayEntry_.Begin();
+    if (shortDemo) return;
     for(uint32_t i=0;i<kRailReadyDroneCount;++i) {
         if(!railShooterSpawnRuntime_.SpawnEnemyActor(BuildRailReadyDrone(railShooterDistance_,i))) continue;
         railReadyDroneActorIds_[i] = railShooterSpawnRuntime_.Enemies().back().actorId;
@@ -10685,14 +10703,29 @@ void AppRunLoop::ReturnToDemoTitle() {
 
 void AppRunLoop::UpdateRailShooterFrame() {
     const auto updateStart = RailPerfClock::now();
+    const bool crystalDemo = IsCrystalCavernDemoMode();
+    static const bool crystalDemoAudit = crystalDemo && ReadEnvironmentUInt("GE3_CRYSTAL_DEMO_AUDIT", 0) != 0;
+    if (crystalDemoAudit) {
+        static std::ofstream log("logs/crystal_demo_audit.csv");
+        static const bool header = bool(log << "title,starting,returning,distance,session_phase,victory,enemies,bullets,title_enemy,entry_active,ready_alpha,go_alpha\n");
+        if (header) {
+            const auto& session = railShooterGameSession_.State();
+            log << railTitleScreenVisible_ << ',' << railTitleScene_.Starting() << ',' << railTransitionDemo_.Returning()
+                << ',' << railShooterDistance_ << ',' << ToString(session.phase) << ',' << IsRunVictory(session)
+                << ',' << railShooterSpawnRuntime_.Enemies().size() << ',' << railShooterSpawnRuntime_.Bullets().size()
+                << ',' << (railTitleScreenVisible_ && railTitleHasLastUpdate_ && railTitleScene_.Pursuer().visible)
+                << ',' << railTitleGameplayEntry_.Frame().active << ',' << railTitleGameplayEntry_.Frame().readyOpacity
+                << ',' << railTitleGameplayEntry_.Frame().goOpacity << std::endl;
+        }
+    }
     float demoPresentationDt=0.0f;
     if(railTransitionDemoEnabled_) {
         const float dt=railTransitionDemoHasLastUpdate_ ?
             std::chrono::duration<float>(updateStart-railTransitionDemoLastUpdate_).count() : 0.0f;
         railTransitionDemoLastUpdate_=updateStart; railTransitionDemoHasLastUpdate_=true;
-        const bool focused=hwnd_==nullptr || GetForegroundWindow()==hwnd_;
-        demoPresentationDt=focused ? dt : 0.0f;
-        railTransitionDemo_.Update(focused ? dt : 0.0f,
+        const bool focused=hwnd_==nullptr || GetForegroundWindow()==hwnd_ || crystalDemoAudit;
+        demoPresentationDt=focused ? (crystalDemoAudit ? .05f : dt) : 0.0f;
+        railTransitionDemo_.Update(demoPresentationDt,
             !railTitleScreenVisible_ && !railTitleGameplayEntry_.Frame().active);
         if(railTransitionDemo_.NeedsTitleSwap()) ReturnToDemoTitle();
         if(railResultReturnActive_ && railTitleScreenVisible_ && !railTransitionDemo_.Returning()) {
@@ -10794,10 +10827,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
         const float dt = railTitleHasLastUpdate_ ? std::chrono::duration<float>(updateStart-railTitleLastUpdate_).count() : 0.0f;
         railTitleLastUpdate_ = updateStart;
         railTitleHasLastUpdate_ = true;
-        const bool focused = hwnd_ == nullptr || GetForegroundWindow() == hwnd_ || ReadEnvironmentUInt("GE3_OPENING_REVIEW",0)!=0;
-        const float titleDt = focused ? (std::clamp)(dt,0.0f,0.05f) : 0.0f;
-        railTitleScene_.Update(titleDt);
-        if(ReadEnvironmentUInt("GE3_OPENING_REVIEW",0) && !railTitleScene_.Starting() && railTitleScene_.Age()>=1.20f)
+        const bool focused = hwnd_ == nullptr || GetForegroundWindow() == hwnd_ || crystalDemoAudit || ReadEnvironmentUInt("GE3_OPENING_REVIEW",0)!=0;
+        const float titleDt = focused ? (crystalDemoAudit ? .05f : std::clamp(dt, 0.0f, .05f)) : 0.0f;
+        railTitleScene_.Update(titleDt, !crystalDemo);
+        if(!crystalDemo && ReadEnvironmentUInt("GE3_OPENING_REVIEW",0) && !railTitleScene_.Starting() && railTitleScene_.Age()>=1.20f)
             railTitleScene_.BeginStart();
         const auto titleSample = railTitleScene_.Path().Evaluate(railTitleScene_.Distance());
         // Stable warm key light follows the title composition; restore the
@@ -10928,6 +10961,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     railShooterLastUpdateTime_ = updateStart;
     railShooterHasLastUpdateTime_ = true;
+    if (crystalDemoAudit) realGameplayDeltaTime = .05f;
     const bool wasTitleStartupBlocked = railTitleGameplayEntry_.Frame().blockingGameplay;
     const bool editorRuntimeAdvance = imguiLayer_.ShouldAdvanceEditorRuntimeFrame();
     const bool coursePreviewOwnsRail = coursePreviewSimulationSystem_.IsActive();
@@ -10942,10 +10976,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool coursePreviewFrozen =
         runtimeState_.terrain.freezeCourseRuntime || !editorRuntimeAdvance ||
         coursePreviewOwnsRail;
-    const bool entryFocused=hwnd_==nullptr || GetForegroundWindow()==hwnd_ || ReadEnvironmentUInt("GE3_OPENING_REVIEW",0)!=0;
+    const bool entryFocused=hwnd_==nullptr || GetForegroundWindow()==hwnd_ || crystalDemoAudit || ReadEnvironmentUInt("GE3_OPENING_REVIEW",0)!=0;
     const float previousEntryElapsed=railTitleGameplayEntry_.Elapsed();
-    railTitleGameplayEntry_.Update(!titleHandoffThisFrame && !coursePreviewFrozen && entryFocused?
-        realGameplayDeltaTime:0.0f);
+    railTitleGameplayEntry_.Update(!titleHandoffThisFrame && !coursePreviewFrozen && entryFocused ?
+        realGameplayDeltaTime : 0.0f, crystalDemo);
     const auto& entryFrame=railTitleGameplayEntry_.Frame();
     const bool titleStartupBlocked = entryFrame.blockingGameplay;
     // Complete the last intro travel slice, then checkpoint the fully warmed
@@ -10954,7 +10988,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool titleEntryBlocked = titleStartupBlocked || gameplayJustUnlocked || railTransitionDemo_.Returning();
     if(entryFrame.readyStarted) {
         (void)audio_.Play(railReadySound_,0.24f);
-        (void)audio_.Play(railDroneFlybySound_,0.42f);
+        if (!crystalDemo) (void)audio_.Play(railDroneFlybySound_,0.42f);
     }
     if(railReadyDroneActorIds_[1]!=0 && previousEntryElapsed<RailTitleGameplayEntry::WingmanReadyBegin &&
         railTitleGameplayEntry_.Elapsed()>=RailTitleGameplayEntry::WingmanReadyBegin)
@@ -13197,11 +13231,21 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     const bool crystalImpactReview = ReadEnvironmentUInt("GE3_CRYSTAL_IMPACT_REVIEW", 0) != 0 &&
         GetEnvironmentVariableW(L"GE3_COURSE_FRAME_EXPORT", nullptr, 0) > 0;
-    if (crystalImpactReview && !titleEntryBlocked && gameplayDeltaTime > 0.0f) {
+    std::optional<Vector2> crystalDemoAim;
+    bool crystalDemoFiring = false;
+    if ((crystalImpactReview || (crystalDemo && playerInputEnabled)) && !titleEntryBlocked && gameplayDeltaTime > 0.0f) {
+        constexpr std::array<std::string_view, 10> demoTargets{
+            "crystal-grotto-tall", "crystal-grotto-west", "crystal-sweep-high",
+            "crystal-dive-inside", "crystal-traverse-vein", "crystal-ravine-outside", "crystal-ravine-inner",
+            "crystal-ridge-high-vein", "crystal-final-tall", "crystal-exit-vein",
+        };
         for (const auto& crystal : railShooterCourse_.terrainPlacements) {
             if (!RailCrystalCavern::IsCrystalMesh(crystal.meshId)) continue;
-            const float gap = crystal.distance - railShooterDistance_;
-            if (gap < 61.0f || gap > 73.0f) continue;
+            const float gap = crystal.distance + crystal.forwardOffset - railShooterDistance_;
+            if (crystalDemo) {
+                if (gap < 52.0f || gap > 82.0f ||
+                    std::find(demoTargets.begin(), demoTargets.end(), crystal.id) == demoTargets.end()) continue;
+            } else if (gap < 61.0f || gap > 73.0f) continue;
             const auto meshes = scene_.CourseMeshes().Items();
             const auto item = std::find_if(meshes.begin(), meshes.end(), [&](const auto& mesh) {
                 return mesh.name == crystal.id && mesh.visible && mesh.transformData;
@@ -13215,7 +13259,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
             lockOnInput.hasCursorPosition = true;
             lockOnInput.cursorPosition = aim.screen;
             lockOnInput.gamepadConnected = false;
-            basicAuditAiming = basicAuditPrimary = true;
+            if (crystalDemo) {
+                crystalDemoAim = aim.screen;
+                crystalDemoFiring = gap <= 72.0f;
+            } else basicAuditAiming = basicAuditPrimary = true;
             break;
         }
     }
@@ -13402,7 +13449,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     static Vector2 auditPointer{};
     static bool auditPointerInitialized=false;
-    if(killBoostAuditTarget || shieldAuditAiming || postBossAuditAiming || heavyAuditAiming || basicAuditAiming) {
+    if(killBoostAuditTarget || shieldAuditAiming || postBossAuditAiming || heavyAuditAiming || basicAuditAiming || crystalDemoAim) {
         if(!auditPointerInitialized) {
             POINT pointer{};GetCursorPos(&pointer);ScreenToClient(hwnd_,&pointer);
             auditPointer={float(pointer.x),float(pointer.y)};auditPointerInitialized=true;
@@ -13576,7 +13623,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const bool normalShotPressed = (leftMouseDown && !wasLeftMouseDown) || inputEdges_.Pressed(VK_LBUTTON);
     const bool normalShotReleased = !leftMouseDown && wasLeftMouseDown;
     const bool needlesWatchBattery = needlesReview && railShooterDistance_ >= 980.0f && railShooterDistance_ < 1080.0f;
-    const bool normalShotTriggerHeld = !titleEntryBlocked && (leftMouseDown || normalShotPressed || killBoostAuditTarget || shieldAuditPrimary || postBossAuditPrimary || heavyAuditPrimary || basicAuditPrimary) &&
+    const bool normalShotTriggerHeld = !titleEntryBlocked && (leftMouseDown || normalShotPressed || killBoostAuditTarget || shieldAuditPrimary || postBossAuditPrimary || heavyAuditPrimary || basicAuditPrimary || crystalDemoFiring) &&
         !normalShotBlockedByUi && !lockModeActive && !needlesWatchBattery;
     const bool normalShotTriggerPressed = !titleEntryBlocked && normalShotPressed && !normalShotBlockedByUi && !lockModeActive && !needlesWatchBattery;
 
@@ -13594,7 +13641,10 @@ void AppRunLoop::UpdateRailShooterFrame() {
     railInputRouteDebug_.leftMouseDown = leftMouseDown;
 
     const RailReticleState& normalReticle = railShooterLockOnSystem_.Reticle();
-    const RailAimState& worldAim = railShooterLockOnSystem_.Aim();
+    const RailAimState demoWorldAim = crystalDemoFiring ? BuildRailAimState({*crystalDemoAim,
+        metrics.width, metrics.height, gameplayViewProjectionMatrix, directedCamera.gameplayPosition,
+        lockOnInput.aimRayMaxDistance}) : RailAimState{};
+    const RailAimState& worldAim = demoWorldAim.valid ? demoWorldAim : railShooterLockOnSystem_.Aim();
     const float reticleNormX = (std::clamp)(
         worldAim.valid ? worldAim.normalizedPosition.x : 0.0f,
         -1.15f,
@@ -15159,7 +15209,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
             }
         }
         RailRunResultAction resultAction=RailRunResultAction::None;
-        if(!titleEntryBlocked && sessionKeyboardAllowed && IsRunResult(updatedSession)) {
+        if (crystalDemo && !titleEntryBlocked && IsRunResult(updatedSession)) {
+            resultAction = RailRunResultAction::Title;
+        } else if(!crystalDemo && !titleEntryBlocked && sessionKeyboardAllowed && IsRunResult(updatedSession)) {
             if(retryRequested) resultAction=RailRunResultAction::Restart;
             else if(WasKeyPressed('C') && railShooterRetryCoordinator_.CanRetry()) resultAction=RailRunResultAction::Checkpoint;
             else if(WasKeyPressed('T')) resultAction=RailRunResultAction::Title;
@@ -20531,20 +20583,20 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     graphContext.productionGpuDrivenPipeline = &imguiLayer_.ProductionGpuDrivenPipeline();
     graphContext.worldPartitionPipeline = &imguiLayer_.WorldPartitionPipeline();
     graphContext.vfxRenderTargets = &vfxEngine_.RenderTargets();
-    graphContext.railFilmBurnProgress = railTitleScreenVisible_
-        ? railTitleScene_.Blackout() : railTitleGameplayEntry_.Frame().blackout;
+    const auto& entry = railTitleGameplayEntry_.Frame();
+    const float entryElapsed = railTitleGameplayEntry_.Elapsed();
+    graphContext.railFilmBurnProgress = railTitleScreenVisible_ ? railTitleScene_.Blackout() : entry.blackout;
     graphContext.railFilmBurnTreatmentStrength = railTitleScreenVisible_ ? 1.0f : 0.55f;
     graphContext.railFilmBurnIncoming = !railTitleScreenVisible_;
-    graphContext.railSandTransition=railTitleScreenVisible_
-        ? railTitleScene_.Starting() : railTitleGameplayEntry_.Frame().blockingGameplay &&
-            railTitleGameplayEntry_.Elapsed()<1.42f;
-    graphContext.railSandTransitionAge=railTitleScreenVisible_
+    graphContext.railSandTransition = railTitleScreenVisible_
+        ? railTitleScene_.Starting() : entry.blockingGameplay && entryElapsed < RailTitleGameplayEntry::SandRevealDuration;
+    graphContext.railSandTransitionAge = railTitleScreenVisible_
         ? railTitleScene_.SandCollapse().age
-        : RailTitleScene::StartDuration-RailTitleScene::CollapseBegin+railTitleGameplayEntry_.Elapsed();
+        : RailTitleScene::StartDuration - RailTitleScene::CollapseBegin + entryElapsed;
     if(!railTitleScreenVisible_ && graphContext.railSandTransition) {
         // The same airborne powder clears around the incoming camera rather
         // than dropping to black or restarting a second dust burst.
-        const float covered=railTitleGameplayEntry_.Frame().blackout;
+        const float covered=entry.blackout;
         graphContext.railCollapseDustStrength=0.68f*(std::clamp)(covered/0.65f,0.0f,1.0f);
     }
     const auto projectPresentationPoint=[&](Vector3 world,Vector2& uv) {

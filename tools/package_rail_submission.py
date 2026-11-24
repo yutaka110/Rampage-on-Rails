@@ -62,7 +62,7 @@ def source_paths():
             yield relative
 
 
-def stage(build, output):
+def stage(build, output, crystal_cavern_demo=False):
     configuration = build.name
     if configuration not in {'Development', 'Release'}:
         raise ValueError('Build folder must identify Development or Release configuration')
@@ -94,13 +94,22 @@ def stage(build, output):
         shutil.copy2(source, target)
         files[relative] = digest(target)
     readme = output / 'README.txt'
-    readme.write_text(
+    standard_instructions = (
         'レールであばレール：実行ファイル・ソースコード\n\n'
         'このフォルダーの GE3.exe を起動してください。Resources と Licenses を同じ場所に保ってください。\n'
         'タイトル画面：Enterでゲーム開始、Escで終了。開始するまでゲームは進行しません。\n'
-        f'Source/ にソースコードとビルド設定があります。構成：{configuration} / x64。\n'
         '操作：マウスで照準、左ボタン長押しで通常射撃、右ボタン長押しでロック・離して発射。\n'
-        'P：一時停止／再開。R／Enter：リトライ可能時に再試行。Alt+F4：終了。\n'
+        'P：一時停止／再開。R／Enter：リトライ可能時に再試行。Alt+F4：終了。\n')
+    demo_instructions = (
+        'レールであばレール　光石洞窟 提出用デモ\n\n'
+        'ZIPを展開し、このフォルダーの GE3.exe を起動してください。\n'
+        'タイトルの「スタート」をクリックするか、Enterを押すと光石洞窟の走行が始まります。\n'
+        '走行中は見せ場の結晶へ自動で通常弾を撃ちます。マウスと左クリックでも射撃できます。\n'
+        'ゴール後は自動でタイトルに戻ります。Pで一時停止／再開、Alt+F4で終了できます。\n'
+        'ソースからビルドしたGE3.exeでは --crystal-cavern-demo で同じデモを起動できます。\n')
+    readme.write_text(
+        (demo_instructions if crystal_cavern_demo else standard_instructions) +
+        f'Source/ にソースコードとビルド設定があります。構成：{configuration} / x64。\n'
         '教材の人物・歩行アニメーション、起動音、ボール柄、確認用モデルは同梱していません。\n'
         '無地の共通テクスチャは Source/tools/generate_neutral_surface.py で生成できます。\n'
         'Source/Build/RailSubmissionResources.json が提出用リソースの一覧です。\n'
@@ -149,10 +158,11 @@ if __name__ == '__main__':
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--verify', action='store_true')
     parser.add_argument('--zip', action='store_true')
+    parser.add_argument('--crystal-cavern-demo', action='store_true')
     args = parser.parse_args()
     if args.zip:
         archive(args.output.resolve())
     elif args.verify:
         verify(args.output.resolve())
     else:
-        stage(args.build.resolve(), args.output.resolve())
+        stage(args.build.resolve(), args.output.resolve(), args.crystal_cavern_demo)

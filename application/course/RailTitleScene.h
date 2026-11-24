@@ -164,11 +164,13 @@ public:
     static constexpr float GoEnd = Duration + 0.85f;
     static constexpr float RevealBegin = 0.01f;
     static constexpr float RevealEnd = 0.54f;
+    static constexpr float SandRevealDuration = 1.29f; // Includes the last falling fragments.
     static constexpr float CameraBegin = 0.08f;
     static constexpr float CameraEnd = 1.62f;
     void Reset();
     void Begin();
     void Update(float deltaTime);
+    void Update(float deltaTime, bool shortDemo);
     // Retain markers crossed by cinematic travel until gameplay can dispatch them.
     std::vector<CourseEventMarker> DispatchCourseEvents(
         const std::vector<CourseEventMarker>& crossed, bool gameplayEnabled);
@@ -186,7 +188,7 @@ private:
 class RailTransitionDemo final {
 public:
     static constexpr float CoverDuration = 2.01f;
-    static constexpr float RevealDuration = 1.29f;
+    static constexpr float RevealDuration = RailTitleGameplayEntry::SandRevealDuration;
     void BeginGameplay();
     void Update(float deltaTime, bool startupComplete);
     bool RequestReturn(bool fromResult=false);
@@ -225,6 +227,7 @@ class RailTitleScene final {
 public:
     bool Initialize();
     void Update(float deltaTime);
+    void Update(float deltaTime, bool enemyAttackEnabled);
     void BeginStart();
     bool Starting() const { return starting_; }
     bool ReadyForGameplay() const { return starting_ && startTime_ >= StartDuration &&
@@ -303,7 +306,7 @@ public:
     static int HitTest(float x, float y, float width, float height);
 private:
     void UpdateAttack(float deltaTime);
-    void UpdateSandCollapse();
+    void UpdateSandCollapse(uint32_t seed);
     Vector3 DepartureDronePosition(float elapsed) const;
     Vector3 DepartureImpactTarget() const;
     void PrepareDepartureWallShot();

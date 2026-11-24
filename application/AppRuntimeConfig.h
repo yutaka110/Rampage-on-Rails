@@ -68,3 +68,4 @@ void ApplyEnvironmentRuntimeConfig(AppVfxRuntimeState& runtimeState);
 
 std::string ParseRailCourseArguments(int count,const wchar_t* const* args);
 std::string ResolveRailCoursePathFromCommandLine();
+bool IsCrystalCavernDemoMode();

@@ -154,6 +154,10 @@ bool RailTitleScene::Initialize() {
 }
 
 void RailTitleScene::Update(float deltaTime) {
+    Update(deltaTime, true);
+}
+
+void RailTitleScene::Update(float deltaTime, bool enemyAttackEnabled) {
     if (lapLength_ <= 0.0f) return;
     const float dt = std::isfinite(deltaTime) ? (std::clamp)(deltaTime,0.0f,0.05f) : 0.0f;
     if(starting_) {
@@ -231,6 +235,13 @@ void RailTitleScene::Update(float deltaTime) {
     const Matrix4x4 bodySway=MakeAffineMatrix(Vector3{1,1,1},Vector3{pitch,0,roll},Vector3{lateral,bounce,0});
     vehicleFrame_.worldMatrix=Multiply(bodySway,vehicleFrame_.worldMatrix);
     wheels_.Update({&contact,&presentation});
+    if (!enemyAttackEnabled) {
+        pursuer_.visible = false;
+        pursuer_.alpha = 0.0f;
+        // In the showcase the ceiling gives way as the cart enters the tunnel.
+        UpdateSandCollapse(1);
+        return;
+    }
     // Sample the motion rail, including its retained curve after BeginStart().
     // Never use the straight scenery coordinate frame for the pursuing actor.
     // Cut slightly inside the bend so the silhouette stays clear of the logo.
@@ -264,13 +275,13 @@ void RailTitleScene::Update(float deltaTime) {
     pursuer_.alpha = 1.0f-Blackout();
     pursuer_.visible = pursuer_.alpha > 0.001f;
     UpdateAttack(dt);
-    UpdateSandCollapse();
+    UpdateSandCollapse(railImpact_.seed);
 }
 
-void RailTitleScene::UpdateSandCollapse() {
+void RailTitleScene::UpdateSandCollapse(uint32_t seed) {
     if(!starting_) return;
-    sandCollapse_.active=railImpact_.seed!=0 && startTime_>=CollapseBegin;
-    sandCollapse_.seed=railImpact_.seed;
+    sandCollapse_.active=seed!=0 && startTime_>=CollapseBegin;
+    sandCollapse_.seed=seed;
     sandCollapse_.age=(std::max)(0.0f,startTime_-CollapseBegin);
     // Reuse the fixed scenery coordinate frame. Dynamic clods never enter the
     // playable terrain/collision system or modify the authored placements.
@@ -1195,21 +1206,34 @@ void RailTitleGameplayEntry::Begin() {
     frame_.active=true;
 }
 void RailTitleGameplayEntry::Update(float deltaTime) {
+    Update(deltaTime, false);
+}
+
+void RailTitleGameplayEntry::Update(float deltaTime, bool shortDemo) {
     frame_.reticleStarted=frame_.gaugesStarted=false;
     frame_.readyStarted=frame_.goStarted=false;
     frame_.travelDeltaTime=0.0f;
     if(!begun_ || !frame_.active) return;
     const double previous=elapsed_;
-    if(std::isfinite(deltaTime)) elapsed_=(std::min)(double(GoEnd),
+    const double end = shortDemo ? SandRevealDuration : GoEnd;
+    if(std::isfinite(deltaTime)) elapsed_=(std::min)(end,
         elapsed_+double((std::clamp)(deltaTime,0.0f,0.05f)));
-    frame_.travelDeltaTime=static_cast<float>((std::min)(elapsed_,double(Duration))-
-        (std::min)(previous,double(Duration)));
     const auto ramp=[&](double from,double to) {
         const float t=static_cast<float>((std::clamp)((elapsed_-from)/(to-from),0.0,1.0));
         return t*t*(3.0f-2.0f*t);
     };
+    if (shortDemo) frame_ = {};
     frame_.blackout=1.0f-static_cast<float>((std::clamp)(
         (elapsed_-RevealBegin)/double(RevealEnd-RevealBegin),0.0,1.0));
+    if (shortDemo) {
+        const double readyBegin = end - .57;
+        frame_.active = frame_.blockingGameplay = elapsed_ < end;
+        frame_.readyOpacity = ramp(readyBegin, readyBegin + .12) * (1.0f - ramp(end - .19, end));
+        frame_.readyStarted = previous < readyBegin + .03 && elapsed_ >= readyBegin + .03;
+        return;
+    }
+    frame_.travelDeltaTime=static_cast<float>((std::min)(elapsed_,double(Duration))-
+        (std::min)(previous,double(Duration)));
     // Begin while the falling veil is still dense. Camera recovery and rail
     // motion overlap the reveal rather than waiting for a clear, frozen scene.
     frame_.cameraHandoffWeight=1.0f-ramp(double(CameraBegin),double(CameraEnd));

@@ -114,6 +114,7 @@ public:
     void Reset();
     void Update(const RailShooterHudRenderInput& input);
     void Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat);
+    void Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat, bool compactReady);
     const RailShooterHudRenderFrame& Frame() const noexcept { return frame_; }
 
 private:
