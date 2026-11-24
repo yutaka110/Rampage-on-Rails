@@ -444,6 +444,7 @@
     <ClCompile Include="application\course\EnemyAttackTelegraphFeedbackBridge.cpp" />
     <ClCompile Include="application\course\EnemyWaveAsset.cpp" />
     <ClCompile Include="application\course\GameSessionSystem.cpp" />
+    <ClCompile Include="application\course\RailCombatSessionBridge.cpp" />
     <ClCompile Include="application\course\GameSessionPresentationBridge.cpp" />
     <ClCompile Include="application\course\GameSessionRetryCoordinator.cpp" />
     <ClCompile Include="application\course\PlayerDamageSystem.cpp" />
@@ -1443,6 +1444,7 @@
     <ClInclude Include="application\course\EnemyAttackTelegraphFeedbackBridge.h" />
     <ClInclude Include="application\course\EnemyWaveAsset.h" />
     <ClInclude Include="application\course\GameSessionSystem.h" />
+    <ClInclude Include="application\course\RailCombatSessionBridge.h" />
     <ClInclude Include="application\course\GameSessionPresentationBridge.h" />
     <ClInclude Include="application\course\GameSessionRetryCoordinator.h" />
     <ClInclude Include="application\course\PlayerDamageSystem.h" />

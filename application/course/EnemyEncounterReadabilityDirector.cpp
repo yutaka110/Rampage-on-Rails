@@ -158,7 +158,7 @@ void EnemyEncounterReadabilityDirector::Update(
             (!actor.entranceExitState.initialized ||
              actor.entranceExitState.targetable);
 
-        const bool visuallyClear = !RailVisualOcclusion::FromCamera(world);
+        const bool visuallyClear = !input.visualOcclusion || !input.visualOcclusion->FromCamera(world);
         EnemyScreenPresenceInput presenceInput{};
         presenceInput.projectedDiameterPixels = diameter;
         presenceInput.authoredAlpha = actor.combatState.initialized

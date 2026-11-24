@@ -102,7 +102,7 @@ void TestPersistentOrdinaryEncounterPacing(RegressionRunner& runner) {
         runner.Expect(pacing.RestoreCheckpoint(saved,course,&error),"legacy resolve checkpoint restores");
         pacing.Update(input);runner.Expect(pacing.Frame().phase==EnemyEncounterBeatPhase::Threaten,
             "a retry restored beyond the old end resumes a full warning cycle");
-        for(const auto& actor:runtime.Enemies())runner.Expect(runtime.DefeatEnemy(runtime.EnemyCombat(),actor.actorId),"defeating a survivor uses combat authority");
+        for(const auto& actor:runtime.Enemies())runner.Expect(runtime.DefeatEnemy(actor.actorId),"defeating a survivor uses combat authority");
         for(int step=0;step<4*fps;++step)pacing.Update(input);
         runner.Expect(!pacing.Frame().active,"defeated formations still finish and release encounter ownership");
         CourseSpawnRuntime stationary;CourseEnemyActorDesc desc=cooked.program.actors.front().actor;desc.actorAssetId="pacing_fixed_control";
@@ -267,7 +267,7 @@ __declspec(noinline) void TestOrdinaryEnemyHighSpeedAudit(RegressionRunner& runn
             CourseCollisionFrameInput input;input.railPath=&rail;input.course=&course;input.deltaTime=dt;input.player.distance=at;input.player.verticalOffset=playerY;input.player.hitPoints=collision.Player().hitPoints;input.combatMount=&mount.Frame();input.externalBodyCollisionAuthority=true;
             input.worldAim=&responseAim;input.primaryTerrainSettings=&terrain;input.weapon.enabled=respond;input.weapon.triggerHeld=trigger;input.weapon.triggerPressed=trigger&&!previousTrigger;previousTrigger=trigger;
             const auto collisionStats=collision.Update(runtime,input);playerShots+=collisionStats.playerShotsFired;playerHits+=collisionStats.playerShotEnemyHits;
-            for(const auto& event:runtime.EnemyCombat().ConsumeEvents())if(event.kind==EnemyCombatEventKind::Defeated)tracked[event.actorId].killed=true;
+            for(const auto& event:runtime.ConsumeEnemyCombatEvents())if(event.kind==EnemyCombatEventKind::Defeated)tracked[event.actorId].killed=true;
             for(const auto& damage:collision.PlayerDamage().ResultsThisFrame())if(damage.accepted) {
                 auto& record=records[{damage.request.sourceActorId,damage.request.attackIntentSequence}];record.damage+=damage.appliedDamage;
                 auto& meta=tracked[damage.request.sourceActorId];if(meta.firstDamage<0)meta.firstDamage=t;

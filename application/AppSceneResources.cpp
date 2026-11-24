@@ -14,6 +14,7 @@
 #include <cstring>
 #include <filesystem>
 #include <numbers>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -1198,7 +1199,12 @@ namespace {
         }
     }
 
-    ModelData BuildRailVehicleModelData(bool damaged=false,bool panelOnly=false) {
+    enum class CartFracturePart {
+        RearFloor, FrontFloor, RightWall, RearWall, FrontWall, RearAxle, FrontAxle, LeftDrive, RightDrive,
+    };
+
+    ModelData BuildRailVehicleModelData(bool damaged = false, bool panelOnly = false,
+        std::optional<CartFracturePart> fracturePart = std::nullopt) {
         ModelData model;
         constexpr const char* kWhiteAlbedo = "Resources/human/white.png";
         model.materials = {
@@ -1208,72 +1214,81 @@ namespace {
         };
         model.material = model.materials.front();
 
+        const auto includes = [&](CartFracturePart part) {
+            return !panelOnly && (!fracturePart || *fracturePart == part);
+        };
+        const bool includesLeftPanel = !fracturePart && (!damaged || panelOnly);
         auto appendPart = [&](const char* name, uint32_t materialIndex, auto appendGeometry) {
             const uint32_t indexStart = static_cast<uint32_t>(model.indices.size());
             appendGeometry();
-            model.subMeshes.push_back({
-                name,
-                indexStart,
-                static_cast<uint32_t>(model.indices.size()) - indexStart,
-                materialIndex,
-            });
+            const auto indexCount = static_cast<uint32_t>(model.indices.size()) - indexStart;
+            if (indexCount > 0) model.subMeshes.push_back({name, indexStart, indexCount, materialIndex});
         };
         appendPart("cart_body", 0, [&]() {
-            if(!panelOnly) AppendCartBeveledBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 3.15f},0.045f);
-            if(!damaged || panelOnly) AppendCartBeveledBox(model,RailVehicleBreakaway::PanelMinimum,RailVehicleBreakaway::PanelMaximum,0.05f);
-            if(!panelOnly) {
-                AppendCartBeveledBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f},0.095f);
-                for(float side:{-1.0f,1.0f}) {
-                    const float z=side*2.975f;
-                    AppendCartBeveledBox(model, {-1.78f,.38f,z-.225f}, {1.78f,1.25f,z+.225f},.085f);
-                    const float face=side*3.215f;
-                    for(float x:{-1.30f,1.30f})
-                        AppendBox(model,{x-.13f,.36f,face-.10f},{x+.13f,1.23f,face+.10f});
-                }
+            if (!panelOnly && !fracturePart) {
+                AppendCartBeveledBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 3.15f}, 0.045f);
+            } else if (fracturePart == CartFracturePart::RearFloor) {
+                AppendCartBeveledBox(model, {-2.15f, -0.30f, -3.15f}, {2.15f, 0.38f, 0}, 0.045f);
+            } else if (fracturePart == CartFracturePart::FrontFloor) {
+                AppendCartBeveledBox(model, {-2.15f, -0.30f, 0}, {2.15f, 0.38f, 3.15f}, 0.045f);
+            }
+            if (includesLeftPanel)
+                AppendCartBeveledBox(model, RailVehicleBreakaway::PanelMinimum, RailVehicleBreakaway::PanelMaximum, 0.05f);
+            if (includes(CartFracturePart::RightWall))
+                AppendCartBeveledBox(model, {1.78f, 0.38f, -3.20f}, {2.25f, 1.82f, 3.20f}, 0.095f);
+            for (float side : {-1.0f, 1.0f}) {
+                if (!includes(side < 0.0f ? CartFracturePart::RearWall : CartFracturePart::FrontWall)) continue;
+                const float z = side * 2.975f;
+                AppendCartBeveledBox(model, {-1.78f, .38f, z - .225f}, {1.78f, 1.25f, z + .225f}, .085f);
+                const float face = side * 3.215f;
+                for (float x : {-1.30f, 1.30f})
+                    AppendBox(model, {x - .13f, .36f, face - .10f}, {x + .13f, 1.23f, face + .10f});
             }
         });
-        if(!panelOnly) appendPart("running_gear", 1, [&]() {
-            // Four wheel meshes are intentionally not baked into the body.
-            // RailVehicleWheelContactPresentationBridge owns their individual
-            // rail-contact transforms and rotation.
-            AppendCartBeveledBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f},0.035f);
-            AppendCartBeveledBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f},0.035f);
-            for(float side:{-1.0f,1.0f}) {
-                const float z=side*3.26f;
-                AppendCartBeveledBox(model,{-1.22f,.48f,z-.08f},{1.22f,.96f,z+.08f},.045f);
-                for(float x:{-1.48f,1.48f}) {
-                    AppendBox(model,{x-.24f,-.46f,z-.23f},{x+.24f,.18f,z+.23f});
-                    AppendBox(model,{x-.16f,.94f,z-.12f},{x+.16f,1.22f,z+.12f});
+        if (!panelOnly) appendPart("running_gear", 1, [&]() {
+            // Wheel meshes have their own rail-contact transforms.
+            if (includes(CartFracturePart::RearAxle))
+                AppendCartBeveledBox(model, {-1.45f, -0.68f, -3.48f}, {1.45f, -0.20f, -3.08f}, 0.035f);
+            if (includes(CartFracturePart::FrontAxle))
+                AppendCartBeveledBox(model, {-1.45f, -0.68f, 3.08f}, {1.45f, -0.20f, 3.48f}, 0.035f);
+            for (float side : {-1.0f, 1.0f}) {
+                const bool wall = includes(side < 0.0f ? CartFracturePart::RearWall : CartFracturePart::FrontWall);
+                const bool axle = includes(side < 0.0f ? CartFracturePart::RearAxle : CartFracturePart::FrontAxle);
+                const float z = side * 3.26f;
+                if (wall) AppendCartBeveledBox(model, {-1.22f, .48f, z - .08f}, {1.22f, .96f, z + .08f}, .045f);
+                for (float x : {-1.48f, 1.48f}) {
+                    if (axle) AppendBox(model, {x - .24f, -.46f, z - .23f}, {x + .24f, .18f, z + .23f});
+                    if (wall) AppendBox(model, {x - .16f, .94f, z - .12f}, {x + .16f, 1.22f, z + .12f});
                 }
-                for(float x:{-.73f,0.f,.73f})
-                    AppendBox(model,{x-.19f,.53f,z+side*.08f-.03f},
-                        {x+.19f,.88f,z+side*.08f+.03f});
+                if (wall) for (float x : {-.73f, 0.f, .73f})
+                    AppendBox(model, {x - .19f, .53f, z + side * .08f - .03f},
+                        {x + .19f, .88f, z + side * .08f + .03f});
             }
-            // Hollow side-sill housings: four closed beveled strips per
-            // nozzle leave the rear aperture open for the rooted boost jet.
-            for(float side:{-1.0f,1.0f}) {
-                const auto root=RailBoostExhaust::Root(side);
-                const float x=root.x, y=root.y, z=root.z;
-                const float sill=side*2.12f;
-                for(float axle:{-1.86f,1.86f}) {
-                    AppendBox(model,{sill-.29f,-.44f,axle-.39f},
-                        {sill+.29f,.33f,axle+.39f});
-                    AppendBox(model,{sill-.38f,-.23f,axle-.26f},
-                        {sill+.38f,.11f,axle+.26f});
+            // Keep the exhaust aperture hollow in both the shell and the fragments.
+            for (float side : {-1.0f, 1.0f}) {
+                if (!includes(side < 0.0f ? CartFracturePart::LeftDrive : CartFracturePart::RightDrive)) continue;
+                const auto root = RailBoostExhaust::Root(side);
+                const float x = root.x, y = root.y, z = root.z;
+                const float sill = side * 2.12f;
+                for (float axle : {-1.86f, 1.86f}) {
+                    AppendBox(model, {sill - .29f, -.44f, axle - .39f}, {sill + .29f, .33f, axle + .39f});
+                    AppendBox(model, {sill - .38f, -.23f, axle - .26f}, {sill + .38f, .11f, axle + .26f});
                 }
-                AppendCartBeveledBox(model,{x-0.40f,y-0.32f,z},{x+0.40f,y-0.20f,z+1.15f},0.025f);
-                AppendCartBeveledBox(model,{x-0.40f,y+0.20f,z},{x+0.40f,y+0.32f,z+1.15f},0.025f);
-                AppendBox(model,{x-0.40f,y-0.22f,z+.018f},{x-0.28f,y+0.22f,z+1.132f});
-                AppendBox(model,{x+0.28f,y-0.22f,z+.018f},{x+0.40f,y+0.22f,z+1.132f});
+                AppendCartBeveledBox(model, {x - 0.40f, y - 0.32f, z}, {x + 0.40f, y - 0.20f, z + 1.15f}, 0.025f);
+                AppendCartBeveledBox(model, {x - 0.40f, y + 0.20f, z}, {x + 0.40f, y + 0.32f, z + 1.15f}, 0.025f);
+                AppendBox(model, {x - 0.40f, y - 0.22f, z + .018f}, {x - 0.28f, y + 0.22f, z + 1.132f});
+                AppendBox(model, {x + 0.28f, y - 0.22f, z + .018f}, {x + 0.40f, y + 0.22f, z + 1.132f});
             }
         });
         appendPart("safety_trim", 2, [&]() {
-            if(!damaged || panelOnly) AppendCartBeveledBox(model,RailVehicleBreakaway::TrimMinimum,RailVehicleBreakaway::TrimMaximum,0.035f);
-            if(!panelOnly) {
-                AppendCartBeveledBox(model, {1.72f, 1.55f, -3.26f}, {2.31f, 1.88f, 3.26f},0.035f);
-                AppendCartBeveledBox(model, {-1.72f, 1.18f, -3.26f}, {1.72f, 1.48f, -2.68f},0.035f);
-                for(float x:{-1.51f,1.51f})
-                    AppendBox(model,{x-.16f,.82f,-3.45f},{x+.16f,1.02f,-3.30f});
+            if (includesLeftPanel)
+                AppendCartBeveledBox(model, RailVehicleBreakaway::TrimMinimum, RailVehicleBreakaway::TrimMaximum, 0.035f);
+            if (includes(CartFracturePart::RightWall))
+                AppendCartBeveledBox(model, {1.72f, 1.55f, -3.26f}, {2.31f, 1.88f, 3.26f}, 0.035f);
+            if (includes(CartFracturePart::RearWall)) {
+                AppendCartBeveledBox(model, {-1.72f, 1.18f, -3.26f}, {1.72f, 1.48f, -2.68f}, 0.035f);
+                for (float x : {-1.51f, 1.51f})
+                    AppendBox(model, {x - .16f, .82f, -3.45f}, {x + .16f, 1.02f, -3.30f});
             }
         });
         model.rootNode.name = "rail_vehicle_mine_cart_root";
@@ -2043,34 +2058,8 @@ ModelData BuildRailVehicleBreakawayModelData(bool panelOnly) {
 }
 
 ModelData BuildRailVehicleFractureModelData(size_t part) {
-    ModelData model=BuildRailVehicleModelData(true,false);
-    model.vertices.clear();model.indices.clear();model.subMeshes.clear();
-    if(part>=RailVehicleBreakaway::FractureParts.size()) return model;
-    const auto box=[&](Vector3 lo,Vector3 hi,float bevel,uint32_t material) {
-        const auto start=static_cast<uint32_t>(model.indices.size());
-        AppendCartBeveledBox(model,lo,hi,bevel);
-        model.subMeshes.push_back({"fracture",start,static_cast<uint32_t>(model.indices.size())-start,material});
-    };
-    const auto& shape=RailVehicleBreakaway::FractureParts[part];
-    if(part<2) box(shape.minimum,shape.maximum,0.045f,0);
-    else if(part==2) {
-        box({1.78f,0.38f,-3.20f},{2.25f,1.82f,3.20f},0.05f,0);
-        box({1.72f,1.55f,-3.26f},{2.31f,1.88f,3.26f},0.035f,2);
-    } else if(part==3) {
-        box({-1.78f,0.38f,-3.20f},{1.78f,1.25f,-2.75f},0.045f,0);
-        box({-1.72f,1.18f,-3.26f},{1.72f,1.48f,-2.68f},0.035f,2);
-    } else if(part==4) box(shape.minimum,shape.maximum,0.045f,0);
-    else if(part<7) box(shape.minimum,shape.maximum,0.035f,1);
-    else {
-        const auto root=RailBoostExhaust::Root(part==7?-1.0f:1.0f);
-        const float x=root.x,y=root.y,z=root.z;
-        box({x-0.40f,y-0.32f,z},{x+0.40f,y-0.20f,z+1.15f},0.025f,1);
-        box({x-0.40f,y+0.20f,z},{x+0.40f,y+0.32f,z+1.15f},0.025f,1);
-        box({x-0.40f,y-0.22f,z},{x-0.28f,y+0.22f,z+1.15f},0.025f,1);
-        box({x+0.28f,y-0.22f,z},{x+0.40f,y+0.22f,z+1.15f},0.025f,1);
-    }
-    EnsureModelDataMaterialLayout(model);RepairModelGeometryOrientation(model);
-    return model;
+    if (part >= RailVehicleBreakaway::FractureParts.size()) return {};
+    return BuildRailVehicleModelData(true, false, static_cast<CartFracturePart>(part));
 }
 
 Material BuildRailVehicleTitleMaterial(const MaterialData& source, const Material& gameplayMaterial,

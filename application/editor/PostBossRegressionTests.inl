@@ -677,7 +677,7 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
             if(i==25)runner.Expect(!result.destroyed && actor.desc.hitPoints>0,
                 "the former full-hull barrage no longer defeats Fang");
         }
-        sequence.Notify(runtime.EnemyCombat().ConsumeEvents());
+        sequence.Notify(runtime.ConsumeEnemyCombatEvents());
         RailLockVolley volley;RailLockToken token;token.target.actorId=ids[1];
         WeaponShot shot;shot.damageType=WeaponDamageType::Ice;shot.damage=34;shot.range=120;
         const int lockShots=int(std::ceil(runtime.Enemies()[1].desc.hitPoints/shot.damage));
@@ -688,7 +688,7 @@ void TestRearPursuitCombat(RegressionRunner& runner) {
             if(burst==5)runner.Expect(runtime.Enemies()[1].desc.hitPoints>0,
                 "the former full-hull lock count no longer defeats Veil");
         }
-        sequence.Notify(runtime.EnemyCombat().ConsumeEvents());
+        sequence.Notify(runtime.ConsumeEnemyCombatEvents());
         for(int i=0;i<fps*4;++i)sequence.Update(dt,distance,true,runtime,dispatcher);
         runner.Expect(sequence.EscapeActive() && !sequence.Complete(),"actual primary and lock defeats qualify escape without claiming a clear before the bridge jump");
     }

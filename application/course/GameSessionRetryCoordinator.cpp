@@ -235,7 +235,7 @@ GameSessionRetryResult GameSessionRetryCoordinator::Retry(
     }
     binding_.collisionSystem->Reset();
     if (checkpoint_.hasGrazeScoreRuntime &&
-        !binding_.collisionSystem->PlayerNearMiss().RestoreState(
+        !binding_.collisionSystem->RestorePlayerNearMiss(
             checkpoint_.nearMiss,
             &validationError)) {
         lastResult_.status = GameSessionRetryStatus::GrazeRuntimeMismatch;

@@ -1726,6 +1726,19 @@ bool CourseSpawnRuntime::DefeatEnemy(EnemyCombatSystem& system,
     return system.ForceDefeatActors(enemies_, *this, actorId);
 }
 
+bool CourseSpawnRuntime::NotifyEnemyDamage(const DamageResult& damageResult,
+        const WeaponFeedbackEvent* feedbackEvent) {
+    return NotifyEnemyDamage(enemyCombatSystem_, damageResult, feedbackEvent);
+}
+
+bool CourseSpawnRuntime::DefeatEnemy(uint32_t actorId) {
+    return DefeatEnemy(enemyCombatSystem_, actorId);
+}
+
+std::vector<EnemyCombatEvent> CourseSpawnRuntime::ConsumeEnemyCombatEvents() {
+    return enemyCombatSystem_.ConsumeEvents();
+}
+
 void CourseSpawnRuntime::UpdateEnemyBehavior(EnemyBehaviorSystem& system,
         const EnemyBehaviorFrameInput& input) {
     system.UpdateActors(enemies_, *this, input);

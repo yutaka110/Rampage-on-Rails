@@ -209,14 +209,23 @@ DamageResult CourseCollisionSystem::ApplyWeaponHit(
     lastWeaponFeedbackResult_ =
         weaponFeedbackSystem_.Submit(runtime, request, lastDamageResult_, nativePrimaryImpact);
     if (!subsystemContact) {
-        runtime.EnemyCombat().SubmitDamageResult(
-            runtime,
+        runtime.NotifyEnemyDamage(
             lastDamageResult_,
             lastWeaponFeedbackResult_.accepted
                 ? &lastWeaponFeedbackResult_.event
                 : nullptr);
     }
     return lastDamageResult_;
+}
+
+bool CourseCollisionSystem::ConfigurePlayerHitbox(const PlayerHitboxDefinition& definition,
+    std::string* errorMessage) {
+    return playerHitboxSystem_.Initialize(definition, errorMessage);
+}
+
+bool CourseCollisionSystem::RestorePlayerNearMiss(const PlayerNearMissRuntimeState& state,
+    std::string* errorMessage) {
+    return playerNearMissSystem_.RestoreState(state, errorMessage);
 }
 
 WeaponFireResult CourseCollisionSystem::UpdateWeaponFire(const WeaponFireInput& input) {

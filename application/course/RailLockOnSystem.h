@@ -37,6 +37,7 @@ struct RailLockOnFrameInput {
     bool keyboardDirectionalAimEnabled = true;
     bool shiftLockEnabled = true;
     bool aimAssistEnabled = true;
+    const RailVisualOcclusion* visualOcclusion = nullptr;
 };
 
 class RailLockOnSystem {

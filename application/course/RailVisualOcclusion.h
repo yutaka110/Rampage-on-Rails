@@ -4,23 +4,18 @@
 #include <functional>
 #include <utility>
 
-// A frame-scoped query of the actual rendered stone and terrain. Combat/lock
-// systems share this visibility decision without owning renderer resources.
-namespace RailVisualOcclusion {
-using Query = std::function<bool(Vector3, Vector3)>;
-inline thread_local const Query* current = nullptr;
-inline thread_local Vector3 currentEye{};
-class Scope final {
+// A single gameplay frame's view of the rendered stone and terrain.
+class RailVisualOcclusion final {
 public:
-    explicit Scope(Query query, Vector3 eye = {}) : query_(std::move(query)), previous_(current), previousEye_(currentEye) { current = &query_; currentEye = eye; }
-    ~Scope() { current = previous_; currentEye = previousEye_; }
-    Scope(const Scope&) = delete;
-    Scope& operator=(const Scope&) = delete;
+    using Query = std::function<bool(Vector3, Vector3)>;
+
+    explicit RailVisualOcclusion(Query query = {}, Vector3 eye = {})
+        : query_(std::move(query)), eye_(eye) {}
+
+    bool Blocked(Vector3 eye, Vector3 target) const { return query_ && query_(eye, target); }
+    bool FromCamera(Vector3 target) const { return Blocked(eye_, target); }
+
 private:
     Query query_;
-    const Query* previous_;
-    Vector3 previousEye_;
+    Vector3 eye_;
 };
-inline bool Blocked(Vector3 eye, Vector3 target) { return current && (*current)(eye, target); }
-inline bool FromCamera(Vector3 target) { return Blocked(currentEye, target); }
-}

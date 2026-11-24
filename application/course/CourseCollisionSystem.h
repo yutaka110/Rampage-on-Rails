@@ -116,6 +116,10 @@ public:
     void SynchronizePlayerHitPoints(
         float hitPoints,
         float maximumHitPoints = 100.0f);
+    bool ConfigurePlayerHitbox(const PlayerHitboxDefinition& definition,
+        std::string* errorMessage = nullptr);
+    bool RestorePlayerNearMiss(const PlayerNearMissRuntimeState& state,
+        std::string* errorMessage = nullptr);
     CourseCollisionFrameStats Update(CourseSpawnRuntime& runtime, const CourseCollisionFrameInput& input);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw, const RailPath& railPath) const;
 
@@ -126,7 +130,6 @@ public:
     const PlayerDamageSystem& PlayerDamage() const noexcept {
         return playerDamageSystem_;
     }
-    PlayerDamageSystem& PlayerDamage() noexcept { return playerDamageSystem_; }
     const std::vector<PlayerDamageResult>& PlayerDamageResults() const noexcept {
         return playerDamageSystem_.ResultsThisFrame();
     }
@@ -136,11 +139,7 @@ public:
     const PlayerHitboxSystem& PlayerHitbox() const noexcept {
         return playerHitboxSystem_;
     }
-    PlayerHitboxSystem& PlayerHitbox() noexcept { return playerHitboxSystem_; }
     const PlayerNearMissSystem& PlayerNearMiss() const noexcept {
-        return playerNearMissSystem_;
-    }
-    PlayerNearMissSystem& PlayerNearMiss() noexcept {
         return playerNearMissSystem_;
     }
     const std::vector<PlayerNearMissResult>& PlayerNearMissResults() const noexcept {

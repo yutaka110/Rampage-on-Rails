@@ -557,6 +557,41 @@ RailTitleSandGrain RailTitleScene::EvaluateRailSpark(const RailTitleRailImpact& 
     return spark;
 }
 
+void RailTitleMenu::Reset() {
+    selection_ = Item::Start;
+    controlsVisible_ = false;
+}
+
+RailTitleMenu::Action RailTitleMenu::HandlePointer(int hitItem, bool activate) {
+    const bool itemHit = hitItem >= 0 && hitItem <= static_cast<int>(Item::Exit);
+    if (!controlsVisible_ && itemHit) selection_ = static_cast<Item>(hitItem);
+    return activate && (controlsVisible_ || itemHit) ? Activate() : Action::None;
+}
+
+RailTitleMenu::Action RailTitleMenu::HandleKey(Key key) {
+    if (key == Key::Confirm) return Activate();
+    if (key == Key::Cancel) {
+        if (controlsVisible_) controlsVisible_ = false;
+        else selection_ = Item::Exit;
+    } else if (!controlsVisible_) {
+        constexpr int count = static_cast<int>(Item::Exit) + 1;
+        const int step = key == Key::Up ? count - 1 : 1;
+        selection_ = static_cast<Item>((Selection() + step) % count);
+    }
+    return Action::None;
+}
+
+RailTitleMenu::Action RailTitleMenu::Activate() {
+    if (controlsVisible_) {
+        controlsVisible_ = false;
+    } else if (selection_ == Item::Controls) {
+        controlsVisible_ = true;
+    } else {
+        return selection_ == Item::Exit ? Action::Exit : Action::Start;
+    }
+    return Action::None;
+}
+
 int RailTitleScene::HitTest(float x,float y,float width,float height) {
     const float s = (std::min)(width/1600.0f,height/900.0f);
     if (s<=0.0f) return -1;

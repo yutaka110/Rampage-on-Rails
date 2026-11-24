@@ -298,7 +298,7 @@ void RailVehicleCollisionFeedbackBridge::Update(
     float gatlingHeave=0, gatlingBank=0, gatlingPitch=0;
     float rearHeave=0, rearBank=0, rearPitch=0;
     float projectileHeave=0, projectileBank=0, projectilePitch=0;
-    Vector3 projectilePush{};
+    Vector2 projectilePushLocal{};
     if(vehicle!=nullptr && vehicle->initialized) for(const auto& response:responses_) {
         if(response.intensity<=0) continue;
         frame_.activeResponseRemainingSeconds=(std::max)(frame_.activeResponseRemainingSeconds,
@@ -364,8 +364,8 @@ void RailVehicleCollisionFeedbackBridge::Update(
             projectileHeave+=spring;
             projectileBank+=roll*spring;
             projectilePitch+=z*spring;
-            projectilePush=Add(projectilePush,Add(Scale(vehicle->right,-x*.12f*spring),
-                Scale(vehicle->forward,-z*.10f*spring)));
+            projectilePushLocal.x += x * spring;
+            projectilePushLocal.y += z * spring;
             continue;
         }
         const float t=(std::clamp)(response.elapsed/response.duration,0.0f,1.0f);
@@ -391,6 +391,10 @@ void RailVehicleCollisionFeedbackBridge::Update(
             (std::clamp)(heave,-.30f,1.0f) + 2.25f*(std::clamp)(heavyHeave,-.20f,1.0f) +
             .45f*(std::clamp)(gatlingHeave,-1.15f,.60f) + (std::clamp)(rearHeave,-.48f,2.7f) +
             2.2f*(std::clamp)(projectileHeave,-.40f,1.0f));
+        // Keep overlapping rounds within the recoil envelope in every axis.
+        const Vector3 projectilePush = Add(
+            Scale(vehicle->right, -.12f * (std::clamp)(projectilePushLocal.x, -1.0f, 1.0f)),
+            Scale(vehicle->forward, -.10f * (std::clamp)(projectilePushLocal.y, -1.0f, 1.0f)));
         frame_.bodyTranslationWorld = Add(Scale(vehicle->up,-bodyTravel),projectilePush);
         frame_.bodyBankDegrees = input.settings.maximumBankDegrees * (
             (std::clamp)(bank,-1.0f,1.0f) + 1.8f*(std::clamp)(heavyBank,-1.0f,1.0f) +

@@ -14,7 +14,7 @@ struct EnergyShieldTestFixture {
         actor.weaponMount.ready=true;actor.weaponMount.dronePose.visible=true;
         actor.weaponMount.dronePose.position={0,4,100};actor.weaponMount.dronePose.scale={1,1,1};
         std::string error;runner.Expect(runtime.RestoreCheckpoint(saved,true,&error),"shield fixture restores a real damageable actor");
-        runtime.EnemyCombat().ConsumeEvents();
+        runtime.ConsumeEnemyCombatEvents();
         runner.Expect(collision.LoadWeaponDefinitions("Resources/weapons",&error),"shield uses actual weapon definitions");
     }
     WeaponHitRequest Request(uint64_t id,bool lock=false,bool rear=false)const {
@@ -35,7 +35,7 @@ void TestEnergyShieldAuthority(RegressionRunner& runner) {
         const auto& feedback=f.collision.WeaponFeedback().LastAcceptedEvent();
         runner.Expect(feedback.shieldHit && !feedback.lockOnContact && feedback.impactEffectName.empty() &&
             feedback.worldPosition.z<99 && feedback.hitStopSeconds==0,"absorbed lock reports the membrane contact without an ice/hull explosion");
-        for(const auto& event:f.runtime.EnemyCombat().ConsumeEvents())reward.ObserveDefeat(event);
+        for(const auto& event:f.runtime.ConsumeEnemyCombatEvents())reward.ObserveDefeat(event);
     }
     runner.Expect(reward.TotalKills()==0,"shield hits cannot grant defeat reward or restart the enemy lifecycle");
     for(uint64_t id=9;id<=12;++id) {
@@ -48,7 +48,7 @@ void TestEnergyShieldAuthority(RegressionRunner& runner) {
     }
     const auto body=f.collision.ApplyWeaponHit(f.runtime,&f.course,f.Request(13,true));
     runner.Expect(body.damageApplied && body.destroyed && !body.shieldHit,"an arriving lock reaches the newly exposed hull");
-    unsigned deaths=0;for(const auto& event:f.runtime.EnemyCombat().ConsumeEvents()) {deaths+=event.kind==EnemyCombatEventKind::Defeated;reward.ObserveDefeat(event);}
+    unsigned deaths=0;for(const auto& event:f.runtime.ConsumeEnemyCombatEvents()) {deaths+=event.kind==EnemyCombatEventKind::Defeated;reward.ObserveDefeat(event);}
     runner.Expect(deaths==1 && reward.TotalKills()==1,"only the actual hull defeat produces one death and one boost credit");
     EnergyShieldTestFixture rear(runner);const auto flank=rear.collision.ApplyWeaponHit(rear.runtime,&rear.course,rear.Request(1,false,true));
     runner.Expect(flank.damageApplied && !flank.shieldHit && rear.runtime.Enemies().front().energyShield.hitPoints==48,
@@ -136,15 +136,20 @@ void TestEnergyShieldPoseAndRetry(RegressionRunner& runner) {
 void TestEnergyShieldAuthoring(RegressionRunner& runner) {
     CourseAsset course;std::string error;runner.Expect(course.LoadFromFile(RailShortCoursePath,&error),"shield loads the complete course");
     const auto cooked=CourseWaveRuntimeCompiler{}.Compile(course,{});runner.Expect(cooked.succeeded,"shield assets compile with the existing wave compiler");
-    size_t shieldCount=0;for(const auto& actor:cooked.program.actors)if(actor.actor.energyShield.enabled) {
-        ++shieldCount;runner.Expect(actor.actor.meshId=="twin_shield_hull" && actor.actor.energyShield.maximumHitPoints==48,
-            "the two shield variants retain the original chassis and explicit authored durability");
+    std::vector<std::string> shieldPlacements;
+    for(const auto& actor:cooked.program.actors)if(actor.actor.energyShield.enabled) {
+        shieldPlacements.push_back(actor.placementGuid);
+        runner.Expect(actor.actor.meshId=="twin_shield_hull" && actor.actor.energyShield.maximumHitPoints==48,
+            "shield placements retain the original chassis and explicit authored durability");
     }
-    runner.Expect(shieldCount==2,"main course introduces exactly two shield enemies without increasing population");
+    std::sort(shieldPlacements.begin(),shieldPlacements.end());
+    runner.Expect(shieldPlacements==std::vector<std::string>{"short-exit-guard-member-5",
+        "short_finale-member-0","short_intercept-member-0"},
+        "the intercept, pursuit and exit guard each bring one shield scout");
     runner.Expect(cooked.program.SaveToFile("logs/energy_shield_roundtrip.coursebin",&error),"shield program writes current binary version");
     CourseRuntimeProgramAsset loaded;runner.Expect(loaded.LoadFromFile("logs/energy_shield_roundtrip.coursebin",&error),"shield program reloads its authored damage contract");
     size_t restored=0;for(const auto& actor:loaded.actors)restored+=actor.actor.energyShield.enabled;
-    runner.Expect(restored==shieldCount,"cooked runtime preserves shield enablement rather than relying on actor IDs");
+    runner.Expect(restored==shieldPlacements.size(),"cooked runtime preserves shield enablement rather than relying on actor IDs");
     ge3::core::ShaderCompiler compiler;runner.Expect(compiler.Initialize(),"shield initializes native shader compiler");
     const auto shader=compiler.CompileFromFile(L"Resources/TitleTracer.PS.hlsl",L"main",L"ps_6_0",{L"-O3",L"-WX"});
     runner.Expect(shader && shader->GetBufferSize()>0,"membrane, impacts and fracture compile in the actual depth-tested world shader");

@@ -48,18 +48,16 @@ int main() {
     }
     Require(!Trace({},{0,0,1},10).hit,"no callback survives frame teardown");
     Require(IsStone("organic_arch_large") && IsStone("root_spire_column") && !IsStone("title_stake"),"only authored stone opts in");
-    Require(!RailVisualOcclusion::Blocked({},{0,.4f,0}),"no visibility callback outside a live frame");
-    {
-        RailVisualOcclusion::Scope visibility([&](Vector3 eye,Vector3 target) {
-            auto direction=Sub(target,eye);float range=std::sqrt(Dot(direction,direction));
-            direction=Unit(direction);Vector3 n{};return mesh.Trace(eye,direction,range,n);
-        },{0,.4f,-5});
-        Require(RailVisualOcclusion::FromCamera({0,.4f,5}),"actual arch lintel hides a lock target");
-        Require(!RailVisualOcclusion::Blocked({0,-.5f,-5},{0,-.5f,5}),"open aperture keeps visible targets lockable");
-        {RailVisualOcclusion::Scope clear([](Vector3,Vector3){return false;});
-            Require(!RailVisualOcclusion::FromCamera({0,.4f,5}),"nested review visibility is isolated");}
-        Require(RailVisualOcclusion::FromCamera({0,.4f,5}),"frame visibility restores after nested review");
-    }
-    Require(!RailVisualOcclusion::Blocked({},{0,.4f,0}),"visibility callback cannot survive a frame");
+    const RailVisualOcclusion visibility([&](Vector3 eye, Vector3 target) {
+        auto direction = Sub(target, eye);
+        float range = std::sqrt(Dot(direction, direction));
+        Vector3 normal{};
+        return mesh.Trace(eye, Unit(direction), range, normal);
+    }, {0,.4f,-5});
+    const RailVisualOcclusion clear;
+    Require(!clear.FromCamera({0,.4f,5}), "a view without a callback has no visual occluders");
+    Require(visibility.FromCamera({0,.4f,5}), "actual arch lintel hides a lock target");
+    Require(!visibility.Blocked({0,-.5f,-5}, {0,-.5f,5}), "open aperture keeps visible targets lockable");
+    Require(!clear.FromCamera({0,.4f,5}), "a separate view is unaffected by the blocked view");
     std::puts("PASS: actual arch aperture, lintel, pillar, nearest hit, scale, empty space, scoped lifetime");
 }

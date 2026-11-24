@@ -880,7 +880,15 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     // This keeps the solver history alive and fades its correction with the
     // same weight as the chase pose, including the first/last blend frames.
     // Solving against the cinematic eye would instead chase its close-up.
-    ApplyVehicleFraming(frame, input, cameraSample);
+    const auto* visualBeat = input.course->FindCinematicShotSet(input.distance);
+    const bool limitRidgeFov = visualBeat && visualBeat->id == "blockout-shot-ridge" &&
+        hasPreviousComfortFrame_ && input.deltaTime > 0.0f;
+    const auto comfortableFov = [&](float fovY) {
+        const float step = .35f * (std::min)(input.deltaTime, .25f);
+        return limitRidgeFov ? (std::clamp)(fovY, previousFovY_ - step, previousFovY_ + step) : fovY;
+    };
+    // Solve the chase framing against the lens it will actually render with.
+    ApplyVehicleFraming(frame, input, cameraSample, comfortableFov(frame.rig.fovY));
     if(input.sequenceViewWeight>0 && input.sequenceView.Validate())
         frame.authoredView=input.sequenceView;
     // Explicit camera sections own the pose, while the common collision,
@@ -967,11 +975,7 @@ RailCameraDirectorFrame RailCameraDirector::Evaluate(const RailCameraDirectorFra
     // Composition pressure can change when a downhill target enters the
     // frustum. Bound the FINAL lens correction as well as the base rig, so
     // this authored ridge never produces a one-frame zoom at that handoff.
-    if(const auto* shot=input.course->FindCinematicShotSet(input.distance);
-            shot && shot->id=="blockout-shot-ridge" && hasPreviousComfortFrame_ && input.deltaTime>0) {
-        const float step=.35f*(std::min)(input.deltaTime,.25f);
-        frame.rig.fovY=(std::clamp)(frame.rig.fovY,previousFovY_-step,previousFovY_+step);
-    }
+    frame.rig.fovY = comfortableFov(frame.rig.fovY);
     frame.fovY = frame.rig.fovY;
     frame.modeKind = ClassifyMode(frame.mode);
     frame.railSpeed = input.railSpeed > 0.0f ? input.railSpeed : cameraSample.speed;
@@ -1018,7 +1022,8 @@ void RailCameraDirector::MeasureVehicleFraming(
 void RailCameraDirector::ApplyVehicleFraming(
     RailCameraDirectorFrame& frame,
     const RailCameraDirectorFrameInput& input,
-    const RailPathSample& cameraSample) {
+    const RailPathSample& cameraSample,
+    float projectionFovY) {
     if (!input.vehicleFramingActive) {
         vehicleFramingPullback_ = 0.0f;
         vehicleFramingLift_ = 0.0f;
@@ -1032,7 +1037,7 @@ void RailCameraDirector::ApplyVehicleFraming(
     const float aspect = input.viewportWidth > 0 && input.viewportHeight > 0
         ? static_cast<float>(input.viewportWidth) / input.viewportHeight
         : 16.0f / 9.0f;
-    const float tanY = std::tan((std::max)(0.05f, frame.rig.fovY) * 0.5f);
+    const float tanY = std::tan((std::max)(0.05f, projectionFovY) * 0.5f);
     const float tanX = tanY * (std::max)(0.25f, aspect);
     const float handoffWeight = std::isfinite(input.titleHandoffWeight)
         ? (std::clamp)(input.titleHandoffWeight, 0.0f, 1.0f) : 0.0f;

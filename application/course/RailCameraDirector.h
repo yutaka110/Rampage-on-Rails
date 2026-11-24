@@ -374,7 +374,8 @@ private:
     void ApplyVehicleFraming(
         RailCameraDirectorFrame& frame,
         const RailCameraDirectorFrameInput& input,
-        const RailPathSample& cameraSample);
+        const RailPathSample& cameraSample,
+        float projectionFovY);
     void MeasureVehicleFraming(
         RailCameraDirectorFrame& frame,
         const RailCameraDirectorFrameInput& input) const;

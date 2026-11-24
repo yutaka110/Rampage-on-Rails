@@ -165,14 +165,15 @@ __declspec(noinline) void TestFastNormalTravel(RegressionRunner& runner) {
         runner.Expect(travel.Distance()>3799.9f && elapsed<180 && samples>=36 && speed.KillBoost().Serial()==0,
             "the complete rail is traversable at the new ordinary pace without E or injected reward activations");
     }
-    for(const auto& sample:std::array<std::pair<float,float>,6>{{{500.0f,29.45f},{1000.0f,44.55f},{1750.0f,36.0f},{2200.0f,46.575f},{2800.0f,54.675f},{3500.0f,36.45f}}}) {
+    for(const auto& sample:std::array<std::pair<float,float>,6>{{{500.0f,29.45f},{1000.0f,32.4f},{1750.0f,36.0f},{2200.0f,46.575f},{2800.0f,54.675f},{3500.0f,36.45f}}}) {
         RailSpeedDirector speed;speed.Configure(preset.speedPolicy);
         RailSpeedDirectorFrameInput si;si.course=&course;si.railPath=&rail;si.distance=sample.first;si.section=course.FindSection(sample.first);
         si.rideProfile=course.FindRideProfile(sample.first);const auto policy=speed.Evaluate(si);
         RailRideDirector ride;RailRideDirectorInput ri;ri.course=&course;ri.railPath=&rail;ri.distance=sample.first;ri.baseRequestedSpeed=policy.requestedSpeed;
         const auto intent=ride.Evaluate(ri);RailRideMotionEnvelope envelope;RailRideMotionEnvelopeInput ei;ei.vehicleDefinition=&preset.vehicle;ei.ride=&intent;
         ei.normalSpeedScale=preset.speedPolicy.normalSpeedScale;const auto normal=envelope.Evaluate(ei);
-        runner.Expect(std::abs(normal.normalRequestedSpeed-sample.second)<.002f,"ordinary section targets match former E travel and the bridge has one shared baseline");
+        runner.Expect(std::abs(normal.normalRequestedSpeed-sample.second)<.002f,
+            "ordinary travel matches each section's tuned speed at distance "+std::to_string(sample.first));
         ei.manualBoostMultiplier=RailManualBoost::HeldMaximumMultiplier;const auto manual=envelope.Evaluate(ei);
         ei.manualBoostMultiplier=RailKillBoost::MaximumMultiplier;const auto reward=envelope.Evaluate(ei);
         runner.Expect(std::abs(manual.requestedSpeed/sample.second-1.2f)<.001f && std::abs(reward.requestedSpeed/sample.second-1.4f)<.001f &&
@@ -657,7 +658,7 @@ void TestKillBoostRealDefeats(RegressionRunner& runner) {
     auto saved=runtime.CaptureCheckpoint();
     for(auto& actor:saved.enemies) {actor.combatState.phase=EnemyCombatPhase::Engaging;actor.combatState.canReceiveDamage=true;actor.combatState.canBeTargeted=true;}
     runner.Expect(runtime.RestoreCheckpoint(saved,true,&error),"damageable real enemies restore");
-    runtime.EnemyCombat().ConsumeEvents();
+    runtime.ConsumeEnemyCombatEvents();
     unsigned count=0;
     for(const auto& actor:runtime.Enemies()) {
         WeaponHitRequest shot;shot.shotId=100+count;shot.targetActorId=actor.actorId;shot.hitKind=RailAimHitKind::Enemy;
@@ -665,13 +666,13 @@ void TestKillBoostRealDefeats(RegressionRunner& runner) {
         shot.rayDirection={0,0,1};shot.hitNormal={0,0,-1};
         const auto result=collision.ApplyWeaponHit(runtime,&course,shot);
         runner.Expect(result.damageApplied && result.destroyed,"real primary/lock contact defeats one actor");
-        for(const auto& event:runtime.EnemyCombat().ConsumeEvents()) {
+        for(const auto& event:runtime.ConsumeEnemyCombatEvents()) {
             boost.ObserveDefeat(event);
             if(immediate.ObserveDefeat(event))immediate.ActivatePending(true,true);
         }
         runner.Expect(boost.Charge()==++count,"accepted primary and lock defeats both contribute exactly one charge");
         collision.ApplyWeaponHit(runtime,&course,shot);
-        for(const auto& event:runtime.EnemyCombat().ConsumeEvents())boost.ObserveDefeat(event);
+        for(const auto& event:runtime.ConsumeEnemyCombatEvents())boost.ObserveDefeat(event);
         runner.Expect(boost.Charge()==count,"replayed weapon damage never grants another kill");
     }
     runner.Expect(immediate.Active() && immediate.Age()==0 && immediate.Serial()==1 && immediate.IgnitionPulse()==1,

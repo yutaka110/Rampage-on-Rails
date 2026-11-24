@@ -97,6 +97,7 @@ void RailLockOnSystem::Update(const RailLockOnFrameInput& input) {
     registryInput.cameraPosition = input.gameplayCameraPosition;
     registryInput.viewRelativeTargeting = input.viewRelativeTargeting;
     registryInput.viewForward = input.viewForward;
+    registryInput.visualOcclusion = input.visualOcclusion;
     registry_.Build(registryInput);
 
     RailReticleFrameInput reticleInput{};

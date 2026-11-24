@@ -128,7 +128,7 @@ bool CourseGameplayWaveRuntimeBridge::NotifyEnemyDefeated(
     actorPhases_[actorIndex] = CourseGameplayActorPhase::Defeated;
     for (const CourseEnemyActor& actor : runtime_->Enemies()) {
         if (actor.desc.sourcePlacementGuid == placementGuid) {
-            runtime_->EnemyCombat().ForceDefeat(*runtime_, actor.actorId);
+            runtime_->DefeatEnemy(actor.actorId);
         }
     }
     runtime_->PruneDestroyedActors();

@@ -1,5 +1,6 @@
 #include "course/RailSceneryImpact.h"
 #include "course/RailVisualOcclusion.h"
+#include "course/RailCombatSessionBridge.h"
 #include "course/RailSideRock.h"
 #include "course/RailShortCourse.h"
 #include "course/RailCrystalCavern.h"
@@ -215,48 +216,8 @@ std::atomic<const char*> gRailStageName{nullptr};
 
 using RailPerfClock = std::chrono::steady_clock;
 
-struct RailPerfFrameSample {
-    uint32_t frame = 0;
-    float distance = 0.0f;
-    double updateMs = 0.0;
-    double collisionMs = 0.0;
-    double visualPresetMs = 0.0;
-    double vfxUpdateMs = 0.0;
-    double terrainUpdateMs = 0.0;
-    double particleUpdateMs = 0.0;
-    double renderMs = 0.0;
-    double waitFrameSlotMs = 0.0;
-    double commandListBeginMs = 0.0;
-    double gpuParticleInitMs = 0.0;
-    double sceneTransformsMs = 0.0;
-    double syncCourseMeshMs = 0.0;
-    double imguiMs = 0.0;
-    double imguiBuildUiMs = 0.0;
-    double imguiEndFrameMs = 0.0;
-    double sceneRuntimeSyncMs = 0.0;
-    double registerPassesMs = 0.0;
-    double prepareGraphResourcesMs = 0.0;
-    double renderGraphDebugMs = 0.0;
-    double cascadeShadowMs = 0.0;
-    double renderGraphExecuteMs = 0.0;
-    double telemetryMs = 0.0;
-    double endFrameMs = 0.0;
-    double endAndExecuteMs = 0.0;
-    double signalMs = 0.0;
-    double presentMs = 0.0;
-};
-
-RailPerfFrameSample gRailPerfFrame{};
-
 double ElapsedMs(RailPerfClock::time_point begin, RailPerfClock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - begin).count();
-}
-
-void ResetRailPerfFrame(uint32_t frameIndex, float distance) {
-    drone_perf::ResetFrame();
-    gRailPerfFrame = {};
-    gRailPerfFrame.frame = frameIndex;
-    gRailPerfFrame.distance = distance;
 }
 
 void WriteRailWatchdogLine(const char* message) {
@@ -2018,7 +1979,7 @@ bool AppRunLoop::ApplyRailVehicleControlPreset(
             asset->hitbox, &initializationError) ||
         !railShooterVehicleDamageCoordinator_.Initialize(
             asset->hitbox, &initializationError) ||
-        !railShooterCollisionSystem_.PlayerHitbox().Initialize(
+        !railShooterCollisionSystem_.ConfigurePlayerHitbox(
             asset->hitbox.BuildPlayerHitboxDefinition(),
             &initializationError)) {
         if (errorMessage != nullptr) *errorMessage = initializationError;
@@ -3167,9 +3128,9 @@ void AppRunLoop::RecordRailCameraTuningSample(
     sample.normalShotsFired = collisionStats.playerShotsFired;
     sample.normalShotHits = collisionStats.playerShotWorldHits;
     sample.playerDamage = collisionStats.playerDamage;
-    sample.updateMs = gRailPerfFrame.updateMs;
-    sample.renderMs = gRailPerfFrame.renderMs;
-    sample.presentMs = gRailPerfFrame.presentMs;
+    sample.updateMs = railPerfFrame_.updateMs;
+    sample.renderMs = railPerfFrame_.renderMs;
+    sample.presentMs = railPerfFrame_.presentMs;
 
     railCameraTuningRecorder_.samples.push_back(std::move(sample));
     ++railCameraTuningRecorder_.recordedSamples;
@@ -5141,8 +5102,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     hudRenderInput.viewportWidth = hudWidth;
     hudRenderInput.viewportHeight = hudHeight;
     hudRenderInput.showTitleScreen = railTitleScreenVisible_;
-    hudRenderInput.titleMenuSelection = railTitleMenuSelection_;
-    hudRenderInput.titleControlsVisible = railTitleControlsVisible_;
+    hudRenderInput.titleMenuSelection = railTitleMenu_.Selection();
+    hudRenderInput.titleControlsVisible = railTitleMenu_.ControlsVisible();
     hudRenderInput.titleOpacity = railTitleScene_.MenuOpacity();
     const bool compactDemoReady = IsCrystalCavernDemoMode();
     hudRenderInput.titleBlackout = railTitleScene_.Blackout();
@@ -10147,22 +10108,28 @@ void AppRunLoop::LogRailShooterRuntimeDiagnostics(const char* reason) {
     }
 }
 
+void AppRunLoop::ResetRailPerfFrame(uint32_t frameIndex) {
+    drone_perf::ResetFrame();
+    railPerfFrame_ = {};
+    railPerfFrame_.frame = frameIndex;
+}
+
 void AppRunLoop::LogRailShooterPerfSpike() {
     const double cpuNoPresentMs =
-        gRailPerfFrame.updateMs +
-        (std::max)(0.0, gRailPerfFrame.renderMs - gRailPerfFrame.presentMs);
+        railPerfFrame_.updateMs +
+        (std::max)(0.0, railPerfFrame_.renderMs - railPerfFrame_.presentMs);
     const bool shouldLog =
-        (drone_perf::Enabled() && gRailPerfFrame.frame % 30 == 0) ||
+        (drone_perf::Enabled() && railPerfFrame_.frame % 30 == 0) ||
         cpuNoPresentMs >= 18.0 ||
-        gRailPerfFrame.updateMs >= 8.0 ||
-        gRailPerfFrame.terrainUpdateMs >= 4.0 ||
-        gRailPerfFrame.syncCourseMeshMs >= 3.0 ||
-        gRailPerfFrame.imguiMs >= 4.0 ||
-        gRailPerfFrame.prepareGraphResourcesMs >= 3.0 ||
-        gRailPerfFrame.renderGraphExecuteMs >= 6.0 ||
-        gRailPerfFrame.endAndExecuteMs >= 4.0 ||
-        gRailPerfFrame.waitFrameSlotMs >= 8.0 ||
-        gRailPerfFrame.presentMs >= 8.0;
+        railPerfFrame_.updateMs >= 8.0 ||
+        railPerfFrame_.terrainUpdateMs >= 4.0 ||
+        railPerfFrame_.syncCourseMeshMs >= 3.0 ||
+        railPerfFrame_.imguiMs >= 4.0 ||
+        railPerfFrame_.prepareGraphResourcesMs >= 3.0 ||
+        railPerfFrame_.renderGraphExecuteMs >= 6.0 ||
+        railPerfFrame_.endAndExecuteMs >= 4.0 ||
+        railPerfFrame_.waitFrameSlotMs >= 8.0 ||
+        railPerfFrame_.presentMs >= 8.0;
     if (!shouldLog) {
         return;
     }
@@ -10173,40 +10140,40 @@ void AppRunLoop::LogRailShooterPerfSpike() {
     const TerrainDebrisCullingStats& debrisStats = terrainChunkManager_.LastDebrisCullingStats();
     std::ostringstream line;
     line << "[RailPerfSpike]"
-         << " frame=" << gRailPerfFrame.frame
+         << " frame=" << railPerfFrame_.frame
          << " distance=" << railShooterDistance_
          << " section=\"" << (section != nullptr ? section->name : std::string("-")) << "\""
          << " cinematicShot=\"" << (shotSet != nullptr ? shotSet->id : std::string("-")) << "\""
          << " cpuNoPresentMs=" << cpuNoPresentMs
-         << " updateMs=" << gRailPerfFrame.updateMs
-         << " renderMs=" << gRailPerfFrame.renderMs
-         << " presentMs=" << gRailPerfFrame.presentMs
+         << " updateMs=" << railPerfFrame_.updateMs
+         << " renderMs=" << railPerfFrame_.renderMs
+         << " presentMs=" << railPerfFrame_.presentMs
          << " presentSyncInterval=" << frameCoordinator_.PresentSyncInterval()
          << " presentTearingAllowed=" << (frameCoordinator_.PresentTearingAllowed() ? 1 : 0)
          << " presentMaxFrameLatency=" << frameCoordinator_.PresentMaxFrameLatency()
          << " swapBufferCount=" << swapChain_.BufferCount()
-         << " collisionMs=" << gRailPerfFrame.collisionMs
-         << " visualPresetMs=" << gRailPerfFrame.visualPresetMs
-         << " vfxUpdateMs=" << gRailPerfFrame.vfxUpdateMs
-         << " terrainUpdateMs=" << gRailPerfFrame.terrainUpdateMs
-         << " particleUpdateMs=" << gRailPerfFrame.particleUpdateMs
-         << " waitFrameSlotMs=" << gRailPerfFrame.waitFrameSlotMs
-         << " gpuParticleInitMs=" << gRailPerfFrame.gpuParticleInitMs
-         << " sceneTransformsMs=" << gRailPerfFrame.sceneTransformsMs
-         << " syncCourseMeshMs=" << gRailPerfFrame.syncCourseMeshMs
-         << " imguiMs=" << gRailPerfFrame.imguiMs
-         << " imguiBuildUiMs=" << gRailPerfFrame.imguiBuildUiMs
-         << " imguiEndFrameMs=" << gRailPerfFrame.imguiEndFrameMs
-         << " sceneRuntimeSyncMs=" << gRailPerfFrame.sceneRuntimeSyncMs
-         << " registerPassesMs=" << gRailPerfFrame.registerPassesMs
-         << " prepareGraphResourcesMs=" << gRailPerfFrame.prepareGraphResourcesMs
-         << " renderGraphDebugMs=" << gRailPerfFrame.renderGraphDebugMs
-         << " cascadeShadowMs=" << gRailPerfFrame.cascadeShadowMs
-         << " renderGraphExecuteMs=" << gRailPerfFrame.renderGraphExecuteMs
-         << " telemetryMs=" << gRailPerfFrame.telemetryMs
-         << " endFrameMs=" << gRailPerfFrame.endFrameMs
-         << " endAndExecuteMs=" << gRailPerfFrame.endAndExecuteMs
-         << " signalMs=" << gRailPerfFrame.signalMs
+         << " collisionMs=" << railPerfFrame_.collisionMs
+         << " visualPresetMs=" << railPerfFrame_.visualPresetMs
+         << " vfxUpdateMs=" << railPerfFrame_.vfxUpdateMs
+         << " terrainUpdateMs=" << railPerfFrame_.terrainUpdateMs
+         << " particleUpdateMs=" << railPerfFrame_.particleUpdateMs
+         << " waitFrameSlotMs=" << railPerfFrame_.waitFrameSlotMs
+         << " gpuParticleInitMs=" << railPerfFrame_.gpuParticleInitMs
+         << " sceneTransformsMs=" << railPerfFrame_.sceneTransformsMs
+         << " syncCourseMeshMs=" << railPerfFrame_.syncCourseMeshMs
+         << " imguiMs=" << railPerfFrame_.imguiMs
+         << " imguiBuildUiMs=" << railPerfFrame_.imguiBuildUiMs
+         << " imguiEndFrameMs=" << railPerfFrame_.imguiEndFrameMs
+         << " sceneRuntimeSyncMs=" << railPerfFrame_.sceneRuntimeSyncMs
+         << " registerPassesMs=" << railPerfFrame_.registerPassesMs
+         << " prepareGraphResourcesMs=" << railPerfFrame_.prepareGraphResourcesMs
+         << " renderGraphDebugMs=" << railPerfFrame_.renderGraphDebugMs
+         << " cascadeShadowMs=" << railPerfFrame_.cascadeShadowMs
+         << " renderGraphExecuteMs=" << railPerfFrame_.renderGraphExecuteMs
+         << " telemetryMs=" << railPerfFrame_.telemetryMs
+         << " endFrameMs=" << railPerfFrame_.endFrameMs
+         << " endAndExecuteMs=" << railPerfFrame_.endAndExecuteMs
+         << " signalMs=" << railPerfFrame_.signalMs
          << " enemies=" << railShooterSpawnRuntime_.ActiveEnemyCount()
          << " bullets=" << railShooterSpawnRuntime_.ActiveBulletCount()
          << " obstacles=" << railShooterSpawnRuntime_.ActiveObstacleCount()
@@ -10594,37 +10561,33 @@ bool AppRunLoop::HandleTitleScreenMessage(
     // Ignore repeated confirm/menu input while the start camera owns the view.
     if (railTitleScene_.Starting()) return (message >= WM_KEYFIRST && message <= WM_KEYLAST) ||
         (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST);
-    bool activate = false;
+    using MenuAction = RailTitleMenu::Action;
+    using MenuKey = RailTitleMenu::Key;
+    auto action = MenuAction::None;
     if (message == WM_MOUSEMOVE || message == WM_LBUTTONUP) {
         const int item = RailTitleScene::HitTest(static_cast<short>(LOWORD(lParam)),
-            static_cast<short>(HIWORD(lParam)),float(windowWidth_),float(windowHeight_));
-        if (!railTitleControlsVisible_ && item >= 0) railTitleMenuSelection_ = item;
-        activate = message == WM_LBUTTONUP && (railTitleControlsVisible_ || item >= 0);
+            static_cast<short>(HIWORD(lParam)), float(windowWidth_), float(windowHeight_));
+        action = railTitleMenu_.HandlePointer(item, message == WM_LBUTTONUP);
     } else if (message == WM_KEYDOWN) {
         if ((lParam & (LPARAM{1} << 30)) != 0) return true;
-        if (wParam == VK_ESCAPE) {
-            if (railTitleControlsVisible_) railTitleControlsVisible_ = false;
-            else railTitleMenuSelection_ = 2;
-            return true;
+        switch (wParam) {
+        case VK_ESCAPE: action = railTitleMenu_.HandleKey(MenuKey::Cancel); break;
+        case VK_UP:
+        case 'W': action = railTitleMenu_.HandleKey(MenuKey::Up); break;
+        case VK_DOWN:
+        case 'S': action = railTitleMenu_.HandleKey(MenuKey::Down); break;
+        case VK_RETURN:
+        case VK_SPACE: action = railTitleMenu_.HandleKey(MenuKey::Confirm); break;
         }
-        if (!railTitleControlsVisible_) {
-            if (wParam == VK_UP || wParam == 'W') railTitleMenuSelection_ = (railTitleMenuSelection_ + 2) % 3;
-            if (wParam == VK_DOWN || wParam == 'S') railTitleMenuSelection_ = (railTitleMenuSelection_ + 1) % 3;
-        }
-        activate = wParam == VK_RETURN || wParam == VK_SPACE;
-    } else if (message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_RBUTTONUP) {
-        return true;
-    } else return false;
-    if (activate) {
-        if (railTitleControlsVisible_) railTitleControlsVisible_ = false;
-        else if (railTitleMenuSelection_ == 1) railTitleControlsVisible_ = true;
-        else if (railTitleMenuSelection_ == 2) PostMessageW(hwnd_, WM_CLOSE, 0, 0);
-        else {
-            railTitleScene_.BeginStart();
-            railTitleControlsVisible_ = false;
-            (void)audio_.Play(railSessionStartSound_,0.12f);
-            OutputDebugStringA("[RailTitle] Start camera transition.\n");
-        }
+    } else {
+        return message == WM_LBUTTONDOWN || message == WM_RBUTTONDOWN || message == WM_RBUTTONUP;
+    }
+    if (action == MenuAction::Exit) {
+        PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+    } else if (action == MenuAction::Start) {
+        railTitleScene_.BeginStart();
+        (void)audio_.Play(railSessionStartSound_, 0.12f);
+        OutputDebugStringA("[RailTitle] Start camera transition.\n");
     }
     // Mouse movement also reaches ImGui so it can detect hover on the switch.
     return message != WM_MOUSEMOVE;
@@ -10692,7 +10655,7 @@ void AppRunLoop::ReturnToDemoTitle() {
     railTitleSavedBackdrop_=runtimeState_.showProceduralBackdrop;
     railTitleScene_=RailTitleScene{};
     railTitleScreenVisible_=true; railTitleHasLastUpdate_=false;
-    railTitleMenuSelection_=0; railTitleControlsVisible_=false;
+    railTitleMenu_.Reset();
     railTransitionDemoHover_=railTransitionDemoPressed_=false;
     railTitleDustTimer_=0.0f; railTitleLensSourceSeed_=0;
     railShooterHasLastUpdateTime_=false;
@@ -10919,9 +10882,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         return;
     }
     ++railShooterFrameIndex_;
-    ResetRailPerfFrame(railShooterFrameIndex_, railShooterDistance_);
+    ResetRailPerfFrame(railShooterFrameIndex_);
     const RailWorldRaycast::FrameCacheScope raycastFrameCache(&terrainCollisionWorld_);
-    const RailVisualOcclusion::Scope visualVisibility([this](Vector3 eye,Vector3 target) {
+    const RailVisualOcclusion visualVisibility([this](Vector3 eye,Vector3 target) {
         const auto delta=Subtract(target,eye);
         const float range=std::hypot(delta.x,delta.y,delta.z);
         if(range<.8f || range>600.0f)return false;
@@ -12225,7 +12188,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     runtimeState_.terrain.previewDistance = railShooterDistance_;
     const auto visualPresetStart = RailPerfClock::now();
     ApplyRailShooterVisualPresets(railShooterDistance_);
-    gRailPerfFrame.visualPresetMs = ElapsedMs(visualPresetStart, RailPerfClock::now());
+    railPerfFrame_.visualPresetMs = ElapsedMs(visualPresetStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterVisualPresets");
 
     // A paused scrub is a static evaluation, not a zero-dt continuation of
@@ -12611,6 +12574,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
 
     RailLockOnFrameInput lockOnInput{};
+    lockOnInput.visualOcclusion = &visualVisibility;
     lockOnInput.hwnd = hwnd_;
     lockOnInput.deltaTime = gameplayDeltaTime;
     if((minibossTimeScale<1 || railPostBossSequence_.Escape().Aiming()) && gameplayDeltaTime>0)lockOnInput.deltaTime=sessionDeltaTime;
@@ -14270,7 +14234,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railThreatResponseSettings_);
     DispatchThreatResponse();
     const std::vector<EnemyCombatEvent> enemyCombatEvents =
-        railShooterSpawnRuntime_.EnemyCombat().ConsumeEvents();
+        railShooterSpawnRuntime_.ConsumeEnemyCombatEvents();
     if(!normalTravelAudit && grazeInput.gameplayActive && killBoostControl.AllowsActivation() && IsRailShortCourse(railShooterCoursePath_))
         for(const auto& event:enemyCombatEvents) {
             auto& boost=railShooterSpeedDirector_.KillBoost();
@@ -14579,6 +14543,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         gameplayDeltaTime > 0.0f &&
             (hwnd_ == nullptr || GetForegroundWindow() == hwnd_));
     EnemyEncounterReadabilityInput encounterReadabilityInput{};
+    encounterReadabilityInput.visualOcclusion = &visualVisibility;
     encounterReadabilityInput.runtime = &railShooterSpawnRuntime_;
     encounterReadabilityInput.railPath = &railPath_;
     encounterReadabilityInput.viewProjection =
@@ -14859,7 +14824,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         const auto* proxy=railEnemyEncounterReadabilityDirector_.FindActor(actor.actorId);
         if(!proxy || !proxy->onScreen || !proxy->targetable || !proxy->screenReadable ||
             proxy->projectedDiameterPixels<30.0f*float(metrics.height)/720.0f ||
-            RailVisualOcclusion::Blocked(frameState_.cameraWorldPosition,proxy->worldPosition))continue;
+            visualVisibility.Blocked(frameState_.cameraWorldPosition,proxy->worldPosition))continue;
         tutorialInput.targetVisible=true;
         if(!introFormation && !(speedLessonsLearned && actor.desc.waveId=="short_intercept"))continue;
         tutorialInput.lockTargetAvailable|=std::any_of(tutorialCandidates.begin(),tutorialCandidates.end(),
@@ -15096,66 +15061,21 @@ void AppRunLoop::UpdateRailShooterFrame() {
             <<','<<railMinibossCombat_.FeedbackPart()<<','<<heavy.counterHitAge<<std::endl;
     }
     if (!coursePreviewOwnsRail && railShooterGameSession_.IsInitialized()) {
-        const bool trackScore=!IsRailShortCourse(railShooterCoursePath_);
-        if(trackScore) {
-            uint64_t grazeScoreThisFrame = 0;
-            for (const GrazeScoreResult& result :
-                 railGrazeScoreSystem_.ResultsThisFrame()) {
-                if (!result.accepted || result.scoreAwarded == 0) continue;
-                grazeScoreThisFrame += result.scoreAwarded;
-            }
-            const EnemyAttackDefenseResolutionFrame& defenseResults =
-                railEnemyAttackDefenseResolutionSystem_.Frame();
-            railShooterGameSession_.SetCombo(
-                railEncounterPerformanceScoreSystem_.State().chain,
-                !railEncounterPerformanceScoreSystem_.ResultsThisFrame().empty()
-                    ? "encounter_performance_chain"
-                    : (defenseResults.successes > 0
-                        ? "enemy_attack_defense_chain" : "graze_chain"));
-            if (grazeScoreThisFrame > 0) {
-                railShooterGameSession_.AddScore(
-                    grazeScoreThisFrame,
-                    "near_miss_graze");
-            }
-            if (defenseResults.scoreAwarded > 0) {
-                railShooterGameSession_.AddScore(
-                    defenseResults.scoreAwarded,
-                    "enemy_attack_defense");
-            }
-        }
-        for (const EncounterPerformanceScoreResult& result :
-             railEncounterPerformanceScoreSystem_.ResultsThisFrame()) {
-            if (!result.accepted || result.scoreAwarded == 0) continue;
-            const char* source = "encounter_enemy_defeat";
-            if (result.kind==EncounterPerformanceScoreKind::LockSweep ||
-                result.kind==EncounterPerformanceScoreKind::BatteryBreak ||
-                result.kind==EncounterPerformanceScoreKind::ProjectileIntercept) {
-                source=ToString(result.kind);
-                (void)audio_.PlaySpatial(railLockFullSound_,0.12f,0.0f,
-                    result.kind==EncounterPerformanceScoreKind::ProjectileIntercept?1.12f:1.0f);
-            }
-            if (result.kind == EncounterPerformanceScoreKind::CleanClear) {
-                source = result.fullSweep
-                    ? "encounter_clean_clear_full_sweep"
-                    : "encounter_clean_clear";
-            } else if (result.kind ==
-                       EncounterPerformanceScoreKind::EncounterClear) {
-                source = result.fullSweep
-                    ? "encounter_clear_full_sweep"
-                    : "encounter_clear";
-            }
-            if(trackScore)railShooterGameSession_.AddScore(result.scoreAwarded, source);
-        }
-        for (const PlayerDamageResult& result :
-             railShooterCollisionSystem_.PlayerDamageResults()) {
-            if (!result.accepted || result.appliedDamage <= 0.0f) continue;
-            const std::string source = result.request.sourceId.empty()
-                ? std::string(ToString(result.request.kind))
-                : result.request.sourceId;
-            (void)railShooterGameSession_.ApplyPlayerDamage(
-                result.appliedDamage,
-                source);
-        }
+        const auto& defenseResults = railEnemyAttackDefenseResolutionSystem_.Frame();
+        const RailCombatSessionInput combatResults{
+            .trackScore = !IsRailShortCourse(railShooterCoursePath_),
+            .chain = railEncounterPerformanceScoreSystem_.State().chain,
+            .defenseSuccesses = defenseResults.successes,
+            .defenseScore = defenseResults.scoreAwarded,
+            .grazes = railGrazeScoreSystem_.ResultsThisFrame(),
+            .rewards = railEncounterPerformanceScoreSystem_.ResultsThisFrame(),
+            .damage = railShooterCollisionSystem_.PlayerDamageResults(),
+        };
+        RailCombatSessionBridge::Apply(railShooterGameSession_, combatResults,
+            [this](EncounterPerformanceScoreKind kind) {
+                (void)audio_.PlaySpatial(railLockFullSound_, 0.12f, 0.0f,
+                    kind == EncounterPerformanceScoreKind::ProjectileIntercept ? 1.12f : 1.0f);
+            });
         GameSessionFrameInput sessionInput{};
         sessionInput.deltaTime = sessionDeltaTime*minibossTimeScale;
         sessionInput.courseDistance = railShooterDistance_;
@@ -15326,7 +15246,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
                  "\n").c_str());
         }
     }
-    gRailPerfFrame.collisionMs = ElapsedMs(collisionStart, RailPerfClock::now());
+    railPerfFrame_.collisionMs = ElapsedMs(collisionStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterCollision");
     if(railPrimaryKills_.NewCount()>0) {
         railShooterCameraDirector_.AddFeedbackImpulse(.38f,-.004f,.002f);
@@ -15495,11 +15415,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
     }
     const auto vfxUpdateStart = RailPerfClock::now();
     vfxEngine_.Update(runtimeState_.vfx, gameplayDeltaTime);
-    gRailPerfFrame.vfxUpdateMs = ElapsedMs(vfxUpdateStart, RailPerfClock::now());
+    railPerfFrame_.vfxUpdateMs = ElapsedMs(vfxUpdateStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterVfx");
     const auto terrainUpdateStart = RailPerfClock::now();
     UpdateTerrainAuthoring(gameplayDeltaTime);
-    gRailPerfFrame.terrainUpdateMs = ElapsedMs(terrainUpdateStart, RailPerfClock::now());
+    railPerfFrame_.terrainUpdateMs = ElapsedMs(terrainUpdateStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.afterTerrain");
     if ((railShooterFrameIndex_ % 120u) == 0u) {
         LogRailShooterRuntimeDiagnostics("heartbeat");
@@ -15508,8 +15428,8 @@ void AppRunLoop::UpdateRailShooterFrame() {
     frameState_.drawCount = particleSystem_.UpdateInstances(
         frameState_.viewProjectionMatrix,
         frameState_.deltaTime);
-    gRailPerfFrame.particleUpdateMs = ElapsedMs(particleUpdateStart, RailPerfClock::now());
-    gRailPerfFrame.updateMs = ElapsedMs(updateStart, RailPerfClock::now());
+    railPerfFrame_.particleUpdateMs = ElapsedMs(particleUpdateStart, RailPerfClock::now());
+    railPerfFrame_.updateMs = ElapsedMs(updateStart, RailPerfClock::now());
     imguiLayer_.CompleteEditorRuntimeFrameAdvance(!coursePreviewFrozen);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "update.end");
 }
@@ -16087,12 +16007,12 @@ void AppRunLoop::CaptureRailGpuTimingCpuMetadata(uint32_t backBufferIndex) {
         return;
     }
     timingSlot.cpuNoPresentMs =
-        gRailPerfFrame.updateMs +
-        (std::max)(0.0, gRailPerfFrame.renderMs - gRailPerfFrame.presentMs);
-    timingSlot.waitFrameSlotMs = gRailPerfFrame.waitFrameSlotMs;
-    timingSlot.renderGraphExecuteMs = gRailPerfFrame.renderGraphExecuteMs;
-    timingSlot.endAndExecuteMs = gRailPerfFrame.endAndExecuteMs;
-    timingSlot.presentMs = gRailPerfFrame.presentMs;
+        railPerfFrame_.updateMs +
+        (std::max)(0.0, railPerfFrame_.renderMs - railPerfFrame_.presentMs);
+    timingSlot.waitFrameSlotMs = railPerfFrame_.waitFrameSlotMs;
+    timingSlot.renderGraphExecuteMs = railPerfFrame_.renderGraphExecuteMs;
+    timingSlot.endAndExecuteMs = railPerfFrame_.endAndExecuteMs;
+    timingSlot.presentMs = railPerfFrame_.presentMs;
     timingSlot.rayShadow=railShadowAcceleration_!=0;
     static const bool shadowAudit=ReadEnvironmentUInt("GE3_RAIL_SHADOW_AUDIT",0)!=0;
     if(shadowAudit) {
@@ -19699,12 +19619,12 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforeWaitForFrameSlot");
     const auto waitStart = RailPerfClock::now();
     if (!frameCoordinator_.WaitForFrameSlot(backBufferIndex)) {
-        gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
+        railPerfFrame_.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.waitForFrameSlotFailed");
         closeImguiFrameOnAbort();
         return;
     }
-    gRailPerfFrame.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
+    railPerfFrame_.waitFrameSlotMs = ElapsedMs(waitStart, RailPerfClock::now());
     ResolveCompletedRailGpuTiming(backBufferIndex);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterWaitForFrameSlot");
     bool terrainMaterialReloadRequested =
@@ -19717,7 +19637,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     const auto commandBeginStart = RailPerfClock::now();
     ComPtr<ID3D12GraphicsCommandList> commandList =
         clPool_.Begin(backBufferIndex, appPipelines_.GetMainPSO());
-    gRailPerfFrame.commandListBeginMs = ElapsedMs(commandBeginStart, RailPerfClock::now());
+    railPerfFrame_.commandListBeginMs = ElapsedMs(commandBeginStart, RailPerfClock::now());
     if (commandList == nullptr) {
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.commandListBeginFailed");
         closeImguiFrameOnAbort();
@@ -19742,7 +19662,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         commandList.Get(),
         heaps_,
         appPipelines_);
-    gRailPerfFrame.gpuParticleInitMs = ElapsedMs(gpuParticleInitStart, RailPerfClock::now());
+    railPerfFrame_.gpuParticleInitMs = ElapsedMs(gpuParticleInitStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterInitializeGpuParticles");
 
     ID3D12Resource* backBuffer = swapChain_.BackBuffer(backBufferIndex);
@@ -19758,7 +19678,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         frameState_.projMatrix,
         windowWidth_,
         windowHeight_);
-    gRailPerfFrame.sceneTransformsMs = ElapsedMs(sceneTransformsStart, RailPerfClock::now());
+    railPerfFrame_.sceneTransformsMs = ElapsedMs(sceneTransformsStart, RailPerfClock::now());
     const auto syncCourseMeshStart = RailPerfClock::now();
     const CourseSpawnRuntime& coursePresentationRuntime =
         coursePreviewActorRuntimeBridge_.Active()
@@ -19786,7 +19706,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         IsRailShortCourse(railShooterCoursePath_) ? &railMothershipBattle_.Current() : nullptr,
         IsRailShortCourse(railShooterCoursePath_)?railPostBossSequence_.Scenery():std::span<const CourseTerrainPlacement>{},
         &railVeilModel_.Frame(), &railEliteFire_,{railShooterPlayerLateralOffset_,railShooterPlayerVerticalOffset_});
-    gRailPerfFrame.syncCourseMeshMs = ElapsedMs(syncCourseMeshStart, RailPerfClock::now());
+    railPerfFrame_.syncCourseMeshMs = ElapsedMs(syncCourseMeshStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSyncCourseMeshes");
 
     const PostProcessExecutionPlan postExecutionPlan = vfxEngine_.PostProcess().BuildExecutionPlan();
@@ -19899,7 +19819,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 StopEditorGameplaySpawns();
             },
             IsRailShooterSceneActive()});
-    gRailPerfFrame.imguiBuildUiMs = ElapsedMs(imguiBuildUiStart, RailPerfClock::now());
+    railPerfFrame_.imguiBuildUiMs = ElapsedMs(imguiBuildUiStart, RailPerfClock::now());
     const auto imguiEndFrameStart = RailPerfClock::now();
     imguiLayer_.EndFrame();
     imguiFrameOpen = false;
@@ -19910,8 +19830,8 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             ("[RuntimeScene] Reconcile failed: " +
              runtimeSceneReconcileError + "\n").c_str());
     }
-    gRailPerfFrame.imguiEndFrameMs = ElapsedMs(imguiEndFrameStart, RailPerfClock::now());
-    gRailPerfFrame.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
+    railPerfFrame_.imguiEndFrameMs = ElapsedMs(imguiEndFrameStart, RailPerfClock::now());
+    railPerfFrame_.imguiMs = ElapsedMs(imguiStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterImgui");
 
     ApplyEditorViewportRenderTargetForRender();
@@ -20046,7 +19966,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         runtimeState_.accelerationField.acceleration,
         {runtimeState_.accelerationField.area.min, runtimeState_.accelerationField.area.max}
     });
-    gRailPerfFrame.sceneRuntimeSyncMs = ElapsedMs(sceneRuntimeSyncStart, RailPerfClock::now());
+    railPerfFrame_.sceneRuntimeSyncMs = ElapsedMs(sceneRuntimeSyncStart, RailPerfClock::now());
 
     AppFrameGraphBuildContext graphContext{};
     graphContext.renderGraph = &renderGraph_;
@@ -20698,7 +20618,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     // disabled while still presenting the assignment controls.
     static const bool carrierWeaponReview=ReadEnvironmentUInt("GE3_CARRIER_WEAPON_REVIEW",0)!=0;
     if(!carrierWeaponReview)RegisterSubmissionHudPass(commandList.Get(), "BackBuffer");
-    gRailPerfFrame.registerPassesMs = ElapsedMs(registerPassesStart, RailPerfClock::now());
+    railPerfFrame_.registerPassesMs = ElapsedMs(registerPassesStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterRegisterPasses");
     const auto prepareGraphStart = RailPerfClock::now();
     const RenderViewportMetrics renderTargetMetrics =
@@ -20713,7 +20633,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         renderGraph_,
         renderTargetMetrics.width,
         renderTargetMetrics.height);
-    gRailPerfFrame.prepareGraphResourcesMs = ElapsedMs(prepareGraphStart, RailPerfClock::now());
+    railPerfFrame_.prepareGraphResourcesMs = ElapsedMs(prepareGraphStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterPrepareGraphResources");
 
     resourceRegistry_.RegisterRenderTarget({
@@ -20784,7 +20704,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         lastRenderPassDebugInfo_ = renderGraph_.BuildPassDebugInfo();
         lastRenderGraphDescription_ = renderGraph_.Describe(lastRenderPassDebugInfo_);
     }
-    gRailPerfFrame.renderGraphDebugMs = ElapsedMs(renderGraphDebugStart, RailPerfClock::now());
+    railPerfFrame_.renderGraphDebugMs = ElapsedMs(renderGraphDebugStart, RailPerfClock::now());
     lastRenderGraphError_ = renderGraphError;
     lastTransientTargetCount_ = vfxGraphResourceStats.transientTargetCount;
     lastTransientTargetStorageCount_ = vfxGraphResourceStats.transientTargetStorageCount;
@@ -20800,11 +20720,11 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         // Keep the declared map in a sampleable state in either mode.
         RenderRailCasterShadow(commandList.Get(),railShadowAcceleration_?std::span<const RailShadowCaster>{}:nearShadowCasters);
     }
-    gRailPerfFrame.cascadeShadowMs = ElapsedMs(cascadeShadowStart, RailPerfClock::now());
+    railPerfFrame_.cascadeShadowMs = ElapsedMs(cascadeShadowStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterCascadeShadow");
     const auto renderGraphExecuteStart = RailPerfClock::now();
     renderGraph_.Execute(commandList.Get());
-    gRailPerfFrame.renderGraphExecuteMs = ElapsedMs(renderGraphExecuteStart, RailPerfClock::now());
+    railPerfFrame_.renderGraphExecuteMs = ElapsedMs(renderGraphExecuteStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterRenderGraphExecute");
     DumpRenderGraphDebugFrame();
     const auto telemetryStart = RailPerfClock::now();
@@ -20814,30 +20734,30 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             vfxTelemetryFrameIndex_++,
             developerDiagnosticsVisible);
     vfxEngine_.CaptureFrameTelemetry(commandList.Get(), vfxTelemetryOptions);
-    gRailPerfFrame.telemetryMs = ElapsedMs(telemetryStart, RailPerfClock::now());
+    railPerfFrame_.telemetryMs = ElapsedMs(telemetryStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterCaptureTelemetry");
     const auto endFrameStart = RailPerfClock::now();
     frameRenderer_.EndFrame(commandList.Get(), backBuffer);
-    gRailPerfFrame.endFrameMs = ElapsedMs(endFrameStart, RailPerfClock::now());
+    railPerfFrame_.endFrameMs = ElapsedMs(endFrameStart, RailPerfClock::now());
     EndRailGpuTiming(commandList.Get(), backBufferIndex);
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterEndFrame");
 
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforeEndAndExecute");
     const auto endAndExecuteStart = RailPerfClock::now();
     if (!clPool_.EndAndExecute(dev_)) {
-        gRailPerfFrame.endAndExecuteMs = ElapsedMs(endAndExecuteStart, RailPerfClock::now());
+        railPerfFrame_.endAndExecuteMs = ElapsedMs(endAndExecuteStart, RailPerfClock::now());
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.endAndExecuteFailed");
         return;
     }
-    gRailPerfFrame.endAndExecuteMs = ElapsedMs(endAndExecuteStart, RailPerfClock::now());
+    railPerfFrame_.endAndExecuteMs = ElapsedMs(endAndExecuteStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterEndAndExecute");
     const auto signalStart = RailPerfClock::now();
     if (!frameCoordinator_.SignalFrame(backBufferIndex)) {
-        gRailPerfFrame.signalMs = ElapsedMs(signalStart, RailPerfClock::now());
+        railPerfFrame_.signalMs = ElapsedMs(signalStart, RailPerfClock::now());
         LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.signalFrameFailed");
         return;
     }
-    gRailPerfFrame.signalMs = ElapsedMs(signalStart, RailPerfClock::now());
+    railPerfFrame_.signalMs = ElapsedMs(signalStart, RailPerfClock::now());
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.afterSignalFrame");
     LogRailFrameStage(railShooterFrameIndex_, railShooterDistance_, "render.beforePresent");
     // Explicit authoring export: capture the engine's finished backbuffer,
@@ -21687,12 +21607,12 @@ void AppRunLoop::RenderVfxPreviewFrame() {
     }
     const auto presentStart = RailPerfClock::now();
     const HRESULT presentHr = swapChain_.Present(dev_, frameCoordinator_.PresentSyncInterval());
-    gRailPerfFrame.presentMs = ElapsedMs(presentStart, RailPerfClock::now());
+    railPerfFrame_.presentMs = ElapsedMs(presentStart, RailPerfClock::now());
     // The compositor can display the queued image a couple of presents after submission.
     if(presentHr==S_OK && railClearTimePresentsRemaining_>0 && railLockOnHudAtlasVertexCount_>0 &&
         submissionHudFontReady_ && !railTitleScreenVisible_ && --railClearTimePresentsRemaining_==0)
         (void)audio_.Play(railClearTimeSound_,.68f);
-    gRailPerfFrame.renderMs = ElapsedMs(renderStart, RailPerfClock::now());
+    railPerfFrame_.renderMs = ElapsedMs(renderStart, RailPerfClock::now());
     RecordRailCameraTuningSample(
         frameState_.deltaTime,
         railShooterSpeedDirector_.LastFrame(),

@@ -13,6 +13,7 @@
 
 class CourseSpawnRuntime;
 class RailPath;
+class RailVisualOcclusion;
 struct EnemyAttackTelegraphFrame;
 struct EnemyProjectilePresentationFrame;
 struct EnemyAttackDefensePresentationFrame;
@@ -69,6 +70,7 @@ struct EnemyEncounterReadabilityInput final {
     float deltaTime = 0.016f;
     bool gameplayActive = true;
     EnemyEncounterReadabilitySettings settings{};
+    const RailVisualOcclusion* visualOcclusion = nullptr;
 };
 
 struct EnemyEncounterReadabilityFrame final {

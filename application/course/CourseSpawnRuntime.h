@@ -273,6 +273,10 @@ public:
         const WeaponFeedbackEvent* feedbackEvent);
     bool DefeatEnemy(EnemyCombatSystem& system,
         uint32_t actorId);
+    bool NotifyEnemyDamage(const DamageResult& damageResult,
+        const WeaponFeedbackEvent* feedbackEvent);
+    bool DefeatEnemy(uint32_t actorId);
+    std::vector<EnemyCombatEvent> ConsumeEnemyCombatEvents();
     void UpdateEnemyBehavior(EnemyBehaviorSystem& system,
         const EnemyBehaviorFrameInput& input);
     bool MarkEnemyBehaviorTelegraph(EnemyBehaviorSystem& system,
@@ -378,7 +382,6 @@ public:
         std::string* errorMessage = nullptr);
     const CourseEnemyFireSafetyStats& LastFireSafetyStats() const { return fireSafetyStats_; }
     const EnemyCombatSystem& EnemyCombat() const noexcept { return enemyCombatSystem_; }
-    EnemyCombatSystem& EnemyCombat() noexcept { return enemyCombatSystem_; }
     const EnemyBehaviorSystem& EnemyBehavior() const noexcept { return enemyBehaviorSystem_; }
     EnemyBehaviorSystem& EnemyBehavior() noexcept { return enemyBehaviorSystem_; }
     const EnemyAttackCoordinator& EnemyAttacks() const noexcept {

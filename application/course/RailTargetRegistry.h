@@ -6,6 +6,7 @@
 
 class CourseSpawnRuntime;
 class RailPath;
+class RailVisualOcclusion;
 
 struct RailTargetRegistryFrameInput {
     const CourseSpawnRuntime* spawnRuntime = nullptr;
@@ -15,6 +16,7 @@ struct RailTargetRegistryFrameInput {
     Vector3 cameraPosition{};
     bool viewRelativeTargeting = false;
     Vector3 viewForward{0, 0, 1};
+    const RailVisualOcclusion* visualOcclusion = nullptr;
 };
 
 class RailTargetRegistry {

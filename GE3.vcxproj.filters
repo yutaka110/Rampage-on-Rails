@@ -1163,6 +1163,9 @@
     <ClCompile Include="application\course\GameSessionSystem.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
+    <ClCompile Include="application\course\RailCombatSessionBridge.cpp">
+      <Filter>ソース ファイル\application\course</Filter>
+    </ClCompile>
     <ClCompile Include="application\course\GameSessionPresentationBridge.cpp">
       <Filter>ソース ファイル\application\course</Filter>
     </ClCompile>
@@ -1951,6 +1954,9 @@
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\GameSessionSystem.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
+    <ClInclude Include="application\course\RailCombatSessionBridge.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
     <ClInclude Include="application\course\GameSessionPresentationBridge.h">

@@ -223,6 +223,25 @@ private:
     float previousAge_=0.0f;
 };
 
+class RailTitleMenu final {
+public:
+    enum class Action { None, Start, Exit };
+    enum class Key { Up, Down, Confirm, Cancel };
+
+    void Reset();
+    Action HandlePointer(int hitItem, bool activate);
+    Action HandleKey(Key key);
+    int Selection() const { return static_cast<int>(selection_); }
+    bool ControlsVisible() const { return controlsVisible_; }
+
+private:
+    enum class Item { Start, Controls, Exit };
+    Action Activate();
+
+    Item selection_ = Item::Start;
+    bool controlsVisible_ = false;
+};
+
 class RailTitleScene final {
 public:
     bool Initialize();

@@ -77,18 +77,16 @@ bool SegmentIntersectsAabb(
 }
 
 bool ResolveLineOfSightBlock(
-    const CourseSpawnRuntime& runtime,
-    const RailPath& railPath,
+    const RailTargetRegistryFrameInput& input,
     const RailLockTargetHandle& target,
-    const Vector3& cameraPosition,
     const Vector3& targetPosition,
-    const RailLockSettings& settings,
     uint32_t& outOccluderActorId,
     float& outBlockT) {
-    if (!settings.lockLineOfSightEnabled) {
+    if (!input.settings.lockLineOfSightEnabled) {
         return false;
     }
-    if (RailVisualOcclusion::Blocked(cameraPosition, targetPosition)) {
+    const auto& cameraPosition = input.cameraPosition;
+    if (input.visualOcclusion && input.visualOcclusion->Blocked(cameraPosition, targetPosition)) {
         outOccluderActorId = 0; // Static environment has no runtime actor ID.
         outBlockT = 0.5f;
         return true;
@@ -96,14 +94,14 @@ bool ResolveLineOfSightBlock(
 
     float bestT = 1.0f;
     uint32_t bestOccluder = 0;
-    const float padding = (std::max)(0.0f, settings.lockLineOfSightObstaclePadding);
-    for (const CourseObstacleActor& obstacle : runtime.Obstacles()) {
+    const float padding = (std::max)(0.0f, input.settings.lockLineOfSightObstaclePadding);
+    for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
         if (target.kind == RailLockTargetKind::Obstacle && target.actorId == obstacle.actorId) {
             continue;
         }
 
         const Vector3 center = ResolveRailLocal(
-            railPath,
+            *input.railPath,
             obstacle.desc.spawnDistance,
             obstacle.desc.distanceOffset,
             obstacle.desc.lateralOffset,
@@ -175,13 +173,7 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
             (enemy.desc.actorAssetId=="short_mothership_core" ? input.settings.maxLocks : 1);
         anchor.stackAcquireIntervalSeconds = weaponPart ? 0.22f :
             (enemy.desc.actorAssetId=="short_mothership_core" ? 0.12f : 0.0f);
-        anchor.lineOfSightBlocked = ResolveLineOfSightBlock(
-            *input.spawnRuntime,
-            *input.railPath,
-            anchor.target,
-            input.cameraPosition,
-            anchor.worldPosition,
-            input.settings,
+        anchor.lineOfSightBlocked = ResolveLineOfSightBlock(input, anchor.target, anchor.worldPosition,
             anchor.lineOfSightOccluderActorId,
             anchor.lineOfSightBlockT);
         if(input.viewRelativeTargeting && enemy.weaponMount.ready) {
@@ -194,8 +186,7 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
                 const auto delta=Subtract(sensor.worldPosition,input.cameraPosition);
                 const auto& f=input.viewForward;
                 sensor.forwardDistance=delta.x*f.x+delta.y*f.y+delta.z*f.z;
-                sensor.lineOfSightBlocked=ResolveLineOfSightBlock(*input.spawnRuntime,*input.railPath,
-                    sensor.target,input.cameraPosition,sensor.worldPosition,input.settings,
+                sensor.lineOfSightBlocked=ResolveLineOfSightBlock(input, sensor.target, sensor.worldPosition,
                     sensor.lineOfSightOccluderActorId,sensor.lineOfSightBlockT);
                 anchors_.push_back(std::move(sensor));
             }
@@ -213,8 +204,7 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
                 const auto f=input.viewForward;
                 panel.forwardDistance=delta.x*f.x+delta.y*f.y+delta.z*f.z;
                 panel.priority=1.4f;
-                panel.lineOfSightBlocked=ResolveLineOfSightBlock(*input.spawnRuntime,*input.railPath,
-                    panel.target,input.cameraPosition,panel.worldPosition,input.settings,
+                panel.lineOfSightBlocked=ResolveLineOfSightBlock(input, panel.target, panel.worldPosition,
                     panel.lineOfSightOccluderActorId,panel.lineOfSightBlockT);
                 anchors_.push_back(std::move(panel));
             }
@@ -238,8 +228,8 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
         anchor.maxStack=(std::min)(input.settings.maxLocks,(std::min)(RailHeavy::InterceptLocks,
             (std::max)(1,int(std::ceil(p.shootDownHitPoints/(std::max)(1.0f,input.settings.releaseDamage))))));
         anchor.stackAcquireIntervalSeconds=RailHeavy::LockStackSeconds;
-        anchor.lineOfSightBlocked=ResolveLineOfSightBlock(*input.spawnRuntime,*input.railPath,anchor.target,
-            input.cameraPosition,anchor.worldPosition,input.settings,anchor.lineOfSightOccluderActorId,anchor.lineOfSightBlockT);
+        anchor.lineOfSightBlocked=ResolveLineOfSightBlock(input, anchor.target, anchor.worldPosition,
+            anchor.lineOfSightOccluderActorId,anchor.lineOfSightBlockT);
         anchors_.push_back(std::move(anchor));
     }
     for (const CourseObstacleActor& obstacle : input.spawnRuntime->Obstacles()) {
@@ -269,13 +259,7 @@ void RailTargetRegistry::Build(const RailTargetRegistryFrameInput& input) {
         }
         anchor.priority = 0.8f;
         anchor.maxStack = 1;
-        anchor.lineOfSightBlocked = ResolveLineOfSightBlock(
-            *input.spawnRuntime,
-            *input.railPath,
-            anchor.target,
-            input.cameraPosition,
-            anchor.worldPosition,
-            input.settings,
+        anchor.lineOfSightBlocked = ResolveLineOfSightBlock(input, anchor.target, anchor.worldPosition,
             anchor.lineOfSightOccluderActorId,
             anchor.lineOfSightBlockT);
         anchors_.push_back(std::move(anchor));
