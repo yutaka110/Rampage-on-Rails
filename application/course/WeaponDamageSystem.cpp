@@ -250,7 +250,7 @@ DamageResult CourseActorDamageReceiver::ApplyActors(std::span<CourseEnemyActor> 
             result.rejectReason = DamageRejectReason::TargetNotFound;
             return result;
         }
-        if (course->terrainPlacements[request.sourceIndex].meshId != RailCrystalCavern::CrystalMesh &&
+        if (!RailCrystalCavern::IsCrystalMesh(course->terrainPlacements[request.sourceIndex].meshId) &&
             !RailSceneryImpact::IsStone(course->terrainPlacements[request.sourceIndex].meshId) &&
             (course->terrainPlacements[request.sourceIndex].layer !=
                 CourseTerrainLayer::GameplayCollision ||

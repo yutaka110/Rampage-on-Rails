@@ -3,12 +3,18 @@
 #include "CourseAsset.h"
 
 #include <algorithm>
+#include <string_view>
 #include <utility>
 
 namespace RailCrystalCavern {
 inline constexpr const char* CoursePath = "Resources/courses/CrystalCavern.course";
 inline constexpr const char* CrystalMesh = "crystal_cavern_cluster";
+inline constexpr const char* CrystalLandmarkMesh = "crystal_cavern_landmark";
 inline constexpr float TimeBudgetSeconds = 100.0f;
+
+inline bool IsCrystalMesh(std::string_view mesh) {
+    return mesh == CrystalMesh || mesh == CrystalLandmarkMesh;
+}
 
 // Keep the original cubic up to the branch, including the bridge landing.
 // The left half of a subdivided Bezier has the same points and tangents as

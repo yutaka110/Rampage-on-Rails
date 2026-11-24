@@ -5599,7 +5599,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         railShooterCourse_.terrainEditLayer.CeilingClosure(railShooterDistance_) > .7f) {
         for (const auto& crystal : railShooterCourse_.terrainPlacements) {
             const float gap = crystal.distance - railShooterDistance_;
-            if (crystal.meshId != RailCrystalCavern::CrystalMesh || gap < -28.0f || gap > 135.0f) continue;
+            if (!RailCrystalCavern::IsCrystalMesh(crystal.meshId) || gap < -28.0f || gap > 135.0f) continue;
             crystalEffects[crystalEffectCount++] = &crystal;
             if (crystalEffectCount == crystalEffects.size()) break;
         }
@@ -11345,7 +11345,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     if (!coursePreviewOwnsRail && !titleEntryBlocked && railTravelDeltaTime > 0.0f &&
         railShooterCourse_.terrainEditLayer.CeilingClosure(vehicleFrame.state.distance) > .7f) {
         for (const auto& crystal : railShooterCourse_.terrainPlacements) {
-            if (crystal.meshId != RailCrystalCavern::CrystalMesh) continue;
+            if (!RailCrystalCavern::IsCrystalMesh(crystal.meshId)) continue;
             const float trigger = crystal.distance + crystal.forwardOffset - kCrystalSurgeLead;
             if (vehicleFrame.state.previousDistance >= trigger || vehicleFrame.state.distance < trigger) continue;
             CourseVfxCueDesc surge;
@@ -13199,7 +13199,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         GetEnvironmentVariableW(L"GE3_COURSE_FRAME_EXPORT", nullptr, 0) > 0;
     if (crystalImpactReview && !titleEntryBlocked && gameplayDeltaTime > 0.0f) {
         for (const auto& crystal : railShooterCourse_.terrainPlacements) {
-            if (crystal.meshId != RailCrystalCavern::CrystalMesh) continue;
+            if (!RailCrystalCavern::IsCrystalMesh(crystal.meshId)) continue;
             const float gap = crystal.distance - railShooterDistance_;
             if (gap < 61.0f || gap > 73.0f) continue;
             const auto meshes = scene_.CourseMeshes().Items();
@@ -13657,7 +13657,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
         RailAimHit hit;float nearest=limit;std::string_view hitMesh;Vector3 hitLocal{};
         for(const auto& item:scene_.CourseMeshes().Items()) {
             if(!item.visible || !item.transformData)continue;
-            const bool crystal=item.meshId==RailCrystalCavern::CrystalMesh;
+            const bool crystal=RailCrystalCavern::IsCrystalMesh(item.meshId);
             if(crystalOnly && !crystal)continue;
             const bool airframe=item.kind==CourseMeshRenderKind::Enemy &&
                 (item.meshId=="combat_sniper_hull" || item.meshId=="combat_interceptor_hull");
@@ -20492,7 +20492,7 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 size_t patchCount = 0;
                 for (const auto& crystal : railShooterCourse_.terrainPlacements) {
                     const float distance = std::abs(crystal.distance - railShooterDistance_);
-                    if (crystal.meshId != RailCrystalCavern::CrystalMesh || distance >= 150.0f) continue;
+                    if (!RailCrystalCavern::IsCrystalMesh(crystal.meshId) || distance >= 150.0f) continue;
                     const auto position = RailLocalPoint(railPath_, crystal.distance, crystal.lateralOffset,
                         crystal.verticalOffset + crystal.scale.y * 0.30f, crystal.forwardOffset);
                     const auto root = RailLocalPoint(railPath_, crystal.distance, crystal.lateralOffset,
@@ -20503,8 +20503,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                     const auto* surge = FindCrystalSurge(railShooterSpawnRuntime_.VfxCues(), crystal);
                     const float flash = surge ? CrystalSurgeFlash(surge->age) : 0.0f;
                     const float burstAge = surge ? 1.0f + surge->age : 0.0f;
+                    const bool landmark = crystal.meshId == RailCrystalCavern::CrystalLandmarkMesh;
                     camera.railBouncePatches[patchCount++] = {{position.x, position.y, position.z, radius},
-                        {root.x, root.y, root.z, 1}, {.34f * strength + 1.5f * flash,
+                        {root.x, root.y, root.z, landmark ? 2.0f : 1.0f}, {.34f * strength + 1.5f * flash,
                             2.35f * strength + 3.8f * flash, 5.1f * strength + 6.8f * flash, burstAge}};
                     if (patchCount == camera.railBouncePatches.size()) break;
                 }

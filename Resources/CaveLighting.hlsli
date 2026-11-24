@@ -49,9 +49,35 @@ float3 RailBounceIrradiance(float3 worldPosition, float3 normal) {
         float receiver = saturate(dot(normal, toPatch));
         float weight = edge * edge * emitter;
         irradiance += patch.radiance.rgb * weight * receiver;
+        if (patch.normal.w > 1.5f && patch.radiance.w >= 1.0f) {
+            float age = patch.radiance.w - 1.0f;
+            float ignition = smoothstep(0.0f, .075f, age) * (1.0f - smoothstep(.31f, .67f, age));
+            float3 nearLight = patch.normal.xyz + float3(0.0f, 4.2f, 0.0f) - worldPosition;
+            float nearDistance = dot(nearLight, nearLight);
+            float nearEdge = saturate(1.0f - nearDistance / 529.0f);
+            float nearFacing = saturate(dot(normal, nearLight * rsqrt(max(nearDistance, .01f))));
+            irradiance += float3(.46f, 2.8f, 7.35f) *
+                (ignition * nearFacing * nearEdge * nearEdge / (1.0f + nearDistance * .033f));
+        }
         coverage += weight;
     }
     return irradiance * (railBounceControl.y / max(1.0f, coverage));
+}
+
+float CrystalLandmarkSurgeAge(float3 worldPosition) {
+    float age = -1.0f;
+    float nearest = 1e10f;
+    [loop] for (uint i = 0; i < (uint)railBounceControl.x; ++i) {
+        RailBouncePatch patch = railBouncePatches[i];
+        if (patch.normal.w < 1.5f) continue;
+        float2 delta = worldPosition.xz - patch.normal.xz;
+        float distance = dot(delta, delta);
+        float reach = patch.positionRadius.w * .70f;
+        if (distance >= nearest || distance >= reach * reach) continue;
+        nearest = distance;
+        age = patch.radiance.w - 1.0f;
+    }
+    return age;
 }
 
 float CrystalSurgeAt(float3 worldPosition) {

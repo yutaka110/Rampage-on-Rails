@@ -168,7 +168,7 @@ terrain|1820|hero_landmark|crystal-traverse-shoulder|root_spire_column|-34|-10|0
 terrain|1865|hero_landmark|crystal-traverse-vein|crystal_cavern_cluster|18|-16|0|7|21|8|0|-19|3|none|13|100|175|crystal-prop-traverse-vein|1|0
 terrain|1955|hero_landmark|crystal-marker-traverse|rail_speed_marker|-8|0|0|1|1|1|0|180|0|none|14|65|125|crystal-prop-marker-traverse|1|0
 terrain|2105|hero_landmark|crystal-ravine-crest|crystal_cavern_cluster|-19|-15|0|6|21|8|0|-23|3|none|13|100|175|crystal-prop-ravine-crest|1|0
-terrain|2180|hero_landmark|crystal-ravine-outside|crystal_cavern_cluster|24|-17|0|13|35|12|0|21|6|none|13|135|225|crystal-prop-ravine-outside|1|0
+terrain|2180|hero_landmark|crystal-ravine-outside|crystal_cavern_landmark|24|-17|0|13|35|12|0|21|6|none|13|135|225|crystal-prop-ravine-outside|1|0
 terrain|2242|hero_landmark|crystal-ravine-inner|crystal_cavern_cluster|-23|-17|0|9|27|10|0|-12|-5|none|13|130|210|crystal-prop-ravine-inner|1|0
 terrain|2315|hero_landmark|crystal-marker-ravine|rail_speed_marker|8|0|0|1|1|1|0|0|0|none|14|65|120|crystal-prop-marker-ravine|1|0
 terrain|2370|hero_landmark|crystal-ravine-floor-vein|crystal_cavern_cluster|20|-16|0|7|19|8|0|-36|0|none|13|100|165|crystal-prop-ravine-floor-vein|1|0

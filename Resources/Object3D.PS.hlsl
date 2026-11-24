@@ -111,6 +111,7 @@ static float EvaluateSpecular(float3 N, float3 L, float3 V, float shininess, int
 #include "WorldImpact.hlsli"
 #include "SunfallLighting.hlsli"
 #include "CaveLighting.hlsli"
+#include "CrystalOpticalHulls.hlsli"
 #include "RailShadowReceiver.hlsli"
 
 // Mode 10 uses the existing normal SRV (t4); alpha carries linear roughness.
@@ -452,43 +453,99 @@ static float2 CrystalVein(float3 localPosition, float footprint) {
     return float2(halo, core) * charge * (1.0f - smoothstep(.045f, .27f, footprint));
 }
 
-static float3 CrystalLighting(float3 worldPosition, float3 N, float3 V, float height) {
+static float3 CrystalLocalDirection(float3 direction) {
+    return SafeNormalize(float3(dot(direction, gMaterial.caveSurface.xyz),
+        dot(direction, gMaterial.caveResponse.xyz), dot(direction, gMaterial.railLightingOrigin.xyz)));
+}
+
+static float CrystalOpticalPath(float3 entry, float3 direction, uint shard) {
+    uint2 range = CrystalHullRanges[shard];
+    float exitDistance = 1.55f;
+    [loop] for (uint i = range.x; i < range.x + range.y; ++i) {
+        float4 plane = CrystalHullPlanes[i];
+        float facing = dot(plane.xyz, direction);
+        if (facing <= .0001f) continue;
+        float distance = (plane.w - dot(plane.xyz, entry) + .0001f) / facing;
+        exitDistance = min(exitDistance, max(distance, 0.0f));
+    }
+    return exitDistance;
+}
+
+static float3 CrystalLighting(float3 worldPosition, float3 N, float3 V, float2 uv, bool landmark) {
     const float4 position = float4(worldPosition, 1.0f);
     float3 local = float3(dot(position, gMaterial.caveSurface), dot(position, gMaterial.caveResponse),
         dot(position, gMaterial.railLightingOrigin));
-    float3 refracted = refract(-V, N, 1.0f / 1.46f);
-    float3 internalRay = SafeNormalize(float3(dot(refracted, gMaterial.caveSurface.xyz),
-        dot(refracted, gMaterial.caveResponse.xyz), dot(refracted, gMaterial.railLightingOrigin.xyz)));
-    float thickness = lerp(.23f, .048f, smoothstep(.67f, 1.0f, height));
+    float3 internalRay = CrystalLocalDirection(refract(-V, N, 1.0f / 1.46f));
     float footprint = min(.30f, length(fwidth(local)) * 3.55f);
-    float2 front = CrystalVein(local + internalRay * (thickness * .28f), footprint);
-    float2 rear = CrystalVein(local + internalRay * (thickness * .91f) + float3(.29f, .035f, -.20f), footprint);
-    float pulse = .87f + .13f * sin(railBounceControl.w * 2.35f + worldPosition.x * .153f + worldPosition.z * .069f);
-    float flash = CrystalSurgeAt(worldPosition);
-    float rootGlow = exp(-height * 3.9f) * smoothstep(.01f, .14f, height);
-    float rootFlash = flash * exp(-height * 15.0f);
-    float strength = (pulse + flash * (.12f + .32f * exp(-height * 6.0f))) *
-        smoothstep(.018f, .21f, height) * lerp(1.32f, .83f, height);
-    float facing = saturate(dot(N, V));
-    float fresnel = .036f + .964f * pow(1.0f - facing, 5.0f);
-    float mineral = .5f + .5f * sin(local.y * 18.0f + local.z * 9.0f + sin(local.x * 16.0f));
-    float3 body = lerp(float3(.012f, .032f, .115f), float3(.020f, .125f, .34f),
-        saturate(height * .72f + mineral * .27f));
-    float3 inside = body + strength * (
-        front.x * float3(.10f, .46f, 1.20f) + front.y * float3(.83f, 2.30f, 4.40f) +
-        rear.x * float3(.026f, .12f, .55f) + rear.y * float3(.075f, .38f, 1.45f)) +
-        rootGlow * float3(.29f, .96f, 2.08f) * pulse + rootFlash * float3(3.25f, 6.4f, 10.6f);
+    float height = saturate(uv.y);
+    uint shardCount = landmark ? CrystalLandmarkShardCount : CrystalClusterShardCount;
+    uint branch = (uint)clamp(floor(uv.x), 0.0f, float(shardCount - 1));
+    uint shard = landmark ? branch + CrystalClusterShardCount : branch;
+    // Use the full chord at this pixel so points at equal height can have very different depths.
+    float path = CrystalOpticalPath(local, CrystalLocalDirection(-V), shard);
+    float thin = 1.0f - smoothstep(.035f, .22f, path);
+    float thick = smoothstep(.11f, .52f, path);
+    float3 transmission = exp2(-path * float3(5.0f, 3.1f, 1.28f));
+    float branchSeed = .5f;
+    float wake, root;
+    float crest = 0.0f;
+    float tip = 0.0f;
+    float veinStrength = 1.0f;
+    if (landmark) {
+        // The landmark mesh encodes a branch number in the integer part of UV.x.
+        branchSeed = frac(sin((float(branch) + 4.0f) * 19.823f) * 1523.273f);
+        float age = CrystalLandmarkSurgeAge(worldPosition);
+        float launchDelay = .09f * branchSeed * smoothstep(.05f, .49f, height);
+        float sinceFront = age - (.035f + height * .39f + launchDelay);
+        wake = smoothstep(-.043f, .019f, sinceFront) * (1.0f - smoothstep(.069f, .29f, sinceFront));
+        crest = smoothstep(-.026f, .019f, sinceFront) * (1.0f - smoothstep(.034f, .109f, sinceFront));
+        root = exp2(-height * 9.3f) * smoothstep(-.011f, .092f, age) *
+            (1.0f - smoothstep(.13f, .43f, age));
+        float tipAge = age - (.43f + .12f * branchSeed);
+        float selectedTip = smoothstep(.44f, .72f, branchSeed) * smoothstep(.69f, .98f, height);
+        tip = selectedTip * smoothstep(-.035f, .016f, tipAge) * (1.0f - smoothstep(.061f, .20f, tipAge));
+    } else {
+        // The world-to-local Y row gives the reciprocal of the authored height scale.
+        float heightScale = rcp(max(.001f, length(gMaterial.caveResponse.xyz)));
+        float size = smoothstep(15.0f, 33.0f, heightScale);
+        float flash = CrystalSurgeAt(worldPosition);
+        veinStrength = lerp(.78f, .94f, size);
+        wake = flash * lerp(.10f, .44f, size) * (1.0f - smoothstep(.61f, 1.0f, height));
+        root = exp2(-height * 8.3f) * (.12f + flash * lerp(.28f, .52f, size));
+    }
 
-    // Wide studio-like reflections stand on the flat facets and travel with the view.
-    float3 reflected = reflect(-V, N);
-    float highlight = pow(saturate(dot(reflected, normalize(float3(-.31f, .48f, -.81f)))), 26.0f);
-    float secondary = pow(saturate(dot(reflected, normalize(float3(.82f, .24f, -.53f)))), 11.0f);
-    float3 surface = float3(.27f, .71f, 1.58f) * fresnel * .78f +
-        float3(.73f, .98f, 1.30f) * highlight * 1.05f + float3(.06f, .21f, .50f) * secondary * .47f;
+    float3 distortion = sin(local.yzx * float3(13.1f, 11.7f, 8.4f) + branchSeed * 5.1f);
+    float depth = min(path * .74f, .35f);
+    float3 frontPoint = local + internalRay * min(depth * .25f, .044f) + distortion * .067f;
+    float3 rearPoint = local + internalRay * depth + float3(.24f, .17f, -.31f) - distortion * .041f;
+    float2 nearVein = CrystalVein(frontPoint, footprint);
+    float2 deepVein = CrystalVein(rearPoint * 1.47f, footprint * 1.35f);
+    float density = .5f + .5f * sin(dot(local, float3(10.0f, 8.9f, -12.9f)) + distortion.z * 1.65f);
+    float pockets = smoothstep(.12f, .90f, density);
+    float3 body = lerp(float3(.010f, .019f, .079f), float3(.030f, .14f, .43f), pockets);
+    body *= lerp(1.0f, float3(.49f, .65f, .84f), thick);
+    float3 nearLight = nearVein.x * float3(.065f, .39f, 1.24f) + nearVein.y * float3(.35f, 1.48f, 3.60f);
+    float3 deepLight = deepVein.x * float3(.023f, .14f, .61f) + deepVein.y * float3(.053f, .31f, 1.20f);
+    float3 interior = body + veinStrength * (nearLight * lerp(.87f, 1.16f, thin) + deepLight * transmission);
+    interior += wake * (nearVein.x * float3(.38f, 1.56f, 3.95f) + nearVein.y * float3(2.50f, 5.82f, 9.90f) +
+        deepVein.y * float3(.19f, .95f, 3.45f) * transmission);
+    float lightLeak = thin * (.17f + .44f * nearVein.x + .28f * deepVein.x + .29f * wake);
+    interior += lightLeak * float3(.18f, .62f, 1.13f);
+    float junction = smoothstep(.41f, .95f, pockets * .58f + nearVein.x * .51f + deepVein.x * .26f);
+    interior += crest * junction * float3(.91f, 3.15f, 7.25f);
+    interior += root * (.20f + .80f * max(nearVein.x, pockets * .57f)) * float3(1.55f, 4.20f, 8.6f);
+    interior += tip * (.36f + .64f * nearVein.x) * float3(2.65f, 6.23f, 11.1f);
+
+    float rim = pow(1.0f - saturate(dot(N, V)), 3.9f);
+    float3 reflection = reflect(-V, N);
+    float glint = pow(saturate(dot(reflection, normalize(float3(-.48f, .52f, -.70f)))), 34.0f);
+    float rimCharge = .17f + .30f * pockets + nearVein.x * (.44f + .92f * wake) + tip * .74f + .22f * thin;
+    float3 surface = rim * rimCharge * float3(.53f, 1.74f, 3.55f) +
+        glint * (.20f + .42f * pockets) * float3(.62f, .95f, 1.38f);
     float3 impactDirection;
     float3 strike = CombatImpactRadiance(worldPosition, impactDirection) *
         (.11f + .35f * saturate(dot(N, impactDirection)));
-    return inside * (1.0f - fresnel * .57f) + surface + strike;
+    return interior * (1.0f - .26f * rim) + surface + strike;
 }
 
 PixelShaderOutput main(VertexShaderOutput input)
@@ -752,10 +809,10 @@ PixelShaderOutput main(VertexShaderOutput input)
         output.color=float4(ApplyWorldScorch(lit,input.worldPosition,N,false),1);return output;
     }
 
-    if (gMaterial.specularMode == 27) {
+    if (gMaterial.specularMode == 27 || gMaterial.specularMode == 28) {
         float3 normal = SafeNormalize(input.normal);
         float3 toEye = SafeNormalize(cameraWorldPosition - input.worldPosition);
-        output.color = float4(CrystalLighting(input.worldPosition, normal, toEye, saturate(uv.y)), 1.0f);
+        output.color = float4(CrystalLighting(input.worldPosition, normal, toEye, uv, gMaterial.specularMode == 28), 1.0f);
         return output;
     }
 

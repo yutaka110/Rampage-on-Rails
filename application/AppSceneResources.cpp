@@ -3272,6 +3272,7 @@ bool AppSceneResources::Initialize(
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("crystal_cavern_cluster", "Resources/course_meshes/CrystalCavernCluster", "CrystalCavernCluster.obj", "default");
+    registerCourseMesh("crystal_cavern_landmark", "Resources/course_meshes/CrystalCavernLandmark", "CrystalCavernLandmark.obj", "default");
     registerCourseMesh("route_barricade_panel", "Resources/course_meshes/RouteBarricadePanel", "RouteBarricadePanel.obj", "animatedCube");
     registerCourseMesh("route_barricade_post", "Resources/course_meshes/RouteBarricadePanel", "RouteBarricadePost.obj", "animatedCube");
     registerCourseMesh("route_barricade_lamp", "Resources/course_meshes/RouteBarricadePanel", "RouteBarricadeLamp.obj", "animatedCube");
