@@ -5,10 +5,12 @@
 #include <cstdint>
 #include <chrono>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace editor {
@@ -70,6 +72,14 @@ struct EditorContentBrowserCollection {
     std::unordered_set<std::string> assetGuids;
 };
 
+enum class EditorAssetContextAction { Duplicate, Reimport, Delete };
+
+struct EditorAssetContextRequest {
+    EditorAssetContextAction action;
+    EditorAssetKind kind;
+    std::string id;
+};
+
 class EditorContentBrowserState {
 public:
     EditorContentBrowserState();
@@ -88,6 +98,13 @@ public:
     void SetSelectedAssetGuid(std::string guid);
     void SetActiveCollection(std::string name);
     void SetFavoritesOnly(bool enabled);
+
+    void QueueAssetContextAction(EditorAssetContextAction action, const EditorAssetRecord& asset) {
+        pendingAssetContextRequest_ = EditorAssetContextRequest{action, asset.kind, asset.id};
+    }
+    std::optional<EditorAssetContextRequest> TakeAssetContextRequest() {
+        return std::exchange(pendingAssetContextRequest_, std::nullopt);
+    }
 
     bool ToggleFavorite(std::string_view guid);
     bool IsFavorite(std::string_view guid) const;
@@ -142,6 +159,7 @@ private:
     std::chrono::steady_clock::time_point dirtyTouchedAt_{};
     uint32_t revision_ = 0;
     std::string statusMessage_;
+    std::optional<EditorAssetContextRequest> pendingAssetContextRequest_;
 };
 
 const char* ToString(EditorContentBrowserViewMode mode);

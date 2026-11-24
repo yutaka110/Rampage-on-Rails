@@ -20,10 +20,6 @@ public:
     void SetRotateSpeed(float speed) { rotateSpeed_ = speed; }
     void SetSpeedMultipliers(float slowMultiplier, float fastMultiplier);
 
-    Vector3 rotation_ = {0.0f, 0.0f, 0.0f};
-    Matrix4x4 matRot_{};
-    Vector3 translation_ = {0.0f, 0.0f, -50.0f};
-
 private:
     VfxCamera camera_{};
     bool inputEnabled_ = true;

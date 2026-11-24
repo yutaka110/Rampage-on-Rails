@@ -15,25 +15,6 @@ enum class Stage : size_t {
     WorldRay, ProceduralRay, TerrainBvh, Count
 };
 
-struct Sample {
-    double milliseconds = 0.0;
-    uint32_t calls = 0;
-};
-
-struct Frame {
-    std::array<Sample, static_cast<size_t>(Stage::Count)> stages{};
-    uint64_t nearestRailEvaluations = 0;
-    uint64_t terrainRayCacheHits = 0;
-    uint64_t railSampleCacheHits = 0;
-    uint64_t terrainBvhQueries = 0, terrainBvhNodes = 0, terrainBvhTriangles = 0;
-    uint64_t terrainReferenceFallbacks = 0;
-    uint64_t terrainComparisonQueries = 0, terrainComparisonHitMismatches = 0, terrainComparisonDistanceMismatches = 0;
-    double terrainComparisonMaximumDistanceError = 0.0;
-    float simulationDeltaTime = 0.0f;
-};
-
-inline thread_local Frame frame{};
-
 inline bool Enabled() {
     static const bool enabled = [] {
         char value[8]{};
@@ -44,33 +25,80 @@ inline bool Enabled() {
     return enabled;
 }
 
-inline void ResetFrame() {
-    if (Enabled()) frame = {};
-}
-
-class Scope final {
-public:
-    explicit Scope(Stage stage) : stage_(stage), enabled_(Enabled()) {
-        if (enabled_) begin_ = Clock::now();
-    }
-    ~Scope() {
-        if (!enabled_) return;
-        Sample& sample = frame.stages[static_cast<size_t>(stage_)];
-        sample.milliseconds +=
-            std::chrono::duration<double, std::milli>(Clock::now() - begin_).count();
-        ++sample.calls;
-    }
-    Scope(const Scope&) = delete;
-    Scope& operator=(const Scope&) = delete;
+class FrameProfile final {
 private:
-    using Clock = std::chrono::steady_clock;
-    Stage stage_;
-    bool enabled_;
-    Clock::time_point begin_{};
+    struct Sample {
+        double milliseconds = 0.0;
+        uint32_t calls = 0;
+    };
+
+    struct Frame {
+        std::array<Sample, static_cast<size_t>(Stage::Count)> stages{};
+        uint64_t nearestRailEvaluations = 0;
+        uint64_t terrainRayCacheHits = 0;
+        uint64_t railSampleCacheHits = 0;
+        uint64_t terrainBvhQueries = 0, terrainBvhNodes = 0, terrainBvhTriangles = 0;
+        uint64_t terrainReferenceFallbacks = 0;
+        uint64_t terrainComparisonQueries = 0, terrainComparisonHitMismatches = 0, terrainComparisonDistanceMismatches = 0;
+        double terrainComparisonMaximumDistanceError = 0.0;
+        float simulationDeltaTime = 0.0f;
+    };
+
+    static thread_local Frame frame_;
+
+public:
+    static void Reset() { if (Enabled()) frame_ = {}; }
+    static void RecordSimulationDeltaTime(float seconds) {
+        if (Enabled()) frame_.simulationDeltaTime = seconds;
+    }
+    static void CountNearestRailEvaluation() { if (Enabled()) ++frame_.nearestRailEvaluations; }
+    static void CountRailSampleCacheHit() { if (Enabled()) ++frame_.railSampleCacheHits; }
+    static void CountTerrainRayCacheHit() { if (Enabled()) ++frame_.terrainRayCacheHits; }
+    static void CountTerrainReferenceFallback() { if (Enabled()) ++frame_.terrainReferenceFallbacks; }
+    static void RecordTerrainBvhQuery(uint64_t nodesVisited, uint64_t trianglesTested) {
+        if (!Enabled()) return;
+        ++frame_.terrainBvhQueries;
+        frame_.terrainBvhNodes += nodesVisited;
+        frame_.terrainBvhTriangles += trianglesTested;
+    }
+    static void RecordTerrainComparison(
+        uint64_t queries, uint64_t hitMismatches, uint64_t distanceMismatches, double maxDistanceError) {
+        if (!Enabled()) return;
+        frame_.terrainComparisonQueries = queries;
+        frame_.terrainComparisonHitMismatches = hitMismatches;
+        frame_.terrainComparisonDistanceMismatches = distanceMismatches;
+        frame_.terrainComparisonMaximumDistanceError = maxDistanceError;
+    }
+    static void AppendToLog(std::ostream& log);
+
+    class Scope final {
+    public:
+        explicit Scope(Stage stage) : stage_(stage), enabled_(Enabled()) {
+            if (enabled_) begin_ = Clock::now();
+        }
+        ~Scope() {
+            if (!enabled_) return;
+            Sample& sample = frame_.stages[static_cast<size_t>(stage_)];
+            sample.milliseconds +=
+                std::chrono::duration<double, std::milli>(Clock::now() - begin_).count();
+            ++sample.calls;
+        }
+        Scope(const Scope&) = delete;
+        Scope& operator=(const Scope&) = delete;
+    private:
+        using Clock = std::chrono::steady_clock;
+        Stage stage_;
+        bool enabled_;
+        Clock::time_point begin_{};
+    };
 };
 
-inline void AppendToLog(std::ostream& log) {
+inline thread_local FrameProfile::Frame FrameProfile::frame_{};
+using Scope = FrameProfile::Scope;
+
+inline void FrameProfile::AppendToLog(std::ostream& log) {
     if (!Enabled()) return;
+    const Frame& frame = frame_;
     constexpr const char* names[] = {
         "droneSpawn", "droneEnvironment", "droneFormation", "droneClearance",
         "droneCamera", "droneTelegraph", "worldRay", "proceduralRay", "terrainBvh"

@@ -3217,7 +3217,7 @@ bool AppSceneResources::Initialize(
         }
         return terrainAlbedoTextureSrvHandleGPU.ptr != 0 ? terrainAlbedoTextureSrvHandleGPU : textureSrvHandleGPU2;
     };
-    RailSceneryImpact::ResetCache();
+    sceneryCollisionMeshes_.Clear();
     auto registerCourseMesh = [&](const char* name, const char* directory, const char* filename, const char* textureName) {
         if (!std::filesystem::is_regular_file(std::filesystem::path(directory) / filename)) {
             return;
@@ -3237,8 +3237,6 @@ bool AppSceneResources::Initialize(
             return;
         }
 
-        if(RailSceneryImpact::IsStone(name) || std::string_view(name)=="combat_sniper_hull" ||
-            std::string_view(name)=="combat_interceptor_hull")RailSceneryImpact::Prepare(courseMeshData);
         GpuMeshResource courseMesh = CreateGpuMeshResource(
             device,
             uploadCommandList,
@@ -3258,6 +3256,10 @@ bool AppSceneResources::Initialize(
             findManagedTextureGpu(textureName),
             findManagedTextureGpu(textureName).ptr != 0,
         });
+        if (RailSceneryImpact::IsStone(name) || std::string_view(name) == "combat_sniper_hull" ||
+            std::string_view(name) == "combat_interceptor_hull") {
+            SceneryCollisionMesh(vfxModelLibrary.back().model);
+        }
     };
     registerCourseMesh("organic_arch_large", "Resources/course_meshes/OrganicArchLarge", "OrganicArchLarge.obj", "courseOrganicRock");
     registerCourseMesh("crystal_cavern_cluster", "Resources/course_meshes/CrystalCavernCluster", "CrystalCavernCluster.obj", "default");

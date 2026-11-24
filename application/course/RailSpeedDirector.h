@@ -78,8 +78,12 @@ public:
     void SetManualBrakeInput(bool held, bool enabled) { manualBrake_.SetInput(held, enabled); }
     const RailManualBrake& ManualBrake() const { return manualBrake_; }
     void SetManualBoostMaximum(float value) { manualBoost_.SetHeldMaximumMultiplier(value); }
-    RailKillBoost& KillBoost() { return killBoost_; }
     const RailKillBoost& KillBoost() const { return killBoost_; }
+    bool RegisterKillBoostDefeat(const EnemyCombatEvent& event) { return killBoost_.ObserveDefeat(event); }
+    bool ActivatePendingKillBoost(bool gameplayActive = true, bool activationAllowed = true) {
+        return killBoost_.ActivatePending(gameplayActive, activationAllowed);
+    }
+    void ResetKillBoost() { killBoost_.Reset(); }
     static float RewardMaximum(const CourseAsset* course, float distance);
     float BoostMultiplier(float rewardLimit = RailKillBoost::MaximumMultiplier) const {
         const float manual=manualBoost_.SpeedMultiplier();

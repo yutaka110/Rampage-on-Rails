@@ -381,13 +381,20 @@ public:
     bool ConfigureFireSafety(const CourseEnemyFireSafetySettings& settings,
         std::string* errorMessage = nullptr);
     const CourseEnemyFireSafetyStats& LastFireSafetyStats() const { return fireSafetyStats_; }
+    std::vector<EnemyBehaviorEvent> ConsumeEnemyBehaviorEvents();
+    bool ConfigureEnemyAttacks(const EnemyAttackCoordinatorSettings& settings,
+        std::string* errorMessage = nullptr);
+    void UpdateEnemyAttacks(const EnemyBehaviorFrame& behaviorFrame, float deltaTime);
+    void ExecuteEnemyAttacks(EnemyAttackExecutionSystem& system, EnemyBehaviorSystem& behaviorSystem);
+    bool SetEnemyFormationDefinition(std::string formationId, EnemyFormationDefinition definition,
+        std::string* errorMessage = nullptr);
+    bool RequestEnemyExit(uint32_t actorId);
+    bool RequestEnemyFormationExit(std::string formationId);
+    bool MarkEnemyBehaviorTelegraph(uint32_t actorId, uint64_t intentSequence);
+    bool MarkEnemyCoordinatorTelegraph(uint32_t actorId, uint64_t intentSequence);
     const EnemyCombatSystem& EnemyCombat() const noexcept { return enemyCombatSystem_; }
     const EnemyBehaviorSystem& EnemyBehavior() const noexcept { return enemyBehaviorSystem_; }
-    EnemyBehaviorSystem& EnemyBehavior() noexcept { return enemyBehaviorSystem_; }
     const EnemyAttackCoordinator& EnemyAttacks() const noexcept {
-        return enemyAttackCoordinator_;
-    }
-    EnemyAttackCoordinator& EnemyAttacks() noexcept {
         return enemyAttackCoordinator_;
     }
     const EnemyAttackExecutionSystem& EnemyAttackExecution() const noexcept {
@@ -402,13 +409,7 @@ public:
     const EnemyFormationSystem& EnemyFormations() const noexcept {
         return enemyFormationSystem_;
     }
-    EnemyFormationSystem& EnemyFormations() noexcept {
-        return enemyFormationSystem_;
-    }
     const EnemyEntranceExitDirector& EnemyEntranceExit() const noexcept {
-        return enemyEntranceExitDirector_;
-    }
-    EnemyEntranceExitDirector& EnemyEntranceExit() noexcept {
         return enemyEntranceExitDirector_;
     }
     bool MarkEnemyAttackTelegraphPresented(

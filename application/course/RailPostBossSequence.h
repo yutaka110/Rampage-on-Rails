@@ -299,8 +299,13 @@ public:
         return phase_==Phase::Combat && coordination_.AircraftState(0).flight==RailPursuerCoordination::Flight::Recover &&
             coordination_.VeilPreparing() && !defeated_[0] && !defeated_[1];
     }
-    RailBridgeEscape& Escape(){return escape_;}
     const RailBridgeEscape& Escape()const{return escape_;}
+    bool AcceptEscapeLockHit(uint32_t target, bool destroyed) {
+        return escape_.AcceptLockHit(target, destroyed);
+    }
+    void ObserveEscapeLockRelease(uint32_t target) { escape_.ObserveRelease(target); }
+    bool ConsumeEscapeRetry() { return escape_.TakeRetry(); }
+    bool ConsumeEscapeLanding() { return escape_.TakeLanding(); }
     bool EscapeActive()const{return phase_==Phase::Escape;}
     float DamageDealt()const{return damageTaken_[0]+damageTaken_[1];}
     float SurvivalSeconds()const{return combatSeconds_;}

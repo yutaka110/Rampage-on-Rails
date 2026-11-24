@@ -22,17 +22,6 @@ struct RotatingLogPolicy {
 
 namespace detail {
 
-struct RotatingLogState {
-    std::mutex mutex;
-    std::unordered_map<std::string, std::chrono::steady_clock::time_point> lastSizeChecks;
-    std::chrono::steady_clock::time_point lastDirectoryCheck{};
-};
-
-inline RotatingLogState& LogState() {
-    static RotatingLogState state;
-    return state;
-}
-
 inline void RotateLogFile(
     const std::filesystem::path& path,
     const RotatingLogPolicy& policy) {
@@ -129,56 +118,42 @@ inline void EnforceDirectoryBudget(
 
 inline std::ofstream OpenRotatingLog(
     const std::filesystem::path& path,
+    bool truncate,
     const RotatingLogPolicy& policy = {}) {
+    static std::mutex mutex;
+    static std::unordered_map<std::string, std::chrono::steady_clock::time_point> lastSizeChecks;
+    static std::chrono::steady_clock::time_point lastDirectoryCheck{};
     const auto now = std::chrono::steady_clock::now();
-    detail::RotatingLogState& state = detail::LogState();
     {
-        std::scoped_lock lock(state.mutex);
+        std::scoped_lock lock(mutex);
         std::error_code error;
         if (!path.parent_path().empty()) {
             std::filesystem::create_directories(path.parent_path(), error);
         }
         const std::string key = path.lexically_normal().generic_string();
-        const auto found = state.lastSizeChecks.find(key);
-        if (found == state.lastSizeChecks.end() ||
+        const auto found = lastSizeChecks.find(key);
+        if (truncate) {
+            lastSizeChecks[key] = now;
+        } else if (found == lastSizeChecks.end() ||
             now - found->second >= policy.sizeCheckInterval) {
             detail::RotateLogFile(path, policy);
-            state.lastSizeChecks[key] = now;
+            lastSizeChecks[key] = now;
         }
-        if (state.lastDirectoryCheck.time_since_epoch().count() == 0 ||
-            now - state.lastDirectoryCheck >= policy.directoryCheckInterval) {
+        if (truncate || lastDirectoryCheck.time_since_epoch().count() == 0 ||
+            now - lastDirectoryCheck >= policy.directoryCheckInterval) {
             const std::filesystem::path directory =
                 path.parent_path().empty() ? std::filesystem::current_path() : path.parent_path();
             detail::EnforceDirectoryBudget(directory, path, policy.maxDirectoryBytes);
-            state.lastDirectoryCheck = now;
+            lastDirectoryCheck = now;
         }
     }
-    return std::ofstream(path, std::ios::out | std::ios::app);
+    return std::ofstream(path, std::ios::out | (truncate ? std::ios::trunc : std::ios::app));
 }
 
 inline std::ofstream OpenRotatingLog(
     const std::filesystem::path& path,
-    bool truncate,
     const RotatingLogPolicy& policy = {}) {
-    if (!truncate) {
-        return OpenRotatingLog(path, policy);
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    detail::RotatingLogState& state = detail::LogState();
-    {
-        std::scoped_lock lock(state.mutex);
-        std::error_code error;
-        if (!path.parent_path().empty()) {
-            std::filesystem::create_directories(path.parent_path(), error);
-        }
-        const std::filesystem::path directory =
-            path.parent_path().empty() ? std::filesystem::current_path() : path.parent_path();
-        detail::EnforceDirectoryBudget(directory, path, policy.maxDirectoryBytes);
-        state.lastSizeChecks[path.lexically_normal().generic_string()] = now;
-        state.lastDirectoryCheck = now;
-    }
-    return std::ofstream(path, std::ios::out | std::ios::trunc);
+    return OpenRotatingLog(path, false, policy);
 }
 
 } // namespace app

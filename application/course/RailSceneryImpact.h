@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <functional>
 #include <numeric>
 #include <string_view>
 #include <unordered_map>
@@ -38,11 +37,14 @@ struct Bounds {
     bool Hit(Vector3 origin,Vector3 direction,float limit) const {
         const float o[]{origin.x,origin.y,origin.z},d[]{direction.x,direction.y,direction.z};
         const float a[]{lo.x,lo.y,lo.z},b[]{hi.x,hi.y,hi.z};
-        float near=0,far=limit;
+        float entryDistance = 0.0f;
+        float exitDistance = limit;
         for(int i=0;i<3;++i) {
             if(std::abs(d[i])<1.e-9f) {if(o[i]<a[i] || o[i]>b[i])return false;continue;}
             float x=(a[i]-o[i])/d[i],y=(b[i]-o[i])/d[i];if(x>y)std::swap(x,y);
-            near=(std::max)(near,x);far=(std::min)(far,y);if(near>far)return false;
+            entryDistance = (std::max)(entryDistance, x);
+            exitDistance = (std::min)(exitDistance, y);
+            if (entryDistance > exitDistance) return false;
         }
         return true;
     }
@@ -102,22 +104,14 @@ public:
         return !nodes_.empty() && TraceNode(0,origin,direction,distance,normal);
     }
 };
-inline auto& Cache() {static std::unordered_map<const VertexData*,Mesh> meshes;return meshes;}
-inline void ResetCache() {Cache().clear();}
-inline const Mesh& Prepare(const ModelData& model) {
-    return Cache().try_emplace(model.vertices.data(),model).first->second;
-}
-using Query=std::function<RailAimHit(Vector3,Vector3,float)>;
-inline const Query*& ActiveQuery() {static thread_local const Query* query=nullptr;return query;}
-class Scope final {
-    Query query_;
-    const Query* previous_;
+class MeshCache final {
 public:
-    explicit Scope(Query query):query_(std::move(query)),previous_(ActiveQuery()) {ActiveQuery()=&query_;}
-    ~Scope() {ActiveQuery()=previous_;}
-    Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+    const Mesh& Prepare(const ModelData& model) {
+        return meshes_.try_emplace(model.vertices.data(), model).first->second;
+    }
+    void Clear() { meshes_.clear(); }
+
+private:
+    std::unordered_map<const VertexData*, Mesh> meshes_;
 };
-inline RailAimHit Trace(Vector3 origin,Vector3 direction,float limit) {
-    return ActiveQuery()?(*ActiveQuery())(origin,direction,limit):RailAimHit{};
-}
 }

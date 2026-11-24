@@ -653,7 +653,7 @@ void CourseCollisionSystem::FirePlayerShot(
         const auto cameraAxis=NormalizeOr(shotAim.worldRayDirection,{0,0,1});
         const auto muzzleDelta=RailSceneryImpact::Sub(PrimaryMuzzle(input,weapon_.muzzleForwardOffset),shotAim.worldRayOrigin);
         const float cameraNear=(std::max)(0.0f,RailSceneryImpact::Dot(muzzleDelta,cameraAxis));
-        auto scenery=RailSceneryImpact::Trace(Add(shotAim.worldRayOrigin,Scale(cameraAxis,cameraNear)),cameraAxis,
+        auto scenery=input.TraceScenery(Add(shotAim.worldRayOrigin,Scale(cameraAxis,cameraNear)),cameraAxis,
             (std::max)(0.0f,shotAim.maxDistance-cameraNear));
         scenery.distance+=cameraNear;
         if(scenery.hit && (!shotAim.hasWorldHit || scenery.distance<shotAim.aimDistance-.001f))ApplyRailAimHit(shotAim,scenery);
@@ -706,7 +706,7 @@ void CourseCollisionSystem::FirePlayerShot(
         muzzleQuery.terrainPreview=input.primaryTerrainPreview;
         muzzleQuery.includeProceduralTerrain=input.primaryTerrainSettings!=nullptr;
         ApplyRailAimHit(shotAim,RailWorldRaycast::Query(muzzleQuery));
-        const auto surface=RailSceneryImpact::Trace(shotAim.worldRayOrigin,shotAim.worldRayDirection,shot.range);
+        const auto surface=input.TraceScenery(shotAim.worldRayOrigin,shotAim.worldRayDirection,shot.range);
         if(surface.hit && (!shotAim.hasWorldHit || surface.distance<shotAim.aimDistance-.001f))ApplyRailAimHit(shotAim,surface);
     }
 

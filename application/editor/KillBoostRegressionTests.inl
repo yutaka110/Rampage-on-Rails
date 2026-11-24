@@ -46,18 +46,25 @@ __declspec(noinline) void TestKillBoostFeedback(RegressionRunner& runner) {
     }
     for(int fps:{30,60,120}) {
         RailSpeedDirector director;const float dt=1.0f/fps;
+        CourseAsset course;
+        course.railPoints = {{{0, 0, 0}, 40, 32}, {{0, 0, 100}, 40, 32}};
+        RailPath rail;
+        course.ApplyToRailPath(rail);
+        RailSpeedDirectorFrameInput speedInput;
+        speedInput.railPath = &rail;
+        speedInput.deltaTime = dt;
         const auto fill=[&] {
             for(unsigned id=1;id<=6;++id) {
                 EnemyCombatEvent e;e.kind=EnemyCombatEventKind::Defeated;e.actorId=id;e.shotId=id;
                 e.actorAssetId="short_scout";e.appliedDamage=1;e.feedbackKind=HitFeedbackKind::Destroyed;
-                director.KillBoost().ObserveDefeat(e);
+                director.RegisterKillBoostDefeat(e);
             }
         };
         fill();RailBoostPresentation exhaust;RailVehicleAudioBridge audio;
         RailVehicleActorFrame actor;actor.active=true;RailVehiclePresentationFrame presentation;presentation.speedNormalized=.7f;
         unsigned ignitions=0,releases=0;bool holdVisible=false,windVisible=false;
         for(int frame=0;frame<6*fps;++frame) {
-            const float previousAge=director.KillBoost().Age();director.KillBoost().Update(dt);
+            const float previousAge=director.KillBoost().Age();director.Evaluate(speedInput);
             const float speed=32*director.BoostMultiplier();
             const float strength=director.BoostPresentationStrength(speed,32);
             const auto feedback=BuildRailKillBoostFeedback(director.KillBoost(),strength,previousAge,true,dt);
@@ -79,11 +86,12 @@ __declspec(noinline) void TestKillBoostFeedback(RegressionRunner& runner) {
         runner.Expect(director.BoostPresentationStrength(64,32)==0 &&
             !BuildRailKillBoostFeedback(director.KillBoost(),1,-1,true,dt).visible,
             "ordinary high speed after expiry cannot leave green light or reward audio behind");
-        director.KillBoost().Reset();fill();director.KillBoost().Update(dt);
+        director.ResetKillBoost();fill();director.Evaluate(speedInput);
         const auto stalled=BuildRailKillBoostFeedback(director.KillBoost(),director.BoostPresentationStrength(32,32),-1,false,dt);
         runner.Expect(stalled.strength==0 && stalled.ignition==0 && !stalled.ignitionSound,
             "a speed-limited cart cannot promise acceleration with light or an ignition sound");
-        director.KillBoost().Update(dt,true,false);
+        speedInput.killBoostAllowed = false;
+        director.Evaluate(speedInput);
         const auto blocked=BuildRailKillBoostFeedback(director.KillBoost(),1,0,true,dt);
         runner.Expect(!blocked.visible && blocked.strength==0 && !blocked.releaseSound,
             "scripted control handovers suppress reward effects while retaining its state");
@@ -102,7 +110,7 @@ struct KillBoostTravelFixture final {
     void Charge() {
         for(unsigned id=1;id<=6;++id) {
             EnemyCombatEvent e;e.kind=EnemyCombatEventKind::Defeated;e.actorId=id;e.shotId=id;e.actorAssetId="short_scout";
-            e.appliedDamage=24;e.feedbackKind=HitFeedbackKind::Destroyed;speed.KillBoost().ObserveDefeat(e);
+            e.appliedDamage=24;e.feedbackKind=HitFeedbackKind::Destroyed;speed.RegisterKillBoostDefeat(e);
         }
     }
     void Step(float dt) {
@@ -222,21 +230,30 @@ __declspec(noinline) void TestKillBoostExtension(RegressionRunner& runner) {
     };
     for(int fps:{30,60,120})for(bool manual:{false,true}) {
         const float dt=1.0f/fps;KillBoostTravelFixture live(18.9f);
-        live.speed.SetManualBoostInput(manual,true);live.Charge();live.speed.KillBoost().ActivatePending();
+        live.speed.SetManualBoostInput(manual,true);live.Charge();live.speed.ActivatePendingKillBoost();
         for(int i=0;i<2*fps;++i)live.Step(dt);
-        auto& reward=live.speed.KillBoost();const auto age=reward.Age();const auto remaining=reward.Remaining();
-        runner.Expect(reward.ObserveDefeat(defeat(7)) && std::abs(reward.Remaining()-remaining-RailKillBoost::KillExtensionSeconds)<.0001f &&
+        const auto& reward=live.speed.KillBoost();const auto age=reward.Age();const auto remaining=reward.Remaining();
+        runner.Expect(live.speed.RegisterKillBoostDefeat(defeat(7)) && std::abs(reward.Remaining()-remaining-RailKillBoost::KillExtensionSeconds)<.0001f &&
             reward.Age()==age && reward.Serial()==1 && reward.Charge()==0 && reward.SpinDegrees()==0,
             "a real kill adds a short extension without rewinding age, spinning or banking another reward");
-        runner.Expect(!reward.ObserveDefeat(defeat(7)),"a repeated defeat cannot extend duration twice");
-        for(unsigned id=8;id<30;++id)reward.ObserveDefeat(defeat(id));
+        runner.Expect(!live.speed.RegisterKillBoostDefeat(defeat(7)),"a repeated defeat cannot extend duration twice");
+        for(unsigned id=8;id<30;++id)live.speed.RegisterKillBoostDefeat(defeat(id));
         runner.Expect(std::abs(reward.Age()+reward.Remaining()-RailKillBoost::MaximumSeconds)<.0001f && reward.Charge()==0,
             "a multi-kill clamps the total run of the reward without excess charge");
         const auto checkpoint=live.speed;const auto forecast=live.Forecast(dt,8);
         runner.Expect(checkpoint.KillBoost().Remaining()==reward.Remaining() && checkpoint.KillBoost().Extensions()==reward.Extensions(),
             "checkpoint and forecast snapshots retain the extended expiry and duplicate guards");
-        reward.Update(dt,false);reward.Update(dt,true,false);
-        runner.Expect(reward.Age()==age,"pause and disabled control cannot drain an extended boost");
+        auto paused = checkpoint.KillBoost();
+        paused.Update(dt, false);
+        auto blocked = checkpoint;
+        RailSpeedDirectorFrameInput blockedInput;
+        blockedInput.railPath = &live.rail;
+        blockedInput.distance = live.travel.Distance();
+        blockedInput.deltaTime = dt;
+        blockedInput.killBoostAllowed = false;
+        blocked.Evaluate(blockedInput);
+        runner.Expect(paused.Age()==age && blocked.KillBoost().Age()==age,
+            "pause and disabled control cannot drain an extended boost");
         for(int i=1;i<=8*fps;++i) {
             live.Step(dt);
             runner.Expect(std::abs(live.travel.Distance()-forecast->DistanceAt(i*dt))<.06f,
@@ -244,11 +261,11 @@ __declspec(noinline) void TestKillBoostExtension(RegressionRunner& runner) {
         }
         runner.Expect(!reward.Active() && reward.Serial()==1 && reward.Charge()==0,
             "extended boost eventually releases with no automatic second ignition");
-        live.speed.KillBoost().Reset();live.Charge();reward.ActivatePending();
+        live.speed.ResetKillBoost();live.Charge();live.speed.ActivatePendingKillBoost();
         while(reward.HoldRemaining()>.001f)live.Step(dt);
         for(int i=0;i<fps/3;++i)live.Step(dt);
         const float before=reward.Blend();const auto serial=reward.Serial();
-        reward.ObserveDefeat(defeat(40));
+        live.speed.RegisterKillBoostDefeat(defeat(40));
         runner.Expect(before>0 && before<.8f && std::abs(reward.Blend()-before)<.0001f && reward.Serial()==serial && !reward.Spinning(),
             "a last-moment kill rescues release without a speed, pose or ignition discontinuity");
         for(int i=0;i<fps/4;++i)live.Step(dt);
@@ -264,7 +281,7 @@ __declspec(noinline) void TestKillBoostExtension(RegressionRunner& runner) {
         RailSpeedDirector::RewardMaximum(&course,2280.0f)>batteryLimit,
         "battery approach and pass share the lower reward cap before easing back to open travel");
     KillBoostTravelFixture battery;
-    battery.Charge();battery.speed.KillBoost().ActivatePending();
+    battery.Charge();battery.speed.ActivatePendingKillBoost();
     for(int i=0;i<60;++i)battery.Step(1.0f/60.0f);
     runner.Expect(std::abs(battery.speed.BoostMultiplier(batteryLimit)-batteryLimit)<.0001f,
         "a fully lit reward reaches the lower battery speed cap");
@@ -336,7 +353,7 @@ __declspec(noinline) void TestBoostLaunchImpulse(RegressionRunner& runner) {
     const auto shader=compiler.CompileFromFile(L"Resources/TitleTracer.PS.hlsl",L"main",L"ps_6_0",{L"-O3",L"-WX"});
     runner.Expect(shader && shader->GetBufferSize()>0,"directional jet flow compiles under strict Release shader checks");
     for(int fps:{30,60,120}) {
-        KillBoostTravelFixture live(29.45f);live.Charge();auto& boost=live.speed.KillBoost();boost.ActivatePending();
+        KillBoostTravelFixture live(29.45f);live.Charge();const auto& boost=live.speed.KillBoost();live.speed.ActivatePendingKillBoost();
         RailVehicleCameraInertiaBridge camera;RailBoostPresentation exhaust;
         float thrustTime=0,pitchTime=0,cameraTime=0,maxThrust=0,minPitch=0,minLag=0,launchLength=0,steadyLength=0;
         for(int i=0;i<fps;++i) {
@@ -431,7 +448,7 @@ __declspec(noinline) void TestKillBoostRapidTravelAndSurge(RegressionRunner& run
         live.speed.SetManualBoostInput(manual,true);
         for(int i=0;i<fps;++i)live.Step(dt);
         const float before=live.vehicle.State().speed;
-        live.Charge();live.speed.KillBoost().ActivatePending();
+        live.Charge();live.speed.ActivatePendingKillBoost();
         const float target=RailManualBoost::RequestedSpeed(base,RailKillBoost::MaximumMultiplier);
         const auto forecast=live.Forecast(dt,7);
         for(int frame=1;frame<=fps*7;++frame) {
@@ -451,7 +468,7 @@ __declspec(noinline) void TestKillBoostRapidTravelAndSurge(RegressionRunner& run
             "the independent fast attack still releases back to the current ordinary or held-assist request");
     }
     for(int fps:{30,60,120})for(bool focus:{false,true}) {
-        KillBoostTravelFixture live;live.Charge();live.speed.KillBoost().ActivatePending();
+        KillBoostTravelFixture live;live.Charge();live.speed.ActivatePendingKillBoost();
         RailVehicleCameraInertiaBridge base,burst;float peak=0,peakFov=0,lastLag=0;
         for(int frame=1;frame<=fps;++frame) {
             live.Step(1.0f/fps);const auto state=live.vehicle.State();
@@ -547,10 +564,10 @@ __declspec(noinline) void TestKillBoostImmediateOnset(RegressionRunner& runner) 
         const auto intro=flyby.Update(dt,live.travel.Distance(),live.travel.Distance(),live.rail,true,true);
         runner.Expect(intro.introductionActive && intro.cameraWeight==0 && control.AllowsActivation(),
             "the actual passive carrier entrance keeps its staging while player-controlled reward activation remains allowed");
-        auto& reward=live.speed.KillBoost();
+        const auto& reward=live.speed.KillBoost();
         for(unsigned id=1;id<=6;++id) {
-            runner.Expect(reward.ObserveDefeat(defeat(id)),"the causal onset accepts each unique real defeat payload");
-            const bool started=reward.ActivatePending(true,control.AllowsActivation());
+            runner.Expect(live.speed.RegisterKillBoostDefeat(defeat(id)),"the causal onset accepts each unique real defeat payload");
+            const bool started=live.speed.ActivatePendingKillBoost(true,control.AllowsActivation());
             runner.Expect(started==(id==6),"exactly the sixth credit starts the reward in its own event-processing frame");
         }
         runner.Expect(reward.Active() && reward.Age()==0 && reward.Serial()==1 && reward.IgnitionPulse()==1 && reward.SpinDegrees()==0,
@@ -578,7 +595,7 @@ __declspec(noinline) void TestKillBoostImmediateOnset(RegressionRunner& runner) 
         }
         runner.Expect(live.vehicle.State().speed>=before+.95f*(RailManualBoost::RequestedSpeed(32,RailKillBoost::MaximumMultiplier)-before) && live.travel.Distance()>startDistance+40 && turned && sounds==1,
             "ignition flows into the complete turn and real speed ramp, with a single sound at each tested frame rate");
-        for(unsigned id=7;id<=12;++id) {reward.ObserveDefeat(defeat(id));reward.ActivatePending(true,true);}
+        for(unsigned id=7;id<=12;++id) {live.speed.RegisterKillBoostDefeat(defeat(id));live.speed.ActivatePendingKillBoost(true,true);}
         runner.Expect(reward.Serial()==1 && reward.Charge()==0 &&
             std::abs(reward.Age()+reward.Remaining()-RailKillBoost::MaximumSeconds)<.0001f,
             "rapid batch defeats reach the absolute expiry without restarting the point ignition");
@@ -607,7 +624,7 @@ __declspec(noinline) void TestKillBoostTravelPrediction(RegressionRunner& runner
         live.speed.SetManualBoostInput(true,true);
         for(int frame=0;frame<fps;++frame)live.Step(dt);
         runner.Expect(std::abs(live.speed.BoostMultiplier()-RailManualBoost::HeldMaximumMultiplier)<.001f,"held assist returns to its configured speed after the reward ends");
-        live.speed.KillBoost().Reset();live.Charge();
+        live.speed.ResetKillBoost();live.Charge();
         for(int frame=0;frame<fps;++frame)live.Step(dt);
         runner.Expect(std::abs(live.speed.BoostMultiplier()-RailKillBoost::MaximumMultiplier)<.001f,"manual and reward boosts select the stronger multiplier instead of multiplying");
     }

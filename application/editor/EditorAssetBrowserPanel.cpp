@@ -41,21 +41,6 @@ constexpr EditorAssetKind kAssetKindFilters[] = {
     EditorAssetKind::Audio,
 };
 
-enum class PendingAssetContextAction {
-    None,
-    Duplicate,
-    Reimport,
-    Delete,
-};
-
-struct PendingAssetContextRequest {
-    PendingAssetContextAction action = PendingAssetContextAction::None;
-    EditorAssetKind kind = EditorAssetKind::Unknown;
-    std::string id;
-};
-
-PendingAssetContextRequest gPendingAssetContextRequest{};
-
 const char* FilterLabel(EditorAssetKind kind) {
     return kind == EditorAssetKind::Unknown ? "All" : ToString(kind);
 }
@@ -820,13 +805,11 @@ void DrawAssetContextMenu(
         ImGui::EndMenu();
     }
     ImGui::Separator();
-    if (ImGui::MenuItem("Duplicate")) {
-        gPendingAssetContextRequest = {
-            PendingAssetContextAction::Duplicate, snapshot.kind, snapshot.id};
+    if (ImGui::MenuItem("Duplicate") && browserState != nullptr) {
+        browserState->QueueAssetContextAction(EditorAssetContextAction::Duplicate, snapshot);
     }
-    if (ImGui::MenuItem("Reimport", nullptr, false, !snapshot.runtimeOnly)) {
-        gPendingAssetContextRequest = {
-            PendingAssetContextAction::Reimport, snapshot.kind, snapshot.id};
+    if (ImGui::MenuItem("Reimport", nullptr, false, !snapshot.runtimeOnly) && browserState != nullptr) {
+        browserState->QueueAssetContextAction(EditorAssetContextAction::Reimport, snapshot);
     }
     if (ImGui::MenuItem("Rename / Move...")) {
         SelectAssetRecord(snapshot, registry, assetSelection, browserState);
@@ -836,9 +819,8 @@ void DrawAssetContextMenu(
     }
     const EditorAssetMutationSafetyReport deleteSafety =
         EvaluateEditorAssetMutationSafety(registry, snapshot, EditorAssetMutationKind::Delete);
-    if (ImGui::MenuItem("Delete", nullptr, false, !deleteSafety.Blocked())) {
-        gPendingAssetContextRequest = {
-            PendingAssetContextAction::Delete, snapshot.kind, snapshot.id};
+    if (ImGui::MenuItem("Delete", nullptr, false, !deleteSafety.Blocked()) && browserState != nullptr) {
+        browserState->QueueAssetContextAction(EditorAssetContextAction::Delete, snapshot);
     }
     ImGui::EndPopup();
 }
@@ -849,30 +831,30 @@ void ProcessPendingAssetContextRequest(
     EditorAssetThumbnailService* thumbnails,
     EditorTransactionStack* transactions,
     EditorNotificationCenter* notifications,
-    EditorContentBrowserState* browserState) {
-    const PendingAssetContextRequest request = std::move(gPendingAssetContextRequest);
-    gPendingAssetContextRequest = {};
-    if (request.action == PendingAssetContextAction::None) return;
+    EditorContentBrowserState& browserState) {
+    const auto pending = browserState.TakeAssetContextRequest();
+    if (!pending) return;
+    const auto& request = *pending;
     const EditorAssetRecord* target = registry.Find(request.kind, request.id);
     if (target == nullptr) return;
-    if (request.action == PendingAssetContextAction::Reimport) {
+    if (request.action == EditorAssetContextAction::Reimport) {
         EditorAssetImportService service(registry, thumbnails);
         const EditorAssetImportResult result = service.Reimport(request.kind, request.id);
         PushAssetImportNotification(notifications, result);
-        if (result.succeeded) SelectAssetRecord(result.record, registry, assetSelection, browserState);
+        if (result.succeeded) SelectAssetRecord(result.record, registry, assetSelection, &browserState);
         return;
     }
-    const EditorAssetMutationKind kind = request.action == PendingAssetContextAction::Duplicate
+    const EditorAssetMutationKind kind = request.action == EditorAssetContextAction::Duplicate
         ? EditorAssetMutationKind::Duplicate : EditorAssetMutationKind::Delete;
     EditorAssetMutationExecutor executor(registry);
     const EditorAssetMutationResult result = executor.Execute(
         EditorAssetMutationRequest{kind, request.kind, request.id, {}, {}, transactions});
     PushAssetMutationNotification(notifications, result);
     if (result.succeeded && kind == EditorAssetMutationKind::Duplicate) {
-        SelectAssetRecord(result.updatedRecord, registry, assetSelection, browserState);
+        SelectAssetRecord(result.updatedRecord, registry, assetSelection, &browserState);
     } else if (result.succeeded) {
         if (assetSelection != nullptr) assetSelection->Clear();
-        if (browserState != nullptr) browserState->SetSelectedAssetGuid({});
+        browserState.SetSelectedAssetGuid({});
     }
     if (result.succeeded && thumbnails != nullptr) thumbnails->Sync(registry);
 }
@@ -1111,7 +1093,7 @@ void DrawEditorAssetBrowserPanel(const EditorAssetBrowserPanelContext& context) 
         context.thumbnails,
         context.transactions,
         context.notifications,
-        &browserState);
+        browserState);
 
     if (context.assetSelection != nullptr && !context.assetSelection->HasPrimary() &&
         !browserState.SelectedAssetGuid().empty()) {

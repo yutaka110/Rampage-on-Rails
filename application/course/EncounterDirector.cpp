@@ -3,6 +3,7 @@
 
 #include "CourseSpawnRuntime.h"
 #include "EnemyEncounterReadabilityDirector.h"
+#include "GameplaySettingsValidation.h"
 #include "RailWorldRaycast.h"
 
 #include <algorithm>
@@ -27,6 +28,20 @@ bool IsType(const CourseEventMarker& event, const char* type) {
     return event.type == type;
 }
 } // namespace
+
+bool EncounterDirector::Configure(const EncounterDirectorSettings& settings, std::string* errorMessage) {
+    using namespace gameplay::settings;
+    if (!Result(NonNegative({
+            settings.majorEncounterSpacing, settings.maxQueueDelay, settings.routeSpacingSeconds,
+            settings.routeAdmissionWindowSeconds, settings.routeAdmissionDistance,
+            settings.adaptivePatrolDelaySeconds, settings.availabilityQueryIntervalSeconds,
+            settings.roleMixDelaySeconds, settings.roleMixSpacingSeconds,
+        }), errorMessage, "Encounter timing and distance must be finite and within range")) {
+        return false;
+    }
+    settings_ = settings;
+    return true;
+}
 
 void EncounterDirector::Reset() {
     pendingEvents_.clear();

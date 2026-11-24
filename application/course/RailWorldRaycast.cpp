@@ -336,11 +336,11 @@ RailPathSample EvaluateTerrainRail(const RailPath& rail, float distance) {
         entry = &gRayCache.railSamples[hash & (RayFrameCache::kRailSampleSlots - 1)];
         if (entry->generation == gRayCache.railSampleGeneration && entry->key == key) {
             ++gRayCache.stats.railSampleHits;
-            if (drone_perf::Enabled()) ++drone_perf::frame.railSampleCacheHits;
+            drone_perf::FrameProfile::CountRailSampleCacheHit();
             return entry->sample;
         }
     }
-    if (drone_perf::Enabled()) ++drone_perf::frame.nearestRailEvaluations;
+    drone_perf::FrameProfile::CountNearestRailEvaluation();
     const RailPathSample sample = rail.Evaluate(distance);
     if (gRayCache.scopeDepth > 0) {
         ++gRayCache.stats.railEvaluations;
@@ -504,7 +504,7 @@ bool RayReferenceTerrain(
         if (SameVector(origin, result.origin) && SameVector(direction, result.direction) &&
             maxDistance == result.maxDistance && input.playerDistance == result.playerDistance) {
             ++gRayCache.stats.terrainResultHits;
-            if (drone_perf::Enabled()) ++drone_perf::frame.terrainRayCacheHits;
+            drone_perf::FrameProfile::CountTerrainRayCacheHit();
             outDistance = result.hitDistance;
             outNormal = result.normal;
             return result.hit;
@@ -547,7 +547,7 @@ bool RayProceduralTerrain(
     const auto* world=input.terrainCollision?input.terrainCollision:gTerrainCollision;
     const auto reference=[&]() {
         ++gRayCache.stats.referenceFallbacks;
-        if (drone_perf::Enabled()) ++drone_perf::frame.terrainReferenceFallbacks;
+        drone_perf::FrameProfile::CountTerrainReferenceFallback();
         return RayReferenceTerrain(input,origin,direction,maxDistance,outDistance,outNormal);
     };
     if (mode==TerrainRaycastMode::Reference || !world ||
@@ -564,11 +564,7 @@ bool RayProceduralTerrain(
     }
     if (!accelerated.available) return reference();
     ++gRayCache.stats.bvhQueries;
-    if (drone_perf::Enabled()) {
-        ++drone_perf::frame.terrainBvhQueries;
-        drone_perf::frame.terrainBvhNodes+=accelerated.nodesVisited;
-        drone_perf::frame.terrainBvhTriangles+=accelerated.trianglesTested;
-    }
+    drone_perf::FrameProfile::RecordTerrainBvhQuery(accelerated.nodesVisited, accelerated.trianglesTested);
     // A triangle surface alone cannot distinguish a ray starting in solid rock.
     // Preserve the reference's origin-in-solid rule. This is one SDF sample,
     // shared for identical origins/windows, rather than a full ray march.
@@ -617,12 +613,10 @@ bool RayProceduralTerrain(
             gRayCache.stats.comparisonMaximumDistanceError=(std::max)(gRayCache.stats.comparisonMaximumDistanceError,error);
             if (error>0.75) ++gRayCache.stats.comparisonDistanceMismatches;
         }
-        if (drone_perf::Enabled()) {
-            drone_perf::frame.terrainComparisonQueries=gRayCache.stats.comparisonQueries;
-            drone_perf::frame.terrainComparisonHitMismatches=gRayCache.stats.comparisonHitMismatches;
-            drone_perf::frame.terrainComparisonDistanceMismatches=gRayCache.stats.comparisonDistanceMismatches;
-            drone_perf::frame.terrainComparisonMaximumDistanceError=gRayCache.stats.comparisonMaximumDistanceError;
-        }
+        const auto& comparison = gRayCache.stats;
+        drone_perf::FrameProfile::RecordTerrainComparison(comparison.comparisonQueries,
+            comparison.comparisonHitMismatches, comparison.comparisonDistanceMismatches,
+            comparison.comparisonMaximumDistanceError);
         return oldHit;
     }
     // Preserve precise weapon impact points with the reference when terrain

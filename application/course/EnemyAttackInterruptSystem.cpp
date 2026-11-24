@@ -42,7 +42,7 @@ EnemyAttackInterruptResult EnemyAttackInterruptSystem::Submit(CourseSpawnRuntime
 }
 
 EnemyAttackInterruptResult EnemyAttackInterruptSystem::SubmitActors(std::span<CourseEnemyActor> actors,
-        CourseSpawnRuntime& runtime,
+        EnemyAttackCoordinator& coordinator, EnemyBehaviorSystem& behavior,
         const DamageResult& damageResult) {
     EnemyAttackInterruptResult result{};
     result.actorId = damageResult.targetActorId;
@@ -82,9 +82,9 @@ EnemyAttackInterruptResult EnemyAttackInterruptSystem::SubmitActors(std::span<Co
             accumulator.damage >= definition_.accumulatedDamageThreshold ||
             (definition_.weakPointAlwaysInterrupts &&
                 damageResult.weakPointHit);
-        if (thresholdReached && runtime.EnemyAttacks().CancelActor(
+        if (thresholdReached && coordinator.CancelActor(
                 actor, EnemyAttackCancelReason::PlayerInterrupted)) {
-            runtime.EnemyBehavior().CancelAttackIntent(
+            behavior.CancelAttackIntent(
                 actor, definition_.interruptedCooldownSeconds);
             result.interrupted = true;
             ++frame_.interruptedAttacks;

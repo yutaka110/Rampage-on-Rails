@@ -93,7 +93,7 @@ bool RailSpeedDirector::Configure(
 void RailSpeedDirector::Reset() {
     manualBoost_.Reset();
     manualBrake_.Reset();
-    killBoost_.Reset();
+    ResetKillBoost();
     eventSlowTimer_ = 0.0f;
     eventBoostTimer_ = 0.0f;
     lastFrame_ = {};

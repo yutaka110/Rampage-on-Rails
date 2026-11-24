@@ -176,7 +176,7 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
     coordinator.maximumAttackersPerWave =
         definition.maximumConcurrentAttackers;
     coordinator.maximumThreatBudget = definition.maximumThreatBudget;
-    (void)runtime.EnemyAttacks().Configure(coordinator);
+    (void)runtime.ConfigureEnemyAttacks(coordinator);
 
     const bool readableEnough =
         next.readableRatio + 0.0001f >= definition.requiredReadableRatio;
@@ -239,7 +239,7 @@ const EnemyEncounterPacingFrame& EnemyEncounterPacingDirector::Update(
     case EnemyEncounterBeatPhase::ExitResolve: {
         if (definition.exitSurvivorsOnResolve && !formationExitRequested_) {
             formationExitRequested_ =
-                runtime.EnemyEntranceExit().RequestFormationExit(
+                runtime.RequestEnemyFormationExit(
                     definition.waveGuid);
             if (formationExitRequested_) {
                 next.events.push_back({
@@ -412,7 +412,7 @@ void EnemyEncounterPacingDirector::EnterPhase(
 void EnemyEncounterPacingDirector::RestoreCoordinator(
     CourseSpawnRuntime* runtime) {
     if (runtime != nullptr && hasCoordinatorBaseline_) {
-        (void)runtime->EnemyAttacks().Configure(coordinatorBaseline_);
+        (void)runtime->ConfigureEnemyAttacks(coordinatorBaseline_);
     }
     hasCoordinatorBaseline_ = false;
 }

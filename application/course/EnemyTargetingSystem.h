@@ -8,6 +8,7 @@
 #include "RailTravelPrediction.h"
 
 class CourseSpawnRuntime;
+class EnemyAttackCoordinator;
 struct CourseEnemyActor;
 class RailPath;
 struct RailPathSample;
@@ -139,7 +140,8 @@ private:
     // Only the owning Runtime supplies mutable storage to these algorithms.
     friend class CourseSpawnRuntime;
     void UpdateActors(std::span<CourseEnemyActor> actors,
-        CourseSpawnRuntime& runtime,
+        EnemyAttackCoordinator& coordinator,
+        float minimumVisibleBeforeFire,
         const EnemyTargetingFrameInput& input);
 
     void LockSolution(

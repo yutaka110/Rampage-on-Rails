@@ -129,7 +129,7 @@ void Notify(
 void SyncFromRuntime(
     TerrainPbrMaterialsPanelState& state,
     const AppSceneResources& scene) {
-    state.drafts = scene.terrainMaterialLibrary.Layers();
+    state.drafts = scene.TerrainMaterials().Layers();
     state.dirty.fill(false);
     state.loadedRevision = scene.TerrainMaterialRevision();
     state.initialized = true;
@@ -733,7 +733,7 @@ void DrawTerrainPbrMaterialsPanel(
         ImGui::BeginDisabled();
     }
     if (ImGui::Button("Revert")) {
-        material = scene.terrainMaterialLibrary.Layers()[selected];
+        material = scene.TerrainMaterials().Layers()[selected];
         state.dirty[selected] = false;
         state.lastAction = "Reverted the selected material instance.";
         scene.PreviewTerrainMaterialDefinitions(state.drafts);

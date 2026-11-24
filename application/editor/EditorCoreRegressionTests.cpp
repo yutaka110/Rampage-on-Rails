@@ -4680,6 +4680,14 @@ void TestProductionContentBrowser(RegressionRunner& runner) {
         EditorContentBrowserState state;
         state.SetPath(statePath);
         state.EnsureLoaded();
+        state.QueueAssetContextAction(EditorAssetContextAction::Duplicate, asset);
+        EditorContentBrowserState otherBrowser;
+        runner.Expect(!otherBrowser.TakeAssetContextRequest(),
+            "Asset context actions must stay with the browser that queued them");
+        const auto request = state.TakeAssetContextRequest();
+        runner.Expect(request && request->action == EditorAssetContextAction::Duplicate &&
+            request->kind == asset.kind && request->id == asset.id && !state.TakeAssetContextRequest(),
+            "Taking an asset context action must return its identity and consume it once");
         runner.Expect(state.CreateCollection("Review"), "Content Browser collection should create");
         runner.Expect(state.AddToCollection("Review", asset.guid),
             "Asset should enter a Content Browser collection");
@@ -19822,6 +19830,22 @@ void TestWeaponStateEncapsulation(RegressionRunner& runner) {
 }
 
 void TestRuntimeEncapsulation(RegressionRunner& runner) {
+    static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().EnemyBehavior()),
+        const EnemyBehaviorSystem&>);
+    static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().EnemyAttacks()),
+        const EnemyAttackCoordinator&>);
+    static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().EnemyFormations()),
+        const EnemyFormationSystem&>);
+    static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().EnemyEntranceExit()),
+        const EnemyEntranceExitDirector&>);
+    static_assert(std::is_same_v<decltype(std::declval<CourseCollisionSystem&>().WeaponFire()),
+        const WeaponFireSystem&>);
+    static_assert(std::is_same_v<decltype(std::declval<EncounterDirector&>().Settings()),
+        const EncounterDirectorSettings&>);
+    static_assert(std::is_same_v<decltype(std::declval<RailSpeedDirector&>().KillBoost()),
+        const RailKillBoost&>);
+    static_assert(std::is_same_v<decltype(std::declval<RailPostBossSequence&>().Escape()),
+        const RailBridgeEscape&>);
     static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().EnemyCombat()),
         const EnemyCombatSystem&>);
     static_assert(std::is_same_v<decltype(std::declval<CourseCollisionSystem&>().PlayerDamage()),
@@ -19837,6 +19861,29 @@ void TestRuntimeEncapsulation(RegressionRunner& runner) {
     static_assert(std::is_same_v<decltype(std::declval<CourseSpawnRuntime&>().Obstacles()),
         const std::vector<CourseObstacleActor>&>);
     std::string error;
+    EncounterDirector encounters;
+    auto encounterSettings = encounters.Settings();
+    encounterSettings.routeSpacingSeconds = (std::numeric_limits<float>::infinity)();
+    runner.Expect(!encounters.Configure(encounterSettings, &error) && !error.empty() &&
+        encounters.Settings().routeSpacingSeconds == EncounterDirectorSettings{}.routeSpacingSeconds,
+        "Invalid encounter settings must leave the active settings unchanged");
+
+    CourseCollisionFrameInput gameplayCollision;
+    CourseCollisionFrameInput previewCollision;
+    const Vector3 rayDirection{0, 0, 1};
+    runner.Expect(!gameplayCollision.TraceScenery({}, rayDirection, 10).hit &&
+        !previewCollision.TraceScenery({}, rayDirection, 10).hit,
+        "A collision update has no scenery query unless the caller supplies one");
+    gameplayCollision.traceScenery = [](Vector3, Vector3, float limit) {
+        RailAimHit hit;
+        hit.hit = true;
+        hit.distance = limit;
+        return hit;
+    };
+    runner.Expect(gameplayCollision.TraceScenery({}, rayDirection, 10).distance == 10 &&
+        !previewCollision.TraceScenery({}, rayDirection, 10).hit,
+        "Gameplay scenery queries do not affect preview input");
+
     PlayerDamageSystem damage;
     damage.Reset();
     for (uint64_t id : {11ULL, 12ULL, 13ULL}) {
@@ -19873,10 +19920,10 @@ void TestRuntimeEncapsulation(RegressionRunner& runner) {
         "Inverted fire range must be rejected before publishing settings");
     auto attack = runtime.EnemyAttacks().Settings();
     attack.maximumThreatBudget = (std::numeric_limits<float>::quiet_NaN)();
-    runner.Expect(!runtime.EnemyAttacks().Configure(attack), "Nonfinite attack budget must be rejected");
+    runner.Expect(!runtime.ConfigureEnemyAttacks(attack), "Nonfinite attack budget must be rejected");
     attack = runtime.EnemyAttacks().Settings();
     attack.maximumConcurrentAttackers = 0;
-    runner.Expect(runtime.EnemyAttacks().Configure(attack), "Zero capacity must remain a valid attack-admission hold");
+    runner.Expect(runtime.ConfigureEnemyAttacks(attack), "Zero capacity must remain a valid attack-admission hold");
 
     runtime.SpawnEnemyActor({});
     const uint32_t enemyId = runtime.Enemies().front().actorId;
@@ -24413,7 +24460,7 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
     const uint64_t intentSequence =
         requesting.behaviorState.attackIntentSequence;
     const std::vector<EnemyBehaviorEvent> requestEvents =
-        runtime.EnemyBehavior().ConsumeEvents();
+        runtime.ConsumeEnemyBehaviorEvents();
     runner.Expect(
         requesting.behaviorDefinition.archetype ==
             EnemyBehaviorArchetype::Interceptor &&
@@ -24471,7 +24518,7 @@ void TestEnemyBehaviorSystem(RegressionRunner& runner) {
     runtime.Update(0.21f);
     const CourseEnemyActor& committed = runtime.Enemies().front();
     const std::vector<EnemyBehaviorEvent> commitEvents =
-        runtime.EnemyBehavior().ConsumeEvents();
+        runtime.ConsumeEnemyBehaviorEvents();
     runner.Expect(
         committed.fireSequence == 1 &&
             committed.bulletsEmittedThisFrame > 0 &&
@@ -24708,8 +24755,8 @@ void TestIntroEnemyForwardClearanceAndExit(RegressionRunner& runner) {
         std::vector<uint32_t> persistentIds;
         for (const auto& actor : runtime.Enemies()) persistentIds.push_back(actor.actorId);
         runtime.RetireEnemies(persistentIds);
-        runtime.EnemyEntranceExit().RequestActorExit(persistentIds.front());
-        runtime.EnemyEntranceExit().RequestFormationExit(runtime.Enemies().front().desc.waveId);
+        runtime.RequestEnemyExit(persistentIds.front());
+        runtime.RequestEnemyFormationExit(runtime.Enemies().front().desc.waveId);
         for (int step = 0; step < 180; ++step) {
             runtime.Update(dt, safety);
             for (const auto& actor : runtime.Enemies()) {
@@ -24883,7 +24930,7 @@ void TestSpireGuardAttackPassChoreography(RegressionRunner& runner) {
             safety.cameraAllowsEnemyFire = mode != 3 || elapsed >= 5.40f;
             auto attackSettings = runtime.EnemyAttacks().Settings();
             attackSettings.maximumConcurrentAttackers = mode == 1 && elapsed < 3.0f ? 0 : 3;
-            runner.Expect(runtime.EnemyAttacks().Configure(attackSettings), "Zero attack capacity is an intentional admission hold");
+            runner.Expect(runtime.ConfigureEnemyAttacks(attackSettings), "Zero attack capacity is an intentional admission hold");
             runtime.Update(dt, safety);
             EnemyCombatPresentationInput presentationInput{};
             presentationInput.runtime = &runtime;
@@ -25016,7 +25063,7 @@ void TestEnemyFormationAndEntranceExit(RegressionRunner& runner) {
     definition.exitDurationSeconds = 0.16f;
     std::string definitionError;
     runner.Expect(
-        runtime.EnemyFormations().SetDefinition(
+        runtime.SetEnemyFormationDefinition(
             "formation-regression", definition, &definitionError),
         "a validated Formation Definition should register under a stable runtime id");
 
@@ -25071,7 +25118,7 @@ void TestEnemyFormationAndEntranceExit(RegressionRunner& runner) {
         "Entrance Director should finish staggered entry before enabling targeting and attack commitment");
 
     runner.Expect(
-        runtime.EnemyEntranceExit().RequestFormationExit(
+        runtime.RequestEnemyFormationExit(
             "formation-regression"),
         "a Wave should be able to request one formation-wide exit");
     runtime.Update(0.02f);
@@ -25720,7 +25767,7 @@ void TestEnemyEncounterBeatPacingCameraAndAuthoring(
     unformedEnemy.suppressFire = true;
     unformedExitRuntime.SpawnEnemyActor(unformedEnemy);
     const bool exitRequested =
-        unformedExitRuntime.EnemyEntranceExit().RequestFormationExit(
+        unformedExitRuntime.RequestEnemyFormationExit(
             unformedEnemy.waveId);
     unformedExitRuntime.Update(0.10f);
     const bool exitStarted = !unformedExitRuntime.Enemies().empty() &&
@@ -25749,7 +25796,7 @@ void TestEnemyAttackCoordinationAndExecution(RegressionRunner& runner) {
     settings.maximumAttackersPerSector = 1;
     settings.maximumThreatBudget = 4.0f;
     settings.tokenRecoverySeconds = 0.12f;
-    runner.Expect(runtime.EnemyAttacks().Configure(settings), "Attack settings fixture must be valid");
+    runner.Expect(runtime.ConfigureEnemyAttacks(settings), "Attack settings fixture must be valid");
 
     auto spawnCommercial = [&](const char* id,
                                EnemyBehaviorArchetype archetype,
@@ -25798,7 +25845,7 @@ void TestEnemyAttackCoordinationAndExecution(RegressionRunner& runner) {
     const CourseSpawnRuntimeCheckpoint checkpoint = runtime.CaptureCheckpoint();
     CourseSpawnRuntime restored;
     { auto candidate = restored.FireSafetySettings(); candidate.enabled = false; runner.Expect(restored.ConfigureFireSafety(candidate), "Fire safety fixture settings must be valid"); }
-    runner.Expect(restored.EnemyAttacks().Configure(settings), "Restored attack settings must be valid");
+    runner.Expect(restored.ConfigureEnemyAttacks(settings), "Restored attack settings must be valid");
     restored.RestoreCheckpoint(checkpoint, false);
     runner.Expect(
         reservedCount(restored) == 1 && restored.ActiveBulletCount() == 0,
@@ -26392,7 +26439,7 @@ void TestUnreachableOrdinaryShotDeferral(RegressionRunner& runner) {
             ti.playerDistance+=32*dt;ti.playerLateralOffset=8;
             actor=runtime.Enemies().front();actor.desc.distanceOffset+=32*dt;
             RestoreEnemyFixture(runner,runtime,actor);targeting.Update(runtime,ti);
-            runtime.EnemyAttacks().Update(runtime,intents,dt);
+            runtime.UpdateEnemyAttacks(intents,dt);
             actor=runtime.Enemies().front();
             runner.Expect(!actor.attackState.tokenReserved && actor.targetingState.waitingForReachableLaunch &&
                 actor.targetingState.targetLateralOffset==anchor.targetLateralOffset &&
@@ -26403,7 +26450,7 @@ void TestUnreachableOrdinaryShotDeferral(RegressionRunner& runner) {
         runner.Expect(cancelled.RestoreCheckpoint(runtime.CaptureCheckpoint(),true) &&
             cancelled.InvalidateEnemyAttackWarning(actor.actorId),
             "a deferred warning can be invalidated by visibility or terrain safety");
-        cancelled.EnemyAttacks().Update(cancelled,intents,dt);
+        cancelled.UpdateEnemyAttacks(intents,dt);
         runner.Expect(cancelled.Enemies().front().attackState.tokenReserved &&
             !cancelled.Enemies().front().targetingState.waitingForReachableLaunch &&
             !cancelled.Enemies().front().targetingState.solutionLocked,
@@ -26412,7 +26459,7 @@ void TestUnreachableOrdinaryShotDeferral(RegressionRunner& runner) {
         CourseSpawnRuntime fairness;runner.Expect(fairness.RestoreCheckpoint(runtime.CaptureCheckpoint(),true),
             "deferred anchor and queue restore without reserving an attacker");
         auto budgets=fairness.EnemyAttacks().Settings();budgets.maximumConcurrentAttackers=1;
-        runner.Expect(fairness.EnemyAttacks().Configure(budgets),"single-slot attack budget configures");
+        runner.Expect(fairness.ConfigureEnemyAttacks(budgets),"single-slot attack budget configures");
         CourseEnemyActorDesc peerDesc;peerDesc.spawnDistance=200;peerDesc.lifetime=30;
         peerDesc.behaviorDefinition=EnemyBehaviorDefinition::Commercial(EnemyBehaviorArchetype::Assault);
         fairness.SpawnEnemyActor(peerDesc);auto peer=fairness.Enemies().back();
@@ -26420,7 +26467,7 @@ void TestUnreachableOrdinaryShotDeferral(RegressionRunner& runner) {
         peer.behaviorState.attackIntentSequence=19;peer.entranceExitState.attackSuppressed=false;
         RestoreEnemyFixture(runner,fairness,peer);auto peerIntents=intents;
         intent.actorId=peer.actorId;intent.sequence=19;peerIntents.attackIntents.push_back(intent);
-        fairness.EnemyAttacks().Update(fairness,peerIntents,dt);
+        fairness.UpdateEnemyAttacks(peerIntents,dt);
         runner.Expect(!fairness.Enemies().front().attackState.tokenReserved && fairness.Enemies().back().attackState.tokenReserved,
             "reachable peers receive the released attack slot while the blocked drone waits");
         // Checkpoint restoration cannot turn an unknown first-frame velocity
@@ -26434,7 +26481,7 @@ void TestUnreachableOrdinaryShotDeferral(RegressionRunner& runner) {
         ti.playerDistance+=15*dt;targeting.Update(runtime,ti);
         runner.Expect(runtime.Enemies().front().targetingState.forwardInterceptReachable,
             "a queued unreachable aim is re-evaluated without needing a reserved token");
-        runtime.EnemyAttacks().Update(runtime,intents,dt);
+        runtime.UpdateEnemyAttacks(intents,dt);
         ti.deltaTime=0;targeting.Update(runtime,ti);ti.deltaTime=dt;
         actor=runtime.Enemies().front();
         runner.Expect(actor.attackState.tokenReserved && !actor.targetingState.waitingForReachableLaunch &&
@@ -26442,12 +26489,12 @@ void TestUnreachableOrdinaryShotDeferral(RegressionRunner& runner) {
             actor.targetingState.targetLateralOffset==anchor.targetLateralOffset && actor.targetingState.targetVerticalOffset==anchor.targetVerticalOffset,
             "reachable re-admission keeps the dodge anchor and starts a complete new warning interval");
         EnemyAttackExecutionSystem execution;EnemyBehaviorSystem behavior;
-        execution.Update(runtime,runtime.EnemyAttacks(),behavior);
+        runtime.ExecuteEnemyAttacks(execution, behavior);
         runner.Expect(runtime.ActiveBulletCount()==0,"recovered reachability never fires before warning acknowledgement");
         runner.Expect(runtime.MarkEnemyAttackTelegraphPresented(actor.actorId,17),"fresh reachable warning can be acknowledged");
         actor=runtime.Enemies().front();actor.behaviorState.attackTimeRemaining=0;
-        RestoreEnemyFixture(runner,runtime,actor);runtime.EnemyAttacks().Update(runtime,intents,0);
-        execution.Update(runtime,runtime.EnemyAttacks(),behavior);
+        RestoreEnemyFixture(runner,runtime,actor);runtime.UpdateEnemyAttacks(intents,0);
+        runtime.ExecuteEnemyAttacks(execution, behavior);
         runner.Expect(execution.Frame().committedVolleys==1 && runtime.ActiveBulletCount()==2 && runtime.Enemies().front().fireSequence==1,
             "once its acknowledged warning completes the deferred attack emits exactly one complete volley");
         runner.Expect(runtime.Bullets().front().projectileId==1,"rejected launches do not consume projectile IDs");
@@ -37432,8 +37479,8 @@ void TestRidgeMovingAimSwitch(RegressionRunner& runner) {
             safety.hasCameraPosition=true;safety.cameraPosition=view.position;safety.viewProjection=&vp;safety.readability=&readable;
             runtime.Update(dt,safety);
             for(const auto& actor:runtime.Enemies())if(actor.attackState.tokenReserved) {
-                runtime.EnemyBehavior().MarkTelegraphPresented(runtime,actor.actorId,actor.behaviorState.attackIntentSequence);
-                runtime.EnemyAttacks().MarkTelegraphPresented(runtime,actor.actorId,actor.attackState.intentSequence);
+                runtime.MarkEnemyBehaviorTelegraph(actor.actorId,actor.behaviorState.attackIntentSequence);
+                runtime.MarkEnemyCoordinatorTelegraph(actor.actorId,actor.attackState.intentSequence);
             }
             EnemyEncounterReadabilityInput ri;ri.runtime=&runtime;ri.railPath=&rail;ri.viewProjection=&vp;
             ri.viewportWidth=1600;ri.viewportHeight=900;ri.playerDistance=at;ri.deltaTime=dt;readable.Update(ri);
@@ -38444,7 +38491,7 @@ void TestFirstGroundBatteryCombat(RegressionRunner& runner,bool allBatteries=fal
         if(reward)for(unsigned id=1;id<=6;++id) {
             EnemyCombatEvent e;e.kind=EnemyCombatEventKind::Defeated;e.actorId=id;e.shotId=id;
             e.actorAssetId="short_scout";e.appliedDamage=24;e.feedbackKind=HitFeedbackKind::Destroyed;
-            speedPolicy.KillBoost().ObserveDefeat(e);
+            speedPolicy.RegisterKillBoostDefeat(e);
         }
         RailRideDirector ride;RailRideMotionEnvelope envelope;
         RailTravelPredictionInput forecast;forecast.vehicle=&vehicle;forecast.speedDirector=&speedPolicy;
@@ -38665,7 +38712,7 @@ void TestManualBrakeTravel(RegressionRunner& runner) {
             event.kind=EnemyCombatEventKind::Defeated;
             event.actorId=id;event.shotId=id;event.actorAssetId="short_scout";
             event.appliedDamage=24;event.feedbackKind=HitFeedbackKind::Destroyed;
-            policy.KillBoost().ObserveDefeat(event);
+            policy.RegisterKillBoostDefeat(event);
         }
         RailTravelPredictionInput forecastInput;
         forecastInput.vehicle=&vehicle;forecastInput.speedDirector=&policy;
@@ -39460,8 +39507,8 @@ void TestDistinctCombatShowcases(RegressionRunner& runner) {
         for(int step=0;step<12*fps;++step) {
             const float at=745+speed*step*dt;
             for(const auto& actor:threats.Enemies()) if(actor.attackState.tokenReserved) {
-                threats.EnemyBehavior().MarkTelegraphPresented(threats,actor.actorId,actor.behaviorState.attackIntentSequence);
-                threats.EnemyAttacks().MarkTelegraphPresented(threats,actor.actorId,actor.attackState.intentSequence);
+                threats.MarkEnemyBehaviorTelegraph(actor.actorId,actor.behaviorState.attackIntentSequence);
+                threats.MarkEnemyCoordinatorTelegraph(actor.actorId,actor.attackState.intentSequence);
             }
             CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.playerDistance=at;safety.playerSpeed=speed;
             threats.Update(dt,safety);defender.BeginFrame();
@@ -39652,14 +39699,14 @@ void TestMixedEnemyRoleChoices(RegressionRunner& runner) {
         CourseEventMarker event{2530,"enemy_wave","route_scout_sniper_pair","route:pair","mixed-role-readability"};
         dispatcher.Dispatch({event},spawn,2530);
         EnemyAttackCoordinatorSettings limits;limits.maximumConcurrentAttackers=2;limits.maximumThreatBudget=2.0f;
-        runner.Expect(spawn.EnemyAttacks().Configure(limits,&error),"mixed pressure budget configures");
+        runner.Expect(spawn.ConfigureEnemyAttacks(limits,&error),"mixed pressure budget configures");
         unsigned scoutVolleys=0,sniperVolleys=0,peak=0;uint32_t priorityId=0;
         for(int step=0;step<12*fps;++step) {
             CourseEnemyFireSafetyFrameInput safety;safety.railPath=&rail;safety.playerDistance=2530+speed*step*dt;
             safety.playerSpeed=speed;safety.deltaTime=dt;
             for(const auto& actor:spawn.Enemies()) if(actor.attackState.tokenReserved) {
-                spawn.EnemyBehavior().MarkTelegraphPresented(spawn,actor.actorId,actor.behaviorState.attackIntentSequence);
-                spawn.EnemyAttacks().MarkTelegraphPresented(spawn,actor.actorId,actor.attackState.intentSequence);
+                spawn.MarkEnemyBehaviorTelegraph(actor.actorId,actor.behaviorState.attackIntentSequence);
+                spawn.MarkEnemyCoordinatorTelegraph(actor.actorId,actor.attackState.intentSequence);
             }
             spawn.Update(dt,safety);
             peak=(std::max)(peak,spawn.EnemyAttacks().Frame().reservedAttacks);
@@ -39767,7 +39814,10 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
     EncounterDirector paused;input.deltaTime=0;input.triggeredEvents={marker};
     runner.Expect(paused.Update(input).dispatchEvents.empty(),"pause cannot materialize a new roadside actor");
     input.deltaTime=0.1f;input.triggeredEvents.clear();runner.Expect(paused.Update(input).dispatchEvents.size()==1,"one fresh roadside arrival resumes normally");
-    EncounterDirector simultaneous;simultaneous.Settings().routeSpacingSeconds=0;
+    EncounterDirector simultaneous;
+    auto simultaneousSettings = simultaneous.Settings();
+    simultaneousSettings.routeSpacingSeconds = 0;
+    runner.Expect(simultaneous.Configure(simultaneousSettings), "Same-frame route spacing can be configured to zero");
     input.triggeredEvents={marker,marker,marker};
     runner.Expect(simultaneous.Update(input).dispatchEvents.size()==2,"same-frame release reserves auxiliary slots before dispatch mutates actors");
     input.deltaTime=1;input.triggeredEvents.clear();runner.Expect(simultaneous.Update(input).dispatchEvents.empty(),"third simultaneous request expires rather than bypassing the two-actor reservation");
@@ -39810,8 +39860,8 @@ void TestRoadsideEncounterRhythm(RegressionRunner& runner) {
                 skyEntry|=actor.entranceExitState.appliedVerticalOffset>8;
                 volleys=(std::max)(volleys,actor.fireSequence);
                 if(actor.attackState.tokenReserved) {
-                    spawn.EnemyBehavior().MarkTelegraphPresented(spawn,actor.actorId,actor.behaviorState.attackIntentSequence);
-                    spawn.EnemyAttacks().MarkTelegraphPresented(spawn,actor.actorId,actor.attackState.intentSequence);
+                    spawn.MarkEnemyBehaviorTelegraph(actor.actorId,actor.behaviorState.attackIntentSequence);
+                    spawn.MarkEnemyCoordinatorTelegraph(actor.actorId,actor.attackState.intentSequence);
                 }
             }
             RailTargetRegistry targets;RailTargetRegistryFrameInput ti;ti.spawnRuntime=&spawn;ti.railPath=&rail;ti.playerDistance=at;targets.Build(ti);
@@ -39930,8 +39980,8 @@ void TestShortRunMixedGroupCombat(RegressionRunner& runner) {
             safety.course=&course;safety.hasCameraPosition=true;safety.cameraPosition=view.position;
             safety.viewProjection=&vp;safety.cameraAllowsEnemyFire=true;spawn.Update(dt,safety);
             for(const auto& actor:spawn.Enemies()) if(actor.attackState.tokenReserved) {
-                spawn.EnemyBehavior().MarkTelegraphPresented(spawn,actor.actorId,actor.behaviorState.attackIntentSequence);
-                spawn.EnemyAttacks().MarkTelegraphPresented(spawn,actor.actorId,actor.attackState.intentSequence);
+                spawn.MarkEnemyBehaviorTelegraph(actor.actorId,actor.behaviorState.attackIntentSequence);
+                spawn.MarkEnemyCoordinatorTelegraph(actor.actorId,actor.attackState.intentSequence);
             }
             peakAttackers=(std::max)(peakAttackers,spawn.EnemyAttacks().Frame().reservedAttacks);
             runner.Expect(spawn.EnemyAttacks().Settings().maximumConcurrentAttackers<=2 &&
@@ -40068,8 +40118,8 @@ void TestCarrierMinibossParts(RegressionRunner& runner) {
             for(const auto& actor:spawn.Enemies()) {
                 const int i=RailMothership::PartIndex(actor.desc.actorAssetId);
                 if(actor.attackState.tokenReserved) {
-                    spawn.EnemyBehavior().MarkTelegraphPresented(spawn,actor.actorId,actor.behaviorState.attackIntentSequence);
-                    spawn.EnemyAttacks().MarkTelegraphPresented(spawn,actor.actorId,actor.attackState.intentSequence);
+                    spawn.MarkEnemyBehaviorTelegraph(actor.actorId,actor.behaviorState.attackIntentSequence);
+                    spawn.MarkEnemyCoordinatorTelegraph(actor.actorId,actor.attackState.intentSequence);
                 }
                 if(i>=0 && actor.fireSequence>sequences[i]) {++shots[i];sequences[i]=actor.fireSequence;}
             }

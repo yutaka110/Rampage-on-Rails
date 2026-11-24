@@ -38,15 +38,15 @@ int main() {
     const auto column=LoadGeometry("Resources/course_meshes/RootSpireColumn/RootSpireColumn.obj");
     Mesh pillar(column);distance=20;
     Require(pillar.Trace({0,0,-5},{0,0,1},distance,normal) && distance>4 && distance<5,"actual pillar surface must receive contact");
-    Require(!Trace({},{0,0,1},10).hit,"query does not escape its gameplay scope");
-    {
-        Scope outer([](Vector3,Vector3,float){RailAimHit h;h.hit=true;h.sourceIndex=1;return h;});
-        Require(Trace({},{0,0,1},10).sourceIndex==1,"scoped primary query enabled");
-        {Scope inner([](Vector3,Vector3,float){RailAimHit h;h.hit=true;h.sourceIndex=2;return h;});
-            Require(Trace({},{0,0,1},10).sourceIndex==2,"nested preview query isolated");}
-        Require(Trace({},{0,0,1},10).sourceIndex==1,"outer query restored");
-    }
-    Require(!Trace({},{0,0,1},10).hit,"no callback survives frame teardown");
+    MeshCache gameplayCache;
+    MeshCache previewCache;
+    const Mesh& gameplayArch = gameplayCache.Prepare(arch);
+    const Mesh& previewArch = previewCache.Prepare(arch);
+    Require(&gameplayArch == &gameplayCache.Prepare(arch), "unchanged mesh data reuses the collision mesh");
+    Require(&gameplayArch != &previewArch, "gameplay and preview caches own their meshes");
+    gameplayCache.Clear();
+    distance = 20;
+    Require(previewArch.Trace({0,.40f,-5},{0,0,1},distance,normal), "clearing gameplay collision meshes leaves preview intact");
     Require(IsStone("organic_arch_large") && IsStone("root_spire_column") && !IsStone("title_stake"),"only authored stone opts in");
     const RailVisualOcclusion visibility([&](Vector3 eye, Vector3 target) {
         auto direction = Sub(target, eye);
@@ -59,5 +59,5 @@ int main() {
     Require(visibility.FromCamera({0,.4f,5}), "actual arch lintel hides a lock target");
     Require(!visibility.Blocked({0,-.5f,-5}, {0,-.5f,5}), "open aperture keeps visible targets lockable");
     Require(!clear.FromCamera({0,.4f,5}), "a separate view is unaffected by the blocked view");
-    std::puts("PASS: actual arch aperture, lintel, pillar, nearest hit, scale, empty space, scoped lifetime");
+    std::puts("PASS: actual arch aperture, lintel, pillar, nearest hit, scale, empty space, cache isolation");
 }

@@ -8,6 +8,8 @@
 #include "WeaponDamageSystem.h"
 
 class CourseSpawnRuntime;
+class EnemyAttackCoordinator;
+class EnemyBehaviorSystem;
 struct CourseEnemyActor;
 
 struct EnemyAttackInterruptDefinition final {
@@ -55,7 +57,8 @@ private:
     // Only the owning Runtime supplies mutable storage to these algorithms.
     friend class CourseSpawnRuntime;
     EnemyAttackInterruptResult SubmitActors(std::span<CourseEnemyActor> actors,
-        CourseSpawnRuntime& runtime,
+        EnemyAttackCoordinator& coordinator,
+        EnemyBehaviorSystem& behavior,
         const DamageResult& damageResult);
 
     struct Accumulator final {

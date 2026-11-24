@@ -10109,7 +10109,7 @@ void AppRunLoop::LogRailShooterRuntimeDiagnostics(const char* reason) {
 }
 
 void AppRunLoop::ResetRailPerfFrame(uint32_t frameIndex) {
-    drone_perf::ResetFrame();
+    drone_perf::FrameProfile::Reset();
     railPerfFrame_ = {};
     railPerfFrame_.frame = frameIndex;
 }
@@ -10186,7 +10186,7 @@ void AppRunLoop::LogRailShooterPerfSpike() {
          << " terrainChunks=" << terrainChunkManager_.RenderChunks().size()
          << " terrainDebris=" << debrisStats.debrisInstanceCount
          << " terrainDebrisCullDispatches=" << debrisStats.debrisCullDispatchCount;
-    drone_perf::AppendToLog(line);
+    drone_perf::FrameProfile::AppendToLog(line);
     if (drone_perf::Enabled()) {
         const auto collisionStats = terrainCollisionWorld_.GetStats();
         line << " collisionBvhChunks=" << collisionStats.residentChunks
@@ -10331,8 +10331,8 @@ void AppRunLoop::EnterMultiMaterialShowcaseScene() {
     submissionHudManuallyHidden_ = false;
 
     uint32_t humanoidModelIndex = 1;
-    if (!scene_.skinnedModels[humanoidModelIndex].loaded) {
-        humanoidModelIndex = scene_.skinnedModels[2].loaded ? 2u : 0u;
+    if (!scene_.IsSkinnedModelLoaded(humanoidModelIndex)) {
+        humanoidModelIndex = scene_.IsSkinnedModelLoaded(2) ? 2u : 0u;
     }
     runtimeState_.selectedSkinnedModelIndex = humanoidModelIndex;
 
@@ -10904,7 +10904,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
             const auto start=RailSceneryImpact::TransformPoint(eye,inverse,1);
             const auto axis=RailSceneryImpact::TransformPoint(direction,inverse,0);
             float nearest=limit;Vector3 normal{};
-            if(RailSceneryImpact::Prepare(model->model).Trace(start,axis,nearest,normal))return true;
+            if(scene_.SceneryCollisionMesh(model->model).Trace(start,axis,nearest,normal))return true;
         }
         return false;
     },frameState_.cameraWorldPosition);
@@ -10992,7 +10992,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
     const float railTravelDeltaTime=!coursePreviewOwnsRail && wasTitleStartupBlocked ? entryFrame.travelDeltaTime+gameplayDeltaTime :
         !coursePreviewOwnsRail && railTransitionDemo_.Returning() ? railTransitionDemo_.TravelDeltaTime() : gameplayDeltaTime;
     railWeaponHotReloadPollTimer_ += realGameplayDeltaTime;
-    if (drone_perf::Enabled()) drone_perf::frame.simulationDeltaTime = gameplayDeltaTime;
+    drone_perf::FrameProfile::RecordSimulationDeltaTime(gameplayDeltaTime);
     if (railWeaponHotReloadPollTimer_ >= 0.25f &&
         (!railShooterCollisionSystem_.WeaponDefinitions().Directory().empty() ||
          !railAimAssistPresetRegistry_.Directory().empty() ||
@@ -13490,7 +13490,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
             }
         }
     }
-    for(const auto& hit:railLockVolley_.Hits())if(railPostBossSequence_.Escape().AcceptLockHit(hit.targetActorId,hit.destroyed)) {
+    for(const auto& hit:railLockVolley_.Hits())if(railPostBossSequence_.AcceptEscapeLockHit(hit.targetActorId,hit.destroyed)) {
         (void)audio_.PlaySpatial(railEscapeSounds_[1],.44f,0,1.0f);
         railShooterCameraDirector_.AddFeedbackImpulse(.16f,-.004f,0);
     }
@@ -13535,7 +13535,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
             railShooterSpawnRuntime_.BeginLockPracticeDeparture(vehicleFrame.state.speed);
     }
     if(lockScheduledShots>0)for(const auto& token:railShooterLockOnSystem_.LastRelease().tokens)
-        if(token.target.kind==RailLockTargetKind::Obstacle)railPostBossSequence_.Escape().ObserveRelease(token.target.actorId);
+        if(token.target.kind==RailLockTargetKind::Obstacle)railPostBossSequence_.ObserveEscapeLockRelease(token.target.actorId);
     bool introTargetVisible=false;
     if(!coursePreviewOwnsRail && !titleEntryBlocked && railShooterDistance_<950)
         for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(actor.desc.waveId=="short_lock" && actor.desc.hitPoints>0) {
@@ -13690,7 +13690,7 @@ void AppRunLoop::UpdateRailShooterFrame() {
             const auto start=RailSceneryImpact::TransformPoint(origin,inverse,1);
             const auto axis=RailSceneryImpact::TransformPoint(direction,inverse,0);
             Vector3 normal{};
-            if(!RailSceneryImpact::Prepare(model->model).Trace(start,axis,nearest,normal))continue;
+            if(!scene_.SceneryCollisionMesh(model->model).Trace(start,axis,nearest,normal))continue;
             // Keep the existing forgiving central aim sphere; additionally
             // receive normal shots on the real wing tips/engines/armour.
             hit.hit=true;hit.kind=airframe?RailAimHitKind::Enemy:RailAimHitKind::TerrainPlacement;hit.distance=nearest;
@@ -13715,10 +13715,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         }
         return hit;
     };
-    CourseCollisionFrameStats collisionStats = [&] {
-        const RailSceneryImpact::Scope scenery(queryScenery);
-        return railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
-    }();
+    collisionInput.traceScenery = queryScenery;
+    CourseCollisionFrameStats collisionStats =
+        railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput);
     bool fangCounterAudioPlayed=false;
     const auto& shootDownResults=railShooterCollisionSystem_.ProjectileShootDown().Frame().results;
     const auto* finalIntercept=railPostBossSequence_.OnFangIntercepts(shootDownResults,railShooterSpawnRuntime_);
@@ -14237,8 +14236,9 @@ void AppRunLoop::UpdateRailShooterFrame() {
         railShooterSpawnRuntime_.ConsumeEnemyCombatEvents();
     if(!normalTravelAudit && grazeInput.gameplayActive && killBoostControl.AllowsActivation() && IsRailShortCourse(railShooterCoursePath_))
         for(const auto& event:enemyCombatEvents) {
-            auto& boost=railShooterSpeedDirector_.KillBoost();
-            if(boost.ObserveDefeat(event))boost.ActivatePending(true,speedInput.killBoostAllowed);
+            if (railShooterSpeedDirector_.RegisterKillBoostDefeat(event)) {
+                railShooterSpeedDirector_.ActivatePendingKillBoost(true, speedInput.killBoostAllowed);
+            }
         }
     // Defeat credit owns the onset. Submit the new point light and sound after
     // credit, using the same age as the body spin rendered later this frame.
@@ -15405,11 +15405,11 @@ void AppRunLoop::UpdateRailShooterFrame() {
         else if(!bossApproach && checkpointStats.enteredSectionThisFrame)
             (void)CaptureRailCheckpoint(checkpointStats.currentSectionName);
     }
-    if(railPostBossSequence_.Escape().TakeRetry()) {
+    if(railPostBossSequence_.ConsumeEscapeRetry()) {
         railShooterGameSession_.Abort("Bridge release missed");
         (void)RetryRailCheckpoint();return;
     }
-    if(railPostBossSequence_.Escape().TakeLanding()) {
+    if(railPostBossSequence_.ConsumeEscapeLanding()) {
         (void)audio_.PlaySpatial(railEscapeSounds_[2],.48f,0,1);
         railShooterCameraDirector_.AddFeedbackImpulse(.30f,.005f,0);
     }
@@ -15567,8 +15567,7 @@ void AppRunLoop::UpdateSubmissionShowcaseInput(float deltaTime) {
         !runtimeState_.skinnedAnimationBlend.active) {
         const uint32_t nextModel =
             runtimeState_.selectedSkinnedModelIndex == 1u ? 2u : 1u;
-        if (nextModel < scene_.skinnedModels.size() &&
-            scene_.skinnedModels[nextModel].loaded) {
+        if (scene_.IsSkinnedModelLoaded(nextModel)) {
             BeginSkinnedAnimationBlend(runtimeState_, nextModel, 0.25f);
         }
     }

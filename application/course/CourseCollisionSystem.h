@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 #include "../diagnostics/DebugDrawSystem.h"
 #include "../terrain/RailPath.h"
@@ -81,6 +82,11 @@ struct CourseCollisionFrameInput {
     const TerrainEditLayer* primaryTerrainPreview = nullptr;
     bool firstGatlingDefense = false;
     uint32_t fangHullCounterTargetActorId = 0;
+    std::function<RailAimHit(Vector3, Vector3, float)> traceScenery;
+
+    RailAimHit TraceScenery(Vector3 origin, Vector3 direction, float limit) const {
+        return traceScenery ? traceScenery(origin, direction, limit) : RailAimHit{};
+    }
 };
 
 struct CourseCollisionFrameStats {
@@ -169,7 +175,6 @@ public:
     const EnemyAttackInterruptSystem& AttackInterrupt() const noexcept {
         return attackInterruptSystem_;
     }
-    WeaponFireSystem& WeaponFire() { return weaponFireSystem_; }
     const WeaponFireSystem& WeaponFire() const { return weaponFireSystem_; }
     bool LoadWeaponDefinitions(
         const std::filesystem::path& directory,

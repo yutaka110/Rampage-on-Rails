@@ -1786,18 +1786,58 @@ void CourseSpawnRuntime::UpdateEnemyEntranceExit(EnemyEntranceExitDirector& syst
 
 void CourseSpawnRuntime::UpdateEnemyTargeting(EnemyTargetingSystem& system,
         const EnemyTargetingFrameInput& input) {
-    system.UpdateActors(enemies_, *this, input);
+    system.UpdateActors(enemies_, enemyAttackCoordinator_,
+        fireSafetySettings_.minVisibleBeforeFire, input);
 }
 
 EnemyAttackInterruptResult CourseSpawnRuntime::InterruptEnemyAttack(EnemyAttackInterruptSystem& system,
         const DamageResult& damageResult) {
-    return system.SubmitActors(enemies_, *this, damageResult);
+    return system.SubmitActors(enemies_, enemyAttackCoordinator_, enemyBehaviorSystem_, damageResult);
 }
 
 void CourseSpawnRuntime::ExecuteEnemyAttacks(EnemyAttackExecutionSystem& system,
         EnemyAttackCoordinator& coordinator,
         EnemyBehaviorSystem& behaviorSystem) {
     system.UpdateActors(enemies_, *this, coordinator, behaviorSystem);
+}
+
+std::vector<EnemyBehaviorEvent> CourseSpawnRuntime::ConsumeEnemyBehaviorEvents() {
+    return enemyBehaviorSystem_.ConsumeEvents();
+}
+
+bool CourseSpawnRuntime::ConfigureEnemyAttacks(const EnemyAttackCoordinatorSettings& settings,
+        std::string* errorMessage) {
+    return enemyAttackCoordinator_.Configure(settings, errorMessage);
+}
+
+void CourseSpawnRuntime::UpdateEnemyAttacks(const EnemyBehaviorFrame& behaviorFrame, float deltaTime) {
+    UpdateEnemyAttacks(enemyAttackCoordinator_, behaviorFrame, deltaTime);
+}
+
+void CourseSpawnRuntime::ExecuteEnemyAttacks(EnemyAttackExecutionSystem& system,
+        EnemyBehaviorSystem& behaviorSystem) {
+    ExecuteEnemyAttacks(system, enemyAttackCoordinator_, behaviorSystem);
+}
+
+bool CourseSpawnRuntime::SetEnemyFormationDefinition(std::string formationId,
+        EnemyFormationDefinition definition, std::string* errorMessage) {
+    return enemyFormationSystem_.SetDefinition(std::move(formationId), std::move(definition), errorMessage);
+}
+
+bool CourseSpawnRuntime::RequestEnemyExit(uint32_t actorId) {
+    return enemyEntranceExitDirector_.RequestActorExit(actorId);
+}
+
+bool CourseSpawnRuntime::RequestEnemyFormationExit(std::string formationId) {
+    return enemyEntranceExitDirector_.RequestFormationExit(std::move(formationId));
+}
+
+bool CourseSpawnRuntime::MarkEnemyBehaviorTelegraph(uint32_t actorId, uint64_t intentSequence) {
+    return MarkEnemyBehaviorTelegraph(enemyBehaviorSystem_, actorId, intentSequence);
+}
+
+bool CourseSpawnRuntime::MarkEnemyCoordinatorTelegraph(uint32_t actorId, uint64_t intentSequence) {
+    return MarkEnemyCoordinatorTelegraph(enemyAttackCoordinator_, actorId, intentSequence);
 }
 
 DamageResult CourseSpawnRuntime::ApplyWeaponHit(CourseActorDamageReceiver& system,

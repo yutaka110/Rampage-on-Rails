@@ -73,9 +73,9 @@ struct EncounterDirectorStats {
 class EncounterDirector {
 public:
     void Reset();
+    bool Configure(const EncounterDirectorSettings& settings, std::string* errorMessage = nullptr);
     EncounterDirectorFrameOutput Update(const EncounterDirectorFrameInput& input);
     const EncounterDirectorStats& LastStats() const { return lastStats_; }
-    EncounterDirectorSettings& Settings() { return settings_; }
     const EncounterDirectorSettings& Settings() const { return settings_; }
 
 private:

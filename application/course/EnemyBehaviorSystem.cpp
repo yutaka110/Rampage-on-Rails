@@ -460,7 +460,7 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
             if (definition.choreographedAttackPass &&
                 state.stateElapsedSeconds >= definition.attackPassRecoilSeconds) {
                 EnterState(actor, EnemyBehaviorState::Retreating);
-                runtime.EnemyEntranceExit().RequestActorExit(actor.actorId);
+                runtime.RequestEnemyExit(actor.actorId);
                 state.engagementBandExitRequested = true;
             } else if (!definition.choreographedAttackPass &&
                 state.stateElapsedSeconds >= definition.evadeDurationSeconds) {
@@ -498,7 +498,7 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
                     actor.fireTimer, definition.attackCooldownSeconds);
                 EnterState(actor, EnemyBehaviorState::Retreating,
                     EnemyBehaviorEventKind::StateChanged);
-                runtime.EnemyEntranceExit().RequestActorExit(actor.actorId);
+                runtime.RequestEnemyExit(actor.actorId);
                 state.engagementBandExitRequested = true;
                 ++frame_.engagementBandForcedExits;
                 state.revision = ++revision_;

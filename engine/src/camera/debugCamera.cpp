@@ -9,8 +9,6 @@ void DebugCamera::Initialize() {
     transform.scale = {1.0f, 1.0f, 1.0f};
     transform.rotate = {0.0f, 0.0f, 0.0f};
     transform.translate = {0.0f, 0.0f, -8.0f};
-    rotation_ = transform.rotate;
-    translation_ = transform.translate;
     camera_.Initialize(
         transform,
         0.25f * std::numbers::pi_v<float>,
@@ -20,8 +18,6 @@ void DebugCamera::Initialize() {
 }
 
 void DebugCamera::SetTransform(const Transform& transform) {
-    rotation_ = transform.rotate;
-    translation_ = transform.translate;
     camera_.SetTransform(transform);
 }
 

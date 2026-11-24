@@ -13,6 +13,7 @@
 #include "AnimationClip.h"
 #include "course/CourseMeshRenderQueue.h"
 #include "course/CourseRailTrackRenderer.h"
+#include "course/RailSceneryImpact.h"
 #include "diagnostics/DebugDrawSystem.h"
 #include "Skeleton.h"
 #include "terrain/TerrainMaterialLibrary.h"
@@ -299,6 +300,9 @@ public:
         float vehicleToneExposure = 1.0f);
     SkinnedModelInstance* GetActiveSkinnedModel();
     const SkinnedModelInstance* GetActiveSkinnedModel() const;
+    bool IsSkinnedModelLoaded(size_t index) const noexcept {
+        return index < skinnedModels.size() && skinnedModels[index].loaded;
+    }
     const AppManagedModelResource* FindManagedModel(uint32_t modelIndex) const;
     [[nodiscard]] uint32_t TrainingSwordModelIndex() const noexcept {
         return trainingSwordModelIndex;
@@ -314,6 +318,7 @@ public:
         const Matrix4x4& viewMatrix,
         const Matrix4x4& projMatrix);
     const std::vector<AppManagedModelResource>& ManagedModelLibrary() const { return vfxModelLibrary; }
+    std::span<const AppManagedTextureResource> ManagedTextures() const { return vfxTextureLibrary; }
     const std::vector<AppModelObjectInstance>& ModelObjectInstances() const { return vfxModelObjects; }
     const AppModelObjectInstance& RailVehicleObject() const noexcept {
         return railVehicleObject;
@@ -322,6 +327,10 @@ public:
         return railVehicleOccupantObject;
     }
     const CourseMeshRenderQueue& CourseMeshes() const { return courseMeshRenderQueue; }
+    const TerrainMaterialLibrary& TerrainMaterials() const { return terrainMaterialLibrary; }
+    const RailSceneryImpact::Mesh& SceneryCollisionMesh(const ModelData& model) {
+        return sceneryCollisionMeshes_.Prepare(model);
+    }
     const CourseRailTrackRenderer& CourseRailTrackMeshes() const {
         return courseRailTrackRenderer;
     }
@@ -375,7 +384,6 @@ public:
     Material* terrainMaterialData = nullptr;
     Microsoft::WRL::ComPtr<ID3D12Resource> terrainPbrMaterialResource;
     TerrainPbrLibraryGpuConstants* terrainPbrMaterialData = nullptr;
-    TerrainMaterialLibrary terrainMaterialLibrary;
     TerrainPbrMaterialDefinition titleGroundMaterialDefinition;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> materialResourceSprite;
@@ -454,17 +462,6 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE skyboxTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE animatedCubeTextureSrvHandleCPU{};
     D3D12_CPU_DESCRIPTOR_HANDLE flatNormalTextureSrvHandleCPU{};
-    std::vector<AppManagedTextureResource> vfxTextureLibrary;
-    std::vector<AppManagedModelResource> vfxModelLibrary;
-    std::vector<AppModelObjectInstance> vfxModelObjects;
-    uint32_t trainingSwordModelIndex = UINT32_MAX;
-    uint32_t railVehicleModelIndex = UINT32_MAX;
-    AppModelObjectInstance weaponAttachmentObject{};
-    AppModelObjectInstance railVehicleObject{};
-    AppModelObjectInstance railVehicleOccupantObject{};
-    CourseMeshRenderQueue courseMeshRenderQueue;
-    CourseRailTrackRenderer courseRailTrackRenderer;
-
     // Sphere
     SphereMeshData sphere{};
 
@@ -478,18 +475,11 @@ public:
     OrbitRibbonMeshData orbitRibbon{};
 
     // Model
-    ModelData modelData{};
     GpuMeshResource modelMesh{};
 
-    ModelData animatedCubeData{};
-    AnimationClip animatedCubeAnimation{};
     GpuMeshResource animatedCubeMesh{};
     Microsoft::WRL::ComPtr<ID3D12Resource> animatedCubeTransformResource;
     TransformationMatrix* animatedCubeTransformData = nullptr;
-
-    static constexpr uint32_t kSkinnedModelCount = 3;
-    std::array<SkinnedModelInstance, kSkinnedModelCount> skinnedModels{};
-    uint32_t activeSkinnedModelIndex = 0;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> skeletonDebugVertexResource;
     Microsoft::WRL::ComPtr<ID3D12Resource> skeletonDebugTransformResource;
@@ -504,6 +494,24 @@ public:
     ge3::debug::DebugDrawSystem enemyThreatVisualDraw;
 
 private:
+    std::vector<AppManagedTextureResource> vfxTextureLibrary;
+    std::vector<AppManagedModelResource> vfxModelLibrary;
+    std::vector<AppModelObjectInstance> vfxModelObjects;
+    uint32_t trainingSwordModelIndex = UINT32_MAX;
+    uint32_t railVehicleModelIndex = UINT32_MAX;
+    AppModelObjectInstance weaponAttachmentObject{};
+    AppModelObjectInstance railVehicleObject{};
+    AppModelObjectInstance railVehicleOccupantObject{};
+    ModelData modelData{};
+    ModelData animatedCubeData{};
+    AnimationClip animatedCubeAnimation{};
+    static constexpr uint32_t kSkinnedModelCount = 3;
+    std::array<SkinnedModelInstance, kSkinnedModelCount> skinnedModels{};
+    uint32_t activeSkinnedModelIndex = 0;
+    TerrainMaterialLibrary terrainMaterialLibrary;
+    CourseMeshRenderQueue courseMeshRenderQueue;
+    CourseRailTrackRenderer courseRailTrackRenderer;
+    RailSceneryImpact::MeshCache sceneryCollisionMeshes_;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> initialUploadResources_;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> terrainRuntimeUploadResources_;
     Microsoft::WRL::ComPtr<ID3D12Device> terrainPbrDevice_;

@@ -478,10 +478,10 @@ void EnemyTargetingSystem::Update(CourseSpawnRuntime& runtime,
 }
 
 void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
-        CourseSpawnRuntime& runtime,
-    const EnemyTargetingFrameInput& sourceInput) {
+        EnemyAttackCoordinator& coordinator, float minimumVisibleBeforeFire,
+        const EnemyTargetingFrameInput& sourceInput) {
     EnemyTargetingFrameInput input = sourceInput;
-    input.minimumVisibleBeforeFire=runtime.FireSafetySettings().minVisibleBeforeFire;
+    input.minimumVisibleBeforeFire = minimumVisibleBeforeFire;
     bool builtForecast = false;
     if (input.travelPredictionInput && input.deltaTime > 0.0f && !input.travelPrediction) {
         float horizon = 0.0f;
@@ -595,14 +595,14 @@ void EnemyTargetingSystem::UpdateActors(std::span<CourseEnemyActor> actors,
                 // A large correction (12 degrees) needs a fresh readable warning,
                 // rather than turning a nearly completed warning into a new shot.
                 if (agreement < 0.9781476f) {
-                    runtime.EnemyAttacks().RestartTelegraphForAimChange(actor);
+                    coordinator.RestartTelegraphForAimChange(actor);
                     RefreshForwardIntercept(actor,input,actorForwardVelocity);
                 }
             }
             ++frame_.forwardCompensatedSolutions;
             if(!state.forwardInterceptReachable) {
                 ++frame_.unreachableSolutions;
-                runtime.EnemyAttacks().DeferUnreachableAttack(actor);
+                coordinator.DeferUnreachableAttack(actor);
             } else if(actor.attackState.tokenReserved) {
                 state.waitingForReachableLaunch=false;
             }
