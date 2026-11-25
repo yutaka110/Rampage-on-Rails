@@ -435,6 +435,131 @@ void EnemyBehaviorSystem::Update(CourseSpawnRuntime& runtime,
     runtime.UpdateEnemyBehavior(*this, input);
 }
 
+struct EnemyBehaviorSystem::BehaviorTick {
+    EnemyBehaviorSystem& system;
+    CourseEnemyActor& actor;
+    CourseSpawnRuntime& runtime;
+    float deltaTime;
+    float playerDistance;
+    float playerForwardSpeed;
+};
+
+class EnemyBehaviorSystem::BehaviorState {
+public:
+    virtual ~BehaviorState() = default;
+    virtual void Update(const BehaviorTick& tick) const = 0;
+};
+
+const EnemyBehaviorSystem::BehaviorState& EnemyBehaviorSystem::StateFor(EnemyBehaviorState state) noexcept {
+    class TimedState final : public BehaviorState {
+    public:
+        TimedState(float EnemyBehaviorDefinition::* duration, EnemyBehaviorState next)
+            : duration_(duration), next_(next) {}
+
+    private:
+        void Update(const BehaviorTick& tick) const override {
+            if (tick.actor.behaviorState.stateElapsedSeconds >= tick.actor.behaviorDefinition.*duration_) {
+                tick.system.EnterState(tick.actor, next_);
+            }
+        }
+
+        float EnemyBehaviorDefinition::* duration_;
+        EnemyBehaviorState next_;
+    };
+
+    class PositioningState final : public BehaviorState {
+        void Update(const BehaviorTick& tick) const override {
+            const auto& actor = tick.actor;
+            const auto& definition = actor.behaviorDefinition;
+            const auto& state = actor.behaviorState;
+            if (!(state.stateElapsedSeconds >= definition.positioningDurationSeconds &&
+                state.attackCooldownRemaining <= 0.0f)) return;
+
+            // Leave room for the aiming handoff and admission frames before
+            // the visible warning starts, including during high-speed travel.
+            if (RailGroundBattery::IsPredictive(actor.desc.actorAssetId)) {
+                const float forward = actor.desc.spawnDistance + actor.desc.distanceOffset - tick.playerDistance;
+                const float lead = tick.playerForwardSpeed *
+                    (definition.aimingDurationSeconds + definition.attackLeadSeconds + 2.0f * tick.deltaTime);
+                const float minimum = RailGroundBattery::MinimumFireDistanceFor(
+                    actor.desc.waveId, actor.desc.spawnDistance, actor.fireSequence > 0) + lead;
+                if (!(forward >= minimum)) return;
+                if (actor.fireSequence == 0 &&
+                    !(forward <= RailGroundBattery::FirstShotDistance(actor.desc.waveId, actor.desc.spawnDistance) + lead)) return;
+            }
+            if ((!definition.maintainForwardEngagementBand || state.engagementBandAttackAllowed) &&
+                (!definition.choreographedAttackPass || HasAttackPassTurn(actor, tick.runtime))) {
+                tick.system.EnterState(tick.actor, EnemyBehaviorState::Aiming);
+            }
+        }
+    };
+
+    class AimingState final : public BehaviorState {
+        void Update(const BehaviorTick& tick) const override {
+            const auto& definition = tick.actor.behaviorDefinition;
+            const auto& state = tick.actor.behaviorState;
+            if (state.stateElapsedSeconds >= definition.aimingDurationSeconds &&
+                (!definition.maintainForwardEngagementBand || state.engagementBandAttackAllowed)) {
+                tick.system.BeginAttackIntent(tick.actor);
+            }
+        }
+    };
+
+    class AttackRequestState final : public BehaviorState {
+        void Update(const BehaviorTick& tick) const override {
+            auto& actor = tick.actor;
+            auto& state = actor.behaviorState;
+            // Queuing must never consume the readable charge-up interval.
+            if (actor.fireEnvironmentReady && actor.attackState.tokenReserved && state.telegraphPresented) {
+                state.attackTimeRemaining = (std::max)(0.0f, state.attackTimeRemaining - tick.deltaTime);
+            }
+            actor.fireTimer = state.attackTimeRemaining;
+        }
+    };
+
+    class EvadingState final : public BehaviorState {
+        void Update(const BehaviorTick& tick) const override {
+            auto& actor = tick.actor;
+            const auto& definition = actor.behaviorDefinition;
+            auto& state = actor.behaviorState;
+            if (definition.choreographedAttackPass &&
+                state.stateElapsedSeconds >= definition.attackPassRecoilSeconds) {
+                tick.system.EnterState(actor, EnemyBehaviorState::Retreating);
+                tick.runtime.RequestEnemyExit(actor.actorId);
+                state.engagementBandExitRequested = true;
+            } else if (!definition.choreographedAttackPass &&
+                state.stateElapsedSeconds >= definition.evadeDurationSeconds) {
+                tick.system.EnterState(actor, EnemyBehaviorState::Repositioning);
+            }
+        }
+    };
+
+    // Retreat and disable are driven by lifetime/combat notifications.
+    class WaitingState final : public BehaviorState {
+        void Update(const BehaviorTick&) const override {}
+    };
+
+    static const TimedState entering(&EnemyBehaviorDefinition::entryDurationSeconds, EnemyBehaviorState::Positioning);
+    static const PositioningState positioning;
+    static const AimingState aiming;
+    static const AttackRequestState requestingAttack;
+    static const EvadingState evading;
+    static const TimedState repositioning(&EnemyBehaviorDefinition::repositionDurationSeconds, EnemyBehaviorState::Positioning);
+    static const WaitingState waiting;
+    switch (state) {
+    case EnemyBehaviorState::Entering: return entering;
+    case EnemyBehaviorState::Positioning: return positioning;
+    case EnemyBehaviorState::Aiming: return aiming;
+    case EnemyBehaviorState::RequestingAttack: return requestingAttack;
+    case EnemyBehaviorState::Evading: return evading;
+    case EnemyBehaviorState::Repositioning: return repositioning;
+    case EnemyBehaviorState::Retreating:
+    case EnemyBehaviorState::Disabled:
+    case EnemyBehaviorState::Dormant: return waiting;
+    }
+    return waiting;
+}
+
 void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         CourseSpawnRuntime& runtime,
         const EnemyBehaviorFrameInput& input, uint32_t lateralHoldActorId) {
@@ -506,69 +631,8 @@ void EnemyBehaviorSystem::UpdateActors(std::span<CourseEnemyActor> actors,
         state.stateElapsedSeconds += dt;
         state.attackCooldownRemaining = (std::max)(
             0.0f, state.attackCooldownRemaining - dt);
-        switch (state.state) {
-        case EnemyBehaviorState::Entering:
-            if (state.stateElapsedSeconds >= definition.entryDurationSeconds) {
-                EnterState(actor, EnemyBehaviorState::Positioning);
-            }
-            break;
-        case EnemyBehaviorState::Positioning:
-            // Include the aiming handoff and token admission frames before
-            // the visible warning countdown, even at high speed and 30 fps.
-            if (state.stateElapsedSeconds >= definition.positioningDurationSeconds &&
-                state.attackCooldownRemaining <= 0.0f &&
-                (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
-                    actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance >=
-                        RailGroundBattery::MinimumFireDistanceFor(actor.desc.waveId,actor.desc.spawnDistance,actor.fireSequence>0)+playerForwardSpeed*
-                            (definition.aimingDurationSeconds+definition.attackLeadSeconds+2.0f*dt)) &&
-                (!RailGroundBattery::IsPredictive(actor.desc.actorAssetId) || actor.fireSequence>0 ||
-                    actor.desc.spawnDistance+actor.desc.distanceOffset-playerDistance <=
-                        RailGroundBattery::FirstShotDistance(actor.desc.waveId,actor.desc.spawnDistance)+playerForwardSpeed*
-                            (definition.aimingDurationSeconds+definition.attackLeadSeconds+2.0f*dt)) &&
-                (!definition.maintainForwardEngagementBand ||
-                    state.engagementBandAttackAllowed) &&
-                (!definition.choreographedAttackPass ||
-                    HasAttackPassTurn(actor, runtime))) {
-                EnterState(actor, EnemyBehaviorState::Aiming);
-            }
-            break;
-        case EnemyBehaviorState::Aiming:
-            if (state.stateElapsedSeconds >= definition.aimingDurationSeconds &&
-                (!definition.maintainForwardEngagementBand ||
-                    state.engagementBandAttackAllowed)) {
-                BeginAttackIntent(actor);
-            }
-            break;
-        case EnemyBehaviorState::RequestingAttack:
-            // Queuing must never consume the readable charge-up interval.
-            if (actor.fireEnvironmentReady &&
-                actor.attackState.tokenReserved && state.telegraphPresented) {
-                state.attackTimeRemaining = (std::max)(
-                    0.0f, state.attackTimeRemaining - dt);
-            }
-            actor.fireTimer = state.attackTimeRemaining;
-            break;
-        case EnemyBehaviorState::Evading:
-            if (definition.choreographedAttackPass &&
-                state.stateElapsedSeconds >= definition.attackPassRecoilSeconds) {
-                EnterState(actor, EnemyBehaviorState::Retreating);
-                runtime.RequestEnemyExit(actor.actorId);
-                state.engagementBandExitRequested = true;
-            } else if (!definition.choreographedAttackPass &&
-                state.stateElapsedSeconds >= definition.evadeDurationSeconds) {
-                EnterState(actor, EnemyBehaviorState::Repositioning);
-            }
-            break;
-        case EnemyBehaviorState::Repositioning:
-            if (state.stateElapsedSeconds >= definition.repositionDurationSeconds) {
-                EnterState(actor, EnemyBehaviorState::Positioning);
-            }
-            break;
-        case EnemyBehaviorState::Retreating:
-        case EnemyBehaviorState::Disabled:
-        case EnemyBehaviorState::Dormant:
-            break;
-        }
+        const BehaviorState& behavior = StateFor(state.state);
+        behavior.Update({*this, actor, runtime, dt, playerDistance, playerForwardSpeed});
 
         ApplyMovement(actor, dt, playerDistance, playerForwardSpeed,
             lateralHoldActorId!=0 && actor.actorId==lateralHoldActorId);

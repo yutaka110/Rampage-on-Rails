@@ -224,102 +224,109 @@ bool GameSessionSystem::Resume() {
     return true;
 }
 
+class GameSessionSystem::PhaseState {
+public:
+    virtual ~PhaseState() = default;
+    // Transitions publish their own revision and derived state.
+    virtual bool Update(GameSessionSystem& session, const GameSessionFrameInput& input, float dt) const = 0;
+};
+
+const GameSessionSystem::PhaseState& GameSessionSystem::StateFor(GameSessionPhase phase) noexcept {
+    class IdleState final : public PhaseState {
+        bool Update(GameSessionSystem&, const GameSessionFrameInput&, float) const override { return false; }
+    };
+    class IntroState final : public PhaseState {
+        bool Update(GameSessionSystem& session, const GameSessionFrameInput& input, float dt) const override {
+            session.AdvanceSessionClocks(dt);
+            session.UpdateCourseProgress(input);
+            if (session.state_.phaseElapsedSeconds >= session.definition_.introDurationSeconds) {
+                session.Transition(GameSessionPhase::Playing, GameSessionEndReason::None,
+                    GameSessionEventType::IntroCompleted, "Session intro completed.");
+                return true;
+            }
+            return false;
+        }
+    };
+    class PlayingState final : public PhaseState {
+        bool Update(GameSessionSystem& session, const GameSessionFrameInput& input, float dt) const override {
+            session.AdvanceSessionClocks(dt);
+            session.UpdateCourseProgress(input);
+            session.state_.gameplayElapsedSeconds += dt;
+            session.state_.attemptElapsedSeconds += dt;
+            const auto defeat = session.DefeatReason(input);
+            const bool victory = session.VictoryConditionsSatisfied();
+            if (defeat != GameSessionEndReason::None && (session.definition_.defeatTakesPriority || !victory)) {
+                session.ConfirmOutcome(GameSessionOutcome::Defeat, defeat);
+                return true;
+            }
+            if (victory) {
+                session.ConfirmOutcome(GameSessionOutcome::Victory, GameSessionEndReason::CourseCompleted);
+                return true;
+            }
+            return false;
+        }
+    };
+    class AwaitingResultState final : public PhaseState {
+        bool Update(GameSessionSystem& session, const GameSessionFrameInput&, float dt) const override {
+            session.AdvanceSessionClocks(dt);
+            if (session.state_.phaseElapsedSeconds >= session.definition_.resultDelaySeconds) {
+                session.Transition(GameSessionPhase::Result, session.state_.endReason,
+                    GameSessionEventType::ResultEntered, session.state_.outcome == GameSessionOutcome::Victory
+                        ? "Victory result ready." : "Defeat result ready.");
+                return true;
+            }
+            return false;
+        }
+    };
+    static const IdleState idle;
+    static const IntroState intro;
+    static const PlayingState playing;
+    static const AwaitingResultState awaitingResult;
+    switch (phase) {
+    case GameSessionPhase::Intro: return intro;
+    case GameSessionPhase::Playing: return playing;
+    case GameSessionPhase::Victory:
+    case GameSessionPhase::Defeat: return awaitingResult;
+    case GameSessionPhase::Uninitialized:
+    case GameSessionPhase::Ready:
+    case GameSessionPhase::Paused:
+    case GameSessionPhase::Result: return idle;
+    }
+    return idle;
+}
+
+void GameSessionSystem::AdvanceSessionClocks(float deltaTime) noexcept {
+    state_.sessionElapsedSeconds += deltaTime;
+    state_.phaseElapsedSeconds += deltaTime;
+}
+
+void GameSessionSystem::UpdateCourseProgress(const GameSessionFrameInput& input) {
+    state_.courseDistance = ClampDistance(input.courseDistance, state_.courseLength);
+    state_.completedMandatoryWaves = input.completedMandatoryWaves;
+    state_.totalMandatoryWaves = input.totalMandatoryWaves;
+    state_.completedMandatoryObjectives = input.completedMandatoryObjectives;
+    state_.totalMandatoryObjectives = input.totalMandatoryObjectives;
+    state_.combatClearConfirmed = input.combatClearConfirmed;
+    state_.objectiveFailed = state_.objectiveFailed || input.objectiveFailed;
+    state_.mandatoryWavesSatisfied = !definition_.requireAllMandatoryWaves ||
+        state_.totalMandatoryWaves == 0 || state_.completedMandatoryWaves >= state_.totalMandatoryWaves;
+    state_.mandatoryObjectivesSatisfied = !definition_.requireAllMandatoryObjectives ||
+        state_.totalMandatoryObjectives == 0 || state_.completedMandatoryObjectives >= state_.totalMandatoryObjectives;
+    state_.courseEndReached = state_.courseLength > 0.0f && state_.courseDistance >=
+        (std::max)(0.0f, state_.courseLength - definition_.courseEndTolerance);
+}
+
 void GameSessionSystem::Update(const GameSessionFrameInput& input) {
     BeginOperation();
     if (!IsInitialized()) return;
 
     ++state_.frameIndex;
-    const float dt = std::isfinite(input.deltaTime)
-        ? (std::max)(0.0f, input.deltaTime)
-        : 0.0f;
-    if (state_.phase == GameSessionPhase::Paused ||
-        state_.phase == GameSessionPhase::Ready ||
-        state_.phase == GameSessionPhase::Result) {
+    const float dt = std::isfinite(input.deltaTime) ? (std::max)(0.0f, input.deltaTime) : 0.0f;
+    const PhaseState& state = StateFor(state_.phase);
+    if (!state.Update(*this, input, dt)) {
         ++state_.revision;
         RefreshDerivedState();
-        return;
     }
-
-    state_.sessionElapsedSeconds += dt;
-    state_.phaseElapsedSeconds += dt;
-    if (state_.phase == GameSessionPhase::Intro ||
-        state_.phase == GameSessionPhase::Playing) {
-        state_.courseDistance = ClampDistance(input.courseDistance, state_.courseLength);
-        state_.completedMandatoryWaves = input.completedMandatoryWaves;
-        state_.totalMandatoryWaves = input.totalMandatoryWaves;
-        state_.completedMandatoryObjectives = input.completedMandatoryObjectives;
-        state_.totalMandatoryObjectives = input.totalMandatoryObjectives;
-        state_.combatClearConfirmed = input.combatClearConfirmed;
-        state_.objectiveFailed = state_.objectiveFailed || input.objectiveFailed;
-        state_.mandatoryWavesSatisfied = !definition_.requireAllMandatoryWaves ||
-            state_.totalMandatoryWaves == 0 ||
-            state_.completedMandatoryWaves >= state_.totalMandatoryWaves;
-        state_.mandatoryObjectivesSatisfied = !definition_.requireAllMandatoryObjectives ||
-            state_.totalMandatoryObjectives == 0 ||
-            state_.completedMandatoryObjectives >= state_.totalMandatoryObjectives;
-        state_.courseEndReached = state_.courseLength > 0.0f &&
-            state_.courseDistance >=
-                (std::max)(0.0f, state_.courseLength - definition_.courseEndTolerance);
-    }
-
-    if (state_.phase == GameSessionPhase::Intro) {
-        if (state_.phaseElapsedSeconds >= definition_.introDurationSeconds) {
-            Transition(
-                GameSessionPhase::Playing,
-                GameSessionEndReason::None,
-                GameSessionEventType::IntroCompleted,
-                "Session intro completed.");
-        } else {
-            ++state_.revision;
-            RefreshDerivedState();
-        }
-        return;
-    }
-
-    if (state_.phase == GameSessionPhase::Playing) {
-        state_.gameplayElapsedSeconds += dt;
-        state_.attemptElapsedSeconds += dt;
-        const GameSessionEndReason defeat = DefeatReason(input);
-        const bool victory = VictoryConditionsSatisfied();
-        if (definition_.defeatTakesPriority) {
-            if (defeat != GameSessionEndReason::None) {
-                ConfirmOutcome(GameSessionOutcome::Defeat, defeat);
-                return;
-            }
-            if (victory) {
-                ConfirmOutcome(GameSessionOutcome::Victory, GameSessionEndReason::CourseCompleted);
-                return;
-            }
-        } else {
-            if (victory) {
-                ConfirmOutcome(GameSessionOutcome::Victory, GameSessionEndReason::CourseCompleted);
-                return;
-            }
-            if (defeat != GameSessionEndReason::None) {
-                ConfirmOutcome(GameSessionOutcome::Defeat, defeat);
-                return;
-            }
-        }
-        ++state_.revision;
-        RefreshDerivedState();
-        return;
-    }
-
-    if ((state_.phase == GameSessionPhase::Victory ||
-         state_.phase == GameSessionPhase::Defeat) &&
-        state_.phaseElapsedSeconds >= definition_.resultDelaySeconds) {
-        Transition(
-            GameSessionPhase::Result,
-            state_.endReason,
-            GameSessionEventType::ResultEntered,
-            state_.outcome == GameSessionOutcome::Victory
-                ? "Victory result ready."
-                : "Defeat result ready.");
-        return;
-    }
-
-    ++state_.revision;
-    RefreshDerivedState();
 }
 
 float GameSessionSystem::ApplyPlayerDamage(float amount, std::string_view sourceId) {

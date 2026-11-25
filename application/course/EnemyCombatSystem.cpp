@@ -169,6 +169,89 @@ void EnemyCombatSystem::AdvancePoseForPrediction(CourseEnemyActor& actor, float 
     prediction.UpdateActors(std::span<CourseEnemyActor>(&actor, 1), (std::max)(0.0f, deltaTime));
 }
 
+class EnemyCombatSystem::PhaseState {
+public:
+    virtual ~PhaseState() = default;
+    virtual void Update(EnemyCombatSystem& system, CourseEnemyActor& actor) const = 0;
+};
+
+const EnemyCombatSystem::PhaseState& EnemyCombatSystem::StateFor(EnemyCombatPhase phase) noexcept {
+    using Counter = uint32_t EnemyCombatFrameStats::*;
+    class HoldingState final : public PhaseState {
+    public:
+        explicit HoldingState(Counter counter = nullptr) : counter_(counter) {}
+    private:
+        void Update(EnemyCombatSystem& system, CourseEnemyActor&) const override {
+            if (counter_) ++(system.frameStats_.*counter_);
+        }
+        Counter counter_;
+    };
+    class TimedState final : public PhaseState {
+    public:
+        TimedState(float EnemyCombatDefinition::* duration, EnemyCombatPhase next, EnemyCombatEventKind event,
+            Counter counter = nullptr, bool publish = true, bool allowImmediate = false)
+            : duration_(duration), next_(next), event_(event), counter_(counter),
+              publish_(publish), allowImmediate_(allowImmediate) {}
+    private:
+        void Update(EnemyCombatSystem& system, CourseEnemyActor& actor) const override {
+            if (counter_) ++(system.frameStats_.*counter_);
+            const float duration = actor.combatDefinition.*duration_;
+            if ((allowImmediate_ && duration <= 0.0f) || actor.combatState.phaseElapsedSeconds >= duration)
+                system.EnterPhase(actor, next_, event_, publish_);
+        }
+        float EnemyCombatDefinition::* duration_;
+        EnemyCombatPhase next_;
+        EnemyCombatEventKind event_;
+        Counter counter_;
+        bool publish_;
+        bool allowImmediate_;
+    };
+    class HitReactionState final : public PhaseState {
+        void Update(EnemyCombatSystem& system, CourseEnemyActor& actor) const override {
+            ++system.frameStats_.reactingActors;
+            const auto& state = actor.combatState;
+            if (state.phaseElapsedSeconds >= actor.combatDefinition.hitReactSeconds) {
+                const bool resumeTelegraph = state.resumePhase == EnemyCombatPhase::Telegraphing;
+                system.EnterPhase(actor, state.resumePhase, resumeTelegraph
+                    ? EnemyCombatEventKind::TelegraphStarted : EnemyCombatEventKind::Engaged, resumeTelegraph);
+            }
+        }
+    };
+    class DyingState final : public PhaseState {
+        void Update(EnemyCombatSystem& system, CourseEnemyActor& actor) const override {
+            ++system.frameStats_.dyingActors;
+            auto& state = actor.combatState;
+            const float duration = actor.combatDefinition.deathDurationSeconds;
+            state.deathProgress = duration > 0.0f ? Saturate(state.phaseElapsedSeconds / duration) : 1.0f;
+            if (state.deathProgress >= 1.0f)
+                system.EnterPhase(actor, EnemyCombatPhase::Retired, EnemyCombatEventKind::Retired);
+        }
+    };
+    static const TimedState spawning(&EnemyCombatDefinition::spawnDurationSeconds, EnemyCombatPhase::Engaging,
+        EnemyCombatEventKind::Engaged, &EnemyCombatFrameStats::spawningActors, true, true);
+    static const TimedState engaging(&EnemyCombatDefinition::engageDurationSeconds, EnemyCombatPhase::Telegraphing,
+        EnemyCombatEventKind::TelegraphStarted, nullptr, true, true);
+    static const HoldingState telegraphing(&EnemyCombatFrameStats::telegraphingActors);
+    static const TimedState attacking(&EnemyCombatDefinition::attackCommitSeconds, EnemyCombatPhase::Recovering,
+        EnemyCombatEventKind::TelegraphStarted, &EnemyCombatFrameStats::attackingActors, false);
+    static const TimedState recovering(&EnemyCombatDefinition::recoverySeconds, EnemyCombatPhase::Telegraphing,
+        EnemyCombatEventKind::TelegraphStarted);
+    static const HitReactionState hitReaction;
+    static const DyingState dying;
+    static const HoldingState retired;
+    switch (phase) {
+    case EnemyCombatPhase::Spawning: return spawning;
+    case EnemyCombatPhase::Engaging: return engaging;
+    case EnemyCombatPhase::Telegraphing: return telegraphing;
+    case EnemyCombatPhase::Attacking: return attacking;
+    case EnemyCombatPhase::Recovering: return recovering;
+    case EnemyCombatPhase::HitReact: return hitReaction;
+    case EnemyCombatPhase::Dying: return dying;
+    case EnemyCombatPhase::Retired: return retired;
+    }
+    return retired;
+}
+
 void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors, float dt) {
     frameStats_ = {};
 
@@ -178,7 +261,6 @@ void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors, float d
             InitializeActor(actor);
         }
         EnemyCombatRuntimeState& state = actor.combatState;
-        const EnemyCombatDefinition& definition = actor.combatDefinition;
         ++frameStats_.activeActors;
 
         state.phaseElapsedSeconds += dt;
@@ -205,61 +287,8 @@ void EnemyCombatSystem::UpdateActors(std::span<CourseEnemyActor> actors, float d
                 EnemyCombatEventKind::AttackCommitted);
         }
 
-        switch (state.phase) {
-        case EnemyCombatPhase::Spawning:
-            ++frameStats_.spawningActors;
-            if (definition.spawnDurationSeconds <= 0.0f ||
-                state.phaseElapsedSeconds >= definition.spawnDurationSeconds) {
-                EnterPhase(actor, EnemyCombatPhase::Engaging,
-                    EnemyCombatEventKind::Engaged);
-            }
-            break;
-        case EnemyCombatPhase::Engaging:
-            if (definition.engageDurationSeconds <= 0.0f ||
-                state.phaseElapsedSeconds >= definition.engageDurationSeconds) {
-                EnterPhase(actor, EnemyCombatPhase::Telegraphing,
-                    EnemyCombatEventKind::TelegraphStarted);
-            }
-            break;
-        case EnemyCombatPhase::Telegraphing:
-            ++frameStats_.telegraphingActors;
-            break;
-        case EnemyCombatPhase::Attacking:
-            ++frameStats_.attackingActors;
-            if (state.phaseElapsedSeconds >= definition.attackCommitSeconds) {
-                EnterPhase(actor, EnemyCombatPhase::Recovering,
-                    EnemyCombatEventKind::TelegraphStarted, false);
-            }
-            break;
-        case EnemyCombatPhase::Recovering:
-            if (state.phaseElapsedSeconds >= definition.recoverySeconds) {
-                EnterPhase(actor, EnemyCombatPhase::Telegraphing,
-                    EnemyCombatEventKind::TelegraphStarted);
-            }
-            break;
-        case EnemyCombatPhase::HitReact:
-            ++frameStats_.reactingActors;
-            if (state.phaseElapsedSeconds >= definition.hitReactSeconds) {
-                EnterPhase(actor, state.resumePhase,
-                    state.resumePhase == EnemyCombatPhase::Telegraphing
-                        ? EnemyCombatEventKind::TelegraphStarted
-                        : EnemyCombatEventKind::Engaged,
-                    state.resumePhase == EnemyCombatPhase::Telegraphing);
-            }
-            break;
-        case EnemyCombatPhase::Dying:
-            ++frameStats_.dyingActors;
-            state.deathProgress = definition.deathDurationSeconds > 0.0f
-                ? Saturate(state.phaseElapsedSeconds / definition.deathDurationSeconds)
-                : 1.0f;
-            if (state.deathProgress >= 1.0f) {
-                EnterPhase(actor, EnemyCombatPhase::Retired,
-                    EnemyCombatEventKind::Retired);
-            }
-            break;
-        case EnemyCombatPhase::Retired:
-            break;
-        }
+        const PhaseState& combat = StateFor(state.phase);
+        combat.Update(*this, actor);
 
         ApplyPhaseGates(actor);
         state.revision = ++revision_;

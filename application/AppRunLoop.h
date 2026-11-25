@@ -217,6 +217,12 @@ private:
     void EnterMultiMaterialShowcaseScene() override;
     void EnterRailShooterScene() override;
     void UpdateRailShooterFrame() override;
+    struct RailSceneFrameContext;
+    class RailSceneFrameState;
+    const RailSceneFrameState& CurrentRailSceneFrameState() const;
+    void CompleteRailTitleHandoff();
+    void UpdateRailTitleFrame(const RailSceneFrameContext& frame);
+    void UpdateRailGameplayFrame(const RailSceneFrameContext& context);
     void RenderRailShooterFrame() override;
     void UpdateVfxPreviewFrame() override;
     void RenderVfxPreviewFrame() override;

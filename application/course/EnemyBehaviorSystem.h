@@ -188,6 +188,10 @@ private:
         uint32_t actorId,
         uint64_t attackIntentSequence);
 
+    struct BehaviorTick;
+    class BehaviorState;
+    static const BehaviorState& StateFor(EnemyBehaviorState state) noexcept;
+
     void EnterState(
         CourseEnemyActor& actor,
         EnemyBehaviorState state,

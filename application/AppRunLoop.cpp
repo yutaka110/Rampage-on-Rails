@@ -10664,6 +10664,55 @@ void AppRunLoop::ReturnToDemoTitle() {
     railTransitionDemo_.CommitTitleSwap();
 }
 
+struct AppRunLoop::RailSceneFrameContext {
+    RailPerfClock::time_point updateStart;
+    const RenderViewportMetrics& metrics;
+    bool crystalDemo;
+    bool crystalDemoAudit;
+    bool titleHandoff = false;
+};
+
+class AppRunLoop::RailSceneFrameState {
+public:
+    virtual ~RailSceneFrameState() = default;
+    virtual void Update(AppRunLoop& host, const RailSceneFrameContext& frame) const = 0;
+};
+
+const AppRunLoop::RailSceneFrameState& AppRunLoop::CurrentRailSceneFrameState() const {
+    class TitleState final : public RailSceneFrameState {
+        void Update(AppRunLoop& host, const RailSceneFrameContext& frame) const override {
+            if (!host.railTitleScene_.ReadyForGameplay()) {
+                host.UpdateRailTitleFrame(frame);
+                return;
+            }
+            host.CompleteRailTitleHandoff();
+            auto firstGameplayFrame = frame;
+            firstGameplayFrame.titleHandoff = true;
+            host.CurrentRailSceneFrameState().Update(host, firstGameplayFrame);
+        }
+    };
+    class PlayingState final : public RailSceneFrameState {
+        void Update(AppRunLoop& host, const RailSceneFrameContext& frame) const override {
+            host.UpdateRailGameplayFrame(frame);
+        }
+    };
+    class DefeatState final : public RailSceneFrameState {
+        void Update(AppRunLoop& host, const RailSceneFrameContext&) const override {
+            const auto now=std::chrono::steady_clock::now();
+            const float dt=host.railGameOverHasLastUpdate_?std::chrono::duration<float>(now-host.railGameOverLastUpdate_).count():0.0f;
+            host.railGameOverLastUpdate_=now;host.railGameOverHasLastUpdate_=true;
+            host.UpdateRailGameOver(dt);
+        }
+    };
+    static const TitleState title;
+    static const PlayingState playing;
+    static const DefeatState defeat;
+    if (railTitleScreenVisible_) return title;
+    if (!coursePreviewSimulationSystem_.IsActive() &&
+        railShooterGameSession_.State().outcome == GameSessionOutcome::Defeat) return defeat;
+    return playing;
+}
+
 void AppRunLoop::UpdateRailShooterFrame() {
     const auto updateStart = RailPerfClock::now();
     const bool crystalDemo = IsCrystalCavernDemoMode();
@@ -10726,161 +10775,162 @@ void AppRunLoop::UpdateRailShooterFrame() {
     terrainCollisionWorld_.Update(railPath_, runtimeState_.terrain.settings,
         &railShooterCourse_.terrainEditLayer, &railPostBossSequence_.TerrainPreview(runtimeState_.terrain.previewEditLayer),
         railShooterDistance_);
-    bool titleHandoffThisFrame=false;
-    if (railTitleScreenVisible_ && railTitleScene_.ReadyForGameplay()) {
-        railTitleScreenVisible_ = false;
-        BeginRailGameplayEntry();
-        if(railTransitionDemoEnabled_) railTransitionDemo_.BeginGameplay();
-        titleHandoffThisFrame=true;
-        runtimeState_.terrain.enabled = railTitleSavedTerrainEnabled_;
-        runtimeState_.directionalLightData = railTitleSavedLight_;
-        runtimeState_.pointLightData = railTitleSavedPointLight_;
-        runtimeState_.spotLight = railTitleSavedSpotLight_;
-        for(int i=0;i<4;++i) runtimeState_.clearColor[i]=railTitleSavedClearColor_[i];
-        runtimeState_.showSkybox = railTitleSavedSkybox_;
-        runtimeState_.showProceduralBackdrop = railTitleSavedBackdrop_;
-        for (const auto& pass : railTitleSavedPostProcess_)
-            (void)vfxEngine_.PostProcess().ConfigurePass(pass);
+    const RailSceneFrameContext frame{updateStart, metrics, crystalDemo, crystalDemoAudit};
+    CurrentRailSceneFrameState().Update(*this, frame);
+}
+
+void AppRunLoop::CompleteRailTitleHandoff() {
+    railTitleScreenVisible_ = false;
+    BeginRailGameplayEntry();
+    if(railTransitionDemoEnabled_) railTransitionDemo_.BeginGameplay();
+    runtimeState_.terrain.enabled = railTitleSavedTerrainEnabled_;
+    runtimeState_.directionalLightData = railTitleSavedLight_;
+    runtimeState_.pointLightData = railTitleSavedPointLight_;
+    runtimeState_.spotLight = railTitleSavedSpotLight_;
+    for(int i=0;i<4;++i) runtimeState_.clearColor[i]=railTitleSavedClearColor_[i];
+    runtimeState_.showSkybox = railTitleSavedSkybox_;
+    runtimeState_.showProceduralBackdrop = railTitleSavedBackdrop_;
+    for (const auto& pass : railTitleSavedPostProcess_)
+        (void)vfxEngine_.PostProcess().ConfigurePass(pass);
+    railTitleSavedPostProcess_.clear();
+    // Keep both rolling voices and their playheads through the blackout.
+    for(uint32_t id:railTitleDustIds_) vfxEngine_.Runtime().StopEffect(id);
+    railTitleDustIds_.clear();
+    railShooterHasLastUpdateTime_ = false;
+    for(int key=0;key<256;++key) previousKeyDown_[key]=(GetAsyncKeyState(key)&0x8000)!=0;
+    previousLeftMouseDown_=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
+}
+
+void AppRunLoop::UpdateRailTitleFrame(const RailSceneFrameContext& frame) {
+    const auto updateStart = frame.updateStart;
+    const auto& metrics = frame.metrics;
+    const bool crystalDemo = frame.crystalDemo;
+    const bool crystalDemoAudit = frame.crystalDemoAudit;
+    editorViewportCamera_.InvalidateInspection();
+    if (!railTitleHasLastUpdate_) {
+        railTitleSavedTerrainEnabled_ = runtimeState_.terrain.enabled;
+        // Gameplay fog/AO use a different depth range. Save and restore
+        // only the passes this presentation overrides.
         railTitleSavedPostProcess_.clear();
-        // Keep both rolling voices and their playheads through the blackout.
-        for(uint32_t id:railTitleDustIds_) vfxEngine_.Runtime().StopEffect(id);
-        railTitleDustIds_.clear();
-        railShooterHasLastUpdateTime_ = false;
-        for(int key=0;key<256;++key) previousKeyDown_[key]=(GetAsyncKeyState(key)&0x8000)!=0;
-        previousLeftMouseDown_=(GetAsyncKeyState(VK_LBUTTON)&0x8000)!=0;
-    }
-    if (railTitleScreenVisible_) {
-        editorViewportCamera_.InvalidateInspection();
-        if (!railTitleHasLastUpdate_) {
-            railTitleSavedTerrainEnabled_ = runtimeState_.terrain.enabled;
-            // Gameplay fog/AO use a different depth range. Save and restore
-            // only the passes this presentation overrides.
-            railTitleSavedPostProcess_.clear();
-            for (auto pass : vfxEngine_.PostProcess().Passes()) {
-                if (pass.name != "ContactAO" && pass.name != "DistanceFog" && pass.name != "ToneMapping") continue;
-                railTitleSavedPostProcess_.push_back(pass);
-                if (pass.name == "DistanceFog") {
-                    pass.enabled = false; // Title objects own their world-space haze.
-                } else if (pass.name == "ToneMapping") {
-                    pass.enabled = true;
-                    pass.intensity = 1.0f;
-                    pass.parameters.toneExposure = 1.55f;
-                } else {
-                    pass.enabled = true;
-                    pass.intensity = 0.30f;
-                    pass.parameters.contactAoRadiusPixels = 2.5f;
-                    pass.parameters.contactAoBias = 0.08f;
-                    pass.parameters.contactAoFalloff = 1.8f;
-                    pass.parameters.contactAoNearPlane = 0.5f;
-                    pass.parameters.contactAoFarPlane = 800.0f;
-                }
-                (void)vfxEngine_.PostProcess().ConfigurePass(pass);
+        for (auto pass : vfxEngine_.PostProcess().Passes()) {
+            if (pass.name != "ContactAO" && pass.name != "DistanceFog" && pass.name != "ToneMapping") continue;
+            railTitleSavedPostProcess_.push_back(pass);
+            if (pass.name == "DistanceFog") {
+                pass.enabled = false; // Title objects own their world-space haze.
+            } else if (pass.name == "ToneMapping") {
+                pass.enabled = true;
+                pass.intensity = 1.0f;
+                pass.parameters.toneExposure = 1.55f;
+            } else {
+                pass.enabled = true;
+                pass.intensity = 0.30f;
+                pass.parameters.contactAoRadiusPixels = 2.5f;
+                pass.parameters.contactAoBias = 0.08f;
+                pass.parameters.contactAoFalloff = 1.8f;
+                pass.parameters.contactAoNearPlane = 0.5f;
+                pass.parameters.contactAoFarPlane = 800.0f;
             }
-            const bool startRequested = railTitleScene_.Starting();
-            const auto openingLight = railShooterCourse_.EvaluateLightingPreset(railShooterDistance_);
-            scene_.titleVehicleReferenceLight = {openingLight.sunColor,
-                Normalize(openingLight.sunDirection),openingLight.sunIntensity};
-            const auto openingPose = railPath_.Evaluate(railShooterDistance_);
-            scene_.titleVehicleReferenceNormal = Scale(openingPose.tangent,-1.0f);
-            scene_.titleVehicleReferenceView = Normalize(Add(
-                Scale(openingPose.tangent,-42.0f),Vector3{0,14.0f,0}));
-            if (!railTitleScene_.Initialize()) OutputDebugStringA("[RailTitle] Track bake failed.\n");
-            if (startRequested) railTitleScene_.BeginStart();
+            (void)vfxEngine_.PostProcess().ConfigurePass(pass);
         }
-        const float dt = railTitleHasLastUpdate_ ? std::chrono::duration<float>(updateStart-railTitleLastUpdate_).count() : 0.0f;
-        railTitleLastUpdate_ = updateStart;
-        railTitleHasLastUpdate_ = true;
-        const bool focused = hwnd_ == nullptr || GetForegroundWindow() == hwnd_ || crystalDemoAudit || ReadEnvironmentUInt("GE3_OPENING_REVIEW",0)!=0;
-        const float titleDt = focused ? (crystalDemoAudit ? .05f : std::clamp(dt, 0.0f, .05f)) : 0.0f;
-        railTitleScene_.Update(titleDt, !crystalDemo);
-        if(!crystalDemo && ReadEnvironmentUInt("GE3_OPENING_REVIEW",0) && !railTitleScene_.Starting() && railTitleScene_.Age()>=1.20f)
-            railTitleScene_.BeginStart();
-        const auto titleSample = railTitleScene_.Path().Evaluate(railTitleScene_.Distance());
-        // Stable warm key light follows the title composition; restore the
-        // authored gameplay light only under the fully opaque transition.
-        const auto titleColors = railTitleScene_.Colors(
-            railShooterCourse_.EvaluateLightingPreset(railShooterDistance_).sunColor);
-        runtimeState_.directionalLightData.color = titleColors.light;
-        runtimeState_.directionalLightData.direction = Normalize(Add(
-            Scale(titleSample.tangent,-0.85f),Add(Scale(titleSample.right,-0.35f),Vector3{0,-0.75f,0})));
-        runtimeState_.directionalLightData.intensity = 2.15f*(1.0f-0.35f*railTitleScene_.TunnelShade());
-        runtimeState_.pointLightData.intensity = 0.0f;
-        runtimeState_.spotLight.intensity = 0.0f;
-        // Match the far landscape haze and remove the gameplay sky's bright sun.
-        runtimeState_.showSkybox = false;
-        runtimeState_.showProceduralBackdrop = false;
-        runtimeState_.clearColor[0]=titleColors.background.x;
-        runtimeState_.clearColor[1]=titleColors.background.y;
-        runtimeState_.clearColor[2]=titleColors.background.z;
-        runtimeState_.clearColor[3]=1.0f;
-        UpdateRailRollingAudio(dt,focused?railTitleScene_.RollingGain()*0.34f:0.0f,
-            railTitleScene_.TunnelShade());
-        railTitleDustTimer_ += titleDt;
-        // Creating a new effect resets the shared GPU particle pool. Let impact
-        // billows evolve without repeatedly resetting them with wheel puffs.
-        const bool attackParticlesActive = !railTitleScene_.Shots().empty() || !railTitleScene_.DustClouds().empty() || !railTitleScene_.AttackCues().empty() ||
-            std::any_of(vfxEngine_.Runtime().Instances().begin(),vfxEngine_.Runtime().Instances().end(),
-                [](const auto& instance){return instance.assetName=="title_ground_impact" || instance.assetName=="title_drone_muzzle";});
-        if(railTitleDustTimer_ >= 0.12f && !attackParticlesActive && railTitleScene_.Blackout()<0.2f) {
-            railTitleDustTimer_ = std::fmod(railTitleDustTimer_,0.12f);
-            for(int wheel=0;wheel<2;++wheel) {
-                Vector3 origin=railTitleScene_.Wheels().wheels[wheel].railContact;
-                origin=Add(origin,Add(Scale(titleSample.tangent,-0.7f),Vector3{0,0.12f,0}));
-                const uint32_t id=vfxEngine_.Runtime().PlayEffectWithParams("title_wheel_dust",origin,
-                    {1,1,1,1},{1,1,1});
-                if(id!=0) railTitleDustIds_.push_back(id);
-            }
-        }
-        // Sand clouds and tracers are deterministic, depth-tested world draws.
-        // Only the brief muzzle flash uses the shared GPU particle pool.
-        for(const auto& cue:railTitleScene_.AttackCues()) {
-            if(focused && cue.kind==RailTitleAttackCueKind::NearMiss)
-                (void)audio_.Play(railEnemyProjectileFlyBySound_,0.16f);
-            if(focused && (cue.kind==RailTitleAttackCueKind::RailImpact || cue.kind==RailTitleAttackCueKind::WallImpact))
-                (void)audio_.Play(railVehicleCollisionSound_,0.20f);
-            if(cue.kind!=RailTitleAttackCueKind::Muzzle) continue;
-            const uint32_t id=vfxEngine_.Runtime().PlayEffectWithParams(
-                "title_drone_muzzle",cue.position,{1,1,1,1},{1,1,1});
-            if(id) railTitleDustIds_.push_back(id);
-        }
-        vfxEngine_.Update(runtimeState_.vfx,titleDt);
-        std::erase_if(railTitleDustIds_,[this](uint32_t id){return vfxEngine_.Runtime().FindInstance(id)==nullptr;});
-        runtimeState_.terrain.enabled = false;
-        const Vector3 eye = railTitleScene_.CameraPosition();
-        frameState_.viewMatrix = MakeLookAtMatrix(eye,railTitleScene_.CameraTarget(),{0,1,0});
-        // The orbit never approaches geometry closer than several metres.
-        // Tight title-only clipping improves depth precision for ground/rail separation.
-        frameState_.projMatrix = MakePerspectiveFovMatrix(railTitleScene_.CameraFov(),metrics.AspectRatio(),0.5f,800.0f);
-        frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix,frameState_.projMatrix);
-        frameState_.cameraWorldPosition = eye;
-        frameState_.deltaTime = titleDt;
-        runtimeState_.cameraWorldPosition = eye;
-        scene_.UpdateCameraWorldPosition(eye);
-        if (scene_.mappedCamera != nullptr) {
-            auto& camera = *scene_.mappedCamera;
-            camera.titleSubject = {titleSample.position.x,titleSample.position.y,titleSample.position.z,1.0f};
-            camera.titleForward = {titleSample.tangent.x,titleSample.tangent.y,titleSample.tangent.z,railTitleScene_.TunnelShade()};
-            camera.titleHaze = {titleColors.background.x,titleColors.background.y,titleColors.background.z,1.0f};
-            const auto sweep=railTitleScene_.LightSweep();
-            camera.titleLightSweep = {sweep.x,sweep.y,railTitleScene_.RailReflectionDistance(),railTitleScene_.RailReflectionOpacity()};
-            const auto& impact=railTitleScene_.RailImpact();
-            camera.titleRailImpact = {impact.position.x,impact.position.y,impact.position.z,railTitleScene_.RailImpactLight()};
-            for (size_t i=0;i<camera.titleWheelContacts.size();++i) {
-                const auto& wheel = railTitleScene_.Wheels().wheels[i];
-                camera.titleWheelContacts[i] = {wheel.railContact.x,wheel.railContact.y,wheel.railContact.z,wheel.visible?1.0f:0.0f};
-            }
-        }
-        railShooterHasLastUpdateTime_ = false;
-        return;
+        const bool startRequested = railTitleScene_.Starting();
+        const auto openingLight = railShooterCourse_.EvaluateLightingPreset(railShooterDistance_);
+        scene_.titleVehicleReferenceLight = {openingLight.sunColor,
+            Normalize(openingLight.sunDirection),openingLight.sunIntensity};
+        const auto openingPose = railPath_.Evaluate(railShooterDistance_);
+        scene_.titleVehicleReferenceNormal = Scale(openingPose.tangent,-1.0f);
+        scene_.titleVehicleReferenceView = Normalize(Add(
+            Scale(openingPose.tangent,-42.0f),Vector3{0,14.0f,0}));
+        if (!railTitleScene_.Initialize()) OutputDebugStringA("[RailTitle] Track bake failed.\n");
+        if (startRequested) railTitleScene_.BeginStart();
     }
-    if (!coursePreviewSimulationSystem_.IsActive() &&
-        railShooterGameSession_.State().outcome==GameSessionOutcome::Defeat) {
-        const auto now=std::chrono::steady_clock::now();
-        const float dt=railGameOverHasLastUpdate_?std::chrono::duration<float>(now-railGameOverLastUpdate_).count():0.0f;
-        railGameOverLastUpdate_=now;railGameOverHasLastUpdate_=true;
-        UpdateRailGameOver(dt);
-        return;
+    const float dt = railTitleHasLastUpdate_ ? std::chrono::duration<float>(updateStart-railTitleLastUpdate_).count() : 0.0f;
+    railTitleLastUpdate_ = updateStart;
+    railTitleHasLastUpdate_ = true;
+    const bool focused = hwnd_ == nullptr || GetForegroundWindow() == hwnd_ || crystalDemoAudit || ReadEnvironmentUInt("GE3_OPENING_REVIEW",0)!=0;
+    const float titleDt = focused ? (crystalDemoAudit ? .05f : std::clamp(dt, 0.0f, .05f)) : 0.0f;
+    railTitleScene_.Update(titleDt, !crystalDemo);
+    if(!crystalDemo && ReadEnvironmentUInt("GE3_OPENING_REVIEW",0) && !railTitleScene_.Starting() && railTitleScene_.Age()>=1.20f)
+        railTitleScene_.BeginStart();
+    const auto titleSample = railTitleScene_.Path().Evaluate(railTitleScene_.Distance());
+    // Stable warm key light follows the title composition; restore the
+    // authored gameplay light only under the fully opaque transition.
+    const auto titleColors = railTitleScene_.Colors(
+        railShooterCourse_.EvaluateLightingPreset(railShooterDistance_).sunColor);
+    runtimeState_.directionalLightData.color = titleColors.light;
+    runtimeState_.directionalLightData.direction = Normalize(Add(
+        Scale(titleSample.tangent,-0.85f),Add(Scale(titleSample.right,-0.35f),Vector3{0,-0.75f,0})));
+    runtimeState_.directionalLightData.intensity = 2.15f*(1.0f-0.35f*railTitleScene_.TunnelShade());
+    runtimeState_.pointLightData.intensity = 0.0f;
+    runtimeState_.spotLight.intensity = 0.0f;
+    // Match the far landscape haze and remove the gameplay sky's bright sun.
+    runtimeState_.showSkybox = false;
+    runtimeState_.showProceduralBackdrop = false;
+    runtimeState_.clearColor[0]=titleColors.background.x;
+    runtimeState_.clearColor[1]=titleColors.background.y;
+    runtimeState_.clearColor[2]=titleColors.background.z;
+    runtimeState_.clearColor[3]=1.0f;
+    UpdateRailRollingAudio(dt,focused?railTitleScene_.RollingGain()*0.34f:0.0f,
+        railTitleScene_.TunnelShade());
+    railTitleDustTimer_ += titleDt;
+    // Creating a new effect resets the shared GPU particle pool. Let impact
+    // billows evolve without repeatedly resetting them with wheel puffs.
+    const bool attackParticlesActive = !railTitleScene_.Shots().empty() || !railTitleScene_.DustClouds().empty() || !railTitleScene_.AttackCues().empty() ||
+        std::any_of(vfxEngine_.Runtime().Instances().begin(),vfxEngine_.Runtime().Instances().end(),
+            [](const auto& instance){return instance.assetName=="title_ground_impact" || instance.assetName=="title_drone_muzzle";});
+    if(railTitleDustTimer_ >= 0.12f && !attackParticlesActive && railTitleScene_.Blackout()<0.2f) {
+        railTitleDustTimer_ = std::fmod(railTitleDustTimer_,0.12f);
+        for(int wheel=0;wheel<2;++wheel) {
+            Vector3 origin=railTitleScene_.Wheels().wheels[wheel].railContact;
+            origin=Add(origin,Add(Scale(titleSample.tangent,-0.7f),Vector3{0,0.12f,0}));
+            const uint32_t id=vfxEngine_.Runtime().PlayEffectWithParams("title_wheel_dust",origin,
+                {1,1,1,1},{1,1,1});
+            if(id!=0) railTitleDustIds_.push_back(id);
+        }
     }
+    // Sand clouds and tracers are deterministic, depth-tested world draws.
+    // Only the brief muzzle flash uses the shared GPU particle pool.
+    for(const auto& cue:railTitleScene_.AttackCues()) {
+        if(focused && cue.kind==RailTitleAttackCueKind::NearMiss)
+            (void)audio_.Play(railEnemyProjectileFlyBySound_,0.16f);
+        if(focused && (cue.kind==RailTitleAttackCueKind::RailImpact || cue.kind==RailTitleAttackCueKind::WallImpact))
+            (void)audio_.Play(railVehicleCollisionSound_,0.20f);
+        if(cue.kind!=RailTitleAttackCueKind::Muzzle) continue;
+        const uint32_t id=vfxEngine_.Runtime().PlayEffectWithParams(
+            "title_drone_muzzle",cue.position,{1,1,1,1},{1,1,1});
+        if(id) railTitleDustIds_.push_back(id);
+    }
+    vfxEngine_.Update(runtimeState_.vfx,titleDt);
+    std::erase_if(railTitleDustIds_,[this](uint32_t id){return vfxEngine_.Runtime().FindInstance(id)==nullptr;});
+    runtimeState_.terrain.enabled = false;
+    const Vector3 eye = railTitleScene_.CameraPosition();
+    frameState_.viewMatrix = MakeLookAtMatrix(eye,railTitleScene_.CameraTarget(),{0,1,0});
+    // The orbit never approaches geometry closer than several metres.
+    // Tight title-only clipping improves depth precision for ground/rail separation.
+    frameState_.projMatrix = MakePerspectiveFovMatrix(railTitleScene_.CameraFov(),metrics.AspectRatio(),0.5f,800.0f);
+    frameState_.viewProjectionMatrix = Multiply(frameState_.viewMatrix,frameState_.projMatrix);
+    frameState_.cameraWorldPosition = eye;
+    frameState_.deltaTime = titleDt;
+    runtimeState_.cameraWorldPosition = eye;
+    scene_.UpdateCameraWorldPosition(eye);
+    if (scene_.mappedCamera != nullptr) {
+        auto& camera = *scene_.mappedCamera;
+        camera.titleSubject = {titleSample.position.x,titleSample.position.y,titleSample.position.z,1.0f};
+        camera.titleForward = {titleSample.tangent.x,titleSample.tangent.y,titleSample.tangent.z,railTitleScene_.TunnelShade()};
+        camera.titleHaze = {titleColors.background.x,titleColors.background.y,titleColors.background.z,1.0f};
+        const auto sweep=railTitleScene_.LightSweep();
+        camera.titleLightSweep = {sweep.x,sweep.y,railTitleScene_.RailReflectionDistance(),railTitleScene_.RailReflectionOpacity()};
+        const auto& impact=railTitleScene_.RailImpact();
+        camera.titleRailImpact = {impact.position.x,impact.position.y,impact.position.z,railTitleScene_.RailImpactLight()};
+        for (size_t i=0;i<camera.titleWheelContacts.size();++i) {
+            const auto& wheel = railTitleScene_.Wheels().wheels[i];
+            camera.titleWheelContacts[i] = {wheel.railContact.x,wheel.railContact.y,wheel.railContact.z,wheel.visible?1.0f:0.0f};
+        }
+    }
+    railShooterHasLastUpdateTime_ = false;
+}
+
+void AppRunLoop::UpdateRailGameplayFrame(const RailSceneFrameContext& context) {
+    const auto& [updateStart, metrics, crystalDemo, crystalDemoAudit, titleHandoffThisFrame] = context;
     ++railShooterFrameIndex_;
     ResetRailPerfFrame(railShooterFrameIndex_);
     const RailWorldRaycast::FrameCacheScope raycastFrameCache(&terrainCollisionWorld_);

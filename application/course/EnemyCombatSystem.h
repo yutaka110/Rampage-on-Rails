@@ -141,6 +141,8 @@ private:
         CourseSpawnRuntime& runtime,
         uint32_t actorId);
 
+    class PhaseState;
+    static const PhaseState& StateFor(EnemyCombatPhase phase) noexcept;
     void EnterPhase(
         CourseEnemyActor& actor,
         EnemyCombatPhase phase,

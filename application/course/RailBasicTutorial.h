@@ -66,31 +66,72 @@ public:
             if(age_<(speedLesson?.50f:1.25f))return;
             success_=false;lesson_=Lesson::None;age_=0;
         }
-        Lesson desired=Lesson::None;
-        // Let the current lock exercise finish before showing a speed lesson.
-        // A short loss of sight on a curve should not dismiss the card.
         lockTargetAbsent_=lesson_==Lesson::Lock && !in.lockTargetAvailable?lockTargetAbsent_+dt:0;
-        if(lesson_==Lesson::Lock && !Learned(Lesson::Lock) && lockTargetAbsent_<.45f) {
-            desired=Lesson::Lock;
-        } else if(in.distance>=BoostGuideStart && !Learned(Lesson::Brake)) {
-            desired=Lesson::Brake;
-        } else if(in.distance>=BoostGuideStart && !Learned(Lesson::Boost)) {
-            waitingForRewardBoost_=in.rewardBoost;
-            if(!waitingForRewardBoost_)desired=Lesson::Boost;
-        } else if(in.distance<SpeedEnd && in.targetVisible && !Learned(Lesson::Primary)) {
-            desired=Lesson::Primary;
-        } else if(in.lockTargetAvailable && !Learned(Lesson::Lock)) {
-            desired=Lesson::Lock;
-        }
+        const Lesson desired=StateFor(lesson_).Next(*this,in);
         if(desired!=lesson_ || waitingForRewardBoost_!=wasWaitingForRewardBoost){lesson_=desired;age_=0;}
         visible_=lesson_!=Lesson::None || waitingForRewardBoost_;
         if(visible_)age_+=dt;
-        progress_=lesson_==Lesson::Primary?(std::min)(1.0f,primaryHold_/.35f):
-            lesson_==Lesson::Lock?(locks_>0?1.0f:0.0f):
-            lesson_==Lesson::Boost?(std::min)(1.0f,boostHold_/.6f):
-            lesson_==Lesson::Brake?(std::min)(1.0f,brakeHold_/.6f):0;
+        progress_=StateFor(lesson_).Progress(*this);
     }
 private:
+    class LessonState {
+    public:
+        virtual ~LessonState() = default;
+        virtual float Progress(const RailBasicTutorial& tutorial) const = 0;
+        virtual Lesson Next(RailBasicTutorial& tutorial, const RailBasicTutorialInput& input) const {
+            // When an exercise yields the card, preserve the route priority.
+            if(input.distance>=BoostGuideStart && !tutorial.Learned(Lesson::Brake))return Lesson::Brake;
+            if(input.distance>=BoostGuideStart && !tutorial.Learned(Lesson::Boost)) {
+                tutorial.waitingForRewardBoost_=input.rewardBoost;
+                return input.rewardBoost?Lesson::None:Lesson::Boost;
+            }
+            if(input.distance<SpeedEnd && input.targetVisible && !tutorial.Learned(Lesson::Primary))return Lesson::Primary;
+            if(input.lockTargetAvailable && !tutorial.Learned(Lesson::Lock))return Lesson::Lock;
+            return Lesson::None;
+        }
+    };
+
+    static const LessonState& StateFor(Lesson lesson) noexcept {
+        class HiddenState final : public LessonState {
+            float Progress(const RailBasicTutorial&) const override { return 0.0f; }
+        };
+        class SustainedInputState final : public LessonState {
+        public:
+            SustainedInputState(float RailBasicTutorial::* heldSeconds, float required)
+                : heldSeconds_(heldSeconds), required_(required) {}
+        private:
+            float Progress(const RailBasicTutorial& tutorial) const override {
+                return (std::min)(1.0f, (tutorial.*heldSeconds_)/required_);
+            }
+            float RailBasicTutorial::* heldSeconds_;
+            float required_;
+        };
+        class LockState final : public LessonState {
+            float Progress(const RailBasicTutorial& tutorial) const override {
+                return tutorial.locks_>0?1.0f:0.0f;
+            }
+            Lesson Next(RailBasicTutorial& tutorial, const RailBasicTutorialInput& input) const override {
+                // Let a useful lock exercise finish even after passing the
+                // speed-guide marker or briefly losing sight around a curve.
+                if(!tutorial.Learned(Lesson::Lock) && tutorial.lockTargetAbsent_<.45f)return Lesson::Lock;
+                return LessonState::Next(tutorial,input);
+            }
+        };
+        static const HiddenState hidden;
+        static const SustainedInputState primary(&RailBasicTutorial::primaryHold_, .35f);
+        static const LockState lock;
+        static const SustainedInputState boost(&RailBasicTutorial::boostHold_, .6f);
+        static const SustainedInputState brake(&RailBasicTutorial::brakeHold_, .6f);
+        switch(lesson) {
+        case Lesson::None: return hidden;
+        case Lesson::Primary: return primary;
+        case Lesson::Lock: return lock;
+        case Lesson::Boost: return boost;
+        case Lesson::Brake: return brake;
+        }
+        return hidden;
+    }
+
     static unsigned Bit(Lesson lesson){return 1u<<unsigned(lesson);}
     Lesson lesson_=Lesson::None;
     unsigned learned_=0,locks_=0,shots_=0;

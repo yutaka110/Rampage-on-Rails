@@ -25,32 +25,18 @@ public:
     void Tick(float dt,float distance,CourseSpawnRuntime& runtime) {
         if(!Active() || !std::isfinite(dt) || dt<=0)return;
         dt=(std::min)(dt,.1f);age_+=dt;phaseAge_+=dt;distance_=distance;
-        if(phase_==Phase::Warning && age_>=ImpactSeconds)Enter(Phase::Turn);
-        if(phase_==Phase::Turn && age_>=ImpactSeconds+CollapseSeconds) {
-            Enter(Phase::Aim);
-            CourseObstacleActorDesc target;target.id=TargetId;target.meshId="bridge_escape_clamp";
-            target.spawnDistance=TargetRail().z;target.lateralOffset=TargetRail().x;target.verticalOffset=TargetRail().y;
-            target.hitPoints=30;target.halfExtents={2.2f,2.6f,.8f};target.lifetime=180;
-            target.payload=TargetId;target.color={1,.78f,.28f,1};
-            const auto before=runtime.Obstacles().size();
-            if(runtime.SpawnObstacle(target) && runtime.Obstacles().size()>before)target_=runtime.Obstacles().back().actorId;
+        // Tick transitions travel forward through the sequence. A large
+        // distance step can pass launch and landing in the same tick.
+        while(const PhaseState* state=StateFor(phase_)) {
+            const Phase before=phase_;
+            state->Update(*this,runtime);
+            if(phase_==before)break;
         }
-        if(phase_==Phase::Aim && phaseAge_>=(inFlight_?4.0f:5.5f))retryPending_=true;
-        if(phase_==Phase::Release && phaseAge_>=ReleaseSeconds) {
-            launchEntryRequest_=ApproachSpeed();
-            launchStartAge_=age_;
-            arc_.enabled=true;
-            Enter(Phase::Boost);
-        }
-        if(phase_==Phase::Boost && distance>=arc_.Launch())Enter(Phase::Flight);
-        if(phase_==Phase::Flight && distance>=arc_.Landing()){Enter(Phase::Landing);landed_=true;}
-        if(phase_==Phase::Landing && phaseAge_>=LandingSeconds)Enter(Phase::Clear);
     }
     void ObserveRelease(uint32_t target){if(Aiming() && target==target_){inFlight_=true;phaseAge_=0;}}
     bool AcceptLockHit(uint32_t target,bool destroyed) {
-        if(!Aiming() || target!=target_ || !destroyed)return false;
-        releaseTimeScale_=TimeScale();
-        inFlight_=false;retryPending_=false;Enter(Phase::Release);return true;
+        const PhaseState* state=StateFor(phase_);
+        return state && state->AcceptLockHit(*this,target,destroyed);
     }
     bool TakeRetry(){const bool value=retryPending_;retryPending_=false;return value;}
     bool TakeLanding(){const bool value=landed_;landed_=false;return value;}
@@ -128,6 +114,101 @@ public:
         return v;
     }
 private:
+    class PhaseState {
+    public:
+        virtual ~PhaseState() = default;
+        virtual void Update(RailBridgeEscape& escape,CourseSpawnRuntime& runtime) const = 0;
+        virtual bool AcceptLockHit(RailBridgeEscape&,uint32_t,bool) const {return false;}
+    };
+
+    static const PhaseState* StateFor(Phase phase) noexcept {
+        class WarningState final : public PhaseState {
+            void Update(RailBridgeEscape& escape,CourseSpawnRuntime&) const override {
+                if(escape.age_>=ImpactSeconds)escape.Enter(Phase::Turn);
+            }
+        };
+        class TurnState final : public PhaseState {
+            void Update(RailBridgeEscape& escape,CourseSpawnRuntime& runtime) const override {
+                if(escape.age_<ImpactSeconds+CollapseSeconds)return;
+                escape.Enter(Phase::Aim);
+                const auto position=escape.TargetRail();
+                CourseObstacleActorDesc target;
+                target.id=TargetId;
+                target.meshId="bridge_escape_clamp";
+                target.spawnDistance=position.z;
+                target.lateralOffset=position.x;
+                target.verticalOffset=position.y;
+                target.hitPoints=30;
+                target.halfExtents={2.2f,2.6f,.8f};
+                target.lifetime=180;
+                target.payload=TargetId;
+                target.color={1,.78f,.28f,1};
+                const auto before=runtime.Obstacles().size();
+                if(runtime.SpawnObstacle(target) && runtime.Obstacles().size()>before)
+                    escape.target_=runtime.Obstacles().back().actorId;
+            }
+        };
+        class AimState final : public PhaseState {
+            void Update(RailBridgeEscape& escape,CourseSpawnRuntime&) const override {
+                if(escape.phaseAge_>=(escape.inFlight_?4.0f:5.5f))escape.retryPending_=true;
+            }
+            bool AcceptLockHit(RailBridgeEscape& escape,uint32_t target,bool destroyed) const override {
+                if(target!=escape.target_ || !destroyed)return false;
+                escape.releaseTimeScale_=escape.TimeScale();
+                escape.inFlight_=false;
+                escape.retryPending_=false;
+                escape.Enter(Phase::Release);
+                return true;
+            }
+        };
+        class ReleaseState final : public PhaseState {
+            void Update(RailBridgeEscape& escape,CourseSpawnRuntime&) const override {
+                if(escape.phaseAge_<ReleaseSeconds)return;
+                escape.launchEntryRequest_=escape.ApproachSpeed();
+                escape.launchStartAge_=escape.age_;
+                escape.arc_.enabled=true;
+                escape.Enter(Phase::Boost);
+            }
+        };
+        class BoostState final : public PhaseState {
+            void Update(RailBridgeEscape& escape,CourseSpawnRuntime&) const override {
+                if(escape.distance_>=escape.arc_.Launch())escape.Enter(Phase::Flight);
+            }
+        };
+        class FlightState final : public PhaseState {
+            void Update(RailBridgeEscape& escape,CourseSpawnRuntime&) const override {
+                if(escape.distance_>=escape.arc_.Landing()) {
+                    escape.Enter(Phase::Landing);
+                    escape.landed_=true;
+                }
+            }
+        };
+        class LandingState final : public PhaseState {
+            void Update(RailBridgeEscape& escape,CourseSpawnRuntime&) const override {
+                if(escape.phaseAge_>=LandingSeconds)escape.Enter(Phase::Clear);
+            }
+        };
+        static const WarningState warning;
+        static const TurnState turn;
+        static const AimState aim;
+        static const ReleaseState release;
+        static const BoostState boost;
+        static const FlightState flight;
+        static const LandingState landing;
+        switch(phase) {
+        case Phase::Warning: return &warning;
+        case Phase::Turn: return &turn;
+        case Phase::Aim: return &aim;
+        case Phase::Release: return &release;
+        case Phase::Boost: return &boost;
+        case Phase::Flight: return &flight;
+        case Phase::Landing: return &landing;
+        case Phase::Dormant:
+        case Phase::Clear: return nullptr;
+        }
+        return nullptr;
+    }
+
     float ApproachSpeed()const{return distance_>=arc_.start-24?0.0f:12.0f;}
     float LaunchAge()const{return launchStartAge_>=0 && !Complete()?age_-launchStartAge_:-1.0f;}
     static float Smooth(float t){t=(std::clamp)(t,0.0f,1.0f);return t*t*(3-2*t);}

@@ -185,6 +185,10 @@ public:
     }
 
 private:
+    class PhaseState;
+    static const PhaseState& StateFor(GameSessionPhase phase) noexcept;
+    void AdvanceSessionClocks(float deltaTime) noexcept;
+    void UpdateCourseProgress(const GameSessionFrameInput& input);
     void ResetRunState(float startDistance, bool preserveRunIndex);
     void BeginOperation();
     void RefreshDerivedState();

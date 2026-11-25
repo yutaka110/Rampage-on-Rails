@@ -21018,8 +21018,10 @@ void TestGameSessionSystem(RegressionRunner& runner) {
     runner.Expect(
         introElapsed > 0.049f &&
             session.State().phase == GameSessionPhase::Playing &&
+            session.State().gameplayElapsedSeconds == 0.0f &&
+            session.State().attemptElapsedSeconds == 0.0f &&
             session.AllowsGameplaySimulation(),
-        "intro timing should survive pause/resume and transition once into Playing");
+        "intro timing should survive pause/resume and charge gameplay clocks only on a Playing update");
 
     session.AddScore(500, "enemy_01");
     session.SetCombo(4, "enemy_01");

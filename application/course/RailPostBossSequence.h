@@ -49,17 +49,19 @@ public:
             CourseEventDispatcher& dispatcher,const TerrainEditLayer* preview=nullptr,float realDt=-1,float entrySpeed=36,const RailPursuerPerception* perception=nullptr) {
         if(!std::isfinite(dt) || dt<=0 || !std::isfinite(distance))return;
         dt=(std::min)(dt,.25f);
-        if(phase_==Phase::Waiting) {
-            if(!bossDefeated)return;
-            anchor_=distance;phase_=Phase::Aftermath;BuildScenery();BuildValley(preview);
-        }
+        const PhaseTick tick{dt, distance, bossDefeated, runtime, preview, realDt, entrySpeed, perception};
+        UpdatePhase(Phase::Waiting,tick);
+        if(phase_==Phase::Waiting)return;
+
         age_+=dt;phaseAge_+=dt;
-        const float d=distance-anchor_;
-        if(phase_==Phase::Aftermath && age_>=AftermathSeconds)Enter(Phase::Vista);
-        if(phase_==Phase::Vista && d>=BridgeStart && phaseAge_>=MinimumVistaSeconds)Enter(Phase::Bridge);
-        else if(phase_==Phase::Bridge && age_>=MinimumBreather)Enter(Phase::Notice);
-        if(phase_==Phase::Notice && phaseAge_>=NoticeSeconds)Enter(Phase::Turning);
-        if(phase_==Phase::Turning && phaseAge_>=TurnSeconds)Enter(Phase::Combat);
+        // Preserve the original evaluation slots. Bridge admission waits
+        // one tick after entering from Vista. Combat and Escape can both
+        // execute in the frame that hands control to Escape.
+        UpdatePhase(Phase::Aftermath,tick);
+        if(phase_==Phase::Vista)UpdatePhase(Phase::Vista,tick);
+        else UpdatePhase(Phase::Bridge,tick);
+        UpdatePhase(Phase::Notice,tick);
+        UpdatePhase(Phase::Turning,tick);
         if(phase_==Phase::Turning || phase_==Phase::Combat) {
             // Spawn outside the moving view. The nearer pursuer enters on
             // the side the camera is turning toward, then its wingman enters
@@ -87,24 +89,8 @@ public:
                 hullSmoke_[i].Observe(actor.age,remaining/initialHull_[i]);
             if(i==1)veilSource_=actor.weaponMount.ready?actor.weaponMount.muzzleRail[0]:Vector3{actor.desc.lateralOffset,actor.desc.verticalOffset,actor.desc.spawnDistance+actor.desc.distanceOffset};
         }
-        if(phase_==Phase::Combat) {
-            runtime.UpdateRearArmor(dt);
-            fangInterceptCounterRemaining_=(std::max)(0.0f,fangInterceptCounterRemaining_-dt);
-            combatSeconds_+=dt;
-            const bool earned=BreakthroughEarned();
-            UpdatePursuers(dt,distance,entrySpeed,earned,runtime,perception);
-            const bool safe=coordination_.SafeToExit();
-            if(earned && safe && !FangInterceptCounterOpen()) {
-                Enter(Phase::Escape);escape_.Begin(distance,veilSource_,anchor_+BridgeStart-10,entrySpeed);veilBeam_={};runtime.ClearProjectiles();
-            }
-        }
-        if(phase_==Phase::Escape) {
-            escape_.Tick(realDt>=0?realDt:dt,distance,runtime);
-            BuildScenery();
-            if(escape_.Complete()) {
-                runtime.RetireEnemies(ids_,false);runtime.ClearProjectiles();Enter(Phase::Complete);
-            }
-        }
+        UpdatePhase(Phase::Combat,tick);
+        UpdatePhase(Phase::Escape,tick);
         ApplyAttackGates(runtime);
     }
     void AdvancePanelBoost(float dt) {
@@ -397,6 +383,107 @@ public:
         }
     }
 private:
+    struct PhaseTick {
+        float deltaTime;
+        float distance;
+        bool bossDefeated;
+        CourseSpawnRuntime& runtime;
+        const TerrainEditLayer* preview;
+        float realDeltaTime;
+        float entrySpeed;
+        const RailPursuerPerception* perception;
+    };
+
+    class PhaseState {
+    public:
+        virtual ~PhaseState() = default;
+        virtual void Update(RailPostBossSequence& sequence,const PhaseTick& tick) const = 0;
+    };
+
+    static const PhaseState* StateFor(Phase phase) noexcept {
+        class WaitingState final : public PhaseState {
+            void Update(RailPostBossSequence& sequence,const PhaseTick& tick) const override {
+                if(!tick.bossDefeated)return;
+                sequence.anchor_=tick.distance;
+                sequence.Enter(Phase::Aftermath);
+                sequence.BuildScenery();
+                sequence.BuildValley(tick.preview);
+            }
+        };
+        class TimedState final : public PhaseState {
+        public:
+            TimedState(float RailPostBossSequence::* clock,float duration,Phase next)
+                : clock_(clock),duration_(duration),next_(next) {}
+        private:
+            void Update(RailPostBossSequence& sequence,const PhaseTick&) const override {
+                if(sequence.*clock_>=duration_)sequence.Enter(next_);
+            }
+            float RailPostBossSequence::* clock_;
+            float duration_;
+            Phase next_;
+        };
+        class VistaState final : public PhaseState {
+            void Update(RailPostBossSequence& sequence,const PhaseTick& tick) const override {
+                if(tick.distance-sequence.anchor_>=BridgeStart && sequence.phaseAge_>=MinimumVistaSeconds)
+                    sequence.Enter(Phase::Bridge);
+            }
+        };
+        class CombatState final : public PhaseState {
+            void Update(RailPostBossSequence& sequence,const PhaseTick& tick) const override {
+                tick.runtime.UpdateRearArmor(tick.deltaTime);
+                sequence.fangInterceptCounterRemaining_=(std::max)(0.0f,
+                    sequence.fangInterceptCounterRemaining_-tick.deltaTime);
+                sequence.combatSeconds_+=tick.deltaTime;
+                const bool earned=sequence.BreakthroughEarned();
+                sequence.UpdatePursuers(tick.deltaTime,tick.distance,tick.entrySpeed,
+                    earned,tick.runtime,tick.perception);
+                if(earned && sequence.coordination_.SafeToExit() && !sequence.FangInterceptCounterOpen()) {
+                    sequence.Enter(Phase::Escape);
+                    sequence.escape_.Begin(tick.distance,sequence.veilSource_,sequence.anchor_+BridgeStart-10,tick.entrySpeed);
+                    sequence.veilBeam_={};
+                    tick.runtime.ClearProjectiles();
+                }
+            }
+        };
+        class EscapeState final : public PhaseState {
+            void Update(RailPostBossSequence& sequence,const PhaseTick& tick) const override {
+                sequence.escape_.Tick(tick.realDeltaTime>=0?tick.realDeltaTime:tick.deltaTime,tick.distance,tick.runtime);
+                sequence.BuildScenery();
+                if(sequence.escape_.Complete()) {
+                    tick.runtime.RetireEnemies(sequence.ids_,false);
+                    tick.runtime.ClearProjectiles();
+                    sequence.Enter(Phase::Complete);
+                }
+            }
+        };
+        static const WaitingState waiting;
+        static const TimedState aftermath(&RailPostBossSequence::age_,AftermathSeconds,Phase::Vista);
+        static const VistaState vista;
+        static const TimedState bridge(&RailPostBossSequence::age_,MinimumBreather,Phase::Notice);
+        static const TimedState notice(&RailPostBossSequence::phaseAge_,NoticeSeconds,Phase::Turning);
+        static const TimedState turning(&RailPostBossSequence::phaseAge_,TurnSeconds,Phase::Combat);
+        static const CombatState combat;
+        static const EscapeState escape;
+        switch(phase) {
+        case Phase::Waiting: return &waiting;
+        case Phase::Aftermath: return &aftermath;
+        case Phase::Vista: return &vista;
+        case Phase::Bridge: return &bridge;
+        case Phase::Notice: return &notice;
+        case Phase::Turning: return &turning;
+        case Phase::Combat: return &combat;
+        case Phase::Escape: return &escape;
+        case Phase::Returning:
+        case Phase::Complete: return nullptr;
+        }
+        return nullptr;
+    }
+
+    void UpdatePhase(Phase slot,const PhaseTick& tick) {
+        if(phase_!=slot)return;
+        if(const PhaseState* state=StateFor(phase_))state->Update(*this,tick);
+    }
+
     void UpdatePursuers(float dt,float distance,float speed,bool finish,CourseSpawnRuntime& runtime,const RailPursuerPerception* perception) {
         veilLightning_.Advance(dt,distance);
         RailPursuerCoordination::Input input;input.speed=speed;input.finishRequested=finish;

@@ -58,6 +58,11 @@ void TestBridgeEscapeInteraction(RegressionRunner& runner) {
             "the shared boost spin completes a single turn before the cart leaves the ramp");
         runner.Expect(std::abs(RailBridgeStructure::RampHeight(escape,1)-escape.Arc().rise)<.001f,"releasing the real pin lifts the sagging deck into the authoritative launch curve");
         runner.Expect(escape.Arc().enabled && escape.RequestedSpeed()>68 && !escape.Complete(),"the opened ramp enables actual acceleration without an early clear");
+        auto combinedStep = escape;
+        combinedStep.Tick(dt, combinedStep.Arc().Landing()+1, runtime);
+        runner.Expect(combinedStep.Current()==RailBridgeEscape::Phase::Landing &&
+            combinedStep.PhaseAge()==0 && combinedStep.TakeLanding() && !combinedStep.TakeLanding(),
+            "a distance step crossing both markers enters Landing once in the same tick");
         escape.Tick(dt,escape.Arc().Launch()+1,runtime);
         runner.Expect(escape.Current()==RailBridgeEscape::Phase::Flight && !escape.Complete(),"takeoff waits for real traveled distance");
         escape.Tick(dt,escape.Arc().Landing()+1,runtime);
