@@ -36,43 +36,100 @@ void AuthoredPosition(const CourseEnemyActor& actor,
     }
 }
 
-void ProceduralSlot(EnemyFormationPattern pattern, uint32_t index,
-                    uint32_t count, const EnemyFormationDefinition& definition,
-                    float& forward, float& lateral, float& vertical) {
-    const float center = (static_cast<float>(count) - 1.0f) * 0.5f;
-    const float signedIndex = static_cast<float>(index) - center;
-    forward = 0.0f; lateral = 0.0f; vertical = 0.0f;
-    switch (pattern) {
-    case EnemyFormationPattern::Authored: break;
-    case EnemyFormationPattern::V:
-        lateral = signedIndex * definition.slotSpacing;
-        forward = std::abs(signedIndex) * definition.slotSpacing * 0.72f;
-        vertical = -std::abs(signedIndex) * definition.verticalSpacing * 0.35f;
-        break;
-    case EnemyFormationPattern::LineAbreast:
-        lateral = signedIndex * definition.slotSpacing;
-        break;
-    case EnemyFormationPattern::Column:
-        forward = static_cast<float>(index) * definition.slotSpacing;
-        vertical = signedIndex * definition.verticalSpacing * 0.25f;
-        break;
-    case EnemyFormationPattern::EchelonLeft:
-    case EnemyFormationPattern::EchelonRight: {
-        const float side = pattern == EnemyFormationPattern::EchelonLeft ? -1.0f : 1.0f;
-        forward = static_cast<float>(index) * definition.slotSpacing * 0.65f;
-        lateral = side * static_cast<float>(index) * definition.slotSpacing;
-        vertical = static_cast<float>(index) * definition.verticalSpacing * 0.25f;
-        break;
+struct FormationSlot {
+    float forward = 0.0f;
+    float lateral = 0.0f;
+    float vertical = 0.0f;
+};
+
+class EnemyFormationLayout {
+public:
+    virtual ~EnemyFormationLayout() = default;
+    virtual FormationSlot Slot(uint32_t index, uint32_t count,
+        const EnemyFormationDefinition& definition) const noexcept = 0;
+};
+
+float CenteredSlotIndex(uint32_t index, uint32_t count) noexcept {
+    return static_cast<float>(index) - (static_cast<float>(count) - 1.0f) * 0.5f;
+}
+
+class AuthoredLayout final : public EnemyFormationLayout {
+    FormationSlot Slot(uint32_t, uint32_t,
+        const EnemyFormationDefinition&) const noexcept override {
+        return {};
     }
-    case EnemyFormationPattern::Ring: {
+};
+
+class VFormationLayout final : public EnemyFormationLayout {
+    FormationSlot Slot(uint32_t index, uint32_t count,
+        const EnemyFormationDefinition& definition) const noexcept override {
+        const float centered = CenteredSlotIndex(index, count);
+        return {std::abs(centered) * definition.slotSpacing * 0.72f,
+            centered * definition.slotSpacing,
+            -std::abs(centered) * definition.verticalSpacing * 0.35f};
+    }
+};
+
+class LineAbreastLayout final : public EnemyFormationLayout {
+    FormationSlot Slot(uint32_t index, uint32_t count,
+        const EnemyFormationDefinition& definition) const noexcept override {
+        return {0.0f, CenteredSlotIndex(index, count) * definition.slotSpacing};
+    }
+};
+
+class ColumnLayout final : public EnemyFormationLayout {
+    FormationSlot Slot(uint32_t index, uint32_t count,
+        const EnemyFormationDefinition& definition) const noexcept override {
+        return {static_cast<float>(index) * definition.slotSpacing, 0.0f,
+            CenteredSlotIndex(index, count) * definition.verticalSpacing * 0.25f};
+    }
+};
+
+class EchelonLayout final : public EnemyFormationLayout {
+public:
+    explicit EchelonLayout(float side) noexcept : side_(side) {}
+
+private:
+    FormationSlot Slot(uint32_t index, uint32_t,
+        const EnemyFormationDefinition& definition) const noexcept override {
+        const float slot = static_cast<float>(index);
+        return {slot * definition.slotSpacing * 0.65f,
+            side_ * slot * definition.slotSpacing,
+            slot * definition.verticalSpacing * 0.25f};
+    }
+
+    float side_;
+};
+
+class RingLayout final : public EnemyFormationLayout {
+    FormationSlot Slot(uint32_t index, uint32_t count,
+        const EnemyFormationDefinition& definition) const noexcept override {
         const float angle = count > 0
             ? static_cast<float>(index) * 2.0f * std::numbers::pi_v<float> /
                 static_cast<float>(count) : 0.0f;
-        lateral = std::cos(angle) * definition.slotSpacing;
-        vertical = std::sin(angle) * definition.slotSpacing * 0.62f;
-        break;
+        return {0.0f, std::cos(angle) * definition.slotSpacing,
+            std::sin(angle) * definition.slotSpacing * 0.62f};
     }
+};
+
+const EnemyFormationLayout& FormationLayoutFor(EnemyFormationPattern pattern) noexcept {
+    static const AuthoredLayout authored;
+    static const VFormationLayout vee;
+    static const LineAbreastLayout lineAbreast;
+    static const ColumnLayout column;
+    static const EchelonLayout echelonLeft(-1.0f);
+    static const EchelonLayout echelonRight(1.0f);
+    static const RingLayout ring;
+    switch (pattern) {
+    case EnemyFormationPattern::Authored: return authored;
+    case EnemyFormationPattern::V: return vee;
+    case EnemyFormationPattern::LineAbreast: return lineAbreast;
+    case EnemyFormationPattern::Column: return column;
+    case EnemyFormationPattern::EchelonLeft: return echelonLeft;
+    case EnemyFormationPattern::EchelonRight: return echelonRight;
+    case EnemyFormationPattern::Ring: return ring;
     }
+    return authored;
 }
 }
 
@@ -213,10 +270,11 @@ void EnemyFormationSystem::UpdateActors(std::span<CourseEnemyActor> actors,
                 member.slotLateralOffset = authoredLateral - authoredLateralCenter;
                 member.slotVerticalOffset = authoredVertical - authoredVerticalCenter;
             } else {
-                ProceduralSlot(definition.pattern, index,
-                    static_cast<uint32_t>(actors.size()), definition,
-                    member.slotForwardOffset, member.slotLateralOffset,
-                    member.slotVerticalOffset);
+                const EnemyFormationLayout& layout = FormationLayoutFor(definition.pattern);
+                const FormationSlot slot = layout.Slot(index, static_cast<uint32_t>(actors.size()), definition);
+                member.slotForwardOffset = slot.forward;
+                member.slotLateralOffset = slot.lateral;
+                member.slotVerticalOffset = slot.vertical;
             }
             const float desiredForward = authoredForwardCenter +
                 member.slotForwardOffset + currentForwardDelta;

@@ -9,6 +9,95 @@ namespace {
 constexpr float kTimerEpsilon = 0.00001f;
 constexpr uint32_t kMaximumCatchUpSalvos = 4;
 
+struct TriggerState {
+    bool held;
+    bool pressed;
+    bool released;
+};
+
+struct FireSchedule {
+    uint32_t salvos;
+    float cadence;
+};
+
+class WeaponFirePolicy {
+public:
+    virtual ~WeaponFirePolicy() = default;
+    virtual bool Activate(const TriggerState& trigger, const WeaponDefinition& definition,
+        WeaponRuntimeState& state) const noexcept = 0;
+    virtual FireSchedule Schedule(const WeaponDefinition& definition,
+        const WeaponRuntimeState&) const noexcept {
+        return {1, definition.shotInterval};
+    }
+};
+
+uint32_t CatchUpSalvos(float cooldownRemaining, float interval) noexcept {
+    const float overdue = (std::max)(0.0f, -cooldownRemaining);
+    return 1u + static_cast<uint32_t>((std::min)(
+        static_cast<double>(overdue) / interval,
+        static_cast<double>(kMaximumCatchUpSalvos - 1)));
+}
+
+class PressFirePolicy final : public WeaponFirePolicy {
+    bool Activate(const TriggerState& trigger, const WeaponDefinition&,
+        WeaponRuntimeState&) const noexcept override {
+        return trigger.pressed;
+    }
+};
+
+class AutomaticFirePolicy final : public WeaponFirePolicy {
+    bool Activate(const TriggerState& trigger, const WeaponDefinition&,
+        WeaponRuntimeState&) const noexcept override {
+        return trigger.held;
+    }
+
+    FireSchedule Schedule(const WeaponDefinition& definition,
+        const WeaponRuntimeState& state) const noexcept override {
+        const uint32_t salvos = state.triggerWasHeld
+            ? CatchUpSalvos(state.cooldownRemaining, definition.shotInterval) : 1u;
+        return {salvos, definition.shotInterval};
+    }
+};
+
+class BurstFirePolicy final : public WeaponFirePolicy {
+    bool Activate(const TriggerState& trigger, const WeaponDefinition& definition,
+        WeaponRuntimeState& state) const noexcept override {
+        if (trigger.pressed && state.burstShotsRemaining == 0) {
+            state.burstShotsRemaining = definition.burstCount;
+        }
+        return state.burstShotsRemaining > 0;
+    }
+
+    FireSchedule Schedule(const WeaponDefinition& definition,
+        const WeaponRuntimeState& state) const noexcept override {
+        const uint32_t salvos = CatchUpSalvos(state.cooldownRemaining, definition.burstInterval);
+        return {(std::min)(salvos, state.burstShotsRemaining), definition.burstInterval};
+    }
+};
+
+class ReleaseFirePolicy final : public WeaponFirePolicy {
+    bool Activate(const TriggerState& trigger, const WeaponDefinition&,
+        WeaponRuntimeState&) const noexcept override {
+        return trigger.released;
+    }
+};
+
+const WeaponFirePolicy& FirePolicyFor(WeaponFireMode mode) noexcept {
+    static const PressFirePolicy press;
+    static const AutomaticFirePolicy automatic;
+    static const BurstFirePolicy burst;
+    static const ReleaseFirePolicy release;
+    switch (mode) {
+    case WeaponFireMode::SemiAutomatic: return press;
+    case WeaponFireMode::Automatic: return automatic;
+    case WeaponFireMode::Burst: return burst;
+    case WeaponFireMode::ChargeRelease:
+    case WeaponFireMode::ReleaseVolley: return release;
+    }
+    // Only modes accepted by ValidateDefinitionInternal enter the registry.
+    return press;
+}
+
 bool FiniteNonNegative(float value) {
     return std::isfinite(value) && value >= 0.0f;
 }
@@ -309,27 +398,8 @@ WeaponFireResult WeaponFireSystem::Update(const WeaponFireInput& input) {
             state.chargeSeconds + (std::max)(0.0f, input.deltaTime));
     }
 
-    bool activated = false;
-    switch (definition.fireMode) {
-    case WeaponFireMode::SemiAutomatic:
-        activated = pressed;
-        break;
-    case WeaponFireMode::Automatic:
-        activated = input.triggerHeld;
-        break;
-    case WeaponFireMode::Burst:
-        if (pressed && state.burstShotsRemaining == 0) {
-            state.burstShotsRemaining = definition.burstCount;
-        }
-        activated = state.burstShotsRemaining > 0;
-        break;
-    case WeaponFireMode::ChargeRelease:
-        activated = released;
-        break;
-    case WeaponFireMode::ReleaseVolley:
-        activated = released;
-        break;
-    }
+    const WeaponFirePolicy& firePolicy = FirePolicyFor(definition.fireMode);
+    const bool activated = firePolicy.Activate({input.triggerHeld, pressed, released}, definition, state);
 
     auto finish = [&](WeaponFireRejectReason reason) {
         result.rejectReason = reason;
@@ -370,21 +440,7 @@ WeaponFireResult WeaponFireSystem::Update(const WeaponFireInput& input) {
         return finish(WeaponFireRejectReason::Cooldown);
     }
 
-    uint32_t salvos = 1;
-    float cadence = definition.shotInterval;
-    if (definition.fireMode == WeaponFireMode::Automatic && state.triggerWasHeld) {
-        const float overdue = (std::max)(0.0f, -state.cooldownRemaining);
-        salvos = 1u + static_cast<uint32_t>((std::min)(
-            static_cast<double>(overdue) / definition.shotInterval,
-            static_cast<double>(kMaximumCatchUpSalvos - 1)));
-    } else if (definition.fireMode == WeaponFireMode::Burst) {
-        cadence = definition.burstInterval;
-        const float overdue = (std::max)(0.0f, -state.cooldownRemaining);
-        salvos = 1u + static_cast<uint32_t>((std::min)(
-            static_cast<double>(overdue) / definition.burstInterval,
-            static_cast<double>(kMaximumCatchUpSalvos - 1)));
-        salvos = (std::min)(salvos, state.burstShotsRemaining);
-    }
+    const auto [salvos, cadence] = firePolicy.Schedule(definition, state);
 
     uint32_t projectileCount = definition.fireMode == WeaponFireMode::ReleaseVolley
         ? (std::min)(input.requestedProjectileCount, definition.maxProjectilesPerTrigger)

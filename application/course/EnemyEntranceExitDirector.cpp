@@ -1,6 +1,7 @@
 #include "EnemyEntranceExitDirector.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 
@@ -46,37 +47,50 @@ EnemyFormationDefinition Definition(
     return EnemyFormationDefinition::CommercialDefault(formationId);
 }
 
+struct TransitOffsetScale {
+    float forward;
+    float lateral;
+    float vertical;
+    bool alternateLateralSide = false;
+
+    void Evaluate(float forwardDistance, float sideDistance, float side, float progress,
+        float& forwardOffset, float& lateralOffset, float& verticalOffset) const noexcept {
+        forwardOffset = forward == 0.0f ? 0.0f : forwardDistance * forward * progress;
+        lateralOffset = lateral == 0.0f ? 0.0f :
+            (alternateLateralSide ? side * sideDistance : sideDistance) * lateral * progress;
+        verticalOffset = vertical == 0.0f ? 0.0f : sideDistance * vertical * progress;
+    }
+};
+
+constexpr auto kEntranceScales = [] {
+    std::array<TransitOffsetScale, static_cast<size_t>(EnemyEntranceStyle::RearChase) + 1> scales{};
+    scales[static_cast<size_t>(EnemyEntranceStyle::FromAhead)] = {1.0f, 0.20f, 0.0f, true};
+    scales[static_cast<size_t>(EnemyEntranceStyle::SweepLeft)] = {0.35f, -1.0f, 0.0f};
+    scales[static_cast<size_t>(EnemyEntranceStyle::SweepRight)] = {0.35f, 1.0f, 0.0f};
+    scales[static_cast<size_t>(EnemyEntranceStyle::Dive)] = {0.25f, 0.0f, 1.0f};
+    scales[static_cast<size_t>(EnemyEntranceStyle::Rise)] = {0.25f, 0.0f, -1.0f};
+    scales[static_cast<size_t>(EnemyEntranceStyle::RearChase)] = {-1.0f, 0.35f, 0.0f, true};
+    return scales;
+}();
+
+constexpr auto kExitScales = [] {
+    std::array<TransitOffsetScale, static_cast<size_t>(EnemyExitStyle::RearRetreat) + 1> scales{};
+    scales[static_cast<size_t>(EnemyExitStyle::ForwardBreak)] = {1.0f, 0.0f, 0.0f};
+    scales[static_cast<size_t>(EnemyExitStyle::SplitSides)] = {0.35f, 1.0f, 0.0f, true};
+    scales[static_cast<size_t>(EnemyExitStyle::Climb)] = {0.20f, 0.0f, 1.0f};
+    scales[static_cast<size_t>(EnemyExitStyle::Dive)] = {0.20f, 0.0f, -1.0f};
+    scales[static_cast<size_t>(EnemyExitStyle::RearRetreat)] = {-1.0f, 0.30f, 0.0f, true};
+    return scales;
+}();
+
 void EntranceOffset(const EnemyFormationDefinition& definition,
                     const CourseEnemyActor& actor, float remaining,
                     float& forward, float& lateral, float& vertical) {
     const float side = (actor.formationState.slotIndex & 1u) != 0u ? -1.0f : 1.0f;
-    forward = 0.0f; lateral = 0.0f; vertical = 0.0f;
-    switch (definition.entranceStyle) {
-    case EnemyEntranceStyle::FromAhead:
-        forward = definition.entranceForwardDistance * remaining;
-        lateral = side * definition.entranceSideDistance * 0.20f * remaining;
-        break;
-    case EnemyEntranceStyle::SweepLeft:
-        forward = definition.entranceForwardDistance * 0.35f * remaining;
-        lateral = -definition.entranceSideDistance * remaining;
-        break;
-    case EnemyEntranceStyle::SweepRight:
-        forward = definition.entranceForwardDistance * 0.35f * remaining;
-        lateral = definition.entranceSideDistance * remaining;
-        break;
-    case EnemyEntranceStyle::Dive:
-        forward = definition.entranceForwardDistance * 0.25f * remaining;
-        vertical = definition.entranceSideDistance * remaining;
-        break;
-    case EnemyEntranceStyle::Rise:
-        forward = definition.entranceForwardDistance * 0.25f * remaining;
-        vertical = -definition.entranceSideDistance * remaining;
-        break;
-    case EnemyEntranceStyle::RearChase:
-        forward = -definition.entranceForwardDistance * remaining;
-        lateral = side * definition.entranceSideDistance * 0.35f * remaining;
-        break;
-    }
+    const auto index = static_cast<size_t>(definition.entranceStyle);
+    const auto scale = index < kEntranceScales.size() ? kEntranceScales[index] : TransitOffsetScale{};
+    scale.Evaluate(definition.entranceForwardDistance, definition.entranceSideDistance,
+        side, remaining, forward, lateral, vertical);
 }
 
 void ExitOffset(const EnemyFormationDefinition& definition,
@@ -107,27 +121,10 @@ void ExitOffset(const EnemyFormationDefinition& definition,
         forward = definition.exitForwardDistance * progress;
         return;
     }
-    switch (definition.exitStyle) {
-    case EnemyExitStyle::ForwardBreak:
-        forward = definition.exitForwardDistance * progress;
-        break;
-    case EnemyExitStyle::SplitSides:
-        forward = definition.exitForwardDistance * 0.35f * progress;
-        lateral = side * definition.exitSideDistance * progress;
-        break;
-    case EnemyExitStyle::Climb:
-        forward = definition.exitForwardDistance * 0.20f * progress;
-        vertical = definition.exitSideDistance * progress;
-        break;
-    case EnemyExitStyle::Dive:
-        forward = definition.exitForwardDistance * 0.20f * progress;
-        vertical = -definition.exitSideDistance * progress;
-        break;
-    case EnemyExitStyle::RearRetreat:
-        forward = -definition.exitForwardDistance * progress;
-        lateral = side * definition.exitSideDistance * 0.30f * progress;
-        break;
-    }
+    const auto index = static_cast<size_t>(definition.exitStyle);
+    const auto scale = index < kExitScales.size() ? kExitScales[index] : TransitOffsetScale{};
+    scale.Evaluate(definition.exitForwardDistance, definition.exitSideDistance,
+        side, progress, forward, lateral, vertical);
 }
 }
 

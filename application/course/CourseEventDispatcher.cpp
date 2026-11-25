@@ -164,26 +164,70 @@ int DefaultBulletCountForPattern(CourseEnemyFirePattern pattern) {
 }
 } // namespace
 
+class CourseEventDispatcher::EventHandler {
+public:
+    virtual ~EventHandler() = default;
+    virtual const char* Execute(CourseEventDispatcher& dispatcher, const CourseEventMarker& event,
+        CourseSpawnRuntime& spawnRuntime, float spawnDistance) const = 0;
+};
+
+class CourseEventDispatcher::EnemyWaveHandler final : public EventHandler {
+    const char* Execute(CourseEventDispatcher& dispatcher, const CourseEventMarker& event,
+        CourseSpawnRuntime& spawnRuntime, float spawnDistance) const override {
+        if (const EnemyWaveAsset* wave = dispatcher.LoadEnemyWave(event.id)) {
+            dispatcher.SpawnEnemyWave(event, *wave, spawnRuntime);
+            return "enemy actors spawned";
+        }
+        dispatcher.SpawnEventCue(event, spawnRuntime, spawnDistance);
+        return "enemy_wave missing, fallback actor spawned";
+    }
+};
+
+class CourseEventDispatcher::ObstacleHandler final : public EventHandler {
+    const char* Execute(CourseEventDispatcher& dispatcher, const CourseEventMarker& event,
+        CourseSpawnRuntime& spawnRuntime, float spawnDistance) const override {
+        dispatcher.SpawnEventObstacle(event, spawnRuntime, spawnDistance);
+        return "event actor spawned";
+    }
+};
+
+class CourseEventDispatcher::BossHandler final : public EventHandler {
+    const char* Execute(CourseEventDispatcher& dispatcher, const CourseEventMarker& event,
+        CourseSpawnRuntime& spawnRuntime, float spawnDistance) const override {
+        dispatcher.SpawnEventBoss(event, spawnRuntime, spawnDistance);
+        dispatcher.SpawnEventCue(event, spawnRuntime, spawnDistance);
+        return "event actor spawned";
+    }
+};
+
+class CourseEventDispatcher::CueHandler final : public EventHandler {
+    const char* Execute(CourseEventDispatcher& dispatcher, const CourseEventMarker& event,
+        CourseSpawnRuntime& spawnRuntime, float spawnDistance) const override {
+        dispatcher.SpawnEventCue(event, spawnRuntime, spawnDistance);
+        return "event actor spawned";
+    }
+};
+
+const CourseEventDispatcher::EventHandler& CourseEventDispatcher::HandlerFor(std::string_view type) noexcept {
+    static const EnemyWaveHandler enemyWave;
+    static const ObstacleHandler obstacle;
+    static const BossHandler boss;
+    static const CueHandler cue;
+    if (type == "enemy_wave") return enemyWave;
+    if (type == "obstacle") return obstacle;
+    if (type == "boss") return boss;
+    return cue;
+}
+
 void CourseEventDispatcher::Dispatch(
     const std::vector<CourseEventMarker>& events,
     CourseSpawnRuntime& spawnRuntime,
     float currentDistance) {
     for (const CourseEventMarker& event : events) {
-        if(event.id=="post-boss-white-bridge")continue;
-        if (event.type == "enemy_wave") {
-            const EnemyWaveAsset* wave = LoadEnemyWave(event.id);
-            if (wave != nullptr) {
-                SpawnEnemyWave(event, *wave, spawnRuntime);
-                LogDispatch(event, "enemy actors spawned");
-            } else {
-                SpawnEventActor(event, spawnRuntime, currentDistance);
-                LogDispatch(event, "enemy_wave missing, fallback actor spawned");
-            }
-            continue;
-        }
-
-        SpawnEventActor(event, spawnRuntime, currentDistance);
-        LogDispatch(event, "event actor spawned");
+        if (event.id == "post-boss-white-bridge") continue;
+        const float spawnDistance = event.distance > 0.0f ? event.distance : currentDistance;
+        const EventHandler& handler = HandlerFor(event.type);
+        LogDispatch(event, handler.Execute(*this, event, spawnRuntime, spawnDistance));
     }
 }
 
@@ -464,69 +508,72 @@ void CourseEventDispatcher::SpawnEnemyWave(
     }
 }
 
-void CourseEventDispatcher::SpawnEventActor(
+void CourseEventDispatcher::SpawnEventObstacle(
     const CourseEventMarker& event,
     CourseSpawnRuntime& spawnRuntime,
-    float currentDistance) {
-    const float spawnDistance = event.distance > 0.0f ? event.distance : currentDistance;
+    float spawnDistance) {
+    CourseObstacleActorDesc desc{};
+    desc.id = event.id;
+    desc.meshId = event.id;
+    desc.payload = event.payload;
+    desc.spawnDistance = spawnDistance;
+    desc.distanceOffset = 22.0f;
+    desc.lifetime = LifetimeForEventType(event.type);
+    desc.halfExtents = {4.2f, 4.8f, 2.4f};
+    desc.color = ColorForEventType(event.type);
+    if (const ObstacleAsset* obstacleAsset = LoadObstacleAsset(event.id)) {
+        desc.meshId = obstacleAsset->meshId;
+        desc.distanceOffset = obstacleAsset->distanceOffset;
+        desc.lateralOffset = obstacleAsset->lateralOffset;
+        desc.verticalOffset = obstacleAsset->verticalOffset;
+        desc.forwardSpeed = obstacleAsset->forwardSpeed;
+        desc.lifetime = obstacleAsset->lifetime;
+        desc.hitPoints = obstacleAsset->hitPoints;
+        desc.breakable = obstacleAsset->breakable;
+        desc.vfxCueId = obstacleAsset->vfxCueId;
+        desc.halfExtents = obstacleAsset->halfExtents;
+        desc.color = obstacleAsset->color;
+    }
+    spawnRuntime.SpawnObstacle(std::move(desc));
+}
 
-    if (event.type == "obstacle") {
-        CourseObstacleActorDesc desc{};
-        desc.id = event.id;
-        desc.meshId = event.id;
-        desc.payload = event.payload;
-        desc.spawnDistance = spawnDistance;
-        desc.distanceOffset = 22.0f;
+void CourseEventDispatcher::SpawnEventBoss(
+    const CourseEventMarker& event,
+    CourseSpawnRuntime& spawnRuntime,
+    float spawnDistance) {
+    CourseEnemyActorDesc desc{};
+    desc.waveId = event.id;
+    desc.role = event.id.empty() ? "gatekeeper_boss" : event.id;
+    desc.spawnDistance = spawnDistance;
+    if (const CourseActorAsset* actorAsset = LoadActorAsset("gatekeeper_boss")) {
+        ApplyActorAsset(desc, *actorAsset);
+    }
+    desc.distanceOffset = 36.0f;
+    desc.lateralOffset = 0.0f;
+    desc.verticalOffset = 8.0f;
+    if (desc.actorAssetId.empty()) {
+        desc.forwardSpeed = -2.0f;
+        desc.radius = RadiusForEventType(event.type);
         desc.lifetime = LifetimeForEventType(event.type);
-        desc.halfExtents = {4.2f, 4.8f, 2.4f};
+        desc.hitPoints = HitPointsForRole("gatekeeper_boss");
+        desc.fireInterval = FireIntervalForRole("gatekeeper_boss");
+        desc.firstShotDelay = 0.45f;
+        desc.bulletSpeed = BulletSpeedForRole("gatekeeper_boss");
+        desc.firePattern = CourseEnemyFirePattern::BossArc;
         desc.color = ColorForEventType(event.type);
-        if (const ObstacleAsset* obstacleAsset = LoadObstacleAsset(event.id)) {
-            desc.meshId = obstacleAsset->meshId;
-            desc.distanceOffset = obstacleAsset->distanceOffset;
-            desc.lateralOffset = obstacleAsset->lateralOffset;
-            desc.verticalOffset = obstacleAsset->verticalOffset;
-            desc.forwardSpeed = obstacleAsset->forwardSpeed;
-            desc.lifetime = obstacleAsset->lifetime;
-            desc.hitPoints = obstacleAsset->hitPoints;
-            desc.breakable = obstacleAsset->breakable;
-            desc.vfxCueId = obstacleAsset->vfxCueId;
-            desc.halfExtents = obstacleAsset->halfExtents;
-            desc.color = obstacleAsset->color;
-        }
-        spawnRuntime.SpawnObstacle(std::move(desc));
-        return;
     }
-
-    if (event.type == "boss") {
-        CourseEnemyActorDesc desc{};
-        desc.waveId = event.id;
-        desc.role = event.id.empty() ? "gatekeeper_boss" : event.id;
-        desc.spawnDistance = spawnDistance;
-        if (const CourseActorAsset* actorAsset = LoadActorAsset("gatekeeper_boss")) {
-            ApplyActorAsset(desc, *actorAsset);
-        }
-        desc.distanceOffset = 36.0f;
-        desc.lateralOffset = 0.0f;
-        desc.verticalOffset = 8.0f;
-        if (desc.actorAssetId.empty()) {
-            desc.forwardSpeed = -2.0f;
-            desc.radius = RadiusForEventType(event.type);
-            desc.lifetime = LifetimeForEventType(event.type);
-            desc.hitPoints = HitPointsForRole("gatekeeper_boss");
-            desc.fireInterval = FireIntervalForRole("gatekeeper_boss");
-            desc.firstShotDelay = 0.45f;
-            desc.bulletSpeed = BulletSpeedForRole("gatekeeper_boss");
-            desc.firePattern = CourseEnemyFirePattern::BossArc;
-            desc.color = ColorForEventType(event.type);
-        }
-        if (const BulletPatternAsset* patternAsset = LoadBulletPatternAsset(desc.bulletPatternId)) {
-            ApplyBulletPatternAsset(desc, *patternAsset);
-        } else {
-            desc.bulletCount = DefaultBulletCountForPattern(desc.firePattern);
-        }
-        spawnRuntime.SpawnEnemyActor(std::move(desc));
+    if (const BulletPatternAsset* patternAsset = LoadBulletPatternAsset(desc.bulletPatternId)) {
+        ApplyBulletPatternAsset(desc, *patternAsset);
+    } else {
+        desc.bulletCount = DefaultBulletCountForPattern(desc.firePattern);
     }
+    spawnRuntime.SpawnEnemyActor(std::move(desc));
+}
 
+void CourseEventDispatcher::SpawnEventCue(
+    const CourseEventMarker& event,
+    CourseSpawnRuntime& spawnRuntime,
+    float spawnDistance) {
     CourseVfxCueDesc cue{};
     cue.id = event.id;
     cue.effectName = EffectForCourseEvent(event);

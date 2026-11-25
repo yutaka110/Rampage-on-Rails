@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -32,6 +33,13 @@ public:
     void PlaceGroundBatteries(const CourseAsset& course, CourseSpawnRuntime& runtime);
 
 private:
+    class EventHandler;
+    class EnemyWaveHandler;
+    class ObstacleHandler;
+    class BossHandler;
+    class CueHandler;
+    static const EventHandler& HandlerFor(std::string_view type) noexcept;
+
     const EnemyWaveAsset* LoadEnemyWave(const std::string& id);
     const CourseActorAsset* LoadActorAsset(const std::string& id);
     const BulletPatternAsset* LoadBulletPatternAsset(const std::string& id);
@@ -44,10 +52,14 @@ private:
         const CourseEventMarker& event,
         const EnemyWaveAsset& wave,
         CourseSpawnRuntime& spawnRuntime);
-    void SpawnEventActor(
+    void SpawnEventObstacle(
+        const CourseEventMarker& event, CourseSpawnRuntime& spawnRuntime, float spawnDistance);
+    void SpawnEventBoss(
+        const CourseEventMarker& event, CourseSpawnRuntime& spawnRuntime, float spawnDistance);
+    void SpawnEventCue(
         const CourseEventMarker& event,
         CourseSpawnRuntime& spawnRuntime,
-        float currentDistance);
+        float spawnDistance);
     void LogDispatch(const CourseEventMarker& event, const char* result);
 
     std::unordered_map<std::string, EnemyWaveAsset> enemyWaveCache_;

@@ -11,6 +11,98 @@
 namespace {
 constexpr float kTau = 6.28318530717958647692f;
 
+struct EnemyMovementOffset {
+    float lateral = 0.0f;
+    float vertical = 0.0f;
+    float forward = 0.0f;
+};
+
+// Actor-local timers and engagement state remain in the runtime. A movement
+// implementation only evaluates the base offset at the supplied phase.
+class EnemyMovementPattern {
+public:
+    virtual ~EnemyMovementPattern() = default;
+    virtual EnemyMovementOffset Evaluate(
+        const EnemyBehaviorDefinition& definition, float phase, uint32_t actorId) const noexcept = 0;
+};
+
+class AssaultMovement final : public EnemyMovementPattern {
+    EnemyMovementOffset Evaluate(const EnemyBehaviorDefinition& definition,
+        float phase, uint32_t) const noexcept override {
+        return {std::sin(phase) * definition.lateralAmplitude,
+            std::sin(phase * 0.53f) * definition.verticalAmplitude};
+    }
+};
+
+class FlankerMovement final : public EnemyMovementPattern {
+    EnemyMovementOffset Evaluate(const EnemyBehaviorDefinition& definition,
+        float phase, uint32_t actorId) const noexcept override {
+        const float side = (actorId & 1u) != 0 ? 1.0f : -1.0f;
+        return {side * definition.lateralAmplitude * (0.58f + 0.42f * std::sin(phase)),
+            std::cos(phase * 0.64f) * definition.verticalAmplitude};
+    }
+};
+
+class CosineVerticalMovement final : public EnemyMovementPattern {
+public:
+    explicit CosineVerticalMovement(float verticalFrequency) noexcept
+        : verticalFrequency_(verticalFrequency) {}
+
+private:
+    EnemyMovementOffset Evaluate(const EnemyBehaviorDefinition& definition,
+        float phase, uint32_t) const noexcept override {
+        return {std::sin(phase) * definition.lateralAmplitude,
+            std::cos(phase * verticalFrequency_) * definition.verticalAmplitude};
+    }
+
+    float verticalFrequency_;
+};
+
+class InterceptorMovement final : public EnemyMovementPattern {
+    EnemyMovementOffset Evaluate(const EnemyBehaviorDefinition& definition,
+        float phase, uint32_t) const noexcept override {
+        return {std::sin(phase) * definition.lateralAmplitude,
+            std::sin(phase * 2.0f) * definition.verticalAmplitude,
+            std::cos(phase) * 1.1f};
+    }
+};
+
+class BossMovement final : public EnemyMovementPattern {
+    EnemyMovementOffset Evaluate(const EnemyBehaviorDefinition& definition,
+        float phase, uint32_t) const noexcept override {
+        return {std::sin(phase) * definition.lateralAmplitude,
+            std::sin(phase * 0.5f) * definition.verticalAmplitude,
+            std::cos(phase * 0.35f) * 0.8f};
+    }
+};
+
+class StationaryMovement final : public EnemyMovementPattern {
+    EnemyMovementOffset Evaluate(const EnemyBehaviorDefinition&,
+        float, uint32_t) const noexcept override {
+        return {};
+    }
+};
+
+const EnemyMovementPattern& MovementPatternFor(EnemyBehaviorArchetype archetype) noexcept {
+    static const AssaultMovement assault;
+    static const FlankerMovement flanker;
+    static const CosineVerticalMovement sniper(0.72f);
+    static const InterceptorMovement interceptor;
+    static const StationaryMovement stationary;
+    static const CosineVerticalMovement support(1.0f);
+    static const BossMovement boss;
+    switch (archetype) {
+    case EnemyBehaviorArchetype::Assault: return assault;
+    case EnemyBehaviorArchetype::Flanker: return flanker;
+    case EnemyBehaviorArchetype::Sniper: return sniper;
+    case EnemyBehaviorArchetype::Interceptor: return interceptor;
+    case EnemyBehaviorArchetype::Turret: return stationary;
+    case EnemyBehaviorArchetype::Support: return support;
+    case EnemyBehaviorArchetype::Boss: return boss;
+    }
+    return stationary;
+}
+
 bool FiniteNonNegative(float value) noexcept {
     return std::isfinite(value) && value >= 0.0f;
 }
@@ -717,44 +809,12 @@ static bool AdvanceEnemyBehaviorMovement(CourseEnemyActor& actor, float deltaTim
         definition.movementFrequency * kTau + state.deterministicPhase;
     const bool individualHover = actor.desc.meshId == "twin_shield_hull" &&
         definition.maintainForwardEngagementBand && !definition.choreographedAttackPass;
-    float lateral = 0.0f;
-    float vertical = 0.0f;
-    float forward = 0.0f;
+    EnemyMovementOffset movement;
     if (definition.movementEnabled && !definition.choreographedAttackPass) {
-        switch (definition.archetype) {
-        case EnemyBehaviorArchetype::Assault:
-            lateral = std::sin(phase) * definition.lateralAmplitude;
-            vertical = std::sin(phase * 0.53f) * definition.verticalAmplitude;
-            break;
-        case EnemyBehaviorArchetype::Flanker: {
-            const float side = (actor.actorId & 1u) != 0 ? 1.0f : -1.0f;
-            lateral = side * definition.lateralAmplitude *
-                (0.58f + 0.42f * std::sin(phase));
-            vertical = std::cos(phase * 0.64f) * definition.verticalAmplitude;
-            break;
-        }
-        case EnemyBehaviorArchetype::Sniper:
-            lateral = std::sin(phase) * definition.lateralAmplitude;
-            vertical = std::cos(phase * 0.72f) * definition.verticalAmplitude;
-            break;
-        case EnemyBehaviorArchetype::Interceptor:
-            lateral = std::sin(phase) * definition.lateralAmplitude;
-            vertical = std::sin(phase * 2.0f) * definition.verticalAmplitude;
-            forward = std::cos(phase) * 1.1f;
-            break;
-        case EnemyBehaviorArchetype::Turret:
-            break;
-        case EnemyBehaviorArchetype::Support:
-            lateral = std::sin(phase) * definition.lateralAmplitude;
-            vertical = std::cos(phase) * definition.verticalAmplitude;
-            break;
-        case EnemyBehaviorArchetype::Boss:
-            lateral = std::sin(phase) * definition.lateralAmplitude;
-            vertical = std::sin(phase * 0.5f) * definition.verticalAmplitude;
-            forward = std::cos(phase * 0.35f) * 0.8f;
-            break;
-        }
+        const EnemyMovementPattern& pattern = MovementPatternFor(definition.archetype);
+        movement = pattern.Evaluate(definition, phase, actor.actorId);
     }
+    auto [lateral, vertical, forward] = movement;
     if (individualHover && definition.movementEnabled) {
         const bool aiming = state.state == EnemyBehaviorState::Aiming ||
             (state.attackIntentActive && actor.attackState.tokenReserved);

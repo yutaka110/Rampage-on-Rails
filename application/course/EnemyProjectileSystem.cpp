@@ -59,6 +59,89 @@ RailVector TurnTowards(
         current.lateral + (desired.lateral - current.lateral) * blend,
         current.vertical + (desired.vertical - current.vertical) * blend}, current);
 }
+
+void IntegrateProjectile(EnemyProjectileRuntimeState& projectile, float deltaTime,
+    std::optional<float> verticalGravity) noexcept;
+
+class EnemyProjectileFlight {
+public:
+    virtual ~EnemyProjectileFlight() = default;
+
+    virtual RailVector AimAtLaunch(RailVector direction, const CourseEnemyActor&,
+        EnemyProjectileRuntimeState&) const noexcept {
+        return direction;
+    }
+
+    // A trajectory preview has no live steering target. Return whether a live
+    // step applied guidance so the simulation can keep its existing counters.
+    virtual bool Advance(EnemyProjectileRuntimeState& projectile, float deltaTime,
+        const EnemyProjectileFrameInput* target) const noexcept = 0;
+};
+
+class StraightProjectileFlight final : public EnemyProjectileFlight {
+    bool Advance(EnemyProjectileRuntimeState& projectile, float deltaTime,
+        const EnemyProjectileFrameInput*) const noexcept override {
+        IntegrateProjectile(projectile, deltaTime, std::nullopt);
+        return false;
+    }
+};
+
+class ArcProjectileFlight final : public EnemyProjectileFlight {
+    RailVector AimAtLaunch(RailVector direction, const CourseEnemyActor& actor,
+        EnemyProjectileRuntimeState& projectile) const noexcept override {
+        const float flight = (std::max)(0.1f, actor.targetingState.predictedFlightSeconds);
+        direction.vertical += 0.5f * projectile.arcGravity * flight * flight;
+        return direction;
+    }
+
+    bool Advance(EnemyProjectileRuntimeState& projectile, float deltaTime,
+        const EnemyProjectileFrameInput*) const noexcept override {
+        IntegrateProjectile(projectile, deltaTime, projectile.arcGravity);
+        return false;
+    }
+};
+
+class HomingProjectileFlight final : public EnemyProjectileFlight {
+    RailVector AimAtLaunch(RailVector direction, const CourseEnemyActor& actor,
+        EnemyProjectileRuntimeState& projectile) const noexcept override {
+        projectile.automaticForwardIntercept = actor.targetingState.compensatesForwardTravel;
+        return direction;
+    }
+
+    bool Advance(EnemyProjectileRuntimeState& projectile, float deltaTime,
+        const EnemyProjectileFrameInput* target) const noexcept override {
+        const bool guided = target != nullptr && projectile.homingTurnRateRadians > 0.0f;
+        if (guided) {
+            const RailVector velocity{projectile.forwardSpeed, projectile.lateralSpeed, projectile.verticalSpeed};
+            const float speed = std::sqrt((std::max)(0.0f, LengthSquared(velocity)));
+            const RailVector desired{
+                (projectile.automaticForwardIntercept ? projectile.lockedTargetDistance - projectile.spawnDistance :
+                    target->playerDistance) - projectile.distanceOffset,
+                target->playerLateralOffset - projectile.lateralOffset,
+                target->playerVerticalOffset - projectile.verticalOffset};
+            const RailVector direction = TurnTowards(NormalizeOr(velocity, {-1.0f, 0.0f, 0.0f}),
+                desired, projectile.homingTurnRateRadians * deltaTime);
+            projectile.forwardSpeed = direction.forward * speed;
+            projectile.lateralSpeed = direction.lateral * speed;
+            projectile.verticalSpeed = direction.vertical * speed;
+        }
+        IntegrateProjectile(projectile, deltaTime, std::nullopt);
+        return guided;
+    }
+};
+
+const EnemyProjectileFlight& ProjectileFlightFor(EnemyProjectileTrajectory trajectory) noexcept {
+    static const StraightProjectileFlight straight;
+    static const ArcProjectileFlight arc;
+    static const HomingProjectileFlight homing;
+    switch (trajectory) {
+    case EnemyProjectileTrajectory::Direct:
+    case EnemyProjectileTrajectory::Predictive: return straight;
+    case EnemyProjectileTrajectory::Homing: return homing;
+    case EnemyProjectileTrajectory::Arc: return arc;
+    }
+    return straight;
+}
 } // namespace
 
 EnemyProjectileRuntimeState ResolveEnemyProjectileLaunch(const CourseEnemyActor& actor, int index) {
@@ -152,18 +235,12 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
             target.x;
         projectile.lockedTargetVerticalOffset =
             target.y;
-        projectile.automaticForwardIntercept=actor.targetingState.compensatesForwardTravel &&
-            definition.trajectory==EnemyProjectileTrajectory::Homing;
         RailVector direction{
             projectile.lockedTargetDistance - projectile.distanceOffset,
             projectile.lockedTargetLateralOffset - projectile.lateralOffset,
             projectile.lockedTargetVerticalOffset - projectile.verticalOffset};
-        if (definition.trajectory == EnemyProjectileTrajectory::Arc) {
-            const float flight = (std::max)(
-                0.1f, actor.targetingState.predictedFlightSeconds);
-            direction.vertical +=
-                0.5f * definition.arcGravity * flight * flight;
-        }
+        const EnemyProjectileFlight& flight = ProjectileFlightFor(definition.trajectory);
+        direction = flight.AimAtLaunch(direction, actor, projectile);
         direction = NormalizeOr(direction, {-1.0f, 0.0f, 0.0f});
         projectile.forwardSpeed = direction.forward * definition.initialSpeed;
         projectile.lateralSpeed = direction.lateral * definition.initialSpeed +
@@ -186,7 +263,9 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
     return solution;
 }
 
-void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile,float deltaTime) {
+namespace {
+void IntegrateProjectile(EnemyProjectileRuntimeState& projectile, float deltaTime,
+        std::optional<float> verticalGravity) noexcept {
     const float dt=(std::max)(0.0f,deltaTime);
     const int aimSalvo=projectile.definitionId==kFangAimVolleyRound?FangAimSalvo(projectile.sourceRole):-1;
     if ((projectile.sourceRole==kFangCrossfireRole || aimSalvo>=0) &&
@@ -226,9 +305,7 @@ void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile,fl
         0.0f,
         (std::max)(1.0f, projectile.maximumSpeed));
     velocity = Scale(direction, speed);
-    if (projectile.trajectory == EnemyProjectileTrajectory::Arc) {
-        velocity.vertical -= projectile.arcGravity * dt;
-    }
+    if (verticalGravity) velocity.vertical -= *verticalGravity * dt;
     projectile.forwardSpeed = velocity.forward;
     projectile.lateralSpeed = velocity.lateral;
     projectile.verticalSpeed = velocity.vertical;
@@ -243,6 +320,12 @@ void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile,fl
     projectile.lateralOffset += projectile.automaticForwardIntercept ? direction.lateral*travel : projectile.lateralSpeed*dt;
     projectile.verticalOffset += projectile.automaticForwardIntercept ? direction.vertical*travel : projectile.verticalSpeed*dt;
     projectile.age += dt;
+}
+} // namespace
+
+void AdvanceEnemyProjectileTrajectory(EnemyProjectileRuntimeState& projectile, float deltaTime) {
+    const EnemyProjectileFlight& flight = ProjectileFlightFor(projectile.trajectory);
+    flight.Advance(projectile, deltaTime, nullptr);
 }
 
 void EnemyProjectileSystem::Reset() {
@@ -359,26 +442,8 @@ void EnemyProjectileSystem::Update(
             continue;
         }
 
-        if (projectile.trajectory == EnemyProjectileTrajectory::Homing &&
-            projectile.homingTurnRateRadians > 0.0f) {
-            const RailVector velocity{projectile.forwardSpeed,projectile.lateralSpeed,projectile.verticalSpeed};
-            const float speed=std::sqrt((std::max)(0.0f,LengthSquared(velocity)));
-            RailVector direction=NormalizeOr(velocity,{-1.0f,0.0f,0.0f});
-            const RailVector desired{
-                (projectile.automaticForwardIntercept ? projectile.lockedTargetDistance-projectile.spawnDistance :
-                    input.playerDistance) - projectile.distanceOffset,
-                input.playerLateralOffset - projectile.lateralOffset,
-                input.playerVerticalOffset - projectile.verticalOffset};
-            direction = TurnTowards(
-                direction,
-                desired,
-                projectile.homingTurnRateRadians * travelTime);
-            ++frame_.homingProjectiles;
-            projectile.forwardSpeed=direction.forward*speed;
-            projectile.lateralSpeed=direction.lateral*speed;
-            projectile.verticalSpeed=direction.vertical*speed;
-        }
-        AdvanceEnemyProjectileTrajectory(projectile,travelTime);
+        const EnemyProjectileFlight& flight = ProjectileFlightFor(projectile.trajectory);
+        if (flight.Advance(projectile, travelTime, &input)) ++frame_.homingProjectiles;
         if (projectile.age >= projectile.lifetime) {
             projectile.active = false;
             ++frame_.expiredThisFrame;

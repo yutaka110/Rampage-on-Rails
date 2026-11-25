@@ -18827,6 +18827,18 @@ void TestCombatLoopEnemyFormationTerrainExpansion(RegressionRunner& runner) {
             formationFrame.correctedMembers > 0,
         "runtime dispatch should preserve all three formation contracts and terrain decisions");
 
+    CourseSpawnRuntime fallbackRuntime;
+    dispatcher.Dispatch({
+        {0.0f, "enemy_wave", "polymorphism_missing_wave_fixture"},
+        {92.0f, "checkpoint", "polymorphism_checkpoint_fixture"},
+        {95.0f, "checkpoint", "post-boss-white-bridge"},
+    }, fallbackRuntime, 90.0f);
+    const auto& cues = fallbackRuntime.VfxCues();
+    runner.Expect(fallbackRuntime.Enemies().empty() && cues.size() == 2 &&
+        cues[0].desc.id == "polymorphism_missing_wave_fixture" && cues[0].desc.spawnDistance == 90.0f &&
+        cues[1].desc.id == "polymorphism_checkpoint_fixture" && cues[1].desc.spawnDistance == 92.0f,
+        "dispatch must preserve missing-wave fallback, marker order, and bridge ownership");
+
     EncounterPerformanceScoreSystem score;
     EnemyEncounterPacingFrame scorePacing{};
     scorePacing.active = true;
@@ -25958,6 +25970,19 @@ void TestEnemyAttackCoordinationAndExecution(RegressionRunner& runner) {
 }
 
 void TestEnemyTargetingAndProjectileRuntime(RegressionRunner& runner) {
+    EnemyProjectileRuntimeState directStep{};
+    directStep.forwardSpeed = 10.0f;
+    directStep.maximumSpeed = 10.0f;
+    directStep.arcGravity = 8.0f;
+    auto arcStep = directStep;
+    arcStep.trajectory = EnemyProjectileTrajectory::Arc;
+    AdvanceEnemyProjectileTrajectory(directStep, 0.25f);
+    AdvanceEnemyProjectileTrajectory(arcStep, 0.25f);
+    runner.Expect(directStep.distanceOffset == 2.5f && arcStep.distanceOffset == 2.5f &&
+        directStep.verticalOffset == 0.0f && arcStep.verticalOffset == -0.5f &&
+        directStep.age == arcStep.age,
+        "straight and ballistic dispatch must apply gravity only to the ballistic step");
+
     std::string error;
     EnemyProjectileDefinitionAsset predictive{};
     EnemyProjectileDefinitionAsset homing{};
