@@ -353,6 +353,7 @@
 #include "../course/RailVehicleDamageCoordinator.h"
 #include "../course/RailVehicleCollisionFeedbackBridge.h"
 #include "../course/EnemyCombatSystem.h"
+#include "../course/EnemyCombatEventPublisher.h"
 #include "../course/EnemyCombatPresentationBridge.h"
 #include "../course/EnemyEncounterReadabilityDirector.h"
 #include "../course/EnemyEncounterPacingDirector.h"
@@ -37570,8 +37571,30 @@ void TestGateBridgeEarnedRelease(RegressionRunner& runner) {
         std::vector<uint32_t> ids;
         for(const auto& a:runtime.Enemies())if(a.desc.waveId=="short_turret_left" || a.desc.waveId=="short_turret_right")ids.push_back(a.actorId);
         runner.Expect(ids.size()==2,"gate owns exactly two installed batteries");
+        std::vector<int> notificationOrder;
+        EnemyCombatEventPublisher publisher{
+            [&](const EnemyCombatEventBatch& batch) {
+                if (batch.shortCourse) flow.Notify(batch.events);
+                notificationOrder.push_back(1);
+            },
+            [&](const EnemyCombatEventBatch&) {
+                runner.Expect(flow.ClearedBatteries(), "later observers see the gate notification first");
+                notificationOrder.push_back(2);
+            }
+        };
+        const auto beforeDefeats = runtime.CaptureCheckpoint();
+        for(auto id:ids)runner.Expect(runtime.DefeatEnemy(id),"battery defeat before retry uses authoritative combat");
+        runner.Expect(runtime.RestoreCheckpoint(beforeDefeats, false),
+            "retry restores the spawn runtime before the gate defeat");
+        publisher.Publish({.events = runtime.ConsumeEnemyCombatEvents(), .shortCourse = true});
+        runner.Expect(notificationOrder.empty() && !flow.ClearedBatteries(),
+            "a restored checkpoint cannot publish a queued defeat from the aborted attempt");
         for(auto id:ids)runner.Expect(runtime.DefeatEnemy(id),"battery defeat uses authoritative combat");
-        flow.Notify(runtime.ConsumeEnemyCombatEvents());
+        const auto events = runtime.ConsumeEnemyCombatEvents();
+        publisher.Publish({.events = events, .shortCourse = true});
+        publisher.Publish({.events = runtime.ConsumeEnemyCombatEvents(), .shortCourse = true});
+        runner.Expect(notificationOrder == std::vector<int>{1, 2},
+            "the consumed combat batch reaches each observer once in registration order");
         auto late=flow;late.Update(dt,1900,runtime,true);
         runner.Expect(late.CurrentPhase()==RailGateBridgeFlow::Phase::Complete && !late.BlockNewEnemies(2000),
             "a missed scenic window cannot move recovery into the next roadside battery");

@@ -1842,6 +1842,9 @@
     <ClInclude Include="application\course\EnemyCombatSystem.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>
+    <ClInclude Include="application\course\EnemyCombatEventPublisher.h">
+      <Filter>ヘッダー ファイル\application\course</Filter>
+    </ClInclude>
     <ClInclude Include="application\course\EnemyCombatPresentationBridge.h">
       <Filter>ヘッダー ファイル\application\course</Filter>
     </ClInclude>

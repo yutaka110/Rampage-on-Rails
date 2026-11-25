@@ -13,6 +13,7 @@
 #include "course/RailMothershipPresentation.h"
 #include "course/RailMothershipBattle.h"
 #include "course/RailPostBossSequence.h"
+#include "course/EnemyCombatEventPublisher.h"
 #include "course/RailAttackWarningPresentation.h"
 #include "CaveLighting.h"
 #include "terrain/TerrainCollisionWorld.h"
@@ -954,6 +955,17 @@ private:
     RailMothership::Reveal railMothershipReveal_{};
     RailMothership::Battle railMothershipBattle_{};
     RailPostBossSequence railPostBossSequence_{};
+    EnemyCombatEventPublisher courseCombatEvents_{
+        [this](const EnemyCombatEventBatch& batch) {
+            if (batch.shortCourse) railGateBridgeFlow_.Notify(batch.events);
+        },
+        [this](const EnemyCombatEventBatch& batch) {
+            if (batch.shortCourse) railRidgeCombatFlow_.Notify(batch.events);
+        },
+        [this](const EnemyCombatEventBatch& batch) {
+            if (batch.postBossEnabled) railPostBossSequence_.Notify(batch.events);
+        }
+    };
     RailMinibossCombatDirector railMinibossCombat_{};
     RailHeavyInterceptPresentation railHeavyIntercept_{};
     RailLockIntroPresentation railLockIntro_{};

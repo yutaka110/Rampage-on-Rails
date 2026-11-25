@@ -14510,9 +14510,11 @@ void AppRunLoop::UpdateRailGameplayFrame(const RailSceneFrameContext& context) {
             <<','<<escape.ImpactCutFlash()<<','<<feeds<<','<<cannon.compression<<','<<cannon.travel<<','<<cannon.power
             <<','<<redTips<<','<<cannon.mouthHeat<<','<<cannon.width<<','<<cannon.impactPower<<'\n';bridgeLog.flush();
     }
-    if(IsRailShortCourse(railShooterCoursePath_)) railGateBridgeFlow_.Notify(enemyCombatEvents);
-    if(IsRailShortCourse(railShooterCoursePath_)) railRidgeCombatFlow_.Notify(enemyCombatEvents);
-    if(postBossEnabled)railPostBossSequence_.Notify(enemyCombatEvents);
+    courseCombatEvents_.Publish({
+        .events = enemyCombatEvents,
+        .shortCourse = IsRailShortCourse(railShooterCoursePath_),
+        .postBossEnabled = postBossEnabled,
+    });
     for (const EnemyCombatEvent& event : enemyCombatEvents) {
         if (event.kind == EnemyCombatEventKind::Defeated &&
             !event.placementGuid.empty() &&

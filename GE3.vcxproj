@@ -1406,6 +1406,7 @@
     <ClInclude Include="application\course\DebrisCompositionSystem.h" />
     <ClInclude Include="application\course\EncounterDirector.h" />
     <ClInclude Include="application\course\EnemyCombatSystem.h" />
+    <ClInclude Include="application\course\EnemyCombatEventPublisher.h" />
     <ClInclude Include="application\course\EnemyCombatPresentationBridge.h" />
     <ClInclude Include="application\course\CombatTruthGate.h" />
     <ClInclude Include="application\course\EnemyScreenPresencePolicy.h" />
