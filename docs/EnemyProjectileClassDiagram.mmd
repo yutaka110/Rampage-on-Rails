@@ -1,0 +1,46 @@
+---
+title: 敵弾の飛行方式
+config:
+  theme: base
+  fontFamily: "'Segoe UI', 'Yu Gothic UI', sans-serif"
+  themeVariables:
+    background: "#ffffff"
+    primaryColor: "#f8fafc"
+    primaryTextColor: "#172b3d"
+    primaryBorderColor: "#527086"
+    lineColor: "#284558"
+    edgeLabelBackground: "#ffffff"
+  class:
+    hideEmptyMembersBox: true
+---
+classDiagram
+    direction TB
+    accTitle: 敵弾の飛行方式のUMLクラス図
+    accDescr: コースが敵弾システムを所有し、敵弾システムが共通の飛行方式を参照する。直進、放物線、追尾のクラスは共通の飛行方式を継承する。
+
+    class CourseSpawnRuntime
+    class EnemyProjectileSystem {
+        +Update(...) void
+    }
+    class EnemyProjectileFlight {
+        <<Abstract>>
+        +Advance(...) bool*
+    }
+    class StraightProjectileFlight {
+        -Advance(...) bool
+    }
+    class ArcProjectileFlight {
+        -Advance(...) bool
+    }
+    class HomingProjectileFlight {
+        -Advance(...) bool
+    }
+
+    CourseSpawnRuntime *-- "1" EnemyProjectileSystem : enemyProjectileSystem_
+    EnemyProjectileSystem ..> EnemyProjectileFlight : Advanceを呼び出す
+    EnemyProjectileFlight <|-- StraightProjectileFlight
+    EnemyProjectileFlight <|-- ArcProjectileFlight
+    EnemyProjectileFlight <|-- HomingProjectileFlight
+
+    classDef contract fill:#e5f4f6,stroke:#267083,stroke-width:1.7px
+    cssClass "EnemyProjectileFlight" contract
