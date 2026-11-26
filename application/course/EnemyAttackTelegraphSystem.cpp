@@ -3,6 +3,7 @@
 
 #include "CourseAsset.h"
 #include "RailAimState.h"
+#include "RailGatlingAttack.h"
 #include "RailWorldRaycast.h"
 #include "../terrain/RailPath.h"
 
@@ -55,6 +56,8 @@ Vector2 NormalizeOr(const Vector2& value, const Vector2& fallback) {
 }
 
 Vector3 EnemyWorldPosition(const CourseEnemyActor& enemy, const RailPath& railPath) {
+    if (enemy.desc.actorAssetId == RailGatling::CavernWeapon && enemy.weaponMount.ready)
+        return ResolveEnemyProjectileWorldPosition(railPath, enemy.weaponMount.muzzleRail[0]);
     const RailPathSample sample = railPath.Evaluate(
         enemy.desc.spawnDistance + enemy.desc.distanceOffset);
     return Add(
@@ -498,7 +501,12 @@ void EnemyAttackTelegraphSystem::Update(
                 break;
             }
         }
-        if (input.settings.requireWorldVisibility && enemy != nullptr) {
+        const bool cavernVisibilityEvaluated = enemy && enemy->desc.actorAssetId == RailGatling::CavernWeapon &&
+            enemy->screenPresenceEvaluated;
+        if (cavernVisibilityEvaluated) {
+            cue.visibilityTested = true;
+            cue.occluded = !enemy->screenPresenceAttackAllowed;
+        } else if (input.settings.requireWorldVisibility && enemy != nullptr) {
             if (visibilityBudget > 0) {
                 --visibilityBudget;
                 ++frame_.stats.visibilityQueries;

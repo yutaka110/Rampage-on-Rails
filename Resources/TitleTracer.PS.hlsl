@@ -55,16 +55,149 @@ float4 main(PixelInput input) : SV_TARGET0 {
         const float2 cell = dot(a, a) < dot(b, b) ? a : b;
         const float hex = max(abs(cell.x), dot(abs(cell), float2(.5f, .8660254f)));
         const float grid = 1.0f - smoothstep(.013f, .013f + max(.014f, fwidth(hex) * .72f), abs(hex - .5f));
-        const float emergence = 1.0f - smoothstep(.10f, .45f, input.color.g);
-        const float sweep = exp2(-pow((uv.y - input.color.g * 2.7f) * 11.0f, 2));
-        const float opacity = .021f + grid * (.18f + .10f * rim) + rim * .52f + lip * .65f + sweep * emergence * .36f;
+        const float opacity = .021f + grid * (.18f + .10f * rim) + rim * .52f + lip * .65f;
         const float3 tint = lerp(float3(.12f, .71f, 2.15f), float3(.34f, 1.50f, 3.60f), saturate(rim + lip));
-        return float4(tint, opacity * front * input.color.a);
+        float coverage = opacity * front;
+        float3 light = tint * coverage;
+        const float age = input.color.g;
+        if (age < .64f) {
+            const float2 center = q - cell;
+            const float phaseOffset = ImpactNoise(float2(fmod(center.x + 24.0f, 24.0f), center.y) * 1.43f + 8.2f);
+            const float arrival = .013f + saturate(center.y / 8.4f) * .452f + phaseOffset * .044f;
+            const float localAge = age - arrival;
+            const float built = smoothstep(0.0f, .082f, localAge);
+            const float panel = smoothstep(hex - .037f, hex + .037f, lerp(-.04f, .56f, built));
+            const float lockIn = smoothstep(.016f, .070f, localAge) *
+                (1.0f - smoothstep(.072f, .124f, localAge));
+            const float seam = grid * lerp(.51f, 1.0f, phaseOffset);
+            const float fill = exp2(-dot(cell, cell) * 6.1f);
+            const float activation = panel * lockIn * front * (seam * .72f + fill * .26f);
+            const float3 blue = lerp(float3(.37f, 2.08f, 5.22f), float3(2.28f, 4.67f, 7.25f), seam);
+            light = light * panel + blue * activation;
+            coverage = max(coverage * panel, activation);
+        }
+        const float seal = smoothstep(.565f, .60f, age) * (1.0f - smoothstep(.61f, .715f, age));
+        const float cap = seal * smoothstep(.81f, 1.0f, uv.y) * smoothstep(-.16f, .08f, facing);
+        light += float3(1.32f, 3.92f, 7.40f) * cap * (.14f + grid * .67f);
+        coverage = max(coverage, cap * .60f);
+        const float wave = input.color.b;
+        if (wave > .001f) {
+            const float azimuth = uv.x * 6.2831853f;
+            const float2 circle = float2(cos(azimuth), sin(azimuth)) * (1.0f - uv.y);
+            const float2 field = circle * 8.0f + float2(uv.y * 14.0f, -uv.y * 9.0f);
+            const float2 drift = input.color.g * float2(.92f, -1.46f);
+            const float coarse = ImpactNoise(field + drift);
+            const float grain = ImpactNoise(field * 2.82f - drift);
+            const float pools = smoothstep(.22f, .82f, coarse * .65f + grain * .35f);
+            const float crest = smoothstep(.24f, .84f, wave);
+            const float3 wake = float3(.44f, 1.50f, 3.75f) * wave * (.14f + pools * .65f);
+
+            // Keep the current on the moving crest and split its ridge at irregular junctions.
+            // Blend two projections of the dome to avoid stretching the ridges at its crown.
+            const float elevation = lerp(-.29423f, 1.5707963f, uv.y);
+            const float3 surface = float3(cos(azimuth) * cos(elevation), sin(elevation), sin(azimuth) * cos(elevation));
+            const float2 horizontal = surface.xz * 6.8f;
+            const float2 upright = float2(dot(surface.xz, float2(.58f, .815f)), surface.y) * 8.4f;
+            const float2 warp = (float2(coarse, grain) - .5f) * .76f;
+            const float ridge = ImpactNoise(horizontal + warp + drift * .46f) * .60f +
+                ImpactNoise(upright - warp.yx + float2(6.1f, -3.2f) - drift * .31f) * .40f - .51f;
+            const float patches = ImpactNoise(upright * .85f + float2(13.4f, -8.3f) - drift * .34f);
+            const float intensity = smoothstep(.39f, .77f, patches * .76f + grain * .24f);
+            const float trunk = 1.0f - smoothstep(.018f, .080f, abs(ridge));
+            const float junction = ImpactNoise(horizontal * .81f + float2(-4.2f, 11.5f) + drift * .21f);
+            const float split = smoothstep(.37f, .72f, junction);
+            const float forkSide = lerp(-1.0f, 1.0f, smoothstep(.33f, .67f, patches));
+            const float forkDistance = abs(ridge - forkSide * split * .16f);
+            const float fork = (1.0f - smoothstep(.012f, .052f, forkDistance)) *
+                smoothstep(.37f, .52f, junction) * (1.0f - smoothstep(.70f, .90f, junction));
+            const float threads = trunk * lerp(.055f, .78f, intensity) + fork * lerp(.07f, .42f, intensity);
+            const float3 veinTint = lerp(float3(1.05f, 2.46f, 4.34f), float3(3.54f, 5.18f, 6.82f), intensity);
+            const float3 filaments = crest * (veinTint * threads + float3(.35f, 1.14f, 2.32f) * pools * grid * .15f);
+            const float visibility = smoothstep(-.21f, .18f, facing);
+            light += (wake + filaments) * visibility;
+            coverage = max(coverage, wave * visibility * .65f);
+        }
+        return float4(light / max(coverage, .0001f), coverage * input.color.a);
     }
-    if (input.texcoord.x >= 142.0f && input.texcoord.x <= 143.0f) {
-        const float across = (input.texcoord.x - 142.5f) * 2.0f;
-        const float profile = exp2(-across * across * 7.0f) * (1.0f - smoothstep(.70f, 1.0f, abs(across)));
-        return float4(input.color.rgb, profile * input.color.a);
+    const bool shieldWisp = input.texcoord.x >= 146.0f && input.texcoord.x <= 147.0f;
+    if (shieldWisp || (input.texcoord.x >= 144.0f && input.texcoord.x <= 145.0f)) {
+        const float2 p = float2(input.texcoord.x - (shieldWisp ? 146.5f : 144.5f), input.texcoord.y - .5f) * 2.0f;
+        const float phase = input.color.r;
+        const float seed = input.color.g * 2.71f;
+        const float2 flow = p * float2(3.25f, 3.92f) + float2(seed + phase * .65f, seed * .61f - phase * 2.2f);
+        const float coarse = ImpactNoise(flow);
+        const float fine = ImpactNoise(flow * 2.36f + float2(7.4f, -4.6f));
+        const float clouds = coarse * .66f + fine * .34f;
+        const float density = smoothstep(.24f + phase * .13f, .74f, clouds);
+        const float falloff = 1.0f - smoothstep(.17f, .99f, length(p) + (coarse - .5f) * .30f);
+        const float edge = 1.0f - smoothstep(.82f, 1.0f, max(abs(p.x), abs(p.y)));
+        const float3 blue = lerp(float3(.095f, .35f, .82f), float3(.21f, .78f, 1.63f), density);
+        const float alpha = density * falloff * edge * input.color.b * input.color.a * (shieldWisp ? .45f : .51f);
+        return float4(blue, alpha);
+    }
+    if (input.texcoord.x >= 148.0f && input.texcoord.x <= 149.0f) {
+        const float2 p = float2(input.texcoord.x - 148.5f, input.texcoord.y - .5f) * 2.0f;
+        const float heat = input.color.r;
+        const float age = input.color.g;
+        const float seed = input.color.b;
+        const float r2 = dot(p, p);
+        const float grain = ImpactNoise(p * 5.7f + float2(seed * 2.2f, age * -7.1f));
+        const float core = exp2(-21.0f * r2) * (1.0f - smoothstep(.024f, .105f, age));
+        const float halo = exp2(-5.6f * r2) * (.54f + .46f * grain) * heat;
+        const float streak = exp2(-4.5f * abs(p.x) - 140.0f * p.y * p.y) * core;
+        const float edge = 1.0f - smoothstep(.60f, .99f, r2);
+        const float alpha = saturate(core + halo * .68f + streak * .26f) * edge * input.color.a;
+        const float3 tint = lerp(float3(6.9f, 2.0f, .70f), float3(13.0f, 12.4f, 11.8f),
+            saturate(core * 1.6f + streak * .25f));
+        return float4(tint, alpha);
+    }
+    if (input.texcoord.x >= 150.0f && input.texcoord.x <= 151.0f) {
+        const float along = input.texcoord.x - 150.0f;
+        const float across = (input.texcoord.y * 2.0f - 1.0f) / lerp(.27f, .94f, along);
+        const float core = exp2(-10.0f * across * across);
+        const float halo = .32f * exp2(-3.2f * across * across);
+        const float taper = smoothstep(0.0f, .75f, along) * (1.0f - smoothstep(.94f, 1.0f, along));
+        const float3 tint = lerp(input.color.rgb, float3(9.5f, 7.0f, 4.6f), core * along * .78f);
+        return float4(tint, (core + halo) * taper * input.color.a);
+    }
+    if (input.texcoord.x >= 154.0f && input.texcoord.x <= 155.0f) {
+        const float across = (input.texcoord.x - 154.5f) * 2.0f;
+        const float distance = input.texcoord.y;
+        const float age = input.color.r;
+        const float newCrack = 1.0f - smoothstep(.015f, .13f, max(0.0f, age - distance / 11.5f));
+        const float notch = ImpactNoise(float2(distance * 10.0f, input.color.g)) - .5f;
+        const float edge = 1.0f - smoothstep(.69f, .99f, abs(across));
+        const float body = exp2(-across * across * 3.6f) * .47f;
+        const float crackCore = exp2(-pow((across + notch * .25f) * 3.8f, 2));
+        const float3 tint = lerp(float3(.21f, 2.55f, 6.30f), float3(6.7f, 9.3f, 12.0f),
+            saturate(crackCore * (.34f + .66f * newCrack)));
+        return float4(tint, (body + crackCore * .76f) * edge * input.color.a * input.color.b);
+    }
+    if (input.texcoord.x >= 156.0f && input.texcoord.x <= 157.0f) {
+        const float2 p = float2(input.texcoord.x - 156.5f, (input.texcoord.y - .5f) * 1.1547005f);
+        const float hex = max(abs(p.x), dot(abs(p), float2(.5f, .8660254f)));
+        const float border = 1.0f - smoothstep(.024f, .094f, .5f - hex);
+        const float glint = pow(saturate(1.0f - input.color.r), 1.6f);
+        const float phase = input.color.b;
+        const float stripe = 1.0f - smoothstep(.04f, .14f,
+            abs(dot(p, float2(.78f, .63f)) - (input.color.g - .5f) * .64f + phase * .28f));
+        const float3 face = lerp(float3(.13f, .77f, 2.52f), float3(.78f, 2.49f, 5.10f), stripe * .65f);
+        const float3 rim = lerp(float3(.25f, 2.04f, 5.65f), float3(3.35f, 5.95f, 8.25f), glint);
+        return float4(lerp(face, rim, border), (.20f + stripe * .13f + border * (.37f + .18f * glint)) * input.color.a);
+    }
+    if (input.texcoord.x >= 158.0f && input.texcoord.x <= 159.0f) {
+        const float2 p = float2(input.texcoord.x - 158.5f, input.texcoord.y - .5f) * 2.0f;
+        const float radial = length(p);
+        const float phase = saturate(input.color.r / .78f);
+        const float radius = lerp(.38f, .94f, 1.0f - (1.0f - phase) * (1.0f - phase));
+        const float distance = radial - radius;
+        const float edge = 1.0f - smoothstep(.86f, 1.0f, radial);
+        const float core = exp2(-pow(distance * 44.0f, 2));
+        const float halo = exp2(-pow(distance * 11.5f, 2)) * .46f;
+        const float echo = exp2(-pow((distance + .10f + phase * .055f) * 26.0f, 2)) * phase * .42f;
+        const float tick = .58f + .42f * pow(saturate(.5f + .5f * cos(atan2(p.y, p.x + .0001f) * 18.0f)), 5);
+        const float3 tint = lerp(float3(.23f, 1.91f, 5.82f), float3(2.22f, 5.04f, 7.20f), core);
+        return float4(tint, (core * tick + halo + echo) * edge * input.color.a);
     }
     if (input.texcoord.x >= 136.0f && input.texcoord.x <= 137.0f) {
         const float along = input.texcoord.x - 136.0f;

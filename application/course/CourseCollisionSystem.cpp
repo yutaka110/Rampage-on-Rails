@@ -6,6 +6,7 @@
 #include "RailVehicleCombatMountBridge.h"
 #include "RailWorldRaycast.h"
 #include "RailGatlingAttack.h"
+#include "RailCavernShield.h"
 #include "RailHeavyAttack.h"
 #include "RailGroundBatteryAttack.h"
 #include "RailRouteHazards.h"
@@ -236,6 +237,13 @@ WeaponFireResult CourseCollisionSystem::UpdateWeaponFire(const WeaponFireInput& 
 CourseCollisionFrameStats CourseCollisionSystem::Update(
     CourseSpawnRuntime& runtime,
     const CourseCollisionFrameInput& input) {
+    return Update(runtime, input, nullptr);
+}
+
+CourseCollisionFrameStats CourseCollisionSystem::Update(
+    CourseSpawnRuntime& runtime,
+    const CourseCollisionFrameInput& input,
+    RailCavernShield* cavernShield) {
     const float dt = (std::max)(0.0f, input.deltaTime);
     weaponFeedbackSystem_.Update(dt);
     lastFrameStats_ = {};
@@ -328,6 +336,17 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
     for (const CourseBulletActor& bullet : runtime.Bullets()) {
         if (!bullet.active || bullet.age >= bullet.lifetime) {
             continue;
+        }
+        if (cavernShield && cavernShield->Active() && input.railPath && bullet.damage > 0.0f) {
+            const auto start = ResolveEnemyProjectileWorldPosition(*input.railPath,
+                {bullet.previousLateralOffset, bullet.previousVerticalOffset, bullet.spawnDistance + bullet.previousDistanceOffset});
+            const auto end = ResolveEnemyProjectileWorldPosition(*input.railPath,
+                {bullet.lateralOffset, bullet.verticalOffset, bullet.spawnDistance + bullet.distanceOffset});
+            RailCavernShield::Contact shieldContact;
+            if (cavernShield->Intersect(start, end, shieldContact) && runtime.ConsumeProjectile(bullet.projectileId)) {
+                cavernShield->Record(shieldContact, bullet.damage);
+                continue;
+            }
         }
         auto contact = playerHitboxSystem_.EvaluateProjectile(bullet);
         const bool crossfire = bullet.sourceRole==kFangCrossfireRole;

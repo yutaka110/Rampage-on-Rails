@@ -7,6 +7,7 @@
 #include "RailMothershipBattle.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 #include <utility>
@@ -161,7 +162,7 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
 
     // Each predictive battery barrel solves its own crossing trajectory.
     const float lane=(RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
-        RailGatling::IsWeapon(actor.desc.actorAssetId) || actor.desc.actorAssetId=="rear_fang")
+        RailGatling::UsesScheduledBurst(actor.desc.actorAssetId) || actor.desc.actorAssetId=="rear_fang")
         ? 0.0f : static_cast<float>(index)-centerLane;
     EnemyProjectileLaunchSolution solution;
     auto& projectile = solution.projectile;
@@ -227,7 +228,18 @@ EnemyProjectileLaunchSolution ResolveEnemyProjectileScheduledLaunch(
         projectile.previousDistanceOffset = projectile.distanceOffset;
         projectile.previousLateralOffset = projectile.lateralOffset;
         projectile.previousVerticalOffset = projectile.verticalOffset;
-        const Vector3 target=aim.targetRail;
+        Vector3 target=aim.targetRail;
+        if (actor.desc.actorAssetId == RailGatling::CavernWeapon) {
+            // Offsets at the predicted cart crossing, in rail units. Keep the opening shot centered.
+            constexpr std::array<Vector2, 12> offsets{{
+                {0.00f, .05f}, {-1.61f, .24f}, {1.76f, .50f}, {-.62f, -.25f},
+                {1.32f, -.33f}, {-2.02f, .47f}, {.49f, .72f}, {1.95f, .08f},
+                {-1.17f, -.28f}, {.08f, -.08f}, {-1.82f, .53f}, {1.16f, .29f},
+            }};
+            const auto offset = offsets[static_cast<size_t>(index) % offsets.size()];
+            target.x += offset.x;
+            target.y += offset.y;
+        }
         projectile.lockedTargetDistance =
             target.z + (delayedBurst ?
                 actor.targetingState.playerForwardVelocity * launchDelaySeconds : 0.0f);
@@ -375,14 +387,16 @@ uint32_t EnemyProjectileSystem::SpawnVolley(
     // Validate the entire volley before allocating an ID or emitting a barrel.
     if(!CanEnemyProjectileVolleyReachTarget(actor)) return 0;
     const int projectileCount=(std::max)(1,actor.desc.bulletCount);
-    const bool gatling=RailGatling::IsWeapon(actor.desc.actorAssetId);
+    const bool gatling=RailGatling::UsesScheduledBurst(actor.desc.actorAssetId);
     const bool fang=actor.desc.actorAssetId=="rear_fang";
+    const float gatlingInterval = actor.desc.actorAssetId == RailGatling::CavernWeapon ?
+        RailGatling::CavernShotInterval : RailGatling::ShotInterval;
     std::vector<EnemyProjectileRuntimeState> launches;
     launches.reserve(projectileCount);
     auto burstActor=fang?std::optional<CourseEnemyActor>(actor):std::nullopt;
     if(burstActor)burstActor->weaponMount.scheduledPredictionRequested=false;
     for(int index=0;index<projectileCount;++index) {
-        const float delay=gatling ? index*RailGatling::ShotInterval : fang ? index*kFangShotInterval : 0.0f;
+        const float delay=gatling ? index*gatlingInterval : fang ? index*kFangShotInterval : 0.0f;
         auto projectile=ResolveEnemyProjectileScheduledLaunch(fang && index>0?*burstActor:actor,index,delay).projectile;
         if(!projectile.active)return 0;
         projectile.launchDelayRemaining=delay;

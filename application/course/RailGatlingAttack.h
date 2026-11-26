@@ -19,6 +19,14 @@ inline constexpr float GuardSampleSeconds = .60f;
 // clears the muzzle, a clash can spread to its adjacent round. This makes
 // guarding the incoming stream more effective than camping the gun's face.
 inline constexpr float ClashArmSeconds = .25f;
+inline constexpr char CavernWeapon[] = "cavern_gatling";
+inline constexpr char CavernProjectile[] = "enemy_cavern_gatling";
+inline constexpr float CavernShotInterval = .10f;
+inline constexpr char CavernRotorMesh[] = "gatling_turret_rotor";
+inline constexpr Vector3 CavernRotorMount{0.0f, -.27f, -.52f};
+inline constexpr float CavernRotorScale = .43f;
+inline constexpr Vector3 CavernMuzzle{0.0f, CavernRotorMount.y, CavernRotorMount.z - 2.25f * CavernRotorScale};
 inline bool IsWeapon(std::string_view actorAssetId) { return actorAssetId == "short_mothership_rapid"; }
+inline bool UsesScheduledBurst(std::string_view actorAssetId) { return IsWeapon(actorAssetId) || actorAssetId == CavernWeapon; }
 inline bool IsProjectile(std::string_view definitionId) { return definitionId == "enemy_mothership_rapid"; }
 }

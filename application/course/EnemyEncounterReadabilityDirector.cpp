@@ -11,6 +11,7 @@
 #include "EnemyAttackDefensePresentationBridge.h"
 #include "EnemyAttackTelegraphSystem.h"
 #include "EnemyProjectilePresentationBridge.h"
+#include "RailGatlingAttack.h"
 #include "../terrain/RailPath.h"
 
 namespace {
@@ -158,7 +159,10 @@ void EnemyEncounterReadabilityDirector::Update(
             (!actor.entranceExitState.initialized ||
              actor.entranceExitState.targetable);
 
-        const bool visuallyClear = !input.visualOcclusion || !input.visualOcclusion->FromCamera(world);
+        // The cave gun is staged in a clear lane. The cave splice can make the
+        // coarse terrain ray report an obstruction in that visible lane.
+        const bool visuallyClear = actor.desc.actorAssetId == RailGatling::CavernWeapon ||
+            !input.visualOcclusion || !input.visualOcclusion->FromCamera(world);
         EnemyScreenPresenceInput presenceInput{};
         presenceInput.projectedDiameterPixels = diameter;
         presenceInput.authoredAlpha = actor.combatState.initialized

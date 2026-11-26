@@ -1,6 +1,7 @@
 #include "RailSideRock.h"
 #include "RailRearPursuitRules.h"
 #include "RailGroundBatteryAttack.h"
+#include "RailGatlingAttack.h"
 #include "RailTurretGeometry.h"
 #include "CourseSpawnRuntime.h"
 #include "RailNeedlesPatrol.h"
@@ -674,10 +675,15 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
     }
 
     enemyAttackCoordinator_.Update(*this, enemyBehaviorSystem_.Frame(), dt);
-    for(auto& actor:enemies_)if(RailTurret::ForMesh(actor.desc.meshId).movingMesh) {
+    for(auto& actor:enemies_) {
+        const bool cavernGatling = actor.desc.actorAssetId == RailGatling::CavernWeapon;
+        const bool rotating = actor.desc.meshId == "gatling_turret" || cavernGatling;
+        if (!rotating && !RailTurret::ForMesh(actor.desc.meshId).movingMesh) continue;
         const bool alive=actor.desc.hitPoints>0 && actor.combatState.phase!=EnemyCombatPhase::Dying && actor.combatState.phase!=EnemyCombatPhase::Retired;
         const bool warning=actor.fireEnvironmentReady && actor.behaviorState.attackIntentActive && actor.attackState.tokenReserved;
-        RailTurret::UpdateMotion(actor.turretMotion,actor.age,actor.fireSequence,dt,warning,alive,actor.desc.meshId=="gatling_turret");
+        const float spinAfterFire = cavernGatling ? actor.desc.bulletCount * RailGatling::CavernShotInterval :
+            RailTurret::DefaultSpinAfterFire;
+        RailTurret::UpdateMotion(actor.turretMotion,actor.age,actor.fireSequence,dt,warning,alive,rotating,spinAfterFire);
     }
     EnemyTargetingFrameInput targetingInput{};
     targetingInput.travelPredictionInput = safetyInput.travelPredictionInput;
@@ -695,8 +701,9 @@ void CourseSpawnRuntime::Update(float deltaTime, const CourseEnemyFireSafetyFram
         *this, enemyAttackCoordinator_, enemyBehaviorSystem_);
     fireSafetyStats_.bulletsEmitted +=
         enemyAttackExecutionSystem_.Frame().emittedProjectiles;
-    for(auto& actor:enemies_)if(RailTurret::ForMesh(actor.desc.meshId).movingMesh)
-        RailTurret::ObserveFire(actor.turretMotion,actor.age,actor.fireSequence);
+    for(auto& actor:enemies_)
+        if(RailTurret::ForMesh(actor.desc.meshId).movingMesh || actor.desc.actorAssetId==RailGatling::CavernWeapon)
+            RailTurret::ObserveFire(actor.turretMotion,actor.age,actor.fireSequence);
 
     EnemyProjectileFrameInput projectileInput{};
     projectileInput.deltaTime = dt;
@@ -988,7 +995,9 @@ bool CourseSpawnRuntime::UpdateEnemyFireEnvironment(
     }
     // Check current geometry before decrementing the warning and again at
     // the final staged pose before execution. HUD-only LOS is one frame late.
-    if (enemy.behaviorDefinition.commercialBehavior && enemy.behaviorState.attackIntentActive &&
+    // The cave tutorial uses the authored clear approach and measured screen exposure.
+    const bool cavernVisibilityEvaluated = enemy.desc.actorAssetId == RailGatling::CavernWeapon && enemy.screenPresenceEvaluated;
+    if (!cavernVisibilityEvaluated && enemy.behaviorDefinition.commercialBehavior && enemy.behaviorState.attackIntentActive &&
         safetyInput.railPath != nullptr && safetyInput.hasCameraPosition &&
         (safetyInput.course != nullptr || safetyInput.terrainSettings != nullptr || !obstacles_.empty())) {
         const Vector3 world = ResolveRailLocal(*safetyInput.railPath,

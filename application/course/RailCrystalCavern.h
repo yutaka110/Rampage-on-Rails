@@ -107,6 +107,7 @@ inline bool Append(CourseAsset& course, const RailPath& incoming,
     appendKeys(course.lightingPresets, caveLights);
     appendKeys(course.terrainMaterialPresets, caveMaterials);
     appendKeys(course.terrainPlacements, cavern.terrainPlacements);
+    appendKeys(course.events, cavern.events);
     const auto& stamps = cavern.terrainEditLayer.Stamps();
     for (auto first = stamps.begin(); first != stamps.end();) {
         const auto end = std::find_if(first, stamps.end(), [&](const auto& stamp) {

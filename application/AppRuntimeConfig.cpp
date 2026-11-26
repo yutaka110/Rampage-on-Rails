@@ -570,16 +570,34 @@ void ApplyEnvironmentRuntimeConfig(AppVfxRuntimeState& runtimeState) {
     }
 }
 
+namespace {
+constexpr std::wstring_view CrystalCavernShieldPreviewArgument = L"--crystal-cavern-shield-preview";
+}
+
 std::string ParseRailCourseArguments(int count,const wchar_t* const* args) {
     for (int i = 1; args && i < count; ++i) {
         if (!args[i]) continue;
         const std::wstring_view argument = args[i];
         if (argument == L"--full-course") return "Resources/courses/CanyonAssaultRoute01.course";
-        if (argument == L"--crystal-cavern" || argument == L"--crystal-cavern-demo") return RailCrystalCavern::CoursePath;
+        if (argument == L"--crystal-cavern" || argument == L"--crystal-cavern-demo" ||
+            argument == CrystalCavernShieldPreviewArgument) return RailCrystalCavern::CoursePath;
     }
     return RailShortCoursePath;
 }
+bool IsCrystalCavernShieldPreviewMode() {
+    static const bool enabled = [] {
+        int count = 0;
+        auto* args = CommandLineToArgvW(GetCommandLineW(), &count);
+        const bool found = args && count > 1 && std::find_if(args + 1, args + count, [](const wchar_t* arg) {
+            return CrystalCavernShieldPreviewArgument == arg;
+        }) != args + count;
+        if (args) LocalFree(args);
+        return found;
+    }();
+    return enabled;
+}
 bool IsCrystalCavernDemoMode() {
+    if (IsCrystalCavernShieldPreviewMode()) return false;
     static const bool enabled = [] {
         int count = 0;
         auto* args = CommandLineToArgvW(GetCommandLineW(), &count);
@@ -600,7 +618,7 @@ bool IsCrystalCavernDemoMode() {
     return enabled;
 }
 std::string ResolveRailCoursePathFromCommandLine() {
-    if (IsCrystalCavernDemoMode()) return RailCrystalCavern::CoursePath;
+    if (IsCrystalCavernShieldPreviewMode() || IsCrystalCavernDemoMode()) return RailCrystalCavern::CoursePath;
     int count=0; auto* args=CommandLineToArgvW(GetCommandLineW(),&count);
     auto path=ParseRailCourseArguments(count,args);
     if(args) LocalFree(args);

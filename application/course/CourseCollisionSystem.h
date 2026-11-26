@@ -23,6 +23,7 @@
 struct RailVehicleCombatMountFrame;
 struct RailVehicleBodyCollisionInput;
 struct TerrainGenerationSettings;
+class RailCavernShield;
 
 struct CourseCollisionPlayerState {
     float distance = 0.0f;
@@ -127,6 +128,7 @@ public:
     bool RestorePlayerNearMiss(const PlayerNearMissRuntimeState& state,
         std::string* errorMessage = nullptr);
     CourseCollisionFrameStats Update(CourseSpawnRuntime& runtime, const CourseCollisionFrameInput& input);
+    CourseCollisionFrameStats Update(CourseSpawnRuntime& runtime, const CourseCollisionFrameInput& input, RailCavernShield* cavernShield);
     void AppendDebugDraw(ge3::debug::DebugDrawSystem& debugDraw, const RailPath& railPath) const;
 
     const CourseCollisionPlayerState& Player() const { return player_; }

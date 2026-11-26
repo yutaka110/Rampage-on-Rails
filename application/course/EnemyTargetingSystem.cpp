@@ -16,7 +16,8 @@
 namespace {
 bool CompensatesAutomaticTravel(const CourseEnemyActor& actor) {
     const auto trajectory=actor.desc.projectileDefinition.trajectory;
-    return (actor.HoldsCombatPositionUntilResolved() || RailGroundBattery::IsPredictive(actor.desc.actorAssetId)) &&
+    return (actor.HoldsCombatPositionUntilResolved() || RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
+        actor.desc.actorAssetId==RailGatling::CavernWeapon) &&
         (trajectory==EnemyProjectileTrajectory::Direct || trajectory==EnemyProjectileTrajectory::Predictive ||
             trajectory==EnemyProjectileTrajectory::Homing);
 }
@@ -108,6 +109,12 @@ void PrepareWeaponMount(CourseEnemyActor& actor,const EnemyTargetingFrameInput& 
         (actor.combatState.initialized?actor.combatState.presentationScale:1.0f)*animation.scaleMultiplier*readableScale);
     pose.scale={size*(std::max)(0.01f,actor.desc.localScale.x),size*(std::max)(0.01f,actor.desc.localScale.y),
         size*(std::max)(0.01f,actor.desc.localScale.z)};
+    if (actor.desc.actorAssetId == RailGatling::CavernWeapon) {
+        mount.muzzleRail[0] = ProjectMuzzleToRail(*input.railPath, TransformAnchor(RailGatling::CavernMuzzle, pose), distance);
+        mount.muzzleRail[1] = mount.muzzleRail[0];
+        mount.ready = true;
+        return;
+    }
     // Authored gun lips in TwinShieldHull.obj after Assimp's LH conversion.
     for(int barrel=0;barrel<2;++barrel) {
         const float side=barrel==0?-1.0f:1.0f;
@@ -347,7 +354,8 @@ EnemyProjectileAimSolution ResolveEnemyProjectileAimSolution(
     const float playerAtLaunch = state.forwardTravelReferenceDistance + playerTravel;
     // Hover enemies follow automatic rail motion too. Preserve only their
     // current relative band correction when estimating a delayed muzzle.
-    const float muzzleAtLaunch = RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ? muzzle.z :
+    const bool fixedMuzzle = RailGroundBattery::IsPredictive(actor.desc.actorAssetId);
+    const float muzzleAtLaunch = fixedMuzzle ? muzzle.z :
         muzzle.z + (forecast ? playerTravel +
         (enemyVelocity - state.playerForwardVelocity)*wait : enemyVelocity*wait);
     result.muzzleRail.z = muzzleAtLaunch;

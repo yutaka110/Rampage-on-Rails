@@ -268,6 +268,7 @@ private:
     void DumpRenderGraphDebugFrame();
     void LoadRailShooterCourse();
     void ApplyRailShooterCourse();
+    void RefreshRailGroundSupportRequests();
     bool AttachCrystalCavern(float landingDistance);
     void RemoveCrystalCavern();
     bool SaveRailShooterCourse(std::string* errorMessage = nullptr);

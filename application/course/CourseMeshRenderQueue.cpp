@@ -1,5 +1,6 @@
 #include "RailSideRock.h"
 #include "RailGroundBatteryAttack.h"
+#include "RailGatlingAttack.h"
 #include "RailRouteHazards.h"
 #include "RailCrystalCavern.h"
 #include "RailRearPursuitRules.h"
@@ -1219,6 +1220,34 @@ void CourseMeshRenderQueue::AddEnemyInstances(
                 }
             }
             WriteItemTransform(*item, model.rootLocal,airframeScale,rotation,center,viewProjection);
+            if (enemy.desc.actorAssetId == RailGatling::CavernWeapon && enemy.desc.hitPoints > 0.0f) {
+                const auto index = ResolveModelIndex(models, RailGatling::CavernRotorMesh, nullptr);
+                if (models[index].loaded && models[index].name == RailGatling::CavernRotorMesh) {
+                    if (auto* rotor = AllocateItem(); rotor && rotor->transformData && rotor->materialData) {
+                        rotor->kind = CourseMeshRenderKind::Enemy;
+                        rotor->name = enemy.desc.role + "/gatling-rotor";
+                        rotor->meshId = RailGatling::CavernRotorMesh;
+                        rotor->modelIndex = index;
+                        rotor->sourceActorId = enemy.actorId;
+                        rotor->sortDistance = item->sortDistance;
+                        rotor->visible = true;
+                        rotor->useMaterialOverride = true;
+                        const float alpha = item->materialData ? item->materialData->color.w : 1.0f;
+                        *rotor->materialData = BuildCarrierBatterySurfaceMaterial(rotor->meshId,
+                            {.89f, .94f, 1.0f, alpha}, presentation ? presentation->flashStrength : 0.0f,
+                            presentation ? presentation->weaponCharge : 0.0f);
+                        const float angle = RailTurret::RotorAngle(enemy.turretMotion, enemy.age);
+                        const float scale = RailGatling::CavernRotorScale;
+                        const auto mount = MakeAffineMatrix(Vector3{scale, scale, scale},
+                            Vector3{0.0f, 0.0f, angle}, RailGatling::CavernRotorMount);
+                        const auto hull = MakeAffineMatrix(airframeScale, rotation, center);
+                        auto world = Multiply(models[index].rootLocal, Multiply(mount, hull));
+                        rotor->transformData->World = world;
+                        rotor->transformData->WVP = Multiply(world, viewProjection);
+                        rotor->transformData->WorldInverseTranspose = Transpose(Inverse(world));
+                    }
+                }
+            }
             continue;
         }
         if (item->materialData != nullptr) {

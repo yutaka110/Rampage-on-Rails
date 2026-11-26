@@ -19,6 +19,7 @@ inline Geometry ForMesh(std::string_view mesh) {
 }
 inline float GatlingRotation(float seconds) { return std::fmod(seconds*18.0f,6.28318530718f); }
 inline constexpr float SpinSpeed=14.0f,SpinAcceleration=56.0f,SpinDeceleration=14.0f;
+inline constexpr float DefaultSpinAfterFire=1.25f;
 struct MotionState {
     float rotorAngle=0,rotorSpeed=0,lastFireAge=-100;
     uint64_t observedFireSequence=0;
@@ -36,10 +37,11 @@ inline float AdvanceRotor(float& speed,float target,float seconds) {
 inline void ObserveFire(MotionState& state,float age,uint64_t sequence) {
     if(sequence>state.observedFireSequence){state.observedFireSequence=sequence;state.lastFireAge=age;}
 }
-inline void UpdateMotion(MotionState& state,float age,uint64_t sequence,float dt,bool charging,bool alive,bool rotating=true) {
+inline void UpdateMotion(MotionState& state,float age,uint64_t sequence,float dt,bool charging,bool alive,
+    bool rotating=true,float spinAfterFire=DefaultSpinAfterFire) {
     if(!state.initialized){state.initialized=true;state.observedFireSequence=sequence;}
     if(!alive){state.rotorSpeed=0;return;}
-    const bool burst=state.lastFireAge>=0 && age-state.lastFireAge<1.25f;
+    const bool burst=state.lastFireAge>=0 && age-state.lastFireAge<spinAfterFire;
     state.rotorAngle=std::fmod(state.rotorAngle+AdvanceRotor(state.rotorSpeed,rotating && (charging || burst)?SpinSpeed:0,dt),6.28318530718f);
 }
 inline float RotorAngle(const MotionState& state,float age,float delay=0) {
