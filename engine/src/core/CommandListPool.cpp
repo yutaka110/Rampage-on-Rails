@@ -1,11 +1,11 @@
 #include "core/CommandListPool.h"
 #include "core/Device.h"
 #include "utils/Logger.h"
-#include <cassert>
 #if !defined(GE3_ENGINE_RENDERER) || GE3_ENGINE_RENDERER != 1
 #error CommandListPool.cpp must only be compiled by the EngineRenderer module.
 #endif
-#include <sstream>   // 追加
+#include <sstream>
+#include <utility>
 
 using Microsoft::WRL::ComPtr;
 using namespace core;
@@ -16,19 +16,88 @@ static std::string HexHR(HRESULT hr) {
     return oss.str();
 }
 
+class CommandListPool::State {
+public:
+    virtual ~State() = default;
+    virtual bool Initialize(CommandListPool&, Device&, UINT) const { return false; }
+    virtual ID3D12GraphicsCommandList* Begin(
+        CommandListPool&, UINT, ID3D12PipelineState*) const { return nullptr; }
+    virtual bool EndAndExecute(CommandListPool&, Device&) const { return false; }
+};
 
-// frameCount はスワップチェーンのバッファ数に合わせる（例: 2）
-bool CommandListPool::Initialize(Device& dev, UINT frameCount)
-{
-    frameCount_ = frameCount;
-    allocators_.resize(frameCount_);
+class CommandListPool::UnavailableState final : public State {
+public:
+    static const UnavailableState& Instance() noexcept {
+        static const UnavailableState state;
+        return state;
+    }
 
+    bool Initialize(CommandListPool& pool, Device& dev, UINT frameCount) const override;
+};
+
+class CommandListPool::ReadyState final : public State {
+public:
+    static const ReadyState& Instance() noexcept {
+        static const ReadyState state;
+        return state;
+    }
+
+    bool Initialize(CommandListPool& pool, Device& dev, UINT frameCount) const override {
+        return pool.InitializeResources(dev, frameCount);
+    }
+
+    ID3D12GraphicsCommandList* Begin(
+        CommandListPool& pool, UINT frameIndex, ID3D12PipelineState* pso) const override;
+};
+
+class CommandListPool::RecordingState final : public State {
+public:
+    static const RecordingState& Instance() noexcept {
+        static const RecordingState state;
+        return state;
+    }
+
+    bool EndAndExecute(CommandListPool& pool, Device& dev) const override;
+};
+
+CommandListPool::CommandListPool() noexcept : state_(&UnavailableState::Instance()) {}
+
+bool CommandListPool::Initialize(Device& dev, UINT frameCount) {
+    return state_->Initialize(*this, dev, frameCount);
+}
+
+void CommandListPool::Shutdown() noexcept {
+    list_.Reset();
+    allocators_.clear();
+    TransitionTo(UnavailableState::Instance());
+}
+
+ID3D12GraphicsCommandList* CommandListPool::Begin(
+    UINT frameIndex, ID3D12PipelineState* pso) {
+    return state_->Begin(*this, frameIndex, pso);
+}
+
+bool CommandListPool::EndAndExecute(Device& dev) {
+    return state_->EndAndExecute(*this, dev);
+}
+
+void CommandListPool::TransitionTo(const State& next) noexcept {
+    state_ = &next;
+}
+
+bool CommandListPool::InitializeResources(Device& dev, UINT frameCount) {
     auto* d3d = dev.GetDevice();
-    HRESULT hr = S_OK;
+    if (d3d == nullptr || frameCount == 0) {
+        Logger::Error("[CommandListPool] Initialization requires a device and at least one frame slot.\n");
+        return false;
+    }
 
-    for (UINT i = 0; i < frameCount_; ++i) {
-        hr = d3d->CreateCommandAllocator(
-            D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocators_[i]));
+    std::vector<ComPtr<ID3D12CommandAllocator>> allocators(frameCount);
+    ComPtr<ID3D12GraphicsCommandList> list;
+
+    for (UINT i = 0; i < frameCount; ++i) {
+        const HRESULT hr = d3d->CreateCommandAllocator(
+            D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocators[i]));
         if (FAILED(hr)) {
             std::ostringstream oss;
             oss << "[CommandListPool] CreateCommandAllocator[" << i << "] failed: " << HexHR(hr) << "\n";
@@ -37,10 +106,10 @@ bool CommandListPool::Initialize(Device& dev, UINT frameCount)
         }
     }
 
-    hr = d3d->CreateCommandList(
+    HRESULT hr = d3d->CreateCommandList(
         0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-        allocators_[0].Get(), nullptr,
-        IID_PPV_ARGS(&list_));
+        allocators.front().Get(), nullptr,
+        IID_PPV_ARGS(&list));
     if (FAILED(hr)) {
         std::ostringstream oss;
         oss << "[CommandListPool] CreateCommandList failed: " << HexHR(hr) << "\n";
@@ -48,7 +117,7 @@ bool CommandListPool::Initialize(Device& dev, UINT frameCount)
         return false;
     }
 
-    hr = list_->Close();
+    hr = list->Close();
     if (FAILED(hr)) {
         std::ostringstream oss;
         oss << "[CommandListPool] Initial Close() failed: " << HexHR(hr) << "\n";
@@ -56,47 +125,64 @@ bool CommandListPool::Initialize(Device& dev, UINT frameCount)
         return false;
     }
 
+    list_ = std::move(list);
+    allocators_ = std::move(allocators);
     Logger::Info("[CommandListPool] Initialized successfully.\n");
     return true;
 }
 
-// Begin: 指定フレームの Allocator を Reset し、リストを Reset して返す
-ID3D12GraphicsCommandList* CommandListPool::Begin(UINT frameIndex, ID3D12PipelineState* pso)
-{
-    assert(frameIndex < frameCount_);
-    currentFrame_ = frameIndex;
-
-    HRESULT hr = allocators_[currentFrame_]->Reset();
-    if (FAILED(hr)) {
-        std::ostringstream oss;
-        oss << "[CommandListPool] CommandAllocator[" << currentFrame_ << "] Reset() failed: " << HexHR(hr) << "\n";
-        Logger::Error(oss.str());
-        return nullptr;
-    }
-
-    hr = list_->Reset(allocators_[currentFrame_].Get(), pso);
-    if (FAILED(hr)) {
-        std::ostringstream oss;
-        oss << "[CommandListPool] CommandList Reset() failed on frame " << currentFrame_ << ": " << HexHR(hr) << "\n";
-        Logger::Error(oss.str());
-        return nullptr;
-    }
-
-    return list_.Get();
+bool CommandListPool::UnavailableState::Initialize(
+    CommandListPool& pool, Device& dev, UINT frameCount) const {
+    if (!pool.InitializeResources(dev, frameCount)) return false;
+    pool.TransitionTo(ReadyState::Instance());
+    return true;
 }
 
-// EndAndExecute: Close→Execute（QueueはDeviceから取得）
-bool CommandListPool::EndAndExecute(Device& dev)
-{
-    HRESULT hr = list_->Close();
+ID3D12GraphicsCommandList* CommandListPool::ReadyState::Begin(
+    CommandListPool& pool, UINT frameIndex, ID3D12PipelineState* pso) const {
+    auto* allocator = pool.Allocator(frameIndex);
+    if (allocator == nullptr) {
+        Logger::Error("[CommandListPool] Begin called with an invalid frame slot.\n");
+        return nullptr;
+    }
+
+    HRESULT hr = allocator->Reset();
     if (FAILED(hr)) {
+        std::ostringstream oss;
+        oss << "[CommandListPool] CommandAllocator[" << frameIndex << "] Reset() failed: " << HexHR(hr) << "\n";
+        Logger::Error(oss.str());
+        return nullptr;
+    }
+
+    hr = pool.list_->Reset(allocator, pso);
+    if (FAILED(hr)) {
+        std::ostringstream oss;
+        oss << "[CommandListPool] CommandList Reset() failed on frame " << frameIndex << ": " << HexHR(hr) << "\n";
+        Logger::Error(oss.str());
+        return nullptr;
+    }
+
+    pool.TransitionTo(RecordingState::Instance());
+    return pool.list_.Get();
+}
+
+bool CommandListPool::RecordingState::EndAndExecute(CommandListPool& pool, Device& dev) const {
+    auto* queue = dev.GetCommandQueue();
+    if (queue == nullptr) return false;
+
+    const HRESULT hr = pool.list_->Close();
+    if (FAILED(hr)) {
+        // D3D12 cannot reset a list after Close fails. Keep the old resources alive
+        // until the caller can safely reinitialize or destroy the pool.
+        pool.TransitionTo(UnavailableState::Instance());
         std::ostringstream oss;
         oss << "[CommandListPool] CommandList Close() failed: " << HexHR(hr) << "\n";
         Logger::Error(oss.str());
         return false;
     }
 
-    ID3D12CommandList* lists[] = { list_.Get() };
-    dev.GetCommandQueue()->ExecuteCommandLists(1, lists);
+    ID3D12CommandList* lists[] = { pool.list_.Get() };
+    queue->ExecuteCommandLists(1, lists);
+    pool.TransitionTo(ReadyState::Instance());
     return true;
 }

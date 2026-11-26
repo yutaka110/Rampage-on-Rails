@@ -54,7 +54,9 @@ bool EngineContext::Initialize(HWND hwnd, UINT width, UINT height, bool enableDe
     }
 
     // CommandListPool（フレーム数分）
-    clPool_.Initialize(dev_, /*frameCount*/ swapChain_.BufferCount());
+    if (!clPool_.Initialize(dev_, swapChain_.BufferCount())) {
+        return false;
+    }
 
     // Descriptor heaps（AppMain の static g_descHeaps をここへ移す）
     heaps_.Initialize(device, /*rtv*/ 128, /*dsv*/ 32, /*srv*/ 4096);
@@ -141,7 +143,7 @@ void EngineContext::Shutdown() {
     depthSrv_ = {};
     heaps_.Finalize();
     swapChain_ = {};
-    clPool_ = {};
+    clPool_.Shutdown();
     dev_.Shutdown();
 
     if (fenceEvent_) {

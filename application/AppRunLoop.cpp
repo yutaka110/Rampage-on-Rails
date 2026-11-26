@@ -2075,6 +2075,7 @@ bool AppRunLoop::AttachCrystalCavern(float landingDistance) {
 }
 
 void AppRunLoop::RemoveCrystalCavern() {
+    railCavernShield_.Reset();
     if (!crystalCavern_) return;
 
     terrainChunkManager_.InvalidateRailFrom(crystalCavern_->joinDistance);
@@ -5580,7 +5581,9 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             if (crystalEffectCount == crystalEffects.size()) break;
         }
     }
-    const bool hasWorldEffects=crystalEffectCount > 0 || sideRockVfx || hasLocalCartImpact || fangInterceptVisible || fangExhaust || barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || gatlingDischarge || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
+    const bool hasCavernShield = cartVisible && !railTitleScreenVisible_ && !railGameOverScene_.Active() &&
+        railCavernShield_.Visible();
+    const bool hasWorldEffects=hasCavernShield || crystalEffectCount > 0 || sideRockVfx || hasLocalCartImpact || fangInterceptVisible || fangExhaust || barricadeLamps || impactSpall || showPursuerSmoke || routeSlab || cartEnergy.count>0 || gatlingDischarge || localImpactFlash || railPostBossSequence_.EscapeActive() || railEliteFire_.Visible() || railBrakeVfx_.Visible() || showVeilBeam || showCrossfire || lightningVisible || hasFangImpacts || showPursuitShadows || railGameOverScene_.Active() || hasEnemyOrbs || hasBatteryThermals || hasEnergyShields || !railAttackWarningPresentation_.Sources().empty() || railTitleScreenVisible_ || railReadyDroneSalvo_.Visible() || railLockVolley_.Visible() || railPulseShots_.Visible() || railPrimaryKills_.Visible() || railBoostVfx_.Visible() || !wrecks.empty();
     const bool hasWingCartImpact=cartVisible && std::any_of(cartMarks.begin(),cartMarks.end(),[](const auto& mark) {
         return mark.owner==RailCombatImpact::CartOwner && mark.kind==RailCombatImpact::Kind::WingCart;
     });
@@ -6254,6 +6257,80 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
             dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
         };
+        if (hasCavernShield) {
+            const auto& shield = railCavernShield_;
+            const auto& pose = shield.CurrentPose();
+            const auto& rounds = RailCavernShield::Rounds;
+            if (railLockOnHudAtlasVertexCount_ + railTitleDustVertexCount_ +
+                RailCavernShield::SurfaceVertices <= kMaxAtlasVertices) shield.DrawSurface(eye, dustVertex);
+            for (size_t index = 0; index < rounds.size(); ++index) {
+                const auto& round = rounds[index];
+                const float remaining = round.time - shield.Age();
+                if (remaining <= 0 || remaining > RailCavernShield::FlightSeconds) continue;
+                const auto source = shield.Origins()[index];
+                const auto target = pose.Point(Normalize(round.unit));
+                const auto direction = NormalizeOr(Subtract(target, source), pose.forward);
+                const float travel = 1.0f - remaining / RailCavernShield::FlightSeconds;
+                const auto head = Add(source, Scale(Subtract(target, source), travel));
+                const float half = (std::min)(2.5f, std::sqrt(Dot(Subtract(head, source), Subtract(head, source))) * .5f);
+                const auto width = NormalizeOr(Cross(direction, Subtract(eye, head)), up);
+                glowQuad(Subtract(head, Scale(direction, half)), Scale(direction, half), Scale(width, .19f),
+                    32.0f, {5.8f, 2.05f, .46f, .88f});
+                glowQuad(head, Scale(right, .17f), Scale(up, .15f), 16.0f, {5.5f, 3.5f, 1.5f, .88f});
+            }
+            for (const auto& hit : shield.Impacts()) {
+                if (hit.age >= .64f) continue;
+                const auto point = pose.Point(hit.unit);
+                const float flash = std::exp(-hit.age * 26.0f);
+                const float flareSize = .62f + .45f * flash;
+                glowQuad(point, Scale(right, flareSize), Scale(up, flareSize), 16.0f,
+                    {5.2f, 6.8f, 8.5f, flash});
+                glowQuad(point, Scale(right, .26f), Scale(up, .25f), 16.0f,
+                    {11.0f, 11.5f, 12.0f, flash});
+
+                // A geodesic ring travels over the ellipsoid and fades at its lip.
+                const auto axis = NormalizeOr(Cross(hit.unit, Vector3{0, 1, 0}), Vector3{1, 0, 0});
+                const auto tangent = Cross(hit.unit, axis);
+                const float radius = .10f + hit.age * 3.32f;
+                constexpr int segments = 24;
+                const auto ringVertex = [&](int index, float side) {
+                    const float angle = float(index) * 6.2831853f / segments;
+                    const float distance = radius + (side - .5f) * (.09f + hit.age * .13f);
+                    const auto circle = Add(Scale(axis, std::cos(angle)), Scale(tangent, std::sin(angle)));
+                    const auto unit = Add(Scale(hit.unit, std::cos(distance)), Scale(circle, std::sin(distance)));
+                    const auto world = pose.Point(Scale(unit, 1.006f));
+                    const float facing = Dot(pose.Normal(unit), NormalizeOr(Subtract(eye, world), towardCamera));
+                    const float life = 1.0f - RailCavernShield::Smooth(hit.age / .64f);
+                    const float alpha = life * RailCavernShield::Smooth((unit.y - RailCavernShield::Bottom) * 20.0f) *
+                        RailCavernShield::Smooth((facing + .13f) * 5.0f);
+                    dustVertex(world, {142.0f + side, float(index) / segments}, {.30f, 1.76f, 4.4f, alpha});
+                };
+                if (railLockOnHudAtlasVertexCount_ + railTitleDustVertexCount_ + segments * 6 <= kMaxAtlasVertices)
+                    for (int index = 0; index < segments; ++index) {
+                        ringVertex(index, 0); ringVertex(index + 1, 0); ringVertex(index, 1);
+                        ringVertex(index, 1); ringVertex(index + 1, 0); ringVertex(index + 1, 1);
+                    }
+
+                const auto sparkTangent = NormalizeOr(Cross(hit.normal, pose.up), pose.right);
+                const auto sparkUp = Cross(hit.normal, sparkTangent);
+                for (unsigned index = 0; index < 10; ++index) {
+                    const float lifetime = .20f + .023f * float((index * 7 + hit.serial) % 10);
+                    if (hit.age >= lifetime) continue;
+                    const float angle = (float(index) + float(hit.serial) * .636f) * 2.399963f;
+                    const auto direction = Add(Scale(hit.normal, .44f + .08f * float(index % 5)),
+                        Add(Scale(sparkTangent, std::cos(angle)), Scale(sparkUp, std::sin(angle))));
+                    const float speed = 5.8f + 1.02f * float(index);
+                    const auto motion = Scale(direction, speed * hit.age);
+                    const auto head = Add(Add(hit.origin, motion), Scale(pose.up, -7.5f * hit.age * hit.age));
+                    const auto width = NormalizeOr(Cross(direction, Subtract(eye, head)), up);
+                    const float fade = 1.0f - hit.age / lifetime;
+                    const float length = .15f + speed * .036f * fade;
+                    glowQuad(Subtract(head, Scale(direction, length)), Scale(direction, length),
+                        Scale(width, .044f + .017f * float(index % 3)), 32.0f,
+                        {5.8f, 1.95f, .32f, fade});
+                }
+            }
+        }
         for (size_t index = 0; index < impactMarks.size(); ++index) {
             const auto& mark = impactMarks[index];
             if (mark.kind != RailCombatImpact::Kind::Crystal) continue;
@@ -12105,6 +12182,28 @@ void AppRunLoop::UpdateRailGameplayFrame(const RailSceneFrameContext& context) {
         fangSurfaceAuditSpawned=railShooterSpawnRuntime_.SpawnProjectile(std::move(testRound));
     }
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput, railPostBossSequence_.FangFollowupTarget());
+    if (crystalCavern_ && !coursePreviewOwnsRail && !titleEntryBlocked && gameplayDeltaTime > 0.0f) {
+        if (railShooterDistance_ < crystalCavern_->joinDistance) railCavernShield_.Reset();
+        const unsigned previousHits = railCavernShield_.HitCount();
+        const bool caveEntry = railPostBossSequence_.Complete() &&
+            railShooterDistance_ >= crystalCavern_->joinDistance + RailCavernShield::EntryOffset;
+        railCavernShield_.Update(gameplayDeltaTime, caveEntry,
+            RailCavernShield::Pose::FromCart(railShooterVehicleRenderer_.Frame().worldMatrix), vehicleFrame.state.speed);
+        if (railCavernShield_.Visible()) {
+            for (const auto& shot : railShooterSpawnRuntime_.Bullets()) {
+                if (!shot.active || shot.hitConsumed) continue;
+                const auto previous = RailLocalPoint(railPath_, shot.spawnDistance + shot.previousDistanceOffset,
+                    shot.previousLateralOffset, shot.previousVerticalOffset, 0);
+                const auto current = RailLocalPoint(railPath_, shot.spawnDistance + shot.distanceOffset,
+                    shot.lateralOffset, shot.verticalOffset, 0);
+                Vector3 unit;
+                if (railCavernShield_.Intersect(previous, current, unit) &&
+                    railShooterSpawnRuntime_.ConsumeProjectile(shot.projectileId)) railCavernShield_.Record(unit);
+            }
+            if (railCavernShield_.HitCount() != previousHits)
+                (void)audio_.PlaySpatial(railEnergyShieldHitSound_, .36f, 0.0f, 1.06f);
+        }
+    }
     if(gameplayDeltaTime>0 && !coursePreviewOwnsRail && !titleEntryBlocked) {
         for(const auto& actor:railShooterSpawnRuntime_.Obstacles()) {
             if(!RailRouteHazards::IsSlab(actor))continue;
@@ -21498,12 +21597,15 @@ void AppRunLoop::RenderVfxPreviewFrame() {
         frameExportPath=(base.parent_path()/(base.stem().wstring()+L"-"+distanceName+L".png")).wstring();
     }
     const bool sequenceFrameReady = frameExportIndex == 0 || frameExportElapsed >= 1.0f / 24.0f;
+    const bool cavernShieldReview = ReadEnvironmentUInt("GE3_CAVERN_SHIELD_REVIEW", 0) != 0;
+    const bool cavernShieldCaptureReady = !cavernShieldReview || (crystalCavern_ &&
+        railShooterDistance_ >= crystalCavern_->joinDistance - 8.0f);
     if(openingCapture || airframeCapture || worldCapture || rockCapture || localCartReady || needlesCaptureReady || (!openingReview && !airframeCaptureMode && !worldReview && !rockReview && !localCartCapture && !frameExportPath.empty() && !frameExportDone && ++frameExportWait>=frameExportMinimum && sequenceFrameReady &&
-        killBoostCaptureReady && shieldCaptureReady && postBossCaptureReady && (heavyCaptureReady || carrierFinishCapture) &&
+        killBoostCaptureReady && shieldCaptureReady && postBossCaptureReady && cavernShieldCaptureReady && (heavyCaptureReady || carrierFinishCapture) &&
         (carrierContinuityCapture?carrierCaptureReady:basicCaptureReady) && hazardCaptureReady &&
         railShooterDistance_>=float(speedFeelCaptureDistance) &&
         (carrierContinuityCapture || cartImpactCapture || energyCapture || primaryContactCapture || primaryFlightCapture || primaryPresentationCapture || lockStageCapture || lockContactCapture || scoutContactCapture || rearPanelReviewReady || crossfireReviewReady || rearBeamReviewReady || lightningReviewReady || rearHullReviewReady ||
-            frameExportIndex > 0 || terrainChunkManager_.RenderChunks().size()==terrainChunkManager_.Chunks().size()))) {
+            cavernShieldReview || frameExportIndex > 0 || terrainChunkManager_.RenderChunks().size()==terrainChunkManager_.Chunks().size()))) {
         frameExportDone=!needlesCaptureReady && !captureDefeatedWreck && (!structureReview || structureShot==structureFrameCount) &&
             (!carrierContinuityCapture || carrierCaptureIndex++==lastCarrierCapture);
         if(captureDefeatedDamage)defeatedDamageCaptured=true;
@@ -21574,6 +21676,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             <<" lift="<<escapeCapture.Arc().Height(railShooterDistance_)<<" supported="<<railShooterTrackContactPose_.Frame().allWheelsSupported
             <<" distance="<<railShooterDistance_<<" start="<<escapeCapture.Arc().start<<" landing="<<escapeCapture.Arc().Landing()
             <<" victory="<<(railShooterGameSession_.State().outcome==GameSessionOutcome::Victory)<<'\n';
+        if (cavernShieldReview && crystalCavern_) state << "# cavern_shield age=" << railCavernShield_.Age()
+            << " alpha=" << railCavernShield_.Opacity() << " hits=" << railCavernShield_.HitCount()
+            << " hp=" << railShooterGameSession_.State().playerHealth << " join=" << crystalCavern_->joinDistance << '\n';
         state<<"# kill_boost total="<<capturedBoost.TotalKills()<<" charge="<<capturedBoost.Charge()<<" serial="<<capturedBoost.Serial()
             <<" age="<<capturedBoost.Age()<<" speed="<<railShooterVehicleMovement_.State().speed
             <<" normal="<<railShooterRideMotionEnvelope_.Frame().normalRequestedSpeed

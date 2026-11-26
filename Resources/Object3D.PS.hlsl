@@ -413,7 +413,7 @@ static float FilteredCarrierNoise(float2 uv, float2 frequency, float seed)
     return (CartSurfaceNoise(position + seed) - .5f) * visibility;
 }
 
-static float2 CrystalVein(float3 localPosition, float footprint) {
+static float2 CrystalVein(float3 localPosition, float footprint, float minimumCharge) {
     // A folded cellular field produces branching fractures through the volume.
     float2 q = float2(localPosition.x * 8.8f + localPosition.z * 5.4f,
         localPosition.y * 5.8f - localPosition.z * 3.7f);
@@ -447,7 +447,7 @@ static float2 CrystalVein(float3 localPosition, float footprint) {
     }
     float edge = sqrt(secondDistance) - sqrt(nearDistance);
     // Both sides of a fracture use the same pair, avoiding hard changes across it.
-    float charge = lerp(.09f, 1.0f, smoothstep(.65f, 1.34f, nearEnergy + secondEnergy));
+    float charge = smoothstep(minimumCharge, minimumCharge + .44f, nearEnergy + secondEnergy);
     float halo = 1.0f - smoothstep(.02f, .15f + footprint, edge);
     float core = 1.0f - smoothstep(.006f, .037f + footprint, edge);
     return float2(halo, core) * charge * (1.0f - smoothstep(.045f, .27f, footprint));
@@ -458,14 +458,19 @@ static float3 CrystalLocalDirection(float3 direction) {
         dot(direction, gMaterial.caveResponse.xyz), dot(direction, gMaterial.railLightingOrigin.xyz)));
 }
 
-static float CrystalOpticalPath(float3 entry, float3 direction, uint shard) {
+static float CrystalOpticalPath(float3 entry, float3 direction, uint shard, out float3 reflectionGradient) {
     uint2 range = CrystalHullRanges[shard];
     float exitDistance = 1.55f;
+    reflectionGradient = 0.0f;
     [loop] for (uint i = range.x; i < range.x + range.y; ++i) {
         float4 plane = CrystalHullPlanes[i];
+        float gap = plane.w - dot(plane.xyz, entry);
+        // Use the same normal field on both sides of each facet boundary.
+        float weight = 1.0f - smoothstep(0.0f, .19f, abs(gap));
+        reflectionGradient += plane.xyz * weight;
         float facing = dot(plane.xyz, direction);
         if (facing <= .0001f) continue;
-        float distance = (plane.w - dot(plane.xyz, entry) + .0001f) / facing;
+        float distance = (gap + .0001f) / facing;
         exitDistance = min(exitDistance, max(distance, 0.0f));
     }
     return exitDistance;
@@ -482,7 +487,8 @@ static float3 CrystalLighting(float3 worldPosition, float3 N, float3 V, float2 u
     uint branch = (uint)clamp(floor(uv.x), 0.0f, float(shardCount - 1));
     uint shard = landmark ? branch + CrystalClusterShardCount : branch;
     // Use the full chord at this pixel so points at equal height can have very different depths.
-    float path = CrystalOpticalPath(local, CrystalLocalDirection(-V), shard);
+    float3 reflectionGradient;
+    float path = CrystalOpticalPath(local, CrystalLocalDirection(-V), shard, reflectionGradient);
     float thin = 1.0f - smoothstep(.035f, .22f, path);
     float thick = smoothstep(.11f, .52f, path);
     float3 transmission = exp2(-path * float3(5.0f, 3.1f, 1.28f));
@@ -515,33 +521,43 @@ static float3 CrystalLighting(float3 worldPosition, float3 N, float3 V, float2 u
     }
 
     float3 distortion = sin(local.yzx * float3(13.1f, 11.7f, 8.4f) + branchSeed * 5.1f);
-    float depth = min(path * .74f, .35f);
-    float3 frontPoint = local + internalRay * min(depth * .25f, .044f) + distortion * .067f;
-    float3 rearPoint = local + internalRay * depth + float3(.24f, .17f, -.31f) - distortion * .041f;
-    float2 nearVein = CrystalVein(frontPoint, footprint);
-    float2 deepVein = CrystalVein(rearPoint * 1.47f, footprint * 1.35f);
+    // Trace two depths along the refracted view. Sparse coarse fractures carry
+    // the brightest light. The denser fracture field sits deeper in the blue.
+    float3 mainPoint = local + internalRay * min(path * .47f, .28f);
+    float3 finePoint = local + internalRay * min(path * .82f, .43f);
+    float2 mainVein = CrystalVein(mainPoint * float3(.54f, .46f, .57f) + distortion * .045f,
+        footprint * .55f, 1.02f);
+    float2 fineVein = CrystalVein(finePoint * 1.12f + float3(.24f, .17f, -.31f) - distortion * .035f,
+        footprint * 1.12f, .28f);
     float density = .5f + .5f * sin(dot(local, float3(10.0f, 8.9f, -12.9f)) + distortion.z * 1.65f);
     float pockets = smoothstep(.12f, .90f, density);
     float3 body = lerp(float3(.010f, .019f, .079f), float3(.030f, .14f, .43f), pockets);
     body *= lerp(1.0f, float3(.49f, .65f, .84f), thick);
-    float3 nearLight = nearVein.x * float3(.065f, .39f, 1.24f) + nearVein.y * float3(.35f, 1.48f, 3.60f);
-    float3 deepLight = deepVein.x * float3(.023f, .14f, .61f) + deepVein.y * float3(.053f, .31f, 1.20f);
-    float3 interior = body + veinStrength * (nearLight * lerp(.87f, 1.16f, thin) + deepLight * transmission);
-    interior += wake * (nearVein.x * float3(.38f, 1.56f, 3.95f) + nearVein.y * float3(2.50f, 5.82f, 9.90f) +
-        deepVein.y * float3(.19f, .95f, 3.45f) * transmission);
-    float lightLeak = thin * (.17f + .44f * nearVein.x + .28f * deepVein.x + .29f * wake);
+    float3 mainLight = mainVein.x * float3(.075f, .39f, 1.14f) + mainVein.y * float3(.47f, 1.56f, 3.45f);
+    float3 fineLight = fineVein.x * float3(.016f, .095f, .45f) + fineVein.y * float3(.026f, .16f, .68f);
+    float3 mainTransmission = lerp(float3(1.0f, 1.0f, 1.0f), float3(.38f, .60f, .88f), thick);
+    float3 interior = body + veinStrength * (mainLight * mainTransmission + fineLight * transmission);
+    interior += wake * (mainVein.x * float3(.38f, 1.56f, 3.95f) + mainVein.y * float3(2.50f, 5.82f, 9.90f)) *
+        mainTransmission;
+    float lightLeak = thin * (.17f + .44f * mainVein.x + .20f * fineVein.x + .29f * wake);
     interior += lightLeak * float3(.18f, .62f, 1.13f);
-    float junction = smoothstep(.41f, .95f, pockets * .58f + nearVein.x * .51f + deepVein.x * .26f);
+    float junction = smoothstep(.41f, .95f, pockets * .58f + mainVein.x * .64f);
     interior += crest * junction * float3(.91f, 3.15f, 7.25f);
-    interior += root * (.20f + .80f * max(nearVein.x, pockets * .57f)) * float3(1.55f, 4.20f, 8.6f);
-    interior += tip * (.36f + .64f * nearVein.x) * float3(2.65f, 6.23f, 11.1f);
+    interior += root * (.20f + .80f * max(mainVein.x, pockets * .57f)) * float3(1.55f, 4.20f, 8.6f);
+    interior += tip * (.36f + .64f * mainVein.x) * float3(2.65f, 6.23f, 11.1f);
 
+    // Transform the local gradient by the transpose of the world-to-local
+    // basis. Use it only for the moving specular lobes on the polished faces.
+    float3 reflectionNormal = reflectionGradient.x * gMaterial.caveSurface.xyz +
+        reflectionGradient.y * gMaterial.caveResponse.xyz + reflectionGradient.z * gMaterial.railLightingOrigin.xyz;
+    reflectionNormal = dot(reflectionNormal, reflectionNormal) > 1e-8f ? normalize(reflectionNormal) : N;
     float rim = pow(1.0f - saturate(dot(N, V)), 3.9f);
-    float3 reflection = reflect(-V, N);
-    float glint = pow(saturate(dot(reflection, normalize(float3(-.48f, .52f, -.70f)))), 34.0f);
-    float rimCharge = .17f + .30f * pockets + nearVein.x * (.44f + .92f * wake) + tip * .74f + .22f * thin;
-    float3 surface = rim * rimCharge * float3(.53f, 1.74f, 3.55f) +
-        glint * (.20f + .42f * pockets) * float3(.62f, .95f, 1.38f);
+    float reflectionEdge = pow(1.0f - saturate(dot(reflectionNormal, V)), 1.95f);
+    float3 reflection = reflect(-V, reflectionNormal);
+    float key = pow(saturate(dot(reflection, normalize(float3(-.48f, .52f, -.70f)))), 24.0f);
+    float fill = pow(saturate(dot(reflection, normalize(float3(.68f, .43f, .59f)))), 17.0f);
+    float3 surface = rim * (.21f + .29f * thin) * float3(.53f, 1.74f, 3.55f) +
+        (key * 1.35f + fill * .68f) * (.24f + .76f * reflectionEdge) * float3(.66f, 1.02f, 1.60f);
     float3 impactDirection;
     float3 strike = CombatImpactRadiance(worldPosition, impactDirection) *
         (.11f + .35f * saturate(dot(N, impactDirection)));

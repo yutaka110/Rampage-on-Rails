@@ -42,6 +42,30 @@ float2 FangOrbitArc(float2 p,float tilt,float clock,float seed) {
 }
 
 float4 main(PixelInput input) : SV_TARGET0 {
+    if (input.texcoord.x >= 140.0f && input.texcoord.x <= 141.0f) {
+        const float2 uv = float2(input.texcoord.x - 140.0f, input.texcoord.y);
+        const float facing = input.color.r;
+        const float front = smoothstep(-.10f, .075f, facing);
+        const float rim = pow(1.0f - saturate(facing), 3.4f);
+        const float lip = (1.0f - smoothstep(0.0f, .060f, uv.y)) * .68f;
+        const float2 tile = float2(1.0f, 1.7320508f);
+        const float2 q = uv * float2(24.0f, 8.4f);
+        const float2 a = frac(q / tile) * tile - .5f * tile;
+        const float2 b = frac((q - .5f * tile) / tile) * tile - .5f * tile;
+        const float2 cell = dot(a, a) < dot(b, b) ? a : b;
+        const float hex = max(abs(cell.x), dot(abs(cell), float2(.5f, .8660254f)));
+        const float grid = 1.0f - smoothstep(.013f, .013f + max(.014f, fwidth(hex) * .72f), abs(hex - .5f));
+        const float emergence = 1.0f - smoothstep(.10f, .45f, input.color.g);
+        const float sweep = exp2(-pow((uv.y - input.color.g * 2.7f) * 11.0f, 2));
+        const float opacity = .021f + grid * (.18f + .10f * rim) + rim * .52f + lip * .65f + sweep * emergence * .36f;
+        const float3 tint = lerp(float3(.12f, .71f, 2.15f), float3(.34f, 1.50f, 3.60f), saturate(rim + lip));
+        return float4(tint, opacity * front * input.color.a);
+    }
+    if (input.texcoord.x >= 142.0f && input.texcoord.x <= 143.0f) {
+        const float across = (input.texcoord.x - 142.5f) * 2.0f;
+        const float profile = exp2(-across * across * 7.0f) * (1.0f - smoothstep(.70f, 1.0f, abs(across)));
+        return float4(input.color.rgb, profile * input.color.a);
+    }
     if (input.texcoord.x >= 136.0f && input.texcoord.x <= 137.0f) {
         const float along = input.texcoord.x - 136.0f;
         const float across = abs(input.texcoord.y - .5f) * 2.0f;

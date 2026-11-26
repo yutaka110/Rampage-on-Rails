@@ -13,6 +13,7 @@
 #include "course/RailMothershipPresentation.h"
 #include "course/RailMothershipBattle.h"
 #include "course/RailPostBossSequence.h"
+#include "course/RailCavernShield.h"
 #include "course/EnemyCombatEventPublisher.h"
 #include "course/RailAttackWarningPresentation.h"
 #include "CaveLighting.h"
@@ -1009,4 +1010,5 @@ private:
         float joinDistance = 0.0f;
     };
     std::optional<CrystalCavernContinuation> crystalCavern_;
+    RailCavernShield railCavernShield_;
 };
