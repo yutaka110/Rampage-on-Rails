@@ -109,6 +109,7 @@ struct AppFrameGraphBuildContext {
     Vector4 railEliteLens{};
     float railEliteLensAge=0;
     bool railNearShadowActive = false;
+    bool railLensHeatShimmer = false;
     const D3D12_GPU_VIRTUAL_ADDRESS* railShadowAcceleration = nullptr;
     Vector2 sunfallCanyonGrade{}; // bridge and carrier arena blend weights
 };

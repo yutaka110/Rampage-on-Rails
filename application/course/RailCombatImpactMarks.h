@@ -3,6 +3,7 @@
 #include "RailCartImpactEnergy.h"
 #include "RailRearCartImpact.h"
 #include "RailLocalCartImpact.h"
+#include "RailCavernLightning.h"
 #include "utils/math/MathUtils.h"
 #include <algorithm>
 #include <cmath>
@@ -18,7 +19,7 @@ inline constexpr uint32_t CartOwner=0;
 inline constexpr float ArcLifetime=.18f;
 inline constexpr float BlueArcDelay=.018f;
 enum class Arc { None, Blue, Green };
-enum class Kind { Hull, Plate, Cart, Heavy, Kill, GatlingCart, VeilLightningCart, VeilBeamCart, WingCart, BatteryCart, Sand, Rock, Crystal };
+enum class Kind { Hull, Plate, Cart, Heavy, Kill, GatlingCart, VeilLightningCart, VeilBeamCart, WingCart, BatteryCart, Sand, Rock, Crystal, CavernLightningCart };
 inline bool WorldSurface(Kind kind) {return kind==Kind::Sand || kind==Kind::Rock || kind==Kind::Crystal;}
 inline constexpr float WorldLifetime=2.8f;
 inline constexpr float CrystalLifetime=.68f;
@@ -33,7 +34,7 @@ inline RailRearCartImpact::Type RearCartType(Kind kind) {
 }
 
 inline bool TransientCart(Kind kind) {
-    return LocalCart(kind) || kind==Kind::GatlingCart || kind==Kind::WingCart ||
+    return LocalCart(kind) || kind==Kind::GatlingCart || kind==Kind::WingCart || kind==Kind::CavernLightningCart ||
         RearCartType(kind)!=RailRearCartImpact::Type::None;
 }
 
@@ -72,13 +73,15 @@ inline float CartDischargeDuration(const Mark& mark) {
     if (mark.kind==Kind::VeilLightningCart) return RailRearCartImpact::LightningDuration;
     if (mark.kind==Kind::VeilBeamCart) return RailRearCartImpact::BeamDuration;
     if (mark.kind==Kind::WingCart) return RailRearCartImpact::WingDuration;
+    if (mark.kind==Kind::CavernLightningCart) return RailCavernLightning::ImpactSeconds;
     return RailCartImpactEnergy::Duration;
 }
 
 inline const Mark* LatestCartDischarge(std::span<const Mark> marks,bool gatling) {
     const Mark* latest=nullptr;
     for(auto it=marks.rbegin();it!=marks.rend();++it) {
-        if(it->owner!=CartOwner || it->kind==Kind::WingCart || RearCartType(it->kind)!=RailRearCartImpact::Type::None ||
+        if(it->owner!=CartOwner || it->kind==Kind::WingCart || it->kind==Kind::CavernLightningCart ||
+            RearCartType(it->kind)!=RailRearCartImpact::Type::None ||
             (it->kind==Kind::GatlingCart)!=gatling ||
             it->age>=CartDischargeDuration(*it))continue;
         if(gatling || it->kind==Kind::Heavy)return &*it;
@@ -94,7 +97,8 @@ public:
         if(!std::isfinite(dt) || dt<=0)return;
         for(auto& mark:marks_) {
             const bool bossCart=mark.owner==CartOwner &&
-                (mark.kind==Kind::Heavy || (TransientCart(mark.kind) && !LocalCart(mark.kind)));
+                (mark.kind==Kind::Heavy || (TransientCart(mark.kind) && !LocalCart(mark.kind) &&
+                    mark.kind!=Kind::CavernLightningCart));
             mark.age+=bossCart && cartPresentationDt>=0.0f?cartPresentationDt:dt;
         }
         std::erase_if(marks_,[](const auto& mark){

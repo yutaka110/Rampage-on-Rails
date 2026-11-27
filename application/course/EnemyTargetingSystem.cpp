@@ -2,6 +2,7 @@
 #include "RailTurretGeometry.h"
 #include "EnemyTargetingSystem.h"
 #include "RailGatlingAttack.h"
+#include "RailCavernLightning.h"
 #include "RailHeavyAttack.h"
 #include "RailGroundBatteryAttack.h"
 
@@ -17,7 +18,7 @@ namespace {
 bool CompensatesAutomaticTravel(const CourseEnemyActor& actor) {
     const auto trajectory=actor.desc.projectileDefinition.trajectory;
     return (actor.HoldsCombatPositionUntilResolved() || RailGroundBattery::IsPredictive(actor.desc.actorAssetId) ||
-        actor.desc.actorAssetId==RailGatling::CavernWeapon) &&
+        actor.desc.actorAssetId==RailGatling::CavernWeapon || actor.desc.actorAssetId==RailCavernLightning::Actor) &&
         (trajectory==EnemyProjectileTrajectory::Direct || trajectory==EnemyProjectileTrajectory::Predictive ||
             trajectory==EnemyProjectileTrajectory::Homing);
 }

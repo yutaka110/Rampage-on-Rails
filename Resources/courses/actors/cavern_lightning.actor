@@ -1,0 +1,7 @@
+actor|cavern_lightning|Cavern Lightning Gunship|combat_sniper_hull|2.25|90|7|0.59|0.81|1|1|cavern_lightning
+combat|5.5|0.10|48|cavern_lightning
+movement|0
+# Keep the 0.72-second vortex and leave the formed white core visible for another 0.15 seconds.
+behavior|sniper|0.16|0.10|0.18|0.87|5.5|0.22|0.25|0|0|0|true
+engagement_band|true|30|43|63|16|2.2|44|10
+attack_pass|true|0.10|0.60|0.35

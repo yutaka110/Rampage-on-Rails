@@ -1,5 +1,6 @@
 // Seeded billows, with dense shaded centres and broken translucent edges.
 #include "RailEnergyShield.hlsli"
+#include "RailLightningFlight.hlsli"
 struct PixelInput {
     float4 position : SV_POSITION;
     float2 texcoord : TEXCOORD0;
@@ -15,6 +16,20 @@ float Fbm(float2 p) {
     return Noise(p)*0.5f+Noise(p*2.07f+7.1f)*0.28f+Noise(p*4.13f+17.3f)*0.15f+Noise(p*8.3f)*0.07f;
 }
 float4 main(PixelInput input) : SV_TARGET0 {
+    if (input.texcoord.x >= 3500.0f && input.texcoord.x <= 3501.0f) {
+        const float2 p = (float2(input.texcoord.x - 3500.0f,input.texcoord.y) - .5f) * 2.0f;
+        const float phase = input.color.r;
+        float angle;
+        const float edge = RailLightningHeadEdge(p,phase,angle);
+        const float aa = clamp(fwidth(edge)*.65f,.021f,.095f);
+        const float coverage = 1.0f - smoothstep(-aa,aa,edge);
+        const float flow = Noise(p * float2(9.5f,6.4f) + float2(-phase*.56f,1.4f));
+        const float shoulder = smoothstep(-.31f,.01f,edge);
+        const float3 deep = float3(.003f,.008f,.022f);
+        const float3 navy = float3(.012f,.031f,.093f);
+        const float3 color = lerp(deep,navy,shoulder*.51f+flow*.35f);
+        return float4(color,coverage * input.color.a);
+    }
     if(input.texcoord.x>=3400.0f && input.texcoord.x<=3401.0f) {
         float2 p=float2((input.texcoord.x-3400.5f)*2.0f,input.texcoord.y*2.0f-1.0f);
         float width=max(.10f,.68f*fwidth(p.x));

@@ -7,6 +7,7 @@
 #include "RailWorldRaycast.h"
 #include "RailGatlingAttack.h"
 #include "RailCavernShield.h"
+#include "RailCavernLightning.h"
 #include "RailHeavyAttack.h"
 #include "RailGroundBatteryAttack.h"
 #include "RailRouteHazards.h"
@@ -345,6 +346,22 @@ CourseCollisionFrameStats CourseCollisionSystem::Update(
             RailCavernShield::Contact shieldContact;
             if (cavernShield->Intersect(start, end, shieldContact) && runtime.ConsumeProjectile(bullet.projectileId)) {
                 cavernShield->Record(shieldContact, bullet.damage);
+                if (bullet.definitionId == RailCavernLightning::Projectile) {
+                    EnemyProjectilePresentationEvent event{};
+                    event.kind = EnemyProjectilePresentationEventKind::Impacted;
+                    event.projectileId = bullet.projectileId;
+                    event.ownerActorId = bullet.ownerActorId;
+                    event.definitionId = bullet.definitionId;
+                    event.trajectory = bullet.trajectory;
+                    event.worldPosition = shieldContact.worldPosition;
+                    event.motionDirection = shieldContact.incoming;
+                    event.impactNormal = cavernShield->CurrentPose().Normal(shieldContact.unit);
+                    event.color = bullet.color;
+                    event.effectId = bullet.impactEffectId;
+                    event.surfaceImpact = true;
+                    event.bodyRadius = bullet.radius;
+                    projectileContacts_.push_back(std::move(event));
+                }
                 continue;
             }
         }

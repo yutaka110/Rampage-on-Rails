@@ -108,4 +108,72 @@ inline Frame Evaluate(Vector3 contact,Vector3 normal,float age,uint64_t seed,boo
     result.flashes[result.flashCount++]={{0,.91f,3.43f},front,body,2.15f,false};
     return result;
 }
+
+inline Frame EvaluateCavernLightning(Vector3 contact,Vector3 normal,const std::array<Vector3,4>& wheels,
+    float age,uint64_t seed) {
+    Frame result;
+    const auto bound=RailRearCartImpact::ResolveWingContact(contact,normal);
+    using RailCartImpactEnergy::Smooth;
+    struct Node {Vector3 point;float arrival;};
+    const auto trace=[&](std::span<const Node> path,Vector3 face,float width,float gain,float phase) {
+        for(size_t i=1;i<path.size();++i) {
+            const auto& a=path[i-1];
+            const auto& b=path[i];
+            if(age<=a.arrival || age>=b.arrival+.25f)continue;
+            const Vector3 delta{b.point.x-a.point.x,b.point.y-a.point.y,b.point.z-a.point.z};
+            const float length=std::hypot(delta.x,delta.y,delta.z);
+            if(length<.01f)continue;
+            const Vector3 across{(face.y*delta.z-face.z*delta.y)/length,
+                (face.z*delta.x-face.x*delta.z)/length,(face.x*delta.y-face.y*delta.x)/length};
+            const int cells=(std::clamp)(int(std::ceil(length/.44f)),2,11);
+            const auto point=[&](float t) {
+                const float bend=.14f*std::sin(t*3.141593f)*std::sin(t*cells*3.63f+phase);
+                return Vector3{a.point.x+delta.x*t+across.x*bend,a.point.y+delta.y*t+across.y*bend,
+                    a.point.z+delta.z*t+across.z*bend};
+            };
+            const float progress=(std::min)(1.0f,(age-a.arrival)/(b.arrival-a.arrival));
+            for(int cell=0;cell<cells && result.count<result.strokes.size();++cell) {
+                const float lo=float(cell)/cells;
+                const float hi=(std::min)(progress,float(cell+1)/cells);
+                if(hi<=lo)break;
+                const float since=age-std::lerp(a.arrival,b.arrival,(lo+hi)*.5f);
+                const float tail=1.0f-Smooth(since,.042f,.25f);
+                const float flicker=.54f+.46f*std::sin(age*36.0f+phase+float(cell)*2.31f);
+                if(tail<.02f)continue;
+                const auto end=point(hi);
+                result.strokes[result.count++]={point(lo),end,
+                    gain*tail*std::lerp(flicker,1.0f,tail),width*std::lerp(.39f,1.0f,tail)};
+                if(hi>=progress && age<b.arrival+.032f && result.hotTipCount<result.hotTips.size()) {
+                    const float tip=1.0f-Smooth(since,.018f,.062f);
+                    result.hotTips[result.hotTipCount++]={point((std::max)(lo,hi-.16f)),end,gain*tip,width*.75f};
+                }
+            }
+        }
+    };
+    const float phase=float(seed%97)*.69f;
+    const auto p=bound.point;
+    const auto n=bound.normal;
+    const Node entry{{(std::clamp)(p.x,-1.42f,1.42f),1.52f,3.31f},.105f};
+    const Node root{{p.x+.065f*n.x,p.y+.065f*n.y,p.z+.065f*n.z},.015f};
+    trace(std::array{root,Node{{std::lerp(root.point.x,entry.point.x,.5f),
+        (std::max)(.49f,std::lerp(root.point.y,entry.point.y,.60f)),
+        std::lerp(root.point.z,entry.point.z,.53f)},.064f},entry},{0,1,0},.14f,1.0f,phase);
+    for(size_t flank=0;flank<2;++flank) {
+        const float side=flank==0 ? -1.0f : 1.0f;
+        const float delay=p.x*side<0.0f ? .027f : 0.0f;
+        const Node corner{{side*2.02f,1.86f,3.27f},.173f+delay};
+        const Node plate{{side*2.42f,1.59f,1.73f},.249f+delay};
+        const Node rear{{side*2.42f,.96f,-1.95f},.341f+delay};
+        trace(std::array{entry,corner,Node{{side*2.24f,2.02f,2.54f},.212f+delay},plate,
+            Node{{side*2.42f,1.61f,-.44f},.306f+delay},rear},
+            {side,0,0},.13f,.94f,phase+side*1.7f);
+        const auto frontWheel=wheels[2+flank];
+        const auto rearWheel=wheels[flank];
+        trace(std::array{plate,Node{frontWheel,.369f+delay},Node{{frontWheel.x,
+            frontWheel.y+.17f,frontWheel.z-.39f},.412f+delay}},{side,0,0},.105f,.88f,phase-1.9f*side);
+        trace(std::array{rear,Node{rearWheel,.423f+delay},Node{{rearWheel.x,
+            rearWheel.y+.18f,rearWheel.z-.43f},.451f+delay}},{side,0,0},.093f,.80f,phase+2.4f*side);
+    }
+    return result;
+}
 }

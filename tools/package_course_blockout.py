@@ -41,7 +41,7 @@ def main():
             continue
         if (target/'GE3.exe').resolve() != exe.resolve():
             shutil.copy2(exe, target/'GE3.exe')
-        for relative in ['Object3D.PS.hlsl','Terrain.PS.hlsl','TitleLighting.hlsli','RailHudAtlas.PS.hlsl','TitleDust.PS.hlsl','TitleTracer.PS.hlsl','RailGatlingRing.hlsli','RailKillBoostOverlay.hlsli','RailEnergyShield.hlsli','FullscreenComposite.PS.hlsl',
+        for relative in ['Object3D.PS.hlsl','Terrain.PS.hlsl','TitleLighting.hlsli','RailHudAtlas.PS.hlsl','TitleDust.PS.hlsl','TitleTracer.PS.hlsl','RailLightningFlight.hlsli','RailGatlingRing.hlsli','RailKillBoostOverlay.hlsli','RailEnergyShield.hlsli','FullscreenComposite.PS.hlsl',
                          'audio/elite_fang_fire.wav','audio/elite_veil_fire.wav','audio/elite_veil_shock.wav','audio/elite_veil_charge.wav',
                          'audio/bridge_escape_break.wav','audio/bridge_escape_release.wav','audio/bridge_escape_land.wav',
                          'audio/bridge_escape_charge.wav','audio/bridge_escape_cannon.wav','audio/bridge_escape_tear.wav',

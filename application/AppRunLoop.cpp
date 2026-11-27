@@ -20,6 +20,7 @@
 #include "course/RailProjectileOrbSurface.h"
 #include "course/RailGatlingAimCycle.h"
 #include "course/RailGatlingAttack.h"
+#include "course/RailCavernLightning.h"
 #include "course/RailGatlingRingVisual.h"
 #include "course/RailKillBoostPose.h"
 #include "course/RailKillBoostFeedback.h"
@@ -566,6 +567,14 @@ struct RailOverlayProjectedPoint {
     bool inDepth = false;
     bool onscreen = false;
 };
+
+const CourseEnemyActor* FindCavernLightningGunship(const CourseSpawnRuntime& runtime) {
+    const auto& enemies = runtime.Enemies();
+    const auto actor = std::find_if(enemies.begin(),enemies.end(),[](const auto& candidate) {
+        return candidate.desc.actorAssetId == RailCavernLightning::Actor && candidate.desc.hitPoints > 0.0f;
+    });
+    return actor == enemies.end() ? nullptr : &*actor;
+}
 
 RailOverlayProjectedPoint ProjectRailOverlayPoint(
     const Vector3& point,
@@ -4230,6 +4239,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const bool mountedProjectileImpact=lastImpact.accepted && !lastImpact.lethal &&
         lastImpact.request.kind==PlayerHitKind::EnemyProjectile &&
         railShooterVehicleCollisionFeedback_.Frame().lastConsumedResultSequence==lastImpact.sequence;
+    const bool cavernLightningHit=mountedProjectileImpact &&
+        lastImpact.request.sourceId==RailCavernLightning::Projectile;
     const auto impactKind=mountedProjectileImpact?RailEnemyEnergy::KindForProjectile(lastImpact.request.sourceId):RailEnemyEnergy::BatteryKind::None;
     const bool heavyCartImpact=impactKind==RailEnemyEnergy::BatteryKind::Heavy;
     const float impactAge=PlayerDamagePresentationBridge::DamageNoticeSeconds-damagePresentation.damageNoticeRemainingSeconds;
@@ -4276,12 +4287,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         const bool directional=std::any_of(directions.begin(),directions.end(),[](float a){return a>0;});
         const float depth=float((std::min)(hudWidth,hudHeight))*(heavyCartImpact?.16f:.11f);
         const float u=(uvWhite.x+uvWhite.z)*.5f,v=(uvWhite.y+uvWhite.w)*.5f;
-        const Vector4 clear{1,.18f,.045f,0};
+        const Vector4 clear=cavernLightningHit?Vector4{.18f,.65f,1,0}:Vector4{1,.18f,.045f,0};
         for(size_t edge=0;edge<4;++edge) {
             const float weight=directional?directions[edge]:(edge>=2?.55f:0.0f);
             if(weight<=0 || railLockOnHudAtlasVertexCount_+6>kMaxAtlasVertices)continue;
             const float w=float(hudWidth),h=float(hudHeight);
-            const Vector4 ink{1,.18f,.045f,weight*damagePresentation.screenFlashIntensity*(heavyCartImpact?.69f:.62f)};
+            auto ink=clear;
+            ink.w=weight*damagePresentation.screenFlashIntensity*(cavernLightningHit?.32f:heavyCartImpact?.69f:.62f);
             if(edge<2) {
                 const float left=edge==0?0:w-depth,right=edge==0?depth:w;
                 const auto a=edge==0?ink:clear,b=edge==0?clear:ink;
@@ -4353,6 +4365,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     // combat targeting always remains readable when several threats overlap.
     const EnemyAttackTelegraphFrame& telegraphFrame =
         railEnemyAttackTelegraphSystem_.Frame();
+    const auto* cavernLightningGunship=FindCavernLightningGunship(railShooterSpawnRuntime_);
+    const uint32_t cavernLightningActorId=cavernLightningGunship ? cavernLightningGunship->actorId : 0;
     if(imguiLayer_.WantsDeveloperDiagnostics()) for (const EnemyAttackTelegraphCue& cue : telegraphFrame.cues) {
         if (!validPoint(cue.screenPosition)) {
             continue;
@@ -4435,7 +4449,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             IsRailShortCourse(railShooterCoursePath_);
         uint32_t markedBattery=0;
         for(const auto& source:railAttackWarningPresentation_.Sources()) {
-            if(source.fired)continue;
+            if(source.fired || (cavernLightningActorId && source.actorId==cavernLightningActorId))continue;
             {
                 const bool ordinary=source.weapon==RailWarningWeapon::Ordinary;
                 const auto style=RailAttackWarningPresentation::OrdinaryStyle(source);
@@ -5526,6 +5540,7 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const auto isGatlingShell=[](const auto& p) {return p.batteryKind==RailEnemyEnergy::BatteryKind::Gatling;};
     const auto isHeavyShell=[](const auto& p) {return p.batteryKind==RailEnemyEnergy::BatteryKind::Heavy;};
     const auto isCavernTracer=[](const auto& p) {return p.visualDefinitionId=="visual_cavern_gatling";};
+    const auto isCavernLightning=[](const auto& p) {return p.visualDefinitionId==RailCavernLightning::Visual;};
     const bool hasEnemyOrbs=!railTitleScreenVisible_ && std::any_of(enemyBulletFrame.proxies.begin(),enemyBulletFrame.proxies.end(),
         [](const auto& p){return p.spriteBacked;});
     const auto isOrdinaryClash = [](const EnemyProjectileLifecycleVfxProxy& burst) {
@@ -5598,7 +5613,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
     const bool barricadeLamps=!railTitleScreenVisible_ && !railGameOverScene_.Active() &&
         std::any_of(routeObstacles.begin(),routeObstacles.end(),showsBarricadeLamps);
     const bool hasLocalCartImpact=cartVisible && std::any_of(cartMarks.begin(),cartMarks.end(),[](const auto& mark) {
-        return mark.owner==RailCombatImpact::CartOwner && RailCombatImpact::LocalCart(mark.kind);
+        return mark.owner==RailCombatImpact::CartOwner &&
+            (RailCombatImpact::LocalCart(mark.kind) || mark.kind==RailCombatImpact::Kind::CavernLightningCart);
     });
     const bool sideRockVfx=!railTitleScreenVisible_ && std::any_of(railShooterSpawnRuntime_.Obstacles().begin(),
         railShooterSpawnRuntime_.Obstacles().end(),[](const auto& rock) {
@@ -5660,6 +5676,13 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 world.x*m[0][3]+world.y*m[1][3]+world.z*m[2][3]+m[3][3]};
             railLockOnHudAtlasMappedVertices_[index]={projected,texcoord,color};
             ++railTitleDustVertexCount_;
+        };
+        const auto glowQuad=[&](Vector3 center,Vector3 h,Vector3 v,float uvBase,Vector4 color,float uvY=0.0f) {
+            if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+6>kMaxAtlasVertices) return;
+            const auto a=Add(center,Add(Scale(h,-1),v)),b=Add(center,Add(h,v));
+            const auto c=Add(center,Add(Scale(h,-1),Scale(v,-1))),d=Add(center,Add(h,Scale(v,-1)));
+            dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
+            dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
         };
         struct SandBillboard {
             Vector3 center,horizontal,vertical; Vector4 color; float seed;
@@ -5848,7 +5871,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 RailEnemyEnergy::Alpha(body,opacity),uvBase,{},0.0f,animationUvY,radius});
         };
         if(hasEnemyOrbs) for(const auto& p:enemyBulletFrame.proxies) {
-            if(p.spriteBacked && !isCavernTracer(p) && !isSiegeShell(p) && !isGatlingShell(p) && (!isHeavyShell(p) || p.shellIntegrity<.999f))
+            if(p.spriteBacked && !isCavernTracer(p) && !isCavernLightning(p) && !isSiegeShell(p) &&
+                !isGatlingShell(p) && (!isHeavyShell(p) || p.shellIntegrity<.999f))
                 orbBody(p.worldPosition,p.coreRadius,1.0f,p.orbAnimationUvY,p.bodyColor,p.bodyUvBase);
         }
         if(!railTitleScreenVisible_ && !railGameOverScene_.Active()) {
@@ -6223,6 +6247,21 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         const auto drawGatlingShellBacking=[&](Vector3 position,float radius,float opacity,float phase) {
             orbSurface(position,radius*1.35f,radius,3300,phase,{.36f,.085f,.019f,.94f*opacity});
         };
+        struct LightningHead {
+            Vector3 forward, side;
+            float length, width, projectedTravel, phase, heat;
+        };
+        const auto lightningHead=[&](const EnemyProjectileVfxProxy& shot) {
+            const auto view=NormalizeOr(Subtract(eye,shot.worldPosition),towardCamera);
+            const auto cross=Cross(shot.motionDirection,view);
+            const auto side=NormalizeOr(cross,right);
+            const float projectedTravel=(std::min)(1.0f,std::sqrt(Dot(cross,cross)));
+            const float clock=railEnemyProjectilePresentationTime_;
+            const float seed=float(shot.projectileId%29);
+            return LightningHead{NormalizeOr(Cross(view,side),up),side,
+                shot.coreRadius*std::lerp(1.78f,2.76f,projectedTravel),shot.coreRadius*1.76f,
+                projectedTravel,clock*15.0f+seed*.84f,RailCavernLightning::FlightHeat(clock,seed)};
+        };
         for(const auto& shell:chargedShells) {
             if(shell.weapon==RailWarningWeapon::Heavy)drawHeavyShellBacking(shell.position,shell.radius,shell.opacity,shell.phase);
             else if(shell.weapon==RailWarningWeapon::Rapid)drawGatlingShellBacking(shell.position,shell.radius,shell.opacity,shell.phase);
@@ -6230,6 +6269,12 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
         if(hasEnemyOrbs)for(const auto& proxy:enemyBulletFrame.proxies) {
             if(!proxy.spriteBacked)continue;
+            if(isCavernLightning(proxy)) {
+                const auto head=lightningHead(proxy);
+                glowQuad(proxy.worldPosition,Scale(head.forward,head.length),Scale(head.side,head.width),
+                    RailCavernLightning::FlightBodyUv,{head.phase,0,0,.91f});
+                continue;
+            }
             if(isGatlingShell(proxy)) {
                 // Keep a shaded shoulder behind the flame where the rounds cross the pale hull.
                 drawGatlingShellBacking(proxy.worldPosition,proxy.coreRadius,1.0f,proxy.orbAnimationUvY);
@@ -6250,6 +6295,23 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             const float heat=FlightHeat(projectile->normalizedAge);
             const float phase=Orbit(railEnemyProjectilePresentationTime_,projectile->ownerActorId,projectile->attackIntentSequence,heat);
             drawRoadShellBacking(proxy.worldPosition,proxy.coreRadius,heat,1,phase);
+        }
+        const auto cavernMuzzle=cavernLightningGunship ? ResolveEnemyProjectileWorldPosition(railPath_,
+            ResolveEnemyProjectileMuzzleRailPosition(*cavernLightningGunship,0)) : Vector3{};
+        const auto cavernChargeCenter=Add(cavernMuzzle,Scale(towardCamera,1.16f));
+        const auto cavernVortexProgress=[&](const RailWarningSource& source) {
+            return RailCavernLightning::VortexProgress(source.charge,
+                cavernLightningGunship->behaviorDefinition.attackLeadSeconds,railEnemyAttackTelegraphSettings_.leadSeconds);
+        };
+        if (!railTitleScreenVisible_ && !railGameOverScene_.Active() && cavernLightningActorId) {
+            for (const auto& source : railAttackWarningPresentation_.Sources()) {
+                if (source.actorId!=cavernLightningActorId || source.fired) continue;
+                const float charge=cavernVortexProgress(source);
+                const float seal=TwinShieldDestructionSmooth(charge,.70f,.95f);
+                const float radius=std::lerp(1.35f,.72f,charge);
+                orbSurface(cavernChargeCenter,radius,radius*.59f,3300.0f,0,
+                    {.007f,.025f,.078f,.89f*(1.0f-seal)});
+            }
         }
         const uint32_t dustCount=railTitleDustVertexCount_;
         if(hasEnergyShields)for(const auto& actor:railShooterSpawnRuntime_.Enemies()) {
@@ -6284,19 +6346,22 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 dustVertex(c,{10+u1,0},color); dustVertex(b,{10+u0,1},color); dustVertex(d,{10+u1,1},color);
             }
         }
-        const auto glowQuad=[&](Vector3 center,Vector3 h,Vector3 v,float uvBase,Vector4 color,float uvY=0.0f) {
-            if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+6>kMaxAtlasVertices) return;
-            const auto a=Add(center,Add(Scale(h,-1),v)),b=Add(center,Add(h,v));
-            const auto c=Add(center,Add(Scale(h,-1),Scale(v,-1))),d=Add(center,Add(h,Scale(v,-1)));
-            dustVertex(a,{uvBase,uvY},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(c,{uvBase,uvY+1},color);
-            dustVertex(c,{uvBase,uvY+1},color); dustVertex(b,{uvBase+1,uvY},color); dustVertex(d,{uvBase+1,uvY+1},color);
+        const auto lightningArc=[&](Vector3 start,Vector3 end,float width,Vector4 color) {
+            const auto half=Scale(Subtract(end,start),.5f);
+            const auto center=Add(start,half);
+            const auto across=NormalizeOr(Cross(half,Subtract(eye,center)),right);
+            // Overlap the tapered segment ends enough to join the arc at each kink.
+            glowQuad(center,Scale(half,1.20f),Scale(across,width),RailCavernLightning::ArcUv,color);
         };
         if (hasCavernShield) {
             const auto& shield = railCavernShield_;
             const auto& pose = shield.CurrentPose();
             const float shellOpacity = shield.MembraneOpacity();
-            if (shellOpacity > 0.0f && railLockOnHudAtlasVertexCount_ + railTitleDustVertexCount_ +
-                RailCavernShield::SurfaceVertices <= kMaxAtlasVertices) shield.DrawSurface(eye, dustVertex);
+            const auto surfaceBudget = kMaxAtlasVertices - railLockOnHudAtlasVertexCount_ - railTitleDustVertexCount_;
+            if (shellOpacity > 0.0f && surfaceBudget >= RailCavernShield::SurfaceVertices) {
+                constexpr int twoLayerVertices = RailCavernShield::SurfaceVertices + RailCavernShield::InnerSurfaceVertices;
+                shield.DrawSurface(eye, surfaceBudget >= twoLayerVertices, dustVertex);
+            }
             constexpr float launchEffectsDuration = .46f;
             if (shield.Active() && shield.Age() < launchEffectsDuration) {
                 const float age = shield.Age();
@@ -6899,6 +6964,38 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                     {6.4f,6.1f,5.8f,arc.heat});
             }
         }
+        if(cartVisible)for(const auto& mark:cartMarks) {
+            if(mark.owner!=RailCombatImpact::CartOwner || mark.kind!=RailCombatImpact::Kind::CavernLightningCart ||
+                mark.age>=RailCavernLightning::ImpactSeconds)continue;
+            auto world=cartRender.worldMatrix;
+            const auto toLocal=Inverse(world);
+            const auto& wheelFrame=railShooterWheelContactPresentation_.Frame();
+            std::array<Vector3,4> wheels;
+            for(size_t i=0;i<wheels.size();++i) {
+                const float side=i%2==0?-1.0f:1.0f;
+                const auto& wheel=wheelFrame.wheels[i];
+                auto rim=wheelFrame.valid
+                    ? RailCombatImpact::Transform(wheel.axleCenter,toLocal,1)
+                    : Vector3{side*1.90f,-.34f,i<2?-1.95f:1.95f};
+                rim.x+=side*.46f;
+                rim.y+=.28f;
+                wheels[i]=rim;
+            }
+            const auto arc=RailLocalCartImpact::EvaluateCavernLightning(mark.localPoint,mark.localNormal,wheels,mark.age,mark.seed);
+            for(size_t i=0;i<arc.count;++i) {
+                const auto& stroke=arc.strokes[i];
+                const auto a=cartWorld(stroke.start),b=cartWorld(stroke.end);
+                lightningArc(a,b,stroke.width*2.6f,{.20f,1.33f,4.6f,stroke.opacity*.55f});
+                lightningArc(a,b,stroke.width*1.27f,{.66f,3.95f,6.8f,stroke.opacity});
+            }
+            for(size_t i=0;i<arc.hotTipCount;++i) {
+                const auto& tip=arc.hotTips[i];
+                const auto end=cartWorld(tip.end);
+                lightningArc(cartWorld(tip.start),end,tip.width*1.27f,{7.0f,9.1f,11.2f,tip.opacity});
+                glowQuad(end,Scale(right,.29f),Scale(up,.23f),RailCavernLightning::CoreUv,
+                    {7.4f,9.5f,11.2f,tip.opacity*.93f});
+            }
+        }
         if(localImpactFlash) {
             const auto& hit=lastImpact.request;
             const auto center=Add(hit.impactWorldPosition,Scale(hit.impactNormalWorld,.13f));
@@ -7380,10 +7477,78 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 glowQuad(muzzle,Scale(right,3.8f),Scale(up,2.6f),60,{5.6f,1.75f,4.1f,ignition});
             }
         }
-        if(!railTitleScreenVisible_ && !railGameOverScene_.Active())
+        if(!railTitleScreenVisible_ && !railGameOverScene_.Active()) {
             for(const auto& sprite:railAttackWarningPresentation_.Sprites(right,up,eye,
-                    2.0f/((std::max)(.001f,std::abs(frameState_.projMatrix.m[1][1]))*720.0f)))
+                    2.0f/((std::max)(.001f,std::abs(frameState_.projMatrix.m[1][1]))*720.0f),cavernLightningActorId))
                 glowQuad(sprite.center,sprite.horizontal,sprite.vertical,sprite.atlas,sprite.color);
+            for(const auto& source:railAttackWarningPresentation_.Sources()) {
+                if(!cavernLightningActorId || source.actorId!=cavernLightningActorId)continue;
+                const auto muzzle=cavernChargeCenter;
+                if (source.fired) {
+                    const auto flash=Add(cavernMuzzle,Scale(towardCamera,.30f));
+                    glowQuad(flash,Scale(right,2.96f),Scale(up,2.73f),16.0f,
+                        {.64f,3.45f,7.5f,source.flash*.89f});
+                    glowQuad(flash,Scale(right,1.12f),Scale(up,.88f),RailCavernLightning::CoreUv,
+                        {8.8f,10.4f,11.8f,source.flash});
+                    continue;
+                }
+
+                const float charge=cavernVortexProgress(source);
+                const float seal=TwinShieldDestructionSmooth(charge,.70f,.95f);
+                const float vortexAge=(std::min)(source.visibleAge,RailCavernLightning::VortexSeconds);
+                const float arrival=TwinShieldDestructionSmooth(vortexAge,0,.085f);
+                const float collapse=TwinShieldDestructionSmooth(charge,.08f,.96f);
+                const float radius=std::lerp(4.35f,.92f,collapse);
+                const float turn=vortexAge*5.7f+charge*charge*4.0f;
+                const float settling=TwinShieldDestructionSmooth(source.visibleAge,
+                    RailCavernLightning::VortexSeconds,RailCavernLightning::VortexSeconds+.11f);
+                const float gain=(.52f+.48f*arrival)*(.72f+.28f*charge)*(1.0f-.82f*settling);
+                glowQuad(muzzle,Scale(right,radius*1.15f),Scale(up,radius*.86f),
+                    RailCavernLightning::VortexUv,{turn,charge,0,gain*.81f});
+
+                const auto spiralPoint=[&](float angle,float distance) {
+                    return Add(muzzle,Add(Scale(right,distance*std::cos(angle)),
+                        Scale(Add(Scale(up,.71f),Scale(towardCamera,.25f)),distance*std::sin(angle))));
+                };
+                constexpr int arms=4, segments=12;
+                for (int arm=0;arm<arms;++arm) {
+                    const float heading=turn+float(arm)*1.5708f+.19f*std::sin(float(arm)*2.7f);
+                    const float reach=radius*(1.0f-.064f*float(arm));
+                    const auto point=[&](float span) {
+                        const float angle=heading+2.66f*span+.17f*std::sin(span*14.0f+heading*1.8f);
+                        const float ring=std::lerp(reach,radius*.19f,span)*(.94f+.06f*std::cos(angle*4.0f));
+                        return spiralPoint(angle,ring);
+                    };
+                    auto a=point(0.0f);
+                    for (int segment=1;segment<=segments;++segment) {
+                        const float span=float(segment)/segments;
+                        const float flow=.57f+.43f*std::sin(span*17.0f-turn*2.25f+float(arm)*.77f);
+                        const float travel=TwinShieldDestructionSmooth(span,.02f,.28f)*
+                            (1.0f-.85f*TwinShieldDestructionSmooth(span,.81f,1.0f));
+                        const auto b=point(span);
+                        lightningArc(a,b,std::lerp(.145f,.078f,collapse),
+                            {.32f+.62f*span,1.92f+2.09f*span,4.3f+2.0f*span,gain*flow*travel});
+                        a=b;
+                    }
+                }
+                for (int mote=0;mote<18;++mote) {
+                    const float seed=float(mote);
+                    const float fall=std::fmod(.1414f*seed+vortexAge*(1.35f+.15f*float(mote%4)),1.0f);
+                    const float heading=turn*.75f+seed*2.39996f;
+                    const auto point=[&](float t) {
+                        return spiralPoint(heading+3.05f*t,radius*std::lerp(1.25f,.16f,t));
+                    };
+                    const float opacity=TwinShieldDestructionSmooth(fall,0,.16f)*
+                        (1.0f-TwinShieldDestructionSmooth(fall,.76f,1.0f));
+                    lightningArc(point((std::max)(0.0f,fall-.095f)),point(fall),.055f+.01f*float(mote%3),
+                        {.51f,2.82f,6.5f,opacity*gain*.83f});
+                }
+                glowQuad(muzzle,Scale(right,.85f+seal*.51f),Scale(up,.78f+seal*.42f),16.0f,
+                    {.31f,2.35f,6.1f,seal*.72f});
+                glowQuad(muzzle,Scale(right,.39f+seal*.44f),Scale(up,.36f+seal*.38f),
+                    RailCavernLightning::CoreUv,{9.2f,10.7f,12.3f,seal});
+            }
+        }
         if(hasBatteryThermals)for(const auto& pose:railEnemyCombatPresentationBridge_.Frame().actors)if(pose.batteryThermal.valid)
             for(const auto& actor:railShooterSpawnRuntime_.Enemies())if(actor.actorId==pose.actorId)
                 for(const auto& sprite:BuildRailBatteryThermalSprites(actor,pose.batteryThermal,railPath_,pose.turretWorldRotation,right,up))
@@ -7476,6 +7641,245 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
             orbSurface(center,radius*1.20f,radius,34.0f,animationUvY,RailEnemyEnergy::Alpha(palette.surface,opacity*.80f));
         };
         if(hasEnemyOrbs) for(const auto& p:enemyBulletFrame.proxies) {
+            if(p.spriteBacked && isCavernLightning(p)) {
+                const auto axis=p.motionDirection;
+                const auto head=lightningHead(p);
+                const auto side=head.side;
+                const auto across=NormalizeOr(Cross(side,axis),up);
+                const float radius=p.coreRadius;
+                const float clock=railEnemyProjectilePresentationTime_;
+                const float seed=float(p.projectileId%29);
+                const auto& rounds=railShooterSpawnRuntime_.Bullets();
+                const auto round=std::find_if(rounds.begin(),rounds.end(),
+                    [&](const auto& candidate){return candidate.projectileId==p.projectileId;});
+                const float flightAge=round==rounds.end() ? 0.0f : round->age;
+                const float traveled=round==rounds.end() ? 0.0f :
+                    (std::min)(radius*19.5f,std::abs(round->distanceOffset));
+                // Start the additive wake behind the visible shell, including when flight is foreshortened.
+                const float gap=(head.length*.68f+radius*.35f)/(std::max)(.13f,head.projectedTravel);
+                const float length=traveled-gap;
+                const auto tailRoot=Subtract(p.worldPosition,Scale(axis,gap));
+                constexpr int strands=5,segments=13;
+                const auto arcPoint=[&](float t,int strand) {
+                    const float filament=float(strand);
+                    const float phase=t*9.8f+filament*1.25664f+seed+clock*(strand%2?-13.0f:10.0f);
+                    const float angle=phase+.39f*std::sin(t*67.0f+filament*3.9f-clock*27.0f);
+                    const float kink=.85f+.30f*std::sin(t*87.0f+seed+filament*3.1f+clock*34.0f);
+                    const float envelope=(.57f+.57f*std::sin(3.141593f*std::sqrt(t)))*(1.0f-t);
+                    const float span=radius*envelope*kink;
+                    const auto radial=Add(Scale(side,std::cos(angle)),Scale(across,std::sin(angle)));
+                    return Add(Subtract(tailRoot,Scale(axis,t*length)),Scale(radial,span));
+                };
+                if(length>.05f) {
+                    const auto halfWake=Scale(axis,length*.5f);
+                    glowQuad(Subtract(tailRoot,halfWake),halfWake,Scale(side,radius*1.8f),
+                        RailCavernLightning::WakeUv,{.17f,1.22f,2.87f,.58f},2.0f*std::floor(std::fmod(clock*12.0f+seed,16.0f)));
+                    for(int strand=0;strand<strands;++strand) {
+                        auto start=arcPoint(0.0f,strand);
+                        for(int segment=1;segment<=segments;++segment) {
+                            const float t=float(segment)/segments;
+                            const auto end=arcPoint(t,strand);
+                            const float flicker=.5f+.5f*std::sin(clock*(24.0f+4.0f*strand)+float(segment)*1.83f+seed);
+                            const float hot=flicker*flicker*(1.0f-t);
+                            const float fade=1.0f-TwinShieldDestructionSmooth(t,.47f,.97f);
+                            const float gain=fade*(.17f+.83f*flicker);
+                            const Vector4 color{.17f+.52f*hot,1.22f+2.1f*hot,4.25f+2.05f*hot,gain};
+                            lightningArc(end,start,radius*(.061f+.089f*hot),color);
+                            if((segment+strand*2)%3==1 && segment<10) {
+                                const auto center=Subtract(tailRoot,Scale(axis,t*length));
+                                const auto outward=NormalizeOr(Subtract(end,center),side);
+                                const auto fork=Add(Subtract(end,Scale(axis,length*.066f)),
+                                    Scale(outward,radius*(.40f+.65f*flicker)*(1.0f-t)));
+                                const auto kink=NormalizeOr(Add(outward,Scale(across,strand%2?.72f:-.74f)),side);
+                                const auto tip=Add(Subtract(fork,Scale(axis,length*.062f)),
+                                    Scale(kink,radius*(.56f+.27f*flicker)*(1.0f-t)));
+                                lightningArc(fork,end,radius*.098f,{.42f,2.46f,6.1f,gain*.82f});
+                                lightningArc(tip,fork,radius*.065f,{.22f,1.79f,5.4f,gain*.54f});
+                                const float junction=TwinShieldDestructionSmooth(flicker,.59f,.92f)*fade;
+                                const float size=radius*(.14f+.15f*hot);
+                                glowQuad(end,Scale(right,size),Scale(up,size*.86f),RailCavernLightning::CoreUv,
+                                    {8.1f,9.2f,10.7f,junction*.91f});
+                            }
+                            start=end;
+                        }
+                    }
+                }
+                if(round!=rounds.end()) {
+                    constexpr std::array<float,2> releaseTimes{.155f,.305f};
+                    for(size_t peel=0;peel<releaseTimes.size();++peel) {
+                        const float elapsed=flightAge-releaseTimes[peel];
+                        if(elapsed<-.065f || elapsed>.195f) continue;
+                        const float detached=(std::max)(0.0f,elapsed);
+                        // Rewind to the release point on this predictive round's rail-local path.
+                        const float distance=round->spawnDistance+round->distanceOffset-round->forwardSpeed*detached;
+                        const auto releasePoint=ResolveEnemyProjectileWorldPosition(railPath_,{
+                            round->lateralOffset-round->lateralSpeed*detached,
+                            round->verticalOffset-round->verticalSpeed*detached,distance});
+                        const auto rail=railPath_.Evaluate(distance);
+                        const auto outward=NormalizeOr(Add(Scale(rail.right,peel==0?-1.0f:1.0f),
+                            Scale(rail.up,.41f)),side);
+                        const float swell=TwinShieldDestructionSmooth(elapsed,-.065f,0.0f);
+                        const auto root=Add(Subtract(releasePoint,Scale(axis,radius*.37f)),Scale(outward,radius*.69f));
+                        const auto peelPoint=[&](float t) {
+                            const float curl=std::sin(t*3.141593f);
+                            const float kink=.13f*std::sin(t*24.0f+seed+elapsed*23.0f);
+                            const auto bend=Add(Scale(outward,radius*curl*(.52f+.95f*swell+kink)+detached*4.1f),
+                                Scale(axis,radius*(.53f-t)*(1.3f+.62f*swell)-detached*1.1f));
+                            return Add(root,bend);
+                        };
+                        const float strength=swell*(1.0f-TwinShieldDestructionSmooth(detached,.013f,.145f));
+                        auto previous=peelPoint(0.0f);
+                        constexpr int peelSegments=8;
+                        for(int i=1;i<=peelSegments;++i) {
+                            const float t=float(i)/peelSegments;
+                            const float tip=std::sin((t-.5f/peelSegments)*3.141593f);
+                            const auto point=peelPoint(t);
+                            lightningArc(previous,point,radius*(.083f+.094f*tip),
+                                {1.6f+tip*2.58f,4.51f+tip*2.47f,8.3f,strength*tip});
+                            previous=point;
+                        }
+                        if(elapsed<0.0f) continue;
+                        for(int spark=0;spark<5;++spark) {
+                            const float life=.104f+.019f*float(spark);
+                            if(detached>=life) continue;
+                            const float t=.26f+.13f*float(spark);
+                            const float age=detached/life;
+                            const auto direction=NormalizeOr(Add(outward,
+                                Add(Scale(rail.up,.36f*std::sin(seed+float(spark)*2.3f)),Scale(axis,.44f-t))),outward);
+                            const auto point=Add(peelPoint(t),Scale(direction,detached*(2.4f+.58f*float(spark))));
+                            lightningArc(Subtract(point,Scale(direction,.14f+.09f*(1.0f-age))),point,
+                                radius*.068f,{4.1f,6.5f,9.0f,(1.0f-age)*.86f});
+                        }
+                    }
+                }
+                constexpr float rimPulseStart=.045f,rimPulseSeconds=.205f;
+                const float rimPulse=(flightAge-rimPulseStart)/rimPulseSeconds;
+                glowQuad(p.worldPosition,Scale(head.forward,head.length),Scale(side,head.width),
+                    RailCavernLightning::FlightRimUv,{head.phase,head.heat,rimPulse,.94f});
+                const auto view=NormalizeOr(Subtract(eye,p.worldPosition),towardCamera);
+                const auto outlinePoint=[&](float angle,float bias,float depth) {
+                    const float span=RailCavernLightning::FlightOutlineRadius(angle,head.phase)+bias;
+                    // The texture's V axis is opposite to the positive billboard side vector.
+                    const auto surface=Add(Scale(head.forward,head.length*(.025f+span*std::cos(angle))),
+                        Scale(side,-head.width*(.028f*std::sin(head.phase)+span*std::sin(angle))));
+                    return Add(Add(p.worldPosition,surface),Scale(view,depth));
+                };
+                constexpr float orbitStart=.076f,orbitSeconds=.198f;
+                const float orbitAge=(flightAge-orbitStart)/orbitSeconds;
+                if(orbitAge>0.0f && orbitAge<1.26f) {
+                    const float progress=(std::min)(orbitAge,1.0f);
+                    const float gain=TwinShieldDestructionSmooth(orbitAge,0.0f,.17f)*
+                        (1.0f-TwinShieldDestructionSmooth(orbitAge,.92f,1.26f));
+                    const float turn=std::lerp(.32f,3.56f,progress);
+                    const auto orbitPoint=[&](float angle) {
+                        const float fold=radius*(.54f+.38f*std::sin((angle-.32f)*.91f));
+                        const float jump=.16f+.058f*std::sin(angle*14.7f+seed+orbitAge*9.0f);
+                        return outlinePoint(angle,jump,fold);
+                    };
+                    const float start=(std::max)(.29f,turn-1.48f);
+                    auto previous=orbitPoint(start);
+                    constexpr int arcSegments=11;
+                    for(int i=1;i<=arcSegments;++i) {
+                        const float u=float(i)/arcSegments;
+                        const auto point=orbitPoint(std::lerp(start,turn,u));
+                        const float hot=u*u;
+                        const float pulse=.65f+.35f*std::sin(u*19.0f+seed-orbitAge*7.6f);
+                        lightningArc(previous,point,radius*(.066f+.17f*hot),
+                            {1.24f+hot*5.95f,3.75f+hot*5.17f,7.56f+hot*3.44f,gain*u*(.48f+.52f*pulse)});
+                        previous=point;
+                    }
+                    const auto tip=orbitPoint(turn);
+                    glowQuad(tip,Scale(right,radius*.50f),Scale(up,radius*.40f),
+                        RailCavernLightning::CoreUv,{8.9f,10.6f,12.0f,gain*.94f});
+                    const float split=TwinShieldDestructionSmooth(progress,.65f,.94f);
+                    if(split>.001f) {
+                        const float branchLength=radius*(.27f+.70f*split);
+                        const auto outward=NormalizeOr(Subtract(tip,p.worldPosition),side);
+                        for(float direction:{-1.0f,1.0f}) {
+                            const auto sweep=Scale(side,direction);
+                            const auto corner=Add(tip,Scale(NormalizeOr(Add(outward,Scale(sweep,.56f)),outward),branchLength));
+                            const auto end=Add(corner,Scale(NormalizeOr(Add(outward,Scale(sweep,1.1f)),outward),branchLength*.81f));
+                            lightningArc(tip,corner,radius*.133f,{6.6f,8.9f,10.9f,gain*split*.92f});
+                            lightningArc(corner,end,radius*.076f,{1.5f,4.25f,8.2f,gain*split*.71f});
+                        }
+                    }
+                }
+                constexpr float crescentStart=.212f,crescentSeconds=.245f;
+                const float crescentAge=(flightAge-crescentStart)/crescentSeconds;
+                if(crescentAge>0.0f && crescentAge<1.0f) {
+                    const float open=1.0f-(1.0f-crescentAge)*(1.0f-crescentAge);
+                    const float opacity=TwinShieldDestructionSmooth(crescentAge,0.0f,.24f)*
+                        (1.0f-TwinShieldDestructionSmooth(crescentAge,.32f,1.0f));
+                    const auto center=Add(p.worldPosition,Scale(head.forward,head.length*std::lerp(.18f,.47f,open)));
+                    glowQuad(center,Scale(head.forward,radius*std::lerp(1.95f,4.6f,open)),
+                        Scale(side,radius*std::lerp(1.62f,5.35f,open)),
+                        RailCavernLightning::FlightCrescentUv,{open,seed,0,opacity*.87f});
+                }
+                struct FlightBand {
+                    float startAngle, endAngle, halfWidth, radialBias, depth;
+                    int tailStrand;
+                };
+                constexpr FlightBand bands[]{
+                    {.18f,2.68f,.42f,.018f,.17f,0},
+                    {-.36f,-2.72f,.21f,-.010f,-.12f,2},
+                    {-.45f,1.29f,.14f,.104f,.24f,-1}
+                };
+                constexpr int rimSegments=12,joinSegments=8;
+                for(size_t bandIndex=0;bandIndex<std::size(bands);++bandIndex) {
+                    const auto& band=bands[bandIndex];
+                    const float bandSeed=seed+float(bandIndex)*2.71f;
+                    const float sway=.15f*std::sin(head.phase*.79f+bandSeed);
+                    std::array<Vector3,rimSegments+joinSegments+1> points;
+                    std::array<float,rimSegments+joinSegments+1> widths;
+                    for(int i=0;i<=rimSegments;++i) {
+                        const float t=float(i)/rimSegments;
+                        const float angle=std::lerp(band.startAngle+sway,band.endAngle+.21f*sway,t);
+                        const float bias=band.radialBias+.047f*std::sin(angle*4.0f+head.phase+bandSeed);
+                        const float fold=radius*(band.depth+.17f*std::sin(angle*2.4f+head.phase));
+                        points[i]=outlinePoint(angle,bias,fold);
+                        const float swell=.49f+.50f*std::sin(t*3.141593f)+.14f*std::sin(t*16.0f+head.phase+bandSeed);
+                        widths[i]=radius*band.halfWidth*swell;
+                    }
+                    int last=rimSegments;
+                    if(band.tailStrand>=0 && length>.05f) {
+                        const auto tip=points[rimSegments];
+                        const auto end=arcPoint(0.0f,band.tailStrand);
+                        const auto delta=Subtract(end,tip);
+                        const float reach=(std::min)(radius*1.24f,.43f*std::sqrt(Dot(delta,delta)));
+                        const auto rimTangent=NormalizeOr(Subtract(tip,points[rimSegments-1]),Scale(axis,-1));
+                        const auto wakeTangent=NormalizeOr(Subtract(arcPoint(1.0f/segments,band.tailStrand),end),
+                            Scale(axis,-1));
+                        const auto first=Add(tip,Scale(rimTangent,reach));
+                        const auto second=Subtract(end,Scale(wakeTangent,reach*.82f));
+                        for(int i=1;i<=joinSegments;++i) {
+                            const float t=float(i)/joinSegments;
+                            const float s=1.0f-t;
+                            const auto a=Add(Scale(tip,s*s*s),Scale(first,3.0f*t*s*s));
+                            const auto b=Add(Scale(second,3.0f*t*t*s),Scale(end,t*t*t));
+                            points[rimSegments+i]=Add(a,b);
+                            widths[rimSegments+i]=std::lerp(widths[rimSegments],radius*.13f,t)+
+                                radius*band.halfWidth*.37f*std::sin(t*3.141593f);
+                        }
+                        last+=joinSegments;
+                    }
+                    if(railLockOnHudAtlasVertexCount_+railTitleDustVertexCount_+uint32_t(last*6)>kMaxAtlasVertices) break;
+                    std::array<Vector3,rimSegments+joinSegments+1> crossSections;
+                    for(int i=0;i<=last;++i) {
+                        const auto along=Subtract(points[(std::min)(i+1,last)],points[(std::max)(0,i-1)]);
+                        crossSections[i]=Scale(NormalizeOr(Cross(along,Subtract(eye,points[i])),side),widths[i]);
+                    }
+                    const Vector4 shade{head.phase,bandSeed,head.heat,bandIndex==0?.95f:.79f};
+                    for(int i=0;i<last;++i) {
+                        const float u=RailCavernLightning::FlightRibbonUv+float(i)/last;
+                        const float v=RailCavernLightning::FlightRibbonUv+float(i+1)/last;
+                        const auto a=Add(points[i],crossSections[i]),b=Subtract(points[i],crossSections[i]);
+                        const auto c=Add(points[i+1],crossSections[i+1]),d=Subtract(points[i+1],crossSections[i+1]);
+                        dustVertex(a,{u,0},shade); dustVertex(b,{u,1},shade); dustVertex(c,{v,0},shade);
+                        dustVertex(c,{v,0},shade); dustVertex(b,{u,1},shade); dustVertex(d,{v,1},shade);
+                    }
+                }
+                continue;
+            }
             if (p.spriteBacked && isCavernTracer(p)) {
                 const auto side = NormalizeOr(Cross(p.motionDirection, Subtract(eye, p.worldPosition)), right);
                 const auto trail = Subtract(p.worldPosition, p.trailStart);
@@ -7529,6 +7933,63 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         const float clashGain = 1.0f / std::sqrt(1.0f + .56f * (std::max)(0.0f, activeClashes - 1.0f));
         if(!railTitleScreenVisible_)for(const auto& burst:enemyBulletFrame.lifecycleBursts) {
             if(!burst.spriteBacked)continue;
+            if(burst.kind==EnemyProjectileLifecycleVisualKind::CavernLightningImpact) {
+                const auto normal=NormalizeOr(burst.impactNormal,Scale(burst.motionDirection,-1.0f));
+                const float age=burst.normalizedAge*RailCavernLightning::ImpactSeconds;
+                const float radius=burst.radius;
+                const float variant=float(burst.projectileId%13);
+                const auto pose=cartVisible?RailCavernShield::Pose::FromCart(cartRender.worldMatrix):RailCavernShield::Pose{};
+                const auto impactUp=cartVisible?NormalizeOr(pose.up,up):up;
+                const auto direction=burst.motionDirection;
+                const auto tangent=NormalizeOr(Cross(direction,impactUp),right);
+                const auto level=NormalizeOr(Cross(impactUp,tangent),direction);
+                const auto contact=Add(burst.worldPosition,Scale(normal,.16f));
+                const auto carry=Scale(direction,-age*14.5f);
+                const auto flarePoint=Add(contact,carry);
+                const float flash=1.0f-TwinShieldDestructionSmooth(age,.018f,.076f);
+                if(flash>.001f) {
+                    glowQuad(flarePoint,Scale(right,radius*(5.25f+age*17.0f)),Scale(up,radius*(3.85f+age*12.0f)),
+                        16.0f,{2.31f,6.73f,10.7f,flash*.88f});
+                    glowQuad(flarePoint,Scale(right,radius*2.20f),Scale(up,radius*1.58f),
+                        RailCavernLightning::CoreUv,{10.5f,12.3f,13.9f,flash});
+                }
+                const float wavePhase=(std::clamp)((age-.025f)/.235f,0.0f,1.0f);
+                const float waveOpacity=TwinShieldDestructionSmooth(age,.019f,.053f)*
+                    (1.0f-TwinShieldDestructionSmooth(age,.10f,.266f))*.96f;
+                if(waveOpacity>.001f) {
+                    const float expand=1.0f-(1.0f-wavePhase)*(1.0f-wavePhase);
+                    const auto wave=Add(Add(contact,Scale(carry,1.16f)),Scale(impactUp,-radius*.57f));
+                    const float span=radius*std::lerp(2.25f,9.2f,expand);
+                    const auto pitch=NormalizeOr(Add(level,Scale(impactUp,.26f)),level);
+                    const float uvClock=2.0f*(std::floor(wavePhase*31.0f)+32.0f*variant);
+                    glowQuad(wave,Scale(pitch,span*.93f),Scale(tangent,span),RailCavernLightning::ImpactUv,
+                        {std::lerp(.78f,.19f,expand),std::lerp(4.4f,2.53f,expand),6.8f,waveOpacity},uvClock);
+                }
+                const float feed=1.0f-TwinShieldDestructionSmooth(age,.024f,.121f);
+                if(feed>.001f) {
+                    const auto half=Scale(direction,radius*(2.8f+2.2f*feed));
+                    const auto edge=NormalizeOr(Cross(direction,Subtract(eye,flarePoint)),right);
+                    glowQuad(Subtract(flarePoint,half),half,Scale(edge,radius*.93f),RailCavernLightning::WakeUv,
+                        {.33f,2.94f,6.35f,feed*.69f},2.0f*variant);
+                }
+                for(int spark=0;spark<31;++spark) {
+                    const bool longSpark=spark<11;
+                    const float life=longSpark?.11f+.009f*float(spark):.17f+.19f*float((spark*17)%23)/22.0f;
+                    const float t=age/life;
+                    if(t>=1.0f)continue;
+                    const float angle=float(spark)*2.399963f+variant*.43f;
+                    const auto radial=Add(Scale(tangent,std::cos(angle)),Scale(level,std::sin(angle)));
+                    const auto ray=NormalizeOr(Add(radial,Scale(impactUp,.37f+.16f*float(spark%6))),normal);
+                    const float speed=(longSpark?13.8f:5.1f)+.72f*float((spark*7)%13);
+                    const auto origin=Add(flarePoint,Scale(radial,radius*.31f*float(spark%3)));
+                    const auto point=Add(origin,Add(Scale(ray,speed*age*(1.0f-.23f*t)),Scale(impactUp,-5.4f*age*age)));
+                    const float light=(1.0f-t)*(.69f+.31f*std::sin(float(spark)*3.1f+age*46.0f));
+                    const float streak=(longSpark?.86f+.077f*float(spark):.12f+.037f*float(spark%6))*(1.0f-.56f*t);
+                    lightningArc(Subtract(point,Scale(ray,streak)),point,longSpark?.059f:.033f,
+                        {std::lerp(6.5f,.38f,t),std::lerp(8.2f,2.25f,t),std::lerp(9.8f,5.0f,t),light});
+                }
+                continue;
+            }
             if(cartOwnsProjectileImpact && burst.kind==EnemyProjectileLifecycleVisualKind::PlayerImpact &&
                 burst.projectileId==lastImpact.request.sourceProjectileId)continue;
             if(heavyIntercept!=enemyBulletFrame.lifecycleBursts.end() && burst.projectileId==heavyIntercept->projectileId &&
@@ -11991,7 +12452,7 @@ void AppRunLoop::UpdateRailGameplayFrame(const RailSceneFrameContext& context) {
     const bool preplacedRouteBatteries = IsRailShortCourse(railShooterCoursePath_);
     std::erase_if(encounterInput.triggeredEvents,[preplacedRouteBatteries, crystalDemo](const auto& event) {
         return (preplacedRouteBatteries && event.payload=="route:turret") ||
-            (crystalDemo && event.id==RailGatling::CavernWeapon);
+            (crystalDemo && (event.id==RailGatling::CavernWeapon || event.id==RailCavernLightning::Actor));
     });
     encounterInput.adaptivePatrolsAllowed = IsRailShortCourse(railShooterCoursePath_) &&
         ShortRunAllowsAdaptivePatrol(railShooterDistance_) && !coursePreviewOwnsRail &&
@@ -14286,7 +14747,18 @@ void AppRunLoop::UpdateRailGameplayFrame(const RailSceneFrameContext& context) {
         const auto& hit=cartDamage.request;
         const auto kind=RailEnemyEnergy::KindForProjectile(hit.sourceId);
         if(cartDamage.accepted && !cartDamage.lethal && hit.kind==PlayerHitKind::EnemyProjectile &&
-            hit.hasWorldImpact && kind!=RailEnemyEnergy::BatteryKind::Gatling && !IsFangChaseRound(hit.sourceId) &&
+            hit.hasWorldImpact && hit.sourceId==RailCavernLightning::Projectile &&
+            railCombatImpactMarks_.AcceptCart(cartDamage.sequence)) {
+            auto world=impactVehicle.worldMatrix;
+            const auto worldToCart=Inverse(world);
+            const auto point=RailCombatImpact::Transform(hit.impactWorldPosition,worldToCart,1);
+            const auto normal=NormalizeOr(RailCombatImpact::Transform(hit.impactNormalWorld,worldToCart,0),{0,1,0});
+            railCombatImpactMarks_.Add({CartOwner,cartDamage.sequence,point,normal,
+                hit.impactWorldPosition,hit.impactNormalWorld,{.14f,.70f,1.0f},Kind::CavernLightningCart});
+        }
+        if(cartDamage.accepted && !cartDamage.lethal && hit.kind==PlayerHitKind::EnemyProjectile &&
+            hit.hasWorldImpact && hit.sourceId!=RailCavernLightning::Projectile &&
+            kind!=RailEnemyEnergy::BatteryKind::Gatling && !IsFangChaseRound(hit.sourceId) &&
             railCombatImpactMarks_.AcceptCart(cartDamage.sequence)) {
             Vector4 projectileColor{1.0f,.40f,.07f,1.0f};
             if(const auto* prior=railEnemyProjectilePresentationBridge_.FindProjectile(hit.sourceProjectileId))
@@ -17726,6 +18198,8 @@ void AppRunLoop::DispatchPlayerDamagePresentation() {
         }
     }
     for (const PlayerDamageVfxCommand& command : presentation.vfxCommands) {
+        if (command.resultSequence == presentation.lastDamage.sequence &&
+            presentation.lastDamage.request.sourceId == RailCavernLightning::Projectile) continue;
         CourseVfxCueDesc cue{};
         cue.id = "player_damage_" + std::to_string(command.resultSequence);
         cue.effectName = command.effectId;
@@ -20269,6 +20743,33 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             graphContext.railEliteLensAge=pulse->age;
         }
     }
+    if (!railTitleScreenVisible_ && !railGameOverScene_.Active() && graphContext.railEliteLens.w <= .002f) {
+        const auto heatShimmer = [&](Vector3 center, float radius, float strength) {
+            if (strength < .03f) return;
+            const auto p = ProjectRailOverlayPoint(center,frameState_.viewProjectionMatrix,windowWidth_,windowHeight_);
+            if (!p.onscreen || !p.inDepth || p.behind) return;
+            const auto delta = Subtract(center,frameState_.cameraWorldPosition);
+            const float distance = (std::max)(2.5f,std::sqrt(Dot(delta,delta)));
+            const float projectedRadius = radius * std::abs(frameState_.projMatrix.m[1][1]) * .5f / distance;
+            graphContext.railEliteLens = {p.screen.x/(std::max)(1.0f,float(windowWidth_)),
+                p.screen.y/(std::max)(1.0f,float(windowHeight_)),std::clamp(projectedRadius,.022f,.115f),strength};
+            graphContext.railEliteLensAge = railEnemyProjectilePresentationTime_;
+            graphContext.railLensHeatShimmer = true;
+        };
+        for (const auto& shot : railEnemyProjectilePresentationBridge_.Frame().projectiles) {
+            if (shot.definitionId != RailCavernLightning::Projectile) continue;
+            const float heat = RailCavernLightning::FlightHeat(
+                railEnemyProjectilePresentationTime_,float(shot.projectileId%29));
+            heatShimmer(Subtract(shot.worldPosition,Scale(shot.motionDirection,.62f)),2.0f,.38f+.37f*heat);
+        }
+        for (const auto& burst : railEnemyProjectileVfxRenderer_.Frame().lifecycleBursts) {
+            if (burst.kind != EnemyProjectileLifecycleVisualKind::CavernLightningImpact) continue;
+            const float age = burst.normalizedAge * RailCavernLightning::ImpactSeconds;
+            const float heat = 1.0f - TwinShieldDestructionSmooth(age,.044f,.21f);
+            const auto center = Subtract(burst.worldPosition,Scale(burst.motionDirection,age*7.0f));
+            heatShimmer(center,2.5f+age*4.0f,heat*.78f);
+        }
+    }
     graphContext.runtimeState = &runtimeState_;
     graphContext.frameRenderer = &frameRenderer_;
     graphContext.imguiLayer = &imguiLayer_;
@@ -20346,6 +20847,17 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 }
             };
             for (const auto& shell : railEnemyProjectilePresentationBridge_.Frame().projectiles) {
+                if (shell.definitionId == RailCavernLightning::Projectile) {
+                    const float heat = RailCavernLightning::FlightHeat(
+                        railEnemyProjectilePresentationTime_,float(shell.projectileId%29));
+                    const float strength = .56f + heat;
+                    if (strength > camera.combatImpactLight.w) {
+                        const auto point = shell.worldPosition;
+                        camera.combatImpactLight = {point.x,point.y,point.z,strength};
+                        camera.combatImpactTint = {.32f+heat*.37f,1.52f+heat*.25f,3.05f,11.0f};
+                    }
+                    continue;
+                }
                 if (!RailGroundBattery::IsProjectile(shell.definitionId)) continue;
                 const float birth=TwinShieldDestructionSmooth(shell.normalizedAge,0,.023f);
                 lightShell(shell.worldPosition,.38f+.92f*birth);
@@ -20355,6 +20867,21 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                     if(source.groundBattery)
                         lightShell(source.muzzles[barrel],opacity*std::lerp(.09f,.38f,RailGroundBatteryCharge::Growth(source.charge)));
                 });
+            if (const auto* gunship = FindCavernLightningGunship(railShooterSpawnRuntime_)) {
+                for (const auto& source : railAttackWarningPresentation_.Sources()) {
+                    if (source.actorId!=gunship->actorId || source.fired) continue;
+                    const float charge = RailCavernLightning::VortexProgress(source.charge,
+                        gunship->behaviorDefinition.attackLeadSeconds,railEnemyAttackTelegraphSettings_.leadSeconds);
+                    const float seal = TwinShieldDestructionSmooth(charge,.70f,.95f);
+                    const float strength = .19f + .47f*charge + .94f*seal;
+                    if (strength <= camera.combatImpactLight.w) continue;
+                    const auto muzzle = ResolveEnemyProjectileWorldPosition(railPath_,
+                        ResolveEnemyProjectileMuzzleRailPosition(*gunship,0));
+                    const auto point = Add(muzzle,Scale(NormalizeOr(Subtract(frameState_.cameraWorldPosition,muzzle),{0,0,-1}),1.1f));
+                    camera.combatImpactLight = {point.x,point.y,point.z,strength};
+                    camera.combatImpactTint = {.21f+.58f*seal,1.34f+.48f*seal,3.3f,5.1f};
+                }
+            }
             const auto& lightning=railPostBossSequence_.VeilLightning();
             if(railPostBossSequence_.CurrentPhase()==RailPostBossSequence::Phase::Combat && lightning.Visible()) {
                 for(size_t i=0;i<lightning.positions.size();++i) {
@@ -20396,6 +20923,22 @@ void AppRunLoop::RenderVfxPreviewFrame() {
                 camera.combatImpactTint={.24f,2.8f,1.25f,27.0f};
             }
             for(const auto& burst:railEnemyProjectileVfxRenderer_.Frame().lifecycleBursts) {
+                if (burst.kind == EnemyProjectileLifecycleVisualKind::CavernLightningImpact) {
+                    const float age = burst.normalizedAge * RailCavernLightning::ImpactSeconds;
+                    const float heat = 1.0f - TwinShieldDestructionSmooth(age,.018f,.106f);
+                    const float cool = 1.0f - TwinShieldDestructionSmooth(age,.20f,RailCavernLightning::ImpactSeconds);
+                    const float strength = heat*5.1f + cool*.63f;
+                    if (strength > camera.combatImpactLight.w) {
+                        const auto& vehicle=railShooterVehicleRenderer_.Frame();
+                        const auto point=age>.16f && vehicle.visible && vehicle.meshId=="rail_vehicle.mine_cart"
+                            ? RailCavernShield::Pose::FromCart(vehicle.worldMatrix).center
+                            : Subtract(Add(burst.worldPosition,Scale(burst.impactNormal,.24f)),
+                                Scale(burst.motionDirection,age*14.5f));
+                        camera.combatImpactLight = {point.x,point.y,point.z,strength};
+                        camera.combatImpactTint = {.14f+.92f*heat,.86f+1.15f*heat,3.35f,8.8f};
+                    }
+                    continue;
+                }
                 if(burst.kind!=EnemyProjectileLifecycleVisualKind::RoadBatteryIntercept)continue;
                 const float strength=4.2f*(1-TwinShieldDestructionSmooth(burst.normalizedAge,.05f,1));
                 if(strength<=camera.combatImpactLight.w)continue;

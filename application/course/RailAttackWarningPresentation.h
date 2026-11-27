@@ -256,11 +256,13 @@ public:
         return strokes;
     }
 
-    std::vector<RailWarningSprite> Sprites(Vector3 right,Vector3 up,Vector3 eye={},float pixelWorldScale=0)const {
+    std::vector<RailWarningSprite> Sprites(Vector3 right,Vector3 up,Vector3 eye={},float pixelWorldScale=0,
+        uint32_t customWorldWarningActor=0)const {
         std::vector<RailWarningSprite> sprites;sprites.reserve(160);
         const auto emit=[&](Vector3 p,Vector3 h,Vector3 v,Vector4 c,float atlas=16.0f){sprites.push_back({p,h,v,c,atlas});};
         constexpr float pi=3.14159265358979323846f;
         for(const auto& source:sources_)for(size_t barrel=0;barrel<(std::min)(source.muzzleCount,source.muzzles.size());++barrel) {
+            if(customWorldWarningActor && source.actorId==customWorldWarningActor)continue;
             const Vector3 forward{right.y*up.z-right.z*up.y,right.z*up.x-right.x*up.z,right.x*up.y-right.y*up.x};
             const auto& palette=RailEnemyEnergy::For(source.weapon==RailWarningWeapon::Heavy?RailEnemyEnergy::BatteryKind::Heavy:
                 source.weapon==RailWarningWeapon::Rapid?RailEnemyEnergy::BatteryKind::Gatling:RailEnemyEnergy::BatteryKind::None);

@@ -444,6 +444,26 @@ float4 PresentSandTransition(float2 uv) {
 float4 main(PSInput input) : SV_TARGET
 {
     float2 uv = saturate(input.uv);
+    if (gAux5 < -3.5f) {
+        const float aspect=max(gImpactScreen.y,.1f);
+        const float2 d=(uv-gTunnelFocus)*float2(aspect,1);
+        const float span=max(gImpactScreen.x,.001f);
+        const float2 local=d/span;
+        const float distance=length(local);
+        // Only the moving pocket of heated air bends the image.
+        [branch] if (distance < 1.13f) {
+            const float edge=smoothstep(.18f,.48f,distance)*(1.0f-smoothstep(.72f,1.13f,distance));
+            const float flow1=sin(local.y*14.0f+local.x*8.0f-gLensAge*34.0f);
+            const float flow2=sin(local.x*16.0f-local.y*7.0f+gLensAge*27.0f);
+            const float2 shear=float2(.72f*flow1+.28f*flow2,.48f*flow2);
+            uint width,height;
+            gSceneColor.GetDimensions(width,height);
+            const float2 offset=shear*edge*saturate(gLensLeak)*2.4f/
+                float2(max(float(width),1.0f),max(float(height),1.0f));
+            return float4(gSceneColor.Sample(gSampler,saturate(uv+offset)).rgb,1);
+        }
+        return gSceneColor.Sample(gSampler,uv);
+    }
     if(gAux5 < -2.5f) {
         // A short refractive annulus around the actual muzzle. Centre, HUD,
         // telegraph timing and the rest of the image retain their clarity.

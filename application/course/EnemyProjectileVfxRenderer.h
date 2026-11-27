@@ -86,6 +86,7 @@ enum class EnemyProjectileLifecycleVisualKind : unsigned char {
     RoadBatteryIntercept,
     RoadBatteryLaunch,
     OrdinaryIntercept,
+    CavernLightningImpact,
 };
 
 struct EnemyProjectileLifecycleVfxProxy final {

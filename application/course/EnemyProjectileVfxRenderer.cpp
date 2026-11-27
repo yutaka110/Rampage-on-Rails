@@ -1,4 +1,5 @@
 #include "EnemyProjectileVfxRenderer.h"
+#include "RailCavernLightning.h"
 #include "RailGatlingAttack.h"
 #include "RailGroundBatteryAttack.h"
 #include "RailGroundBatteryCharge.h"
@@ -718,8 +719,9 @@ void EnemyProjectileVfxRenderer::Update(
     };
     for (const EnemyProjectilePresentationEvent& event :
          input.presentation->events) {
+        const bool cavernLightning = event.definitionId == RailCavernLightning::Projectile;
         if(input.vehicleOwnsOrdinaryImpact && event.kind==EnemyProjectilePresentationEventKind::Impacted &&
-            !event.surfaceImpact && !IsFangChaseRound(event.definitionId) &&
+            !event.surfaceImpact && !cavernLightning && !IsFangChaseRound(event.definitionId) &&
             RailEnemyEnergy::KindForProjectile(event.definitionId)==RailEnemyEnergy::BatteryKind::None)continue;
         if (event.kind == EnemyProjectilePresentationEventKind::Expired) {
             continue;
@@ -771,8 +773,9 @@ void EnemyProjectileVfxRenderer::Update(
             }
             break;
         case EnemyProjectilePresentationEventKind::Impacted:
-            burst.kind = EnemyProjectileLifecycleVisualKind::PlayerImpact;
-            burst.durationSeconds = (std::max)(
+            burst.kind = cavernLightning ? EnemyProjectileLifecycleVisualKind::CavernLightningImpact :
+                EnemyProjectileLifecycleVisualKind::PlayerImpact;
+            burst.durationSeconds = cavernLightning ? RailCavernLightning::ImpactSeconds : (std::max)(
                 0.05f, input.settings.impactBurstDurationSeconds);
             break;
         case EnemyProjectilePresentationEventKind::Intercepted:
@@ -851,7 +854,8 @@ void EnemyProjectileVfxRenderer::Update(
             burst.kind == EnemyProjectileLifecycleVisualKind::RoadBatteryLaunch;
         proxy.spriteBacked=input.settings.orbSpritesEnabled &&
             (burst.fangImpact || roadBattery || burst.batteryKind!=RailEnemyEnergy::BatteryKind::None ||
-             burst.kind == EnemyProjectileLifecycleVisualKind::OrdinaryIntercept);
+             burst.kind == EnemyProjectileLifecycleVisualKind::OrdinaryIntercept ||
+             burst.kind == EnemyProjectileLifecycleVisualKind::CavernLightningImpact);
         if (roadBattery) {
             proxy.radius = (std::max)(0.42f, burst.bodyRadius);
         }
@@ -874,6 +878,12 @@ void EnemyProjectileVfxRenderer::Update(
         case EnemyProjectileLifecycleVisualKind::PlayerImpact:
             proxy.primaryColor = {1.0f, 0.96f, 0.72f, 1.0f};
             proxy.secondaryColor = {1.0f, 0.12f, 0.02f, 0.92f};
+            ++frame_.impactBursts;
+            break;
+        case EnemyProjectileLifecycleVisualKind::CavernLightningImpact:
+            proxy.radius = (std::max)(.68f, burst.bodyRadius);
+            proxy.primaryColor = {0.83f, 0.96f, 1.0f, 1.0f};
+            proxy.secondaryColor = {0.16f, 0.69f, 1.0f, 0.90f};
             ++frame_.impactBursts;
             break;
         case EnemyProjectileLifecycleVisualKind::OrdinaryIntercept:

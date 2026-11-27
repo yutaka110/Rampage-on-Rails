@@ -70,6 +70,7 @@
     "CaveLighting.hlsli",
     "CrystalOpticalHulls.hlsli",
     "RailEnergyShield.hlsli",
+    "RailLightningFlight.hlsli",
     "WorldImpact.hlsli",
     "TitleDust.PS.hlsl",
     "TitleTracer.PS.hlsl",

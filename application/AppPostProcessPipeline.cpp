@@ -558,7 +558,8 @@ void AppPostProcessPipeline::RegisterPasses(const AppFrameGraphBuildContext& ctx
              {"RailEliteLens",ge3::graphics::RenderResourceAccessType::WriteRtv}},"",
             [ctx,finalOutputResource](ge3::graphics::RenderPassContext& pass) {
                 uint32_t w=1280,h=720;ctx.vfxRenderTargets->GetTargetSize(finalOutputResource,w,h);
-                const float params[16]={0,0,0,1,0,-3,0,0,ctx.railEliteLens.x,ctx.railEliteLens.y,
+                const float lensMode=ctx.railLensHeatShimmer ? -4.0f : -3.0f;
+                const float params[16]={0,0,0,1,0,lensMode,0,0,ctx.railEliteLens.x,ctx.railEliteLens.y,
                     ctx.railEliteLens.z,float(w)/(std::max)(1.0f,float(h)),ctx.railEliteLens.w,ctx.railEliteLensAge,0,0};
                 ctx.vfxRenderTargets->ExecutePostProcessPass(pass.commandList,"RailEliteLens",
                     ctx.appPipelines->GetCompositeRootSignature(),ctx.appPipelines->GetCompositePSO(),

@@ -30,6 +30,8 @@ public:
     static constexpr float CrackSpeed = 11.5f;
     static constexpr int Around = 32, Up = 12;
     static constexpr int SurfaceVertices = Around * Up * 6;
+    static constexpr int InnerSurfaceStep = 2;
+    static constexpr int InnerSurfaceVertices = Around * (Up / InnerSurfaceStep) * 6;
 
     struct Pose {
         Vector3 center{}, right{}, up{}, forward{};
@@ -180,7 +182,7 @@ public:
     }
 
     template <class Emit>
-    void DrawSurface(Vector3 eye, Emit emit) const {
+    void DrawSurface(Vector3 eye, bool allowInnerSurface, Emit emit) const {
         struct Wave {
             Vector3 contact;
             float outerCos, crestCos, inverseFront, inverseWake, strength;
@@ -203,6 +205,8 @@ public:
             Vector3 point;
             Vector2 uv;
             Vector4 color;
+            Vector3 innerPoint;
+            float innerFacing;
         };
         std::array<std::array<Vertex, Up + 1>, Around + 1> surface;
         const float opacity = MembraneOpacity();
@@ -210,6 +214,13 @@ public:
         const float breakAge = broken ? BreakImpact().age : 0.0f;
         const auto surfacePose = broken ? BreakPose(breakAge) : pose_;
         const float visualAge = broken ? (std::max)(age_, DeployDuration + .075f) : age_;
+        // Share the vertex channel with the hit response. Idle motion is negative
+        // and only returns when the last impact wave has passed.
+        const float idle = Active() && waveCount == 0
+            ? Smooth((age_ - DeployDuration - .075f) / .22f) * Smooth((HitAge() - .50f) / .26f)
+            : 0.0f;
+        const float innerOpacity = opacity * Smooth((age_ - DeployDuration - .075f) / .22f) * std::lerp(.52f, 1.0f, idle);
+        const bool drawInner = allowInnerSurface && !broken && innerOpacity > .001f;
         for (int x = 0; x <= Around; ++x) {
             const float u = float(x) / Around;
             const float azimuth = u * 6.2831853f;
@@ -221,7 +232,8 @@ public:
                 const float horizontal = std::cos(elevation);
                 const Vector3 unit{right * horizontal, std::sin(elevation), forward * horizontal};
                 const auto point = surfacePose.Point(unit);
-                const float facing = Dot(surfacePose.Normal(unit), Normalize(Subtract(eye, point)));
+                const auto normal = surfacePose.Normal(unit);
+                const float facing = Dot(normal, Normalize(Subtract(eye, point)));
                 float light = 0.0f;
                 for (size_t i = 0; i < waveCount; ++i) {
                     const auto& wave = waves[i];
@@ -231,16 +243,33 @@ public:
                     light += (1.0f - light) * (front * wake * wave.strength);
                 }
                 const float panelOpacity = broken ? 1.0f - Smooth((breakAge - PanelReleaseTime(unit)) / .068f) : 1.0f;
-                surface[x][y] = {point, {140.0f + u, v}, {facing, visualAge, light * panelOpacity, opacity * panelOpacity}};
+                auto& sample = surface[x][y];
+                sample.point = point;
+                sample.uv = {u, v};
+                sample.color = {facing, visualAge, light * panelOpacity - idle, opacity * panelOpacity};
+                if (drawInner && y % InnerSurfaceStep == 0) {
+                    // A recessed surface shifts behind the outer rim as the camera moves.
+                    sample.innerPoint = surfacePose.Point(Scale(unit, .92f));
+                    sample.innerFacing = Dot(normal, Normalize(Subtract(eye, sample.innerPoint)));
+                }
             }
         }
-        const auto vertex = [&](int x, int y) {
-            const auto& sample = surface[x][y];
-            emit(sample.point, sample.uv, sample.color);
+        const auto drawGrid = [](int step, const auto& vertex) {
+            for (int y = 0; y < Up; y += step) for (int x = 0; x < Around; ++x) {
+                vertex(x, y); vertex(x + 1, y); vertex(x, y + step);
+                vertex(x, y + step); vertex(x + 1, y); vertex(x + 1, y + step);
+            }
         };
-        for (int y = 0; y < Up; ++y) for (int x = 0; x < Around; ++x) {
-            vertex(x, y); vertex(x + 1, y); vertex(x, y + 1);
-            vertex(x, y + 1); vertex(x + 1, y); vertex(x + 1, y + 1);
+        drawGrid(1, [&](int x, int y) {
+            const auto& sample = surface[x][y];
+            emit(sample.point, Vector2{140.0f + sample.uv.x, sample.uv.y}, sample.color);
+        });
+        if (drawInner) {
+            drawGrid(InnerSurfaceStep, [&](int x, int y) {
+                const auto& sample = surface[x][y];
+                emit(sample.innerPoint, Vector2{160.0f + sample.uv.x, sample.uv.y},
+                    Vector4{sample.innerFacing, visualAge, 0.0f, innerOpacity});
+            });
         }
     }
 
