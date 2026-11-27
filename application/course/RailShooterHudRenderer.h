@@ -107,6 +107,17 @@ struct RailShooterHudRenderFrame final {
     std::vector<RailShooterHudDrawCommand> commands;
 };
 
+enum class RailShooterShieldGaugePhase : uint8_t { Locked, Ready, Deployed, Broken, Recharging };
+
+struct RailShooterShieldGauge final {
+    RailShooterShieldGaugePhase phase = RailShooterShieldGaugePhase::Locked;
+    int health = 0;
+    int maximumHealth = 0;
+    float fill = 0.0f;
+    float preHitFill = 0.0f;
+    float flash = 0.0f;
+};
+
 // Pure layout renderer. It emits bounded, backend-independent screen-space
 // commands and owns no D3D resources or gameplay references.
 class RailShooterHudRenderer final {
@@ -115,6 +126,8 @@ public:
     void Update(const RailShooterHudRenderInput& input);
     void Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat);
     void Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat, bool compactReady);
+    void Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat, bool compactReady,
+        const RailShooterShieldGauge* shieldGauge);
     const RailShooterHudRenderFrame& Frame() const noexcept { return frame_; }
 
 private:

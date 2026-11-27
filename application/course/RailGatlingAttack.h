@@ -20,7 +20,6 @@ inline constexpr float GuardSampleSeconds = .60f;
 // guarding the incoming stream more effective than camping the gun's face.
 inline constexpr float ClashArmSeconds = .25f;
 inline constexpr char CavernWeapon[] = "cavern_gatling";
-inline constexpr char CavernProjectile[] = "enemy_cavern_gatling";
 inline constexpr float CavernShotInterval = .10f;
 inline constexpr char CavernRotorMesh[] = "gatling_turret_rotor";
 inline constexpr Vector3 CavernRotorMount{0.0f, -.27f, -.52f};

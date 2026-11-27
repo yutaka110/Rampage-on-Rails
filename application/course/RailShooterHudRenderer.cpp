@@ -47,6 +47,11 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
 }
 
 void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat, bool compactReady) {
+    Update(input, rearPursuitCombat, compactReady, nullptr);
+}
+
+void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool rearPursuitCombat, bool compactReady,
+        const RailShooterShieldGauge* shieldGauge) {
     RailShooterHudRenderFrame next{};
     next.viewportWidth = input.viewportWidth;
     next.viewportHeight = input.viewportHeight;
@@ -130,7 +135,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
             faultSession.phase=GameSessionPhase::Playing;faultSession.outcome=GameSessionOutcome::None;
             auto faultInput=input;
             faultInput.gameOver=nullptr;faultInput.presentation=&faultHud;faultInput.resultSession=&faultSession;
-            RailShooterHudRenderer faultLayout;faultLayout.Update(faultInput);
+            RailShooterHudRenderer faultLayout;faultLayout.Update(faultInput, false, compactReady, shieldGauge);
             for(auto command:faultLayout.Frame().commands) {
                 command.color.w*=scene.hudOpacity;
                 push(std::move(command));
@@ -606,7 +611,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
     };
     const size_t gaugeBegin=next.commands.size();
     float healthBottom=safe;
-    // Vehicle survival leads. Player HP is a distinct, secondary gauge.
+    // Vehicle survival leads the mounted HUD.
     if(definition.showVehicleIntegrity) {
         const float y=safe;
         const Vector4 color=hud.vehicleIntegrityCritical?critical:primary;
@@ -622,7 +627,46 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
         for(int i=1;i<5;++i) rect(safe+gaugeWidth*i/5.0f,y+42*scale,2*scale,18*scale,panel);
         healthBottom=y+60*scale;
     }
-    if(definition.showPlayerHealth) {
+    if (shieldGauge) {
+        using Phase = RailShooterShieldGaugePhase;
+        const auto& shield = *shieldGauge;
+        const float y = healthBottom + (definition.showVehicleIntegrity ? 19.0f : 0.0f) * scale;
+        const float shieldWidth = gaugeWidth * .90f;
+        const float gaugeY = y + 29.0f * scale;
+        const float thickness = 10.0f * scale;
+        const float fill = shield.fill * startupGauge;
+        const bool charging = shield.phase == Phase::Recharging;
+        const bool locked = shield.phase == Phase::Locked;
+        const bool broken = shield.phase == Phase::Broken;
+        const bool ready = shield.phase == Phase::Ready;
+        const bool showHealth = shield.phase == Phase::Deployed || broken || (ready && shield.health < shield.maximumHealth);
+        std::string label = Utf8(u8"シールド");
+        if (showHealth) label += "  " + std::to_string(shield.health) + "/" + std::to_string(shield.maximumHealth);
+        const auto status = ready ? u8"SPACE 展開" : charging ? u8"再充填" : broken ? u8"破壊" : locked ? u8"未解禁" : u8"";
+        const Vector4 accent = locked ? muted : Vector4{.58f, .85f, 1.0f, opacity};
+        ink(label, safe, y + 19.0f * scale, .69f * scale, accent);
+        ink(Utf8(status), safe + shieldWidth * .78f, y + 19.0f * scale, .63f * scale, accent, center);
+
+        const Vector4 frameColor{.19f, .45f, .65f, opacity * (locked ? .28f : .72f)};
+        const Vector4 fillColor = charging ? Vector4{.11f, .38f, .69f, opacity} : Vector4{.15f, .66f, .98f, opacity};
+        rect(safe - scale, gaugeY - scale, shieldWidth + 2.0f * scale, thickness + 2.0f * scale, frameColor);
+        bar(safe, gaugeY, shieldWidth, thickness, fill, fillColor, {.015f, .045f, .09f, opacity});
+        if (!locked && fill > 0.0f) {
+            const Vector4 glow{.32f, .77f, 1.0f, opacity * (charging ? .14f : .28f)};
+            rect(safe, gaugeY - 2.0f * scale, shieldWidth * fill, thickness + 4.0f * scale, glow);
+            rect(safe, gaugeY + scale, shieldWidth * fill, 2.0f * scale,
+                {.58f, .88f, 1.0f, opacity * (charging ? .48f : .94f)});
+        }
+        const float flash = opacity * shield.flash;
+        if (ready || broken) {
+            rect(safe, gaugeY - 2.0f * scale, shieldWidth, thickness + 4.0f * scale, {.42f, .82f, 1.0f, flash * .42f});
+            rect(safe, gaugeY, shieldWidth, thickness, {.76f, .94f, 1.0f, flash * .86f});
+        } else if (!charging && shield.preHitFill > shield.fill) {
+            rect(safe + shieldWidth * fill, gaugeY, shieldWidth * (shield.preHitFill - shield.fill) * startupGauge,
+                thickness, {.72f, .92f, 1.0f, flash});
+        }
+        healthBottom = gaugeY + thickness;
+    } else if(definition.showPlayerHealth) {
         const float y=healthBottom+(definition.showVehicleIntegrity?24:0)*scale;
         ink(hud.healthText,safe,y+19*scale,0.68f*scale,textColor);
         bar(safe,y+29*scale,gaugeWidth*0.72f,8*scale,hud.playerHealthNormalized*startupGauge,
@@ -631,7 +675,7 @@ void RailShooterHudRenderer::Update(const RailShooterHudRenderInput& input, bool
         healthBottom=y+37*scale;
     }
     const size_t gaugeEnd=next.commands.size();
-    if((definition.showPlayerHealth || definition.showVehicleIntegrity) &&
+    if((shieldGauge || definition.showPlayerHealth || definition.showVehicleIntegrity) &&
         !input.unlimitedCheckpointRetries) {
         text(Utf8(u8"残機 ")+std::to_string(hud.retriesRemaining),safe,
             healthBottom+23*scale,0.54f*scale,muted);

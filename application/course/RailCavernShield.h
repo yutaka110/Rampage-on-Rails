@@ -7,7 +7,7 @@
 #include <cmath>
 #include <cstddef>
 
-// The cave entrance teaches a single deployment against live projectile contacts.
+// The cave entrance unlocks a rechargeable shield against live projectile contacts.
 class RailCavernShield final {
     static Vector3 Add(Vector3 a, Vector3 b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
     static Vector3 Subtract(Vector3 a, Vector3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
@@ -22,10 +22,11 @@ public:
     static constexpr float Bottom = -.29f;
     static constexpr float EntryOffset = 28.0f;
     static constexpr float PromptOffset = 18.0f;
-    static constexpr float EndOffset = 218.0f;
     static constexpr float FadeDuration = .64f;
     static constexpr float DeployDuration = .64f;
     static constexpr float BreakDuration = 1.16f;
+    static constexpr float RechargeDuration = 5.0f;
+    static constexpr float BreakHoldDuration = .25f;
     static constexpr float CrackSpeed = 11.5f;
     static constexpr int Around = 32, Up = 12;
     static constexpr int SurfaceVertices = Around * Up * 6;
@@ -72,20 +73,38 @@ public:
 
     void Reset() { *this = {}; }
 
-    void Update(float dt, bool inLesson, bool deploy, const Pose& current) {
-        if (dt <= 0.0f || (fade_ >= FadeDuration && !Breaking())) return;
-        available_ = inLesson && !started_;
-        if (!started_ && !(available_ && deploy)) return;
-        previous_ = started_ ? pose_ : current;
-        pose_ = current;
-        poseStep_ = dt;
-        started_ = true;
-        available_ = false;
-        age_ += dt;
-        for (auto& hit : impacts_) hit.age += dt;
-        if (!inLesson || health_ <= 0.0f || fade_ > 0.0f ||
-            (sequence_ > 0 && impacts_[(sequence_ - 1) % impacts_.size()].age > .80f))
-            fade_ = (std::min)(FadeDuration, fade_ + dt);
+    void Update(float dt, bool unlocked, bool deploy, const Pose& current) {
+        if (dt <= 0.0f) return;
+        unlocked_ = unlocked;
+        rechargeReadyAge_ = (std::min)(10.0f, rechargeReadyAge_ + dt);
+        if (started_) {
+            previous_ = pose_;
+            pose_ = current;
+            poseStep_ = dt;
+            age_ += dt;
+            for (auto& hit : impacts_) hit.age += dt;
+            const auto* impact = RecentImpact();
+            if (!unlocked_ || Broken() || fade_ > 0.0f || (impact && impact->age > .80f))
+                fade_ = (std::min)(FadeDuration, fade_ + dt);
+            const bool restored = Broken() && BreakImpact().age >= RechargeDuration - .0001f;
+            if (fade_ >= FadeDuration && (!Broken() || restored)) {
+                started_ = false;
+                age_ = fade_ = 0.0f;
+                impacts_ = {};
+                if (restored) {
+                    health_ = MaxHealth;
+                    rechargeReadyAge_ = 0.0f;
+                }
+                preHitHealth_ = health_;
+            }
+        }
+        if (Available() && deploy) {
+            started_ = true;
+            previous_ = pose_ = current;
+            poseStep_ = dt;
+            age_ = dt;
+            rechargeReadyAge_ = 10.0f;
+        }
     }
 
     bool Intersect(Vector3 before, Vector3 after, Contact& contact) const {
@@ -110,6 +129,8 @@ public:
 
     void Record(const Contact& contact, float damage) {
         if (!Active() || damage <= 0.0f) return;
+        const auto* recent = RecentImpact();
+        if (!recent || recent->age > 0.0f) preHitHealth_ = health_;
         impacts_[sequence_ % impacts_.size()] = {
             contact.unit, contact.worldPosition, pose_.Normal(contact.unit), contact.incoming, 0.0f, sequence_ + 1};
         ++sequence_;
@@ -120,13 +141,22 @@ public:
         }
     }
 
-    bool Available() const { return available_; }
+    bool Unlocked() const { return unlocked_; }
+    bool Available() const { return unlocked_ && !started_; }
     bool Active() const { return started_ && fade_ == 0.0f && health_ > 0.0f; }
     bool Broken() const { return health_ <= 0.0f; }
     bool Breaking() const { return Broken() && BreakImpact().age < BreakDuration; }
     bool Visible() const { return started_ && (fade_ < FadeDuration || Breaking()); }
     float Age() const { return age_; }
     int Health() const { return static_cast<int>(std::ceil(health_)); }
+    float HealthRatio() const { return health_ / MaxHealth; }
+    float PreHitRatio() const { return preHitHealth_ / MaxHealth; }
+    float HitAge() const { const auto* hit = RecentImpact(); return hit ? hit->age : 10.0f; }
+    float RechargeRatio() const {
+        return Broken() ? (std::clamp)((BreakImpact().age - BreakHoldDuration) /
+            (RechargeDuration - BreakHoldDuration), 0.0f, 1.0f) : 0.0f;
+    }
+    float RechargeReadyAge() const { return rechargeReadyAge_; }
     unsigned HitCount() const { return sequence_; }
     const Pose& CurrentPose() const { return pose_; }
     const auto& Impacts() const { return impacts_; }
@@ -144,8 +174,8 @@ public:
     float Opacity() const { return Smooth(age_ / .24f) * (1.0f - Smooth(fade_ / FadeDuration)); }
     float MembraneOpacity() const {
         if (Broken()) return 1.0f - Smooth((BreakImpact().age - .24f) / .15f);
-        const float quiet = sequence_ > 0 ? impacts_[(sequence_ - 1) % impacts_.size()].age : 0.0f;
-        const float afterglow = 1.0f - .87f * Smooth((quiet - .46f) / .35f);
+        const auto* impact = RecentImpact();
+        const float afterglow = impact ? 1.0f - .87f * Smooth((impact->age - .46f) / .35f) : 1.0f;
         return Smooth(age_ / .24f) * afterglow * (1.0f - Smooth(fade_ / .15f));
     }
 
@@ -344,11 +374,19 @@ public:
     }
 
 private:
+    const Impact* RecentImpact() const {
+        if (sequence_ == 0) return nullptr;
+        const auto& hit = impacts_[(sequence_ - 1) % impacts_.size()];
+        return hit.serial != 0 ? &hit : nullptr;
+    }
+
     bool started_ = false;
-    bool available_ = false;
+    bool unlocked_ = false;
     float age_ = 0.0f;
     float fade_ = 0.0f;
     float health_ = MaxHealth;
+    float preHitHealth_ = MaxHealth;
+    float rechargeReadyAge_ = 10.0f;
     float poseStep_ = 0.0f;
     unsigned sequence_ = 0;
     Pose pose_{}, previous_{};

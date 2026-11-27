@@ -3542,7 +3542,7 @@ bool AppRunLoop::EnsureRailLockOnHudAtlas(ID3D12GraphicsCommandList* commandList
         submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
     for(char32_t cp:std::u32string_view(U"クリアタイム"))
         submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
-    for(char32_t cp:std::u32string_view(U"シールド展開耐久"))
+    for(char32_t cp:std::u32string_view(U"シールド展開未解禁破壊再充填"))
         submissionJapaneseCodepoints.push_back(static_cast<int>(cp));
     std::sort(submissionJapaneseCodepoints.begin(),submissionJapaneseCodepoints.end());
     submissionJapaneseCodepoints.erase(std::unique(submissionJapaneseCodepoints.begin(),submissionJapaneseCodepoints.end()),submissionJapaneseCodepoints.end());
@@ -5038,17 +5038,26 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
         }
     }
 
-    if (cartVisible && !railTitleScreenVisible_ && !railGameOverScene_.Active() &&
-        (railCavernShield_.Available() || railCavernShield_.MembraneOpacity() > .03f)) {
-        const float x = float(hudWidth) * .5f;
-        const float y = float(hudHeight) * .82f;
-        const bool available = railCavernShield_.Available();
-        std::string label = available ? HudUtf8(u8"SPACE  シールド展開") :
-            HudUtf8(u8"シールド耐久  ") + std::to_string(railCavernShield_.Health()) + "/" +
-                std::to_string(RailCavernShield::MaxHealth);
-        addQuad(x - 118.0f * hudScale, y - 22.0f * hudScale, 236.0f * hudScale, 32.0f * hudScale,
-            uvWhite, {.015f, .044f, .080f, .79f});
-        addCenteredText(label, x, y, .80f * hudScale, {.69f, .91f, 1.0f, 1.0f});
+    const bool showShieldGauge = !railTitleScreenVisible_ && (cartVisible || railGameOverScene_.Active());
+    RailShooterShieldGauge shieldGauge{};
+    if (showShieldGauge && railCavernShield_.Unlocked()) {
+        using Phase = RailShooterShieldGaugePhase;
+        const auto& shield = railCavernShield_;
+        shieldGauge.health = shield.Health();
+        shieldGauge.maximumHealth = RailCavernShield::MaxHealth;
+        if (shield.Broken()) {
+            const float breakAge = shield.BreakImpact().age;
+            shieldGauge.phase = breakAge < RailCavernShield::BreakHoldDuration ? Phase::Broken : Phase::Recharging;
+            shieldGauge.fill = shield.RechargeRatio();
+            shieldGauge.flash = 1.0f - RailCavernShield::Smooth(breakAge / RailCavernShield::BreakHoldDuration);
+        } else {
+            shieldGauge.phase = shield.Available() ? Phase::Ready : Phase::Deployed;
+            shieldGauge.fill = shield.HealthRatio();
+            shieldGauge.preHitFill = shield.PreHitRatio();
+            const float pulseAge = shield.Available() ? shield.RechargeReadyAge() : shield.HitAge();
+            const float duration = shield.Available() ? .42f : .17f;
+            shieldGauge.flash = 1.0f - RailCavernShield::Smooth(pulseAge / duration);
+        }
     }
 
     RailShooterHudRenderInput hudRenderInput{};
@@ -5165,7 +5174,8 @@ bool AppRunLoop::BuildRailLockOnHudAtlasQuads() {
                 (std::clamp)(projected.y/hudHeight,0.22f,0.62f)};
     }
     hudRenderInput.titleTransitionFocus=transitionFocus;
-    railShooterHudRenderer_.Update(hudRenderInput, rearPursuitCombat, compactDemoReady);
+    railShooterHudRenderer_.Update(hudRenderInput, rearPursuitCombat, compactDemoReady,
+        showShieldGauge ? &shieldGauge : nullptr);
     if(!railGameOverScene_.Active() && railGameOverDiorama_.Ready()) railGameOverDiorama_.Reset();
     const auto emitHudCommands = [&](const auto& commands) {
         for (const RailShooterHudDrawCommand& command : commands) {
@@ -11343,10 +11353,9 @@ void AppRunLoop::UpdateRailGameplayFrame(const RailSceneFrameContext& context) {
         (!railShooterGameSession_.IsInitialized() ||
          railShooterGameSession_.State().playerInputEnabled);
     const bool cavernShieldPreview = IsCrystalCavernShieldPreviewMode();
-    const bool cavernShieldLesson = cavernShieldPreview || (crystalCavern_ && railPostBossSequence_.Complete());
+    const bool cavernShieldCourse = cavernShieldPreview || (crystalCavern_ && railPostBossSequence_.Complete());
     const float cavernJoin = crystalCavern_ ? crystalCavern_->joinDistance : 0.0f;
-    const bool cavernShieldSpace = cavernShieldLesson && railShooterDistance_ >= cavernJoin + RailCavernShield::PromptOffset &&
-        railShooterDistance_ < cavernJoin + RailCavernShield::EndOffset;
+    const bool cavernShieldSpace = cavernShieldCourse && railShooterDistance_ >= cavernJoin + RailCavernShield::PromptOffset;
     const bool spacePressed = playerKeyboardAllowed && WasKeyPressed(VK_SPACE);
     const bool keyboardDodgePressed =
         playerKeyboardAllowed && ((!cavernShieldSpace && spacePressed) || WasKeyPressed(VK_SHIFT));
@@ -12313,18 +12322,16 @@ void AppRunLoop::UpdateRailGameplayFrame(const RailSceneFrameContext& context) {
         fangSurfaceAuditSpawned=railShooterSpawnRuntime_.SpawnProjectile(std::move(testRound));
     }
     railShooterSpawnRuntime_.Update(gameplayDeltaTime, fireSafetyInput, railPostBossSequence_.FangFollowupTarget());
-    if (cavernShieldLesson && !coursePreviewOwnsRail && !titleEntryBlocked && gameplayDeltaTime > 0.0f) {
+    if (cavernShieldCourse && !coursePreviewOwnsRail && !titleEntryBlocked && gameplayDeltaTime > 0.0f) {
         const float caveDistance = railShooterDistance_ - cavernJoin;
-        const bool inLesson = caveDistance >= RailCavernShield::PromptOffset && caveDistance < RailCavernShield::EndOffset;
-        const auto& rounds = railShooterSpawnRuntime_.Bullets();
-        const bool finishingVolley = !inLesson && railCavernShield_.Active() &&
-            std::any_of(rounds.begin(), rounds.end(), [](const auto& round) {
-                return round.definitionId == RailGatling::CavernProjectile && !round.hitConsumed &&
-                    (round.launchDelayRemaining > 0.0f || (round.active && round.age < round.lifetime));
-            });
-        const bool reviewDeploy = ReadEnvironmentUInt("GE3_CAVERN_SHIELD_REVIEW", 0) == 2 &&
-            ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_FRAMES", 0) != 0 && caveDistance >= RailCavernShield::EntryOffset;
-        railCavernShield_.Update(gameplayDeltaTime, inLesson || finishingVolley, (playerInputEnabled && spacePressed) || reviewDeploy,
+        const unsigned review = ReadEnvironmentUInt("GE3_CAVERN_SHIELD_REVIEW", 0);
+        const float readyAge = railCavernShield_.RechargeReadyAge();
+        const bool reviewRedeploy = review == 3 && railCavernShield_.Available() && readyAge >= .65f && readyAge < 1.0f;
+        const bool reviewDeploy = (review == 2 || review == 3) &&
+            ReadEnvironmentUInt("GE3_COURSE_FRAME_EXPORT_FRAMES", 0) != 0 && caveDistance >= RailCavernShield::EntryOffset &&
+            (railCavernShield_.HitCount() == 0 || reviewRedeploy);
+        railCavernShield_.Update(gameplayDeltaTime, caveDistance >= RailCavernShield::PromptOffset,
+            (playerInputEnabled && spacePressed) || reviewDeploy,
             RailCavernShield::Pose::FromCart(railShooterVehicleRenderer_.Frame().worldMatrix));
     }
     if(gameplayDeltaTime>0 && !coursePreviewOwnsRail && !titleEntryBlocked) {
@@ -13991,7 +13998,7 @@ void AppRunLoop::UpdateRailGameplayFrame(const RailSceneFrameContext& context) {
     const unsigned previousCavernShieldHits = railCavernShield_.HitCount();
     CourseCollisionFrameStats collisionStats =
         railShooterCollisionSystem_.Update(railShooterSpawnRuntime_, collisionInput,
-            cavernShieldLesson && !coursePreviewOwnsRail && !titleEntryBlocked ? &railCavernShield_ : nullptr);
+            cavernShieldCourse && !coursePreviewOwnsRail && !titleEntryBlocked ? &railCavernShield_ : nullptr);
     if (railCavernShield_.HitCount() != previousCavernShieldHits) {
         const bool broken = railCavernShield_.Broken();
         (void)audio_.PlaySpatial(broken ? railEnergyShieldBreakSound_ : railEnergyShieldHitSound_,
@@ -21812,6 +21819,9 @@ void AppRunLoop::RenderVfxPreviewFrame() {
             << " hp=" << railShooterGameSession_.State().playerHealth
             << " break_age=" << (railCavernShield_.Broken() ? railCavernShield_.BreakImpact().age : -1.0f)
             << " membrane=" << railCavernShield_.MembraneOpacity()
+            << " recharge=" << railCavernShield_.RechargeRatio()
+            << " ready=" << railCavernShield_.Available()
+            << " active=" << railCavernShield_.Active()
             << " join=" << (crystalCavern_ ? crystalCavern_->joinDistance : 0.0f) << '\n';
         state<<"# kill_boost total="<<capturedBoost.TotalKills()<<" charge="<<capturedBoost.Charge()<<" serial="<<capturedBoost.Serial()
             <<" age="<<capturedBoost.Age()<<" speed="<<railShooterVehicleMovement_.State().speed
